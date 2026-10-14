@@ -1,0 +1,235 @@
+{
+  "settings": {
+    "vendor": {
+      "url": "https://vendor.example/agent",
+      "pin": {
+        "mechanism": "unpinned"
+      }
+    }
+  },
+  "plane": {
+    "bad_settings": [
+      {
+        "vendor": {
+          "url": "ftp://vendor.example",
+          "pin": {
+            "mechanism": "unpinned"
+          }
+        }
+      }
+    ],
+    "refresh_settings": {
+      "vendor": {
+        "url": "https://vendor.example/agent",
+        "pin": {
+          "mechanism": "unpinned"
+        }
+      },
+      "other": {
+        "url": "https://other.example/agent",
+        "pin": {
+          "mechanism": "unpinned"
+        }
+      }
+    },
+    "public_url": "https://gw.example",
+    "open_claims": [
+      [
+        "POST",
+        "/a2a/message:send"
+      ],
+      [
+        "POST",
+        "/a2a/message:stream"
+      ],
+      [
+        "GET",
+        "/a2a/tasks"
+      ],
+      [
+        "GET",
+        "/a2a/tasks/{id}"
+      ],
+      [
+        "POST",
+        "/a2a/tasks/{id}"
+      ],
+      [
+        "POST",
+        "/a2a/tasks/{id}/pushNotificationConfigs"
+      ],
+      [
+        "GET",
+        "/a2a/tasks/{id}/pushNotificationConfigs"
+      ],
+      [
+        "GET",
+        "/a2a/tasks/{id}/pushNotificationConfigs/{config_id}"
+      ],
+      [
+        "DELETE",
+        "/a2a/tasks/{id}/pushNotificationConfigs/{config_id}"
+      ],
+      [
+        "GET",
+        "/a2a/extendedAgentCard"
+      ],
+      [
+        "GET",
+        "/.well-known/oauth-protected-resource/a2a"
+      ],
+      [
+        "GET",
+        "/.well-known/agent-card.json"
+      ],
+      [
+        "GET",
+        "/a2a/agents/{agent_id}"
+      ],
+      [
+        "POST",
+        "/a2a/agents/{agent_id}"
+      ],
+      [
+        "POST",
+        "/a2a"
+      ],
+      [
+        "POST",
+        "/a2a/"
+      ],
+      [
+        "POST",
+        "/lf.a2a.v1.A2AService/{method}"
+      ]
+    ],
+    "refresh_claims": [
+      [
+        "POST",
+        "/a2a/message:send"
+      ],
+      [
+        "POST",
+        "/a2a/message:stream"
+      ],
+      [
+        "GET",
+        "/a2a/tasks"
+      ],
+      [
+        "GET",
+        "/a2a/tasks/{id}"
+      ],
+      [
+        "POST",
+        "/a2a/tasks/{id}"
+      ],
+      [
+        "POST",
+        "/a2a/tasks/{id}/pushNotificationConfigs"
+      ],
+      [
+        "GET",
+        "/a2a/tasks/{id}/pushNotificationConfigs"
+      ],
+      [
+        "GET",
+        "/a2a/tasks/{id}/pushNotificationConfigs/{config_id}"
+      ],
+      [
+        "DELETE",
+        "/a2a/tasks/{id}/pushNotificationConfigs/{config_id}"
+      ],
+      [
+        "GET",
+        "/a2a/extendedAgentCard"
+      ],
+      [
+        "GET",
+        "/.well-known/oauth-protected-resource/a2a"
+      ],
+      [
+        "GET",
+        "/.well-known/agent-card.json"
+      ],
+      [
+        "GET",
+        "/a2a/agents/{agent_id}"
+      ],
+      [
+        "POST",
+        "/a2a/agents/{agent_id}"
+      ],
+      [
+        "POST",
+        "/a2a"
+      ],
+      [
+        "POST",
+        "/a2a/"
+      ],
+      [
+        "POST",
+        "/lf.a2a.v1.A2AService/{method}"
+      ]
+    ],
+    "member": "vendor",
+    "host": {
+      "entitled": [
+        {
+          "target": "agent:vendor"
+        }
+      ]
+    },
+    "arrive_each": true,
+    "claimed": {
+      "unit": 7,
+      "method": "POST",
+      "target": "/a2a",
+      "claim": 14
+    },
+    "unclaimed": {
+      "unit": 8,
+      "method": "GET",
+      "target": "/a2a/unclaimed",
+      "status": 404,
+      "claim": 99
+    },
+    "request": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"message/send\",\"params\":{\"message\":{\"role\":\"user\",\"messageId\":\"m1\",\"contextId\":\"ctx-7\",\"parts\":[{\"text\":\"hi\"}]}}}",
+    "request_out": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"message/send\",\"params\":{\"message\":{\"role\":\"user\",\"messageId\":\"m1\",\"contextId\":\"ctx-7\",\"parts\":[{\"text\":\"hi\"}]}}}",
+    "far_end": {
+      "status": 200,
+      "fields": [
+        [
+          "content-type",
+          "application/json"
+        ]
+      ],
+      "answer": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"message\":{\"role\":\"ROLE_AGENT\",\"messageId\":\"a1\",\"parts\":[{\"text\":\"the agent's reply, long enough that a buffer that holds the whole request takes the answer in several writes. the agent's reply, long enough that a buffer that holds the whole request takes the answer in several writes. the agent's reply, long enough that a buffer that holds the whole request takes the answer in several writes. \"}]}}}",
+      "answer_out": "{\"id\":1,\"jsonrpc\":\"2.0\",\"result\":{\"message\":{\"contextId\":\"ctx-7\",\"messageId\":\"a1\",\"parts\":[{\"text\":\"the agent's reply, long enough that a buffer that holds the whole request takes the answer in several writes. the agent's reply, long enough that a buffer that holds the whole request takes the answer in several writes. the agent's reply, long enough that a buffer that holds the whole request takes the answer in several writes. \"}],\"role\":\"ROLE_AGENT\"}}}",
+      "units": [
+        [
+          0,
+          582
+        ],
+        [
+          1,
+          1
+        ]
+      ]
+    },
+    "narrow": {
+      "unit": 9,
+      "reply_cap": 150,
+      "more": 3
+    },
+    "short": {
+      "unit": 11
+    },
+    "refusal": {
+      "status": 403,
+      "text": "denied",
+      "reply": "{\"error\":{\"code\":-32004,\"data\":[{\"@type\":\"type.googleapis.com/google.rpc.ErrorInfo\",\"domain\":\"a2a-protocol.org\",\"reason\":\"UNSUPPORTED_OPERATION\"}],\"message\":\"denied\"},\"id\":null,\"jsonrpc\":\"2.0\"}"
+    }
+  }
+}

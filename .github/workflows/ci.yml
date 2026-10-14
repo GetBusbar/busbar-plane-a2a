@@ -29,10 +29,10 @@ permissions:
 
 jobs:
   ci:
-    uses: GetBusbar/busbar/.github/workflows/plugin-ci.yml@14fe4c7e0da540631fdb6291f6b8c06a55902d66
+    uses: GetBusbar/busbar/.github/workflows/plugin-ci.yml@a6c15bb1a4ab92e40a0bbbe31b516dbfbf41391b
     with:
       service: none
-      busbar_checkout: false
+      busbar_checkout: true
       macos_test: "cargo test --workspace --locked"
       extra_test: ""
       plugin_crate: busbar-plane-a2a-plugin
