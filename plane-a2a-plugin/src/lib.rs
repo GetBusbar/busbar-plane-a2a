@@ -3,7 +3,7 @@
 
 //! The `a2a` plane as a droppable busbar plugin: the `cdylib` a signed tarball carries
 //! (`kind: plane`, section `agents`). It re-exports the logic crate and exports that crate's door
-//! (`busbar_plane_a2a::plane_door::door`, the one a busbar build links) as this image's ONE symbol,
+//! (`busbar_plane_a2a::agent_door::door`, the one a busbar build links) as this image's ONE symbol,
 //! `busbar_plugin_door`, with `busbar_contract::export_door!`, so the library carries exactly the
 //! door a busbar build links.
 //!
@@ -17,5 +17,5 @@ pub use busbar_plane_a2a::*;
 /// The exported door: the macro's `#[no_mangle]` symbol is the one exemption.
 #[allow(unsafe_code)]
 mod exported {
-    busbar_contract::export_door!(busbar_plane_a2a::plane_door::door);
+    busbar_contract::export_door!(busbar_plane_a2a::agent_door::door);
 }

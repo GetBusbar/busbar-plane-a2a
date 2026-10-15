@@ -26,13 +26,14 @@ use busbar_contract::abi::mechanism::call::{AbiStr, Blob, BLOB_ABSENT};
 use busbar_contract::abi::mechanism::door::{KindTailHead, Section, SECTION_DECLARING};
 use busbar_contract::abi::plane::{
     AdminRoute, BillableClass, OpClass, PinMechanism, PlaneTail, RecordChain, TrustKey,
-    CHAIN_DIGESTS_SCOPE, CHAIN_LENGTH_PREFIXED, CLAIM_EXACT, CLAIM_OPEN, CLAIM_PATTERN,
-    INGRESS_REQUEST_RESPONSE, INGRESS_RESPONSE_STREAM, MECHANISM_PEER_KEY, MECHANISM_ROOT,
-    PIN_FINGERPRINT, SHAPE_PIECEWISE, TAIL_HOOKS_GATED, TAIL_REFUSED_PIECE, TRUST_PIN,
-    TRUST_PRIVATE_REACH, TRUST_RECOVERY_BACKOFF, TRUST_REVERIFY_TTL,
+    CHAIN_DIGESTS_SCOPE, CHAIN_LENGTH_PREFIXED, INGRESS_REQUEST_RESPONSE, INGRESS_RESPONSE_STREAM,
+    MECHANISM_PEER_KEY, MECHANISM_ROOT, PIN_FINGERPRINT, SHAPE_PIECEWISE, TAIL_HOOKS_GATED,
+    TAIL_REFUSED_PIECE, TRUST_PIN, TRUST_PRIVATE_REACH, TRUST_RECOVERY_BACKOFF, TRUST_REVERIFY_TTL,
 };
 use busbar_contract::abi::sdk::door::abi_str;
-use busbar_contract::abi::sdk::publish::{AdminRouteSpec, ClaimSpec, SnapshotSpec};
+use busbar_contract::abi::sdk::publish::{
+    admin_route, AdminRouteSpec, ClaimSpec, ServedRoute, SnapshotSpec,
+};
 
 use crate::a2a::config::{
     AgentsCfg, DEFAULT_REVERIFY_TTL, REFUSE_PASSTHROUGH_SECTION, SUBJECT_NOUN,
@@ -65,12 +66,73 @@ const NONE: AbiStr = AbiStr {
     len: 0,
 };
 
-/// The plane's settings sections, as its Statement states them: `agents:` is the one it declares.
-pub const SECTIONS: &[Section] = &[Section {
-    name: abi_str(crate::CONFIG_SECTION),
-    flags: SECTION_DECLARING,
-    _reserved: 0,
-}];
+/// The plane's settings sections, as its Statement states them: `agents:` is the one it declares;
+/// `agent_push:` ([`PUSH_SECTION`]) is its own beside it, handed as written at `open`.
+pub const SECTIONS: &[Section] = &[
+    Section {
+        name: abi_str(crate::CONFIG_SECTION),
+        flags: SECTION_DECLARING,
+        _reserved: 0,
+    },
+    Section {
+        name: abi_str(PUSH_SECTION),
+        flags: 0,
+        _reserved: 0,
+    },
+];
+
+/// THE PLANE'S OWN `agent_push:` SECTION (new in 1.6.0; absent = off): `{ca: <PEM>}`, the operator
+/// CA a push delivery's connection trusts on top of the public roots (ARCHITECT ruling 2026-10-14:
+/// the connector's per-connection trust, reached through the push need's `trust_from`,
+/// [`PUSH_TRUST_FROM`]). The host reads the PEM; the plane judges only the section's shape
+/// ([`read_push_section`]). A section of its own rather than an `agents:` key: every key of
+/// `agents:` is a registration.
+pub const PUSH_SECTION: &str = "agent_push";
+
+/// The [`PUSH_SECTION`] key holding the operator CA, PEM text.
+pub const PUSH_CA_KEY: &str = "ca";
+
+/// WHERE [`NEED_OPEN_WEB`]'s TRUST ANCHOR COMES FROM: [`PUSH_SECTION`]`.`[`PUSH_CA_KEY`] in the
+/// plane's owned sections (`busbar_contract::section::OWNED_PATH_PREFIX`), optional by definition.
+pub const PUSH_TRUST_FROM: &str = "owned.agent_push.ca";
+
+/// Judge the [`PUSH_SECTION`] the plane's owned sections (`{section: value}`, JSON) write: absent
+/// or empty is the push trusting the public roots alone; present, it is a mapping holding
+/// [`PUSH_CA_KEY`] alone, a non-empty text. Whether that text is a usable trust anchor is the
+/// host's to judge when it declares the push need (a PEM that is none refuses the boot).
+///
+/// # Errors
+///
+/// The section's words: not a mapping, an unknown key, or a `ca` that is not non-empty text.
+pub fn read_push_section(owned: &[u8]) -> Result<(), String> {
+    use serde_json::Value;
+    if owned.is_empty() {
+        return Ok(());
+    }
+    let all: Value = serde_json::from_slice(owned).map_err(|e| format!("`{PUSH_SECTION}`: {e}"))?;
+    match all.get(PUSH_SECTION) {
+        None | Some(Value::Null) => Ok(()),
+        Some(Value::Object(fields)) => {
+            for (key, value) in fields {
+                if key != PUSH_CA_KEY {
+                    return Err(format!(
+                        "`{PUSH_SECTION}.{key}` is not a key of `{PUSH_SECTION}:`; it holds \
+                         `{PUSH_CA_KEY}` alone"
+                    ));
+                }
+                if !value.as_str().is_some_and(|text| !text.trim().is_empty()) {
+                    return Err(format!(
+                        "`{PUSH_SECTION}.{PUSH_CA_KEY}` must be the operator CA as PEM text"
+                    ));
+                }
+            }
+            Ok(())
+        }
+        Some(_) => Err(format!(
+            "`{PUSH_SECTION}:` must be a mapping, `{{{PUSH_CA_KEY}: <PEM>}}`"
+        )),
+    }
+}
 
 /// The three bindings, in the order the engine names its wire formats.
 const DIALECTS: &[AbiStr] = &[
@@ -110,15 +172,6 @@ const OP_CLASS_TABLE: &[OpClass] = &[
     op_class(10),
     op_class(11),
 ];
-
-/// The [`OP_CLASS_TABLE`] index of `op`; `None` when the plane does not declare it.
-#[must_use]
-pub fn op_class_index(op: busbar_contract::ids::OpClassId) -> Option<u32> {
-    crate::ops::OP_CLASSES
-        .iter()
-        .position(|c| *c == op)
-        .and_then(|i| u32::try_from(i).ok())
-}
 
 const BILLABLE_CLASSES: &[BillableClass] = &[
     BillableClass {
@@ -255,7 +308,7 @@ pub const NEED_AGENT: u32 = 1;
 /// same member route as [`NEED_AGENT`], at the agent's own `url`, carried over the grpc transport,
 /// held to the same pin and client identity. The kernel binds a registration member on every
 /// member-target need its plane states, and an ATTEMPT names this one
-/// ([`crate::plane_door::attempt_need`]).
+/// ([`crate::agent_door::attempt_need`]).
 pub const NEED_GRPC: u32 = 2;
 
 /// THE MEMBER-TARGET PATH of [`NEED_AGENT`] (`busbar_contract::section::MEMBER_TARGET_PREFIX`): each
@@ -295,7 +348,7 @@ pub const NEEDS: &[Need] = &[
         transport: abi_str(DOCUMENT_TRANSPORT),
         auth: NONE,
         target_from: NONE,
-        trust_from: NONE,
+        trust_from: abi_str(PUSH_TRUST_FROM),
         details: Blob {
             ptr: std::ptr::null(),
             len: 0,
@@ -428,19 +481,10 @@ pub const TAIL: &PlaneTail = &PlaneTail {
 /// it alike.
 pub const STREAM_CEILING_SECS: u64 = 600;
 
-/// One path the plane answers on: the verb, the target, the transport claim it arrives over, and
-/// whether the route admits a caller with no credential at all.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Route {
-    /// The verb.
-    pub verb: &'static str,
-    /// The target path; a `{name}` segment is a path variable.
-    pub target: &'static str,
-    /// The transport claim it arrives over.
-    pub carrier: &'static str,
-    /// No inbound credential: a discovery document or the push callback.
-    pub open: bool,
-}
+/// One path the plane answers on: the SDK's one route row ([`ServedRoute`]): the verb, the target
+/// (a `{name}` segment is a path variable), the transport claim it arrives over, and whether the
+/// route admits a caller with no credential at all (a discovery document or the push callback).
+pub type Route = ServedRoute;
 
 /// The carrier the document and target bindings arrive over.
 const CARRIER: &str = DOCUMENT_TRANSPORT;
@@ -555,26 +599,17 @@ pub const PUSH_ROUTE: usize = 2;
 /// (the shared `connect`, and `approve`); the push callback is never audited (the engine's was not).
 pub const ADMIN_AUDIT_VERBS: [&str; 3] = ["connect", "approve", ""];
 
-const fn admin_route(i: usize, flags: u32) -> AdminRoute {
-    AdminRoute {
-        verb: abi_str(ADMIN_VERBS[i].0),
-        target: abi_str(ADMIN_VERBS[i].1),
-        flags,
-        _reserved: 0,
-        audit_verb: abi_str(ADMIN_AUDIT_VERBS[i]),
-    }
-}
-
-/// [`ADMIN_VERBS`] in the ABI's spelling.
+/// [`ADMIN_VERBS`] in the ABI's spelling, each audited under its [`ADMIN_AUDIT_VERBS`] word.
 pub const ADMIN_ROUTES: &[AdminRoute] = &[
-    admin_route(0, 0),
-    admin_route(1, 0),
+    admin_route(ADMIN_VERBS[0], 0, ADMIN_AUDIT_VERBS[0]),
+    admin_route(ADMIN_VERBS[1], 0, ADMIN_AUDIT_VERBS[1]),
     // Addressed by busbar's own push token (`BUSBAR-1.6.0.md` l.4882): its `authorization`
     // crosses to `serve`, which verifies it through the host's signing service.
     admin_route(
-        PUSH_ROUTE,
+        ADMIN_VERBS[PUSH_ROUTE],
         busbar_contract::abi::plane::ROUTE_PUBLIC
             | busbar_contract::abi::plane::ROUTE_CARRIES_OWN_TOKEN,
+        ADMIN_AUDIT_VERBS[PUSH_ROUTE],
     ),
 ];
 
@@ -619,7 +654,7 @@ pub fn openapi_fragment(admin_prefix: &str) -> serde_json::Value {
 /// # Errors
 ///
 /// The first rule the section breaks, in the grammar's words.
-pub fn read_settings(settings: &[u8]) -> Result<AgentsCfg, String> {
+pub fn read_agents_section(settings: &[u8]) -> Result<AgentsCfg, String> {
     if settings.is_empty() {
         return Ok(AgentsCfg::default());
     }
@@ -712,7 +747,7 @@ pub fn dealt_section(settings: &[u8]) -> std::borrow::Cow<'_, [u8]> {
 /// coordinator ruling Q1(b), 2026-10-07); the kernel still loads the plane, its section being
 /// present (LAW 7). Its trust verbs stay stated, and answer every name `404`: none is registered.
 #[must_use]
-pub fn snapshot_spec(public_url: Option<&str>, fronts: bool) -> SnapshotSpec {
+pub fn agents_snapshot_spec(public_url: Option<&str>, fronts: bool) -> SnapshotSpec {
     let admitted = public_url.filter(|_| fronts).and_then(|p| {
         Some((
             crate::a2a::public::absolute(p, crate::MOUNT_PATH)?,
@@ -720,7 +755,7 @@ pub fn snapshot_spec(public_url: Option<&str>, fronts: bool) -> SnapshotSpec {
         ))
     });
     let (audience, resource_metadata, claims) = match admitted {
-        Some((a, m)) => (Some(a), Some(m), ROUTES.iter().map(claim).collect()),
+        Some((a, m)) => (Some(a), Some(m), ROUTES.iter().map(dialect_claim).collect()),
         None => (None, None, Vec::new()),
     };
     SnapshotSpec {
@@ -746,28 +781,15 @@ pub fn snapshot_spec(public_url: Option<&str>, fronts: bool) -> SnapshotSpec {
     }
 }
 
-/// A route as the snapshot's claim: an open route takes no inbound credential; a target with a
-/// path variable is a pattern, one level per variable, and any other target matches exactly. Its
-/// refusals are rendered in its line's dialect; an open document's in the JSON-RPC one.
-fn claim(r: &Route) -> ClaimSpec {
-    let mut spec = ClaimSpec::new(r.verb, r.target, r.carrier, claim_flags(r));
+/// A route as the snapshot's claim ([`ServedRoute::claim_spec`]: an open route takes no inbound
+/// credential; a target with a path variable is a pattern, one level per variable, and any other
+/// target matches exactly), its refusals rendered in its line's dialect; an open document's in
+/// the JSON-RPC one.
+fn dialect_claim(r: &Route) -> ClaimSpec {
+    let mut spec = r.claim_spec();
     spec.refusal_dialect =
         u16::try_from(line_of(r).dialect().unwrap_or(DIALECT_DOCUMENT)).unwrap_or_default();
     spec
-}
-
-/// The claim flags a route states.
-#[must_use]
-pub fn claim_flags(r: &Route) -> u32 {
-    let mut flags = if r.target.contains('{') {
-        CLAIM_PATTERN
-    } else {
-        CLAIM_EXACT
-    };
-    if r.open {
-        flags |= CLAIM_OPEN;
-    }
-    flags
 }
 
 /// THE AUDIT ROW every admitted unit of this plane leaves (the engine's `receive::AUDIT_ACTION`),
@@ -806,5 +828,5 @@ pub fn audit_write(
 }
 
 #[cfg(test)]
-#[path = "tests/door.rs"]
+#[path = "tests/door_statement.rs"]
 mod tests;

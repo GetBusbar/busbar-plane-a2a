@@ -72,19 +72,19 @@ fn a_failing_receiver_gets_three_attempts_at_250_then_500_ms_and_no_fourth() {
     // The low end of the first wait (250 - 20 %), then the high end of the second (500 + 20 %).
     assert_eq!(
         d.settle("t1", Attempted::Status(503), 0, 0),
-        Settled::Retry(200 * MS)
+        DeliverySettled::Retry(200 * MS)
     );
     assert!(d.due(199 * MS).is_empty(), "nothing before its time");
     assert_eq!(d.next_tick_ns(), 200 * MS);
     assert_eq!(d.due(200 * MS).len(), 1);
     assert_eq!(
         d.settle("t1", Attempted::Transport, 200 * MS, 255),
-        Settled::Retry(800 * MS)
+        DeliverySettled::Retry(800 * MS)
     );
     assert_eq!(d.due(800 * MS).len(), 1);
     assert_eq!(
         d.settle("t1", Attempted::Status(429), 800 * MS, 0),
-        Settled::Done(vocab::EV_PUSH_FAILED)
+        DeliverySettled::Done(vocab::EV_PUSH_FAILED)
     );
     assert!(d.due(u64::MAX).is_empty(), "no fourth attempt");
     assert_eq!((d.depth("t1"), d.next_tick_ns()), (0, 0));
@@ -99,17 +99,20 @@ fn a_refused_destination_or_a_4xx_ends_the_delivery_at_once() {
     assert_eq!(d.due(0).len(), 3);
     assert_eq!(
         d.settle("a", Attempted::Judged(DEST_METADATA), 0, 0),
-        Settled::Done(vocab::EV_PUSH_REFUSED)
+        DeliverySettled::Done(vocab::EV_PUSH_REFUSED)
     );
     assert_eq!(
         d.settle("b", Attempted::Status(404), 0, 0),
-        Settled::Done(vocab::EV_PUSH_FAILED)
+        DeliverySettled::Done(vocab::EV_PUSH_FAILED)
     );
     assert_eq!(
         d.settle("c", Attempted::Delivered, 0, 0),
-        Settled::Done(vocab::EV_PUSH_DELIVERED)
+        DeliverySettled::Done(vocab::EV_PUSH_DELIVERED)
     );
-    assert_eq!(d.settle("c", Attempted::Delivered, 0, 0), Settled::Unknown);
+    assert_eq!(
+        d.settle("c", Attempted::Delivered, 0, 0),
+        DeliverySettled::Unknown
+    );
     assert_eq!(d.next_tick_ns(), 0);
 }
 
@@ -167,7 +170,7 @@ fn a_full_queue_drops_its_oldest_waiting_notification_and_counts_it() {
     assert_eq!(d.dropped(), 2);
     assert_eq!(
         d.settle("t1", Attempted::Delivered, 0, 0),
-        Settled::Done(vocab::EV_PUSH_DELIVERED)
+        DeliverySettled::Done(vocab::EV_PUSH_DELIVERED)
     );
     assert_eq!(d.due(0)[0].body, b"3");
 }
@@ -188,7 +191,7 @@ fn the_request_is_a_post_to_the_callbacks_path_with_the_credential_only_once_hel
         "t1",
         Some(DeliveryAuth {
             scheme: "Bearer".into(),
-            credentials: busbar_contract::Redacted::new("s3cret".into()),
+            credentials: PushCredential::new("s3cret".into()),
         }),
     );
     assert_eq!(
@@ -208,7 +211,7 @@ fn a_terminal_tasks_last_delivery_forgets_its_credential() {
     let d = Deliveries::new();
     let auth = DeliveryAuth {
         scheme: "Basic".into(),
-        credentials: busbar_contract::Redacted::default(),
+        credentials: PushCredential::new(String::new()),
     };
     d.remember_auth("t1", Some(auth));
     let last = Delivery::of(&task("t1", TaskState::Completed)).expect("a callback");
@@ -224,7 +227,7 @@ fn a_terminal_tasks_last_delivery_forgets_its_credential() {
 fn the_credential_never_prints() {
     let auth = DeliveryAuth {
         scheme: "Bearer".into(),
-        credentials: busbar_contract::Redacted::new("s3cret".into()),
+        credentials: PushCredential::new("s3cret".into()),
     };
     assert!(!format!("{auth:?}").contains("s3cret"));
     assert_eq!(auth.header_value(), "Bearer s3cret");
@@ -328,12 +331,12 @@ fn the_push_volume_bound_is_one_point_five_point_fives() {
 
 #[test]
 fn the_statement_declares_its_open_web_need_and_its_agent_member_need() {
-    use crate::door::{MEMBER_TARGET, NEEDS, NEED_AGENT, NEED_OPEN_WEB};
+    use crate::door_statement::{MEMBER_TARGET, NEEDS, NEED_AGENT, NEED_OPEN_WEB};
     use busbar_contract::abi::host::conn::connector::{
         DIRECTION_OUTBOUND, EGRESS_OPEN_WEB, EGRESS_PROVIDER,
     };
     use busbar_contract::abi::mechanism::check::check_needs;
-    let st = &crate::plane_door::STATEMENT;
+    let st = &crate::agent_door::STATEMENT;
     assert!(!st.needs.is_null());
     // The open web, the agents over http, the agents over grpc.
     assert_eq!((st.needs_len, NEEDS.len()), (3, 3));
@@ -356,10 +359,71 @@ fn the_statement_declares_its_open_web_need_and_its_agent_member_need() {
         "the http claim"
     );
     assert_eq!(
-        (need.auth.len, need.target_from.len, need.trust_from.len),
-        (0, 0, 0),
+        (need.auth.len, need.target_from.len),
+        (0, 0),
         "no auth style, no configured target: the plane names each dial's target"
     );
+    assert_eq!(
+        need.trust_from.len,
+        crate::door_statement::PUSH_TRUST_FROM.len(),
+        "its trust anchor is the operator's optional `agent_push.ca` (the text is pinned by the \
+         conformance read of the rendered Statement)"
+    );
+}
+
+/// THE PUSH NEED'S TRUST IS THE PLANE'S OWN `agent_push.ca`, in the owned namespace (ARCHITECT ruling
+/// 2026-10-14): the path names the section the Statement owns beside `agents:` and its one key, and
+/// the section is stated as the plane's own (not declaring, not consumed).
+#[test]
+fn the_push_trust_path_names_the_owned_agent_push_section() {
+    use crate::door_statement::{PUSH_CA_KEY, PUSH_SECTION, PUSH_TRUST_FROM, SECTIONS};
+    use busbar_contract::section::{owned_path, OWNED_PATH_PREFIX};
+    assert_eq!(
+        PUSH_TRUST_FROM,
+        format!("{OWNED_PATH_PREFIX}{PUSH_SECTION}.{PUSH_CA_KEY}")
+    );
+    assert_eq!(
+        owned_path(PUSH_TRUST_FROM),
+        Some(format!("{PUSH_SECTION}.{PUSH_CA_KEY}").as_str())
+    );
+    assert_eq!(SECTIONS.len(), 2, "`agents:`, and `agent_push:` beside it");
+    assert_eq!(
+        (SECTIONS[1].name.len, SECTIONS[1].flags),
+        (PUSH_SECTION.len(), 0),
+        "owned, as written: neither declaring nor consumed"
+    );
+}
+
+/// THE `agent_push:` SECTION'S SHAPE, as the plane judges it at `open` and `refresh`: absent (or
+/// null) is off; present, a mapping holding `ca` alone, non-empty text. Whether the text is a
+/// usable trust anchor is the host's to judge.
+#[test]
+fn the_agent_push_section_holds_its_ca_alone() {
+    use crate::door_statement::read_push_section;
+    for fine in [
+        &b""[..],
+        br#"{}"#,
+        br#"{"agent_push":null}"#,
+        br#"{"agent_push":{}}"#,
+        br#"{"agent_push":{"ca":"-----BEGIN CERTIFICATE-----"}}"#,
+        br#"{"other":{"x":1}}"#,
+    ] {
+        assert_eq!(
+            read_push_section(fine),
+            Ok(()),
+            "{}",
+            String::from_utf8_lossy(fine)
+        );
+    }
+    for (bad, says) in [
+        (&br#"{"agent_push":"pem"}"#[..], "must be a mapping"),
+        (br#"{"agent_push":{"ca":""}}"#, "PEM text"),
+        (br#"{"agent_push":{"ca":7}}"#, "PEM text"),
+        (br#"{"agent_push":{"cert":"pem"}}"#, "`agent_push.cert`"),
+    ] {
+        let err = read_push_section(bad).expect_err("refused");
+        assert!(err.contains(says), "{err}");
+    }
 }
 
 /// predev's token: `<task-id>.` then `hex::encode` of an HMAC-SHA256, 64 lower-case hex digits.
@@ -469,7 +533,7 @@ fn reached_addresses_are_bounded() {
 fn the_credential_round_trips_through_the_record_and_stays_redacted() {
     let auth = DeliveryAuth {
         scheme: "Bearer".into(),
-        credentials: busbar_contract::Redacted::new("s3cret".into()),
+        credentials: PushCredential::new("s3cret".into()),
     };
     let bytes = serde_json::to_vec(&auth).expect("serializes");
     assert_eq!(
@@ -500,7 +564,7 @@ fn the_next_due_is_one_head_at_a_time_the_longest_waiting_first() {
     );
     assert_eq!(
         d.settle("t2", Attempted::Delivered, 11 * MS, 0),
-        Settled::Done(vocab::EV_PUSH_DELIVERED)
+        DeliverySettled::Done(vocab::EV_PUSH_DELIVERED)
     );
     assert_eq!(d.next_due(11 * MS).map(|x| x.task_id), Some("t2".into()));
 }
@@ -579,4 +643,37 @@ fn the_callback_mac_is_compared_in_constant_time() {
         !body.contains("presented ==") && !body.contains("== presented"),
         "a variable-time compare of the presented MAC sits beside the constant-time one: {body}"
     );
+}
+
+/// RED (BUSBAR-1.6.0.md Locked Decision #54: logs, audit records, metrics and error text never
+/// carry a credential's value): the caller's webhook credential is caller payload the plane holds
+/// as a [`PushCredential`], and its bytes reach the `Authorization` field and nothing else. The
+/// credential's own `Debug`, a registered config's `Debug`, and the refusal of a credential busbar
+/// cannot present (the registration's error path) all leave the bytes out. A `PushCredential` whose
+/// `Debug` derived its field, or a refusal that quoted the value back, fails here.
+#[test]
+fn the_push_credential_reaches_the_authorization_field_and_no_debug_or_error_text() {
+    let secret = "s3cret-webhook-tok";
+    let auth = DeliveryAuth {
+        scheme: "Bearer".into(),
+        credentials: PushCredential::new(secret.into()),
+    };
+    assert_eq!(format!("{:?}", auth.credentials), "[redacted]");
+    assert!(!format!("{auth:?}").contains(secret), "{auth:?}");
+    assert!(!format!("{:?}", Some(&auth)).contains(secret));
+    assert_eq!(auth.header_value(), format!("Bearer {secret}"));
+
+    let registered = crate::local::delivery_auth(&serde_json::json!({
+        "authentication": { "scheme": "Bearer", "credentials": secret }
+    }))
+    .expect("a presentable credential registers")
+    .expect("it names one");
+    assert_eq!(registered, auth);
+    assert!(!format!("{registered:?}").contains(secret));
+
+    let refused = crate::local::delivery_auth(&serde_json::json!({
+        "authentication": { "scheme": "Bearer", "credentials": format!("{secret}\u{7}") }
+    }))
+    .expect_err("a credential with a control byte cannot be presented");
+    assert!(!refused.contains(secret), "{refused}");
 }

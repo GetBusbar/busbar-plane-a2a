@@ -21,7 +21,7 @@ fn moved(book: &mut Book, callback: &str) -> TaskRow {
     held.row.push_callback = callback.to_string();
     book.hold(ALICE, &held);
     let mut out = Vec::new();
-    let at = Step {
+    let at = Stamp {
         caller: ALICE,
         request_id: "r",
         now: 200,
@@ -49,7 +49,7 @@ fn a_moved_task_with_a_registered_config_queues_its_notification_to_that_config(
     let row = moved(&mut book, "");
     let auth = DeliveryAuth {
         scheme: "Bearer".into(),
-        credentials: busbar_contract::Redacted::new("tok".into()),
+        credentials: crate::push::PushCredential::new("tok".into()),
     };
     let d = Deliveries::new();
     assert!(queue(
@@ -157,7 +157,7 @@ fn an_owed_outcome_is_filed_on_its_tasks_chain() {
 use busbar_contract::abi::host::service::{DEST_INTERNAL, DEST_PLAINTEXT};
 use busbar_contract::vocab::EV_PUSH_REFUSED;
 
-use crate::push::Settled;
+use crate::push::DeliverySettled;
 
 /// A public address a callback resolves to at registration.
 const AT_REGISTRATION: &str = "203.0.113.7";
@@ -165,13 +165,19 @@ const AT_REGISTRATION: &str = "203.0.113.7";
 /// One scripted judgement: a verdict and the addresses it judged; `None` = nothing was checked.
 type Scripted = Option<(u64, Vec<String>)>;
 
+/// One exchange's framed fields, `(name, value)` in order.
+type Fields = Vec<(Vec<u8>, Vec<u8>)>;
+
 /// A host whose judge answers each attempt from a script (the last answer repeats), and whose
-/// receiver answers `status`; every judged URL and every send is logged.
+/// receiver answers `status`; every judged URL and every send is logged, and every send's framed
+/// exchange is read back: the fields the far end is handed, keyed to the URL they went to.
 struct TestHost {
     verdicts: Vec<Scripted>,
     status: u16,
     judged: Vec<String>,
     sent: Vec<String>,
+    /// Each send's URL and the fields its exchange framed, in send order.
+    framed: Vec<(String, Fields)>,
     /// How many sends answer PENDING before one reaches the receiver.
     pends: u32,
     /// How many attempts were abandoned (their connection closed).
@@ -190,6 +196,7 @@ impl TestHost {
             status,
             judged: Vec::new(),
             sent: Vec::new(),
+            framed: Vec::new(),
             pends: 0,
             abandoned: 0,
         }
@@ -210,12 +217,18 @@ impl Line for TestHost {
         }))
     }
 
-    fn send(&mut self, _ex: &mut Exchange, url: &str) -> Poll<Option<u16>> {
+    fn send(&mut self, ex: &mut Exchange, url: &str) -> Poll<Option<u16>> {
         if self.pends > 0 {
             self.pends -= 1;
             return Poll::Pending;
         }
         self.sent.push(url.to_string());
+        let fields = ex
+            .framed_fields()
+            .into_iter()
+            .map(|(name, value)| (name.to_vec(), value.to_vec()))
+            .collect();
+        self.framed.push((url.to_string(), fields));
         Poll::Ready(Some(self.status))
     }
 
@@ -236,14 +249,14 @@ fn queued(callback: &str) -> Deliveries {
     let d = Deliveries::new();
     let auth = DeliveryAuth {
         scheme: "Bearer".into(),
-        credentials: busbar_contract::Redacted::new("tok".into()),
+        credentials: crate::push::PushCredential::new("tok".into()),
     };
     assert!(queue(&d, &row, Some(&config(callback, Some(auth)))));
     d
 }
 
 /// One `tick`'s attempt at `now_ns`, settled as the tick settles it.
-fn tick_once(d: &Deliveries, host: &mut TestHost, now_ns: u64) -> (Attempted, Settled) {
+fn tick_once(d: &Deliveries, host: &mut TestHost, now_ns: u64) -> (Attempted, DeliverySettled) {
     let delivery = d.next_due(now_ns).expect("a delivery is due");
     let mut flight = Flight {
         delivery,
@@ -266,7 +279,7 @@ fn a_completed_task_with_a_callback_is_delivered() {
     let mut host = TestHost::answering(vec![Some((DEST_ALLOWED, &[AT_REGISTRATION][..]))], 200);
     let (end, settled) = tick_once(&d, &mut host, 0);
     assert_eq!(end, Attempted::Delivered);
-    assert_eq!(settled, Settled::Done(EV_PUSH_DELIVERED));
+    assert_eq!(settled, DeliverySettled::Done(EV_PUSH_DELIVERED));
     assert_eq!(host.sent, vec![callback.to_string()]);
     assert_eq!(
         d.rebound(callback, &["198.51.100.9".to_string()]),
@@ -284,8 +297,63 @@ fn a_callback_that_became_internal_after_registration_is_refused_at_delivery() {
     let mut host = TestHost::answering(vec![Some((DEST_INTERNAL, &[][..]))], 200);
     let (end, settled) = tick_once(&d, &mut host, 0);
     assert_eq!(end, Attempted::Judged(DEST_INTERNAL));
-    assert_eq!(settled, Settled::Done(EV_PUSH_REFUSED), "never retried");
+    assert_eq!(
+        settled,
+        DeliverySettled::Done(EV_PUSH_REFUSED),
+        "never retried"
+    );
     assert!(host.sent.is_empty(), "refused before the socket");
+}
+
+/// THE CALLER'S OWN CREDENTIAL IS PRESENTED, and it is the caller's — not busbar's (ported from the
+/// engine's `pushdeliver_tests.rs::the_callers_own_webhook_credential_is_presented_on_the_delivery`,
+/// the `egress-auth × a2a-server` cell). A caller whose webhook authenticates registers its
+/// `authentication` with the push config; the exchange the attempt actually frames and sends, once
+/// the judge admits the callback, carries exactly one `authorization` field, `<scheme>
+/// <credentials>` as RFC 9110 spells it and as the caller wrote it. Read off the SENT exchange, as
+/// predev read its sent log: framing the attempt without the held credential, or an exchange that
+/// drops the field, reds here. The credential is never printed: a failure names the field, not its
+/// value.
+#[test]
+fn the_callers_own_webhook_credential_is_presented_on_the_delivery() {
+    let callback = "https://hook.caller.test/notify";
+    let mut book = Book::default();
+    let row = moved(&mut book, callback);
+    let d = Deliveries::new();
+    let auth = DeliveryAuth {
+        scheme: "Bearer".into(),
+        credentials: crate::push::PushCredential::new("receiver-issued-token".into()),
+    };
+    assert!(queue(&d, &row, Some(&config(callback, Some(auth)))));
+    let mut host = TestHost::answering(vec![Some((DEST_ALLOWED, &[AT_REGISTRATION][..]))], 200);
+    let (end, _) = tick_once(&d, &mut host, 0);
+    assert_eq!(end, Attempted::Delivered);
+    assert_eq!(
+        host.sent,
+        vec![callback.to_string()],
+        "the delivery is sent once, to the caller's callback"
+    );
+    assert_eq!(host.framed.len(), 1, "one exchange was framed and sent");
+    let (url, fields) = &host.framed[0];
+    assert_eq!(
+        url, callback,
+        "the framed exchange is the one sent to the callback"
+    );
+    let presented: Vec<&[u8]> = fields
+        .iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case(b"authorization"))
+        .map(|(_, value)| value.as_slice())
+        .collect();
+    assert_eq!(
+        presented.len(),
+        1,
+        "the sent exchange carries {} authorization field(s), not exactly one",
+        presented.len()
+    );
+    assert!(
+        presented[0] == b"Bearer receiver-issued-token".as_slice(),
+        "the sent exchange's authorization field is not the credential the caller registered"
+    );
 }
 
 /// Across a restart no reached address survives, so the anti-rebinding rule has nothing to compare
@@ -339,7 +407,7 @@ fn a_plaintext_callback_is_refused_at_delivery() {
     let mut host = TestHost::answering(vec![Some((DEST_PLAINTEXT, &[][..]))], 200);
     let (end, settled) = tick_once(&d, &mut host, 0);
     assert_eq!(end, Attempted::Judged(DEST_PLAINTEXT));
-    assert_eq!(settled, Settled::Done(EV_PUSH_REFUSED));
+    assert_eq!(settled, DeliverySettled::Done(EV_PUSH_REFUSED));
     assert_eq!(host.judged, vec![callback.to_string()]);
     assert!(host.sent.is_empty());
 }
@@ -358,12 +426,12 @@ fn the_guard_is_re_run_on_the_retry() {
     );
     let (first, settled) = tick_once(&d, &mut host, 0);
     assert_eq!(first, Attempted::Status(503));
-    let Settled::Retry(at) = settled else {
+    let DeliverySettled::Retry(at) = settled else {
         panic!("a 503 is retried: {settled:?}");
     };
     let (second, settled) = tick_once(&d, &mut host, at);
     assert_eq!(second, Attempted::Judged(DEST_INTERNAL));
-    assert_eq!(settled, Settled::Done(EV_PUSH_REFUSED));
+    assert_eq!(settled, DeliverySettled::Done(EV_PUSH_REFUSED));
     assert_eq!(host.judged.len(), 2, "judged on every attempt");
     assert_eq!(host.sent.len(), 1, "the retry sent nothing");
 }

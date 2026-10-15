@@ -14,7 +14,7 @@
 //!   while no attempt on it is open, so a task's notifications reach the receiver in the order its
 //!   state changed.
 //! * Each attempt re-runs the destination judge, then dials the plane's outbound `open-web` need
-//!   ([`crate::door::NEED_OPEN_WEB`]) with [`request`]; its end is [`Attempted`].
+//!   ([`crate::door_statement::NEED_OPEN_WEB`]) with [`request`]; its end is [`Attempted`].
 //! * [`Deliveries::settle`] pops the head, or puts it back with its next time when the end is
 //!   retryable and attempts remain. [`Deliveries::next_tick_ns`] is the lifecycle tick's
 //!   `next_tick_ns`: nothing waits on a slot or a thread between attempts.
@@ -37,7 +37,6 @@
 //! may be spent, exactly as 1.5.5 bounded it.
 
 use std::collections::{BTreeMap, VecDeque};
-use std::fmt::Write as _;
 
 use busbar_contract::abi::sdk::exchange::Request;
 use busbar_contract::abi::sdk::publish::Keyed;
@@ -120,38 +119,72 @@ pub fn notification_body(task: &Task) -> Vec<u8> {
 pub struct DeliveryAuth {
     /// The HTTP authentication scheme, as the caller wrote it.
     pub scheme: String,
-    /// The credential itself, redacted in memory (predev `pushdeliver.rs:117`). Its one way out is
-    /// [`DeliveryAuth::header_value`]; the record's serde form carries it as the plain string the
-    /// sealed field always held.
+    /// The credential itself (predev `pushdeliver.rs:117` held it redacted in memory). Its one way
+    /// onto the wire is [`DeliveryAuth::header_value`]; the record's serde form carries it as the
+    /// plain string the sealed field always held.
     #[serde(with = "sealed_credential")]
-    pub credentials: busbar_contract::Redacted<String>,
+    pub credentials: PushCredential,
+}
+
+/// THE CALLER'S WEBHOOK CREDENTIAL AS THE PLANE HOLDS IT: caller payload the A2A body carried, not
+/// secret material the kernel resolved, so it is the plane's own type and never the contract's
+/// `Redacted` (whose accessor no plane reaches, DECISIONS #40). Logs, audit records, metrics and
+/// error text never carry its value (BUSBAR-1.6.0.md Locked Decision #54, the secret's reference
+/// and never its value): no `Display`, no `Serialize`, and its `Debug` prints `[redacted]`. Its
+/// readers are [`DeliveryAuth::header_value`], the `Authorization` field [`request`] writes, and
+/// the push_config record's serde form.
+#[derive(Clone, PartialEq, Eq)]
+pub struct PushCredential(String);
+
+impl PushCredential {
+    /// Hold `value` as the caller's webhook credential.
+    #[must_use]
+    pub fn new(value: String) -> Self {
+        Self(value)
+    }
+
+    /// Whether the caller gave no credential bytes (a bare scheme).
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// The bytes, for this module's two readers alone.
+    fn reveal(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for PushCredential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("[redacted]")
+    }
 }
 
 impl DeliveryAuth {
     /// The `Authorization` value: `<scheme> <credentials>`, or the bare scheme when there are none.
     #[must_use]
     pub fn header_value(&self) -> String {
-        let credentials = self.credentials.expose_secret();
-        if credentials.is_empty() {
+        if self.credentials.is_empty() {
             self.scheme.clone()
         } else {
-            format!("{} {credentials}", self.scheme)
+            format!("{} {}", self.scheme, self.credentials.reveal())
         }
     }
 }
 
 /// The push_config record's form of [`DeliveryAuth::credentials`]: the plain string, written into
-/// the sealed field and read straight back into a [`busbar_contract::Redacted`].
+/// the sealed field and read straight back into a [`PushCredential`].
 mod sealed_credential {
-    use busbar_contract::Redacted;
+    use super::PushCredential;
     use serde::{Deserialize, Deserializer, Serializer};
 
-    pub fn serialize<S: Serializer>(value: &Redacted<String>, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(value.expose_secret())
+    pub fn serialize<S: Serializer>(value: &PushCredential, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(value.reveal())
     }
 
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Redacted<String>, D::Error> {
-        String::deserialize(d).map(Redacted::new)
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<PushCredential, D::Error> {
+        String::deserialize(d).map(PushCredential::new)
     }
 }
 
@@ -285,7 +318,7 @@ struct Book {
 
 /// What [`Deliveries::settle`] did with the head of a task's queue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Settled {
+pub enum DeliverySettled {
     /// It is done (delivered, refused, or out of attempts): the record kind to file.
     Done(&'static str),
     /// It waits for another attempt at this time.
@@ -455,19 +488,25 @@ impl Deliveries {
     /// Settle the open attempt on `task_id`'s head: done, or back in the queue for its next
     /// attempt (`jitter` is a random byte, [`jittered_ms`]). A terminal task's last delivery
     /// forgets its credential.
-    pub fn settle(&self, task_id: &str, end: Attempted, now_ns: u64, jitter: u8) -> Settled {
+    pub fn settle(
+        &self,
+        task_id: &str,
+        end: Attempted,
+        now_ns: u64,
+        jitter: u8,
+    ) -> DeliverySettled {
         self.with(|b| {
             let Some(queue) = b.queues.get_mut(task_id) else {
-                return Settled::Unknown;
+                return DeliverySettled::Unknown;
             };
             let Some(head) = queue.front_mut().filter(|w| w.open) else {
-                return Settled::Unknown;
+                return DeliverySettled::Unknown;
             };
             head.open = false;
             if end.retryable() && head.attempts < MAX_ATTEMPTS {
                 let wait = jittered_ms(RETRY_DELAYS_MS[(head.attempts - 1) as usize], jitter);
                 head.not_before_ns = now_ns.saturating_add(wait.saturating_mul(1_000_000));
-                return Settled::Retry(head.not_before_ns);
+                return DeliverySettled::Retry(head.not_before_ns);
             }
             let terminal = queue.pop_front().is_some_and(|w| w.delivery.terminal);
             if queue.is_empty() {
@@ -476,7 +515,7 @@ impl Deliveries {
             if terminal {
                 b.auths.remove(task_id);
             }
-            Settled::Done(end.record_kind())
+            DeliverySettled::Done(end.record_kind())
         })
     }
 
@@ -586,12 +625,7 @@ pub const TOKEN_MAC_BYTES: usize = 32;
 /// A signature, as the lower-case hex a token carries it in (its first [`TOKEN_MAC_BYTES`]).
 #[must_use]
 pub fn hex(signature: &[u8]) -> String {
-    let signature = &signature[..signature.len().min(TOKEN_MAC_BYTES)];
-    let mut out = String::with_capacity(2 * signature.len());
-    for b in signature {
-        let _ = write!(out, "{b:02x}");
-    }
-    out
+    busbar_contract::abi::sdk::digest::lower_hex(&signature[..signature.len().min(TOKEN_MAC_BYTES)])
 }
 
 /// BUSBAR'S OWN CALLBACK TOKENS: `<task-id>.<hex signature>`, one per task, the signature the
