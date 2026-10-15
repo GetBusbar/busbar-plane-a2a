@@ -9,7 +9,7 @@
 //! assert the operation class and the request id it reads; the door itself is then driven op by op,
 //! linked and dropped in, by the plugin crate's `tests/both_ways.rs`.
 
-use busbar_plane_a2a::arrival::{self, Disposition};
+use busbar_plane_a2a::agent_arrival::{self, AgentDisposition};
 use busbar_plane_a2a::ops;
 
 /// The rig's own vocabulary table, read out of the file the rig imports it from.
@@ -57,8 +57,8 @@ fn request(id: &str, method: &str) -> Vec<u8> {
 /// Drive one body through the door's arrival (the JSON-RPC line, no head fields) and hand back the
 /// method row it classed the request under and the request id it read.
 fn decode(body: &[u8]) -> Result<(ops::MethodRow, serde_json::Value), String> {
-    match arrival::decide(body, |_| None) {
-        Disposition::Request { row, id, .. } => Ok((*row, id)),
+    match agent_arrival::decide_arrival(body, |_| None) {
+        AgentDisposition::Request { row, id, .. } => Ok((*row, id)),
         other => Err(format!("{other:?}")),
     }
 }

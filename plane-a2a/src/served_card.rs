@@ -169,7 +169,7 @@ fn inbound_security_requirement() -> Value {
 /// newest version first.
 fn published_interfaces(public_url: &str) -> Option<Vec<Value>> {
     let http_endpoint = crate::a2a::public::absolute(public_url, crate::MOUNT_PATH)?;
-    let mut versions: Vec<&str> = crate::arrival::SUPPORTED_VERSIONS.to_vec();
+    let mut versions: Vec<&str> = crate::agent_arrival::SUPPORTED_VERSIONS.to_vec();
     versions.reverse();
     let mut out = Vec::new();
     for binding in SERVABLE_BINDINGS {
@@ -196,7 +196,7 @@ pub fn self_card_document(public_url: &str, skills: Vec<Value>) -> Option<Value>
             "An AI gateway. Agents reach the agents busbar fronts through this endpoint; busbar \
              authorises, meters and records every task. The agents themselves are not listed on \
              the public card — an authenticated caller is shown the ones it may reach.",
-        "version": crate::plane_door::VERSION,
+        "version": crate::agent_door::VERSION,
         "provider": { "organization": "busbar", "url": "https://getbusbar.com" },
         "supportedInterfaces": published_interfaces(public_url)?,
         "defaultInputModes": ["text/plain", "application/json"],
@@ -292,16 +292,12 @@ pub fn rewrite_card(
         "securityRequirements".to_string(),
         inbound_security_requirement(),
     );
-    match out.get_mut("capabilities") {
-        Some(Value::Object(caps)) => {
-            caps.insert("extendedAgentCard".to_string(), Value::Bool(true));
-        }
-        _ => {
-            out.insert(
-                "capabilities".to_string(),
-                json!({ "extendedAgentCard": true }),
-            );
-        }
+    // THE AGENT'S OWN CAPABILITIES, as it states them: busbar relays a fronted agent's extended
+    // card read to the agent itself, so the served card may promise one only where the agent's
+    // card does. A card stating none is served with an empty `capabilities` (the member the card
+    // shape requires), claiming nothing on the agent's behalf.
+    if !matches!(out.get("capabilities"), Some(Value::Object(_))) {
+        out.insert("capabilities".to_string(), json!({}));
     }
     let mut served = Value::Object(out);
     if let Some(host) = backend_host.as_deref() {

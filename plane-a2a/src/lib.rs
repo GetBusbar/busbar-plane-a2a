@@ -57,23 +57,23 @@ pub mod a2a {
 /// an agent's cell — the cell refuses on a TRIP and nothing less, an upstream `Retry-After` still
 /// honoured (docs/a2a.md, "These cells refuse on a trip and nothing less").
 pub const DECLARES: &str = include_str!("../declares.json");
-pub mod arrival;
+pub mod agent_arrival;
+pub mod agent_door;
 pub mod binding;
+pub mod card_trust;
 pub mod cards;
 pub mod claims;
 pub mod diagnostics;
-pub mod door;
+pub mod door_statement;
 pub mod events;
 pub mod facts;
 pub mod frame;
 pub mod framed;
-pub mod identity;
 pub mod jsonrpc;
 pub mod local;
 pub mod meta;
 pub mod mirror;
 pub mod ops;
-pub mod plane_door;
 pub mod proto;
 pub mod push;
 pub mod push_door;
@@ -88,8 +88,8 @@ pub mod sse;
 pub mod surface;
 pub mod task_door;
 pub mod task_hop;
+pub mod task_identity;
 pub mod tasks;
-pub mod trust;
 pub mod wkt;
 
 pub use frame::{rewrite, Direction, Frame, Tap, Transform};
@@ -266,7 +266,7 @@ pub const ERROR_INFO_DOMAIN: &str = "a2a-protocol.org";
 
 /// THE ENTRY A COMPOSITION ROOT THAT LINKED THIS PLANE READS beside its door (the root's
 /// `[package.metadata.busbar.linked-axes]` row for this crate): the plane's diagnostics catalog. The
-/// door itself is `plane_door::door`, the plane-door row's entry.
+/// door itself is `agent_door::door`, the plane-door row's entry.
 pub mod linked {
     /// The diagnostics axis: the `A2A_*` catalog entries this plane owns.
     pub use crate::diagnostics::DIAGNOSTICS;
@@ -278,8 +278,8 @@ use busbar_contract::plugin::{AbiVersion, Kind, Plugin};
 /// One configured agent this plane may name.
 ///
 /// Every string is borrowed for the life of the program, because a plane's declarations are read at
-/// registration and sealed. Configured names reach here through the seam that says so:
-/// [`busbar_contract::ids::Registration`]. The composition root builds one at boot, interns every
+/// registration and sealed. Configured names reach here through the seam that says so: the host's
+/// word interner (its `Registration`). The composition root builds one at boot, interns every
 /// config-derived key through it exactly once, and hands over names that outlive it — so nothing
 /// after registration can vary them, and the memory the names occupy is a fixed term rather than
 /// one that grows with traffic.

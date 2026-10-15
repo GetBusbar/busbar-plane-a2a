@@ -46,8 +46,39 @@ fn a_fronted_card_names_busbar_and_nothing_of_the_backend() {
         served["securityRequirements"],
         json!([{ "schemes": { INBOUND_SCHEME_NAME: { "list": [] } } }])
     );
-    assert_eq!(served["capabilities"]["extendedAgentCard"], true);
+    assert_eq!(
+        served["capabilities"],
+        json!({}),
+        "the agent states no capability, so busbar promises none on its behalf"
+    );
     assert!(!served.to_string().contains("internal.corp.example"));
+}
+
+/// A FRONTED AGENT'S CAPABILITIES ARE THE AGENT'S: busbar relays the agent's extended card read to
+/// the agent itself, so the served card carries `extendedAgentCard` (and every other capability)
+/// exactly as the agent's card states it, `false` included, and never promises one the agent's
+/// card does not.
+/// RED before the fix: `rewrite_card` set `extendedAgentCard: true` on every fronted card.
+#[test]
+fn a_fronted_card_carries_the_agents_own_capabilities_and_promises_no_extended_card() {
+    let backend = "https://internal.corp.example/a2a";
+    for stated in [
+        json!({ "extendedAgentCard": false, "streaming": true, "pushNotifications": false }),
+        json!({ "streaming": false }),
+        json!({ "extendedAgentCard": true }),
+    ] {
+        let mut card = backend_card();
+        card["capabilities"] = stated.clone();
+        let served = rewrite_card(&card, backend, PUBLIC, "planner").expect("served");
+        assert_eq!(served["capabilities"], stated, "the agent's own: {stated}");
+    }
+    let mut card = backend_card();
+    card["capabilities"] = json!({ "extendedAgentCard": false });
+    let served = rewrite_card(&card, backend, PUBLIC, "planner").expect("served");
+    assert_eq!(
+        served["capabilities"]["extendedAgentCard"], false,
+        "an agent with no extended card is not served as having one"
+    );
 }
 
 #[test]
@@ -101,7 +132,7 @@ fn busbars_own_card_publishes_every_binding_at_every_version_newest_first() {
         ]
     );
     assert_eq!(card["skills"], json!([]));
-    assert_eq!(card["version"], crate::plane_door::VERSION);
+    assert_eq!(card["version"], crate::agent_door::VERSION);
     assert!(self_card_document("not a url", Vec::new()).is_none());
 }
 
@@ -180,7 +211,7 @@ fn the_served_endpoint_and_the_mounted_path_are_one_derivation() {
         .strip_prefix(PUBLIC)
         .expect("the endpoint is under the public base");
     for verb in ["GET", "POST"] {
-        let claimed = crate::door::ROUTES
+        let claimed = crate::door_statement::ROUTES
             .iter()
             .find(|r| r.verb == verb && r.target.contains("{agent_id}"))
             .unwrap_or_else(|| panic!("a claimed {verb} route names an agent"));
@@ -674,8 +705,8 @@ fn the_signature_is_taken_over_the_document_that_is_actually_served() {
 #[test]
 fn the_card_signing_domain_derives_the_exact_pinned_bytes() {
     assert_eq!(
-        crate::door::CARD_SIGNING_DOMAIN,
+        crate::door_statement::CARD_SIGNING_DOMAIN,
         "a2a/agent-card-signing/v1"
     );
-    assert_eq!(crate::door::CARD_KID_PREFIX, "busbar-a2a-card-");
+    assert_eq!(crate::door_statement::CARD_KID_PREFIX, "busbar-a2a-card-");
 }
