@@ -544,6 +544,8 @@ pub struct A2aDoor {
     backends: BackendIds,
     /// The agents' verified cards, held in plugin memory to their refresh generation.
     pub(crate) cards: crate::cards::Cards,
+    /// The held cards were warmed from the `card` host records after `open` ([`warm_cards`]).
+    cards_warmed: Keyed<(), bool>,
     /// The push notifications waiting for delivery, and the webhook credentials they present.
     pub(crate) deliveries: crate::push::Deliveries,
     /// The delivery attempt in flight across a PENDING `tick`, which `drive` carries on.
@@ -584,6 +586,95 @@ impl A2aDoor {
             }
         });
     }
+}
+
+/// THE HELD CARDS, WARMED FROM THE `card` HOST RECORDS (ARCHITECT ruling B2, as amended: the
+/// `connect` and `approve` answers write them, `BUSBAR-1.6.0.md` l.290 "record writes ride
+/// `on_piece`'s answer" keeping every write on an answer): every agent's recorded card held under
+/// the newest generation, so an instance opened again serves the agents its operator approved
+/// before. READY once the listing has landed (a host that answers none, or no host, has nothing
+/// to load); PENDING while it is in flight.
+fn warm_cards(plane: &A2aDoor, ticket: Ticket) -> Poll<()> {
+    use crate::tasks::Records;
+    let Some(host) = plane.host.as_ref() else {
+        return Poll::Ready(());
+    };
+    let mut via = Via::new(host, plane.services, ticket, 0, &plane.grown);
+    match via.list(crate::records::KIND_CARD, "") {
+        Err(Halt::Pending) => Poll::Pending,
+        Err(Halt::Failed(_)) => Poll::Ready(()),
+        Ok(rows) => {
+            let generation = plane.newest();
+            for (agent, value) in rows {
+                if let Ok(card) = serde_json::from_slice::<serde_json::Value>(&value) {
+                    plane.cards.hold(&agent, generation, card);
+                }
+            }
+            Poll::Ready(())
+        }
+    }
+}
+
+/// The `card` host record of `agent`'s verified `card`: keyed by the agent's id under the
+/// operator's scope (no caller prefix).
+fn card_record(agent: &str, card: &serde_json::Value) -> Write {
+    Write {
+        kind: crate::records::KIND_CARD,
+        key: agent.to_string(),
+        value: serde_json::to_vec(card).unwrap_or_default(),
+    }
+}
+
+/// A trust verb's whole answer: `status`, the head `fields`, `body`, the `AUDIT_*` row, and the
+/// record `writes` it carries, every span in the one arena; a short buffer answers FAILED with
+/// what each needs.
+fn verb_answer(
+    input: &Lent<'_, ServeIn>,
+    out: &mut Out<'_, ServeOut>,
+    (status, head, body): (u32, &[(&str, &str)], &[u8]),
+    audit: u32,
+    writes: &[Write],
+) -> Outcome {
+    let (mut reply, mut fields, mut arena, mut records) = (
+        input.reply_buf(),
+        input.fields_buf(),
+        input.arena_buf(),
+        input.records_buf(),
+    );
+    reply.extend(body);
+    for (name, value) in head {
+        fields.push(OutField {
+            name: arena.span(name.as_bytes()),
+            value: arena.span(value.as_bytes()),
+        });
+    }
+    for w in writes {
+        records.push(RecordWrite {
+            kind: kind_index(w.kind),
+            op: RECORD_PUT,
+            key: arena.span(w.key.as_bytes()),
+            value: arena.span(&w.value),
+        });
+    }
+    let short = !(reply.fits() && fields.fits() && arena.fits() && records.fits());
+    let (rw, rnd) = reply.settle(short);
+    let (fw, fnd) = fields.settle(short);
+    let (cw, cnd) = records.settle(short);
+    let (aw, and) = arena.settle(short);
+    out.set(|o| &o.reply_written, rw as u64);
+    out.set(|o| &o.reply_needed, rnd as u64);
+    out.set(|o| &o.fields_written, fw as u32);
+    out.set(|o| &o.fields_needed, fnd as u32);
+    out.set(|o| &o.records_written, cw as u32);
+    out.set(|o| &o.records_needed, cnd as u32);
+    out.set(|o| &o.arena_written, aw as u64);
+    out.set(|o| &o.arena_needed, and as u64);
+    if short {
+        return Outcome::Failed;
+    }
+    out.set(|o| &o.status, status);
+    out.set(|o| &o.audit, audit);
+    Outcome::Ready
 }
 
 /// The most far-end task ids the instance remembers (the engine's `idmap::CAPACITY`).
@@ -770,6 +861,7 @@ slot!(
             latches: crate::task_hop::Latches::new(),
             backends: BackendIds::default(),
             cards: crate::cards::Cards::new(),
+            cards_warmed: Keyed::new(),
             deliveries: crate::push::Deliveries::new(),
             attempting: crate::push_door::Attempting::default(),
             tokens: crate::push::Tokens::new(),
@@ -871,6 +963,21 @@ slot!(
             out.set(|o| &o.next_tick_ns, 0);
             return Outcome::Ready;
         };
+        // THE FIRST TICK AFTER `open` warms the held cards from the `card` host records, on a
+        // tick of its own (its host calls are this op's only ones); a listing still in flight is
+        // tried again a second later.
+        if !plane.cards_warmed.get(&()).unwrap_or(false) {
+            let now = input.get().now_ns;
+            let next = match warm_cards(plane, instance.ticket()) {
+                Poll::Ready(()) => {
+                    plane.cards_warmed.insert((), true);
+                    now
+                }
+                Poll::Pending => now.saturating_add(1_000_000_000),
+            };
+            out.set(|o| &o.next_tick_ns, next.max(1));
+            return Outcome::Ready;
+        }
         let outcome = crate::push_door::tick_deliveries(plane, &instance, input.get().now_ns);
         out.set(
             |o| &o.next_tick_ns,
@@ -3780,6 +3887,14 @@ slot!(
         };
         let mut standing = plane.trust.get(&name).unwrap_or_default();
         let state_now = |plane: &A2aDoor| crate::card_trust::verdict_state(verdict(plane, &name));
+        // THE CARD RECORD (ruling B2, as amended): a card this look verified rides the verb's
+        // answer as the agent's `card` host record, which a later `open` warms the held cards from.
+        let writes: Vec<Write> = looked
+            .card
+            .as_ref()
+            .map(|card| card_record(&name, card))
+            .into_iter()
+            .collect();
         let Some(claimed) = claimed else {
             // A PREVIEW DECIDES NOTHING: the key stands where the book has it.
             if let Some(card) = looked.card {
@@ -3793,7 +3908,8 @@ slot!(
             );
             standing.sighting = looked.sighting;
             plane.trust.insert(name, standing);
-            return out.answer(&input, 200, VIEW_FIELDS, view.as_bytes(), AUDIT_APPLIED);
+            let answer = (200, VIEW_FIELDS, view.as_bytes());
+            return verb_answer(&input, &mut out, answer, AUDIT_APPLIED, &writes);
         };
         if let Err(refusal) = crate::card_trust::agrees(&looked.sighting, claimed.trim()) {
             let condition = Some(INVALID_CONFIG);
@@ -3825,7 +3941,8 @@ slot!(
         );
         standing.sighting = looked.sighting;
         plane.trust.insert(name, standing);
-        out.answer(&input, 200, VIEW_FIELDS, view.as_bytes(), AUDIT_APPLIED)
+        let answer = (200, VIEW_FIELDS, view.as_bytes());
+        verb_answer(&input, &mut out, answer, AUDIT_APPLIED, &writes)
     }
 );
 
