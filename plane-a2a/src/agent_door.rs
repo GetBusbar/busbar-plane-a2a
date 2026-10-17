@@ -163,6 +163,8 @@ pub struct Hop {
     /// The hop has LEFT the plane for its agent (its request answered at an ATTEMPT, every gate
     /// of the plane's passed): the unit is served and its fee unit is reported from then on.
     left: bool,
+    /// A piece of the far end's answer has come: the agent was reached.
+    heard: bool,
     /// THE ENVELOPE A REQUEST-STAGE REWRITE LEFT (`project`'s `rewrite`): what the hop relays
     /// (its task ids translated over it, its binding composed from it). Everything else the hop
     /// reads (the task it opens, the callback it carries, the admission) reads the caller's own
@@ -214,6 +216,7 @@ impl Hop {
             held_writes: Vec::new(),
             endpoint_judged: false,
             left: false,
+            heard: false,
             rewritten: None,
             mint_message_id: false,
             member: String::new(),
@@ -2006,6 +2009,9 @@ fn hop_piece(
     if let Some(url) = &url {
         hop.relay.name_backend(member, url);
     }
+    if given.from == FROM_FAR_END {
+        hop.heard = true;
+    }
     // THE REFUSED PIECE (`TAIL_REFUSED_PIECE`): the kernel refused the unit before it dialled, and
     // hands the refusal here first, on the unit's own ticket; every other kernel piece is an
     // ATTEMPT.
@@ -2284,6 +2290,17 @@ fn hop_piece(
     if matches!(hop.outbox.head, Some(AnswerHead::Attempt(_))) {
         hop.left = true;
     }
+    // A HOP THE KERNEL NEVER DIALLED (BUSBAR-1.6.0.md l.1126: "a hop refused before the socket
+    // ledgers nothing"): its ATTEMPT left the plane, then the kernel's send found the agent's
+    // credential unavailable and dialled nothing, and the far end said nothing. It never left: its
+    // refused piece reports every class at `0`, the unit's last counts, so its end ledgers no bytes
+    // and refunds the fee.
+    let undialled = refused
+        && given.reason == busbar_contract::abi::plane::RefusalCode::CredentialUnavailable.code()
+        && !hop.heard;
+    if undialled {
+        hop.left = false;
+    }
     let left = hop.left;
     let admitted = hop.admitted;
     let need = attempt_need(hop.relay.binding());
@@ -2302,7 +2319,8 @@ fn hop_piece(
         input.arena_buf(),
         input.units_buf(),
     );
-    // The refused piece reports no units: what the unit counted stands as its ATTEMPT left it.
+    // The refused piece reports no units: what the unit counted stands as its ATTEMPT left it,
+    // unless the hop was never dialled (below).
     let moved = if refused { 0 } else { hop.relay.moved() };
     if moved != 0 {
         units.push(UnitCount {
@@ -2317,6 +2335,18 @@ fn hop_piece(
             source: UNITS_REPORTED,
             amount: 1,
         });
+    }
+    if undialled {
+        for class in [
+            door_statement::CLASS_BYTES_INDEX,
+            door_statement::CLASS_FEE_INDEX,
+        ] {
+            units.push(UnitCount {
+                class,
+                source: UNITS_REPORTED,
+                amount: 0,
+            });
+        }
     }
     let mut head_fields = |list: &[(&'static str, std::borrow::Cow<'static, str>)]| {
         for (name, value) in list {
