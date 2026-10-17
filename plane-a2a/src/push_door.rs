@@ -314,12 +314,12 @@ impl Attempting {
     }
 }
 
-/// THE TIME A DELIVERY ATTEMPT MAY TAKE, predev's own: `RELAY_TIMEOUT`, sixty seconds, the request
-/// ceiling of `origin/predev:crates/busbar-a2a/src/a2a/transport.rs:92`, which
-/// `crates/busbar-a2a/src/a2a/pushdeliver.rs:85` names as the delivery's time ceiling. An attempt
-/// held longer than this lost its wake: it is abandoned, then requeued under predev's retry rules
-/// (spec :390-393, B3).
-const DELIVERY_TIMEOUT_NS: u64 = 60_000_000_000;
+/// THE TIME A WHOLE DELIVERY ATTEMPT MAY TAKE, from the tick that began it: judge, open, write and
+/// response together, [`crate::push::ATTEMPT_TIMEOUT_MS`], ten seconds (ARCHITECT ruling on a slow
+/// push receiver; 1.5.5 had no A2A push client, so it has no value of its own to keep). An attempt
+/// still held then is abandoned, its connection closed, and settles as a transport error under the
+/// three-attempt rule (spec l.391-393).
+const DELIVERY_TIMEOUT_NS: u64 = crate::push::ATTEMPT_TIMEOUT_MS * 1_000_000;
 
 /// When the lifecycle tick is next wanted: the earliest waiting delivery, or the moment a held
 /// attempt is abandoned; `0` = neither.

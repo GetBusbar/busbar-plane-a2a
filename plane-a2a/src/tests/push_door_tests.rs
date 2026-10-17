@@ -535,8 +535,8 @@ fn a_pending_attempt_is_delivered_once_whether_tick_or_drive_runs_first() {
 }
 
 /// A lost wake still ends in exactly one delivery (R-PUSH, coordinator option (b)): an attempt left
-/// held with no `drive` is abandoned by the first tick past predev's delivery timeout (60 s,
-/// `transport.rs:92`), which is asked for at that moment, and its delivery is requeued under the
+/// held with no `drive` is abandoned by the first tick past the whole attempt's deadline (ten
+/// seconds), which is asked for at that moment, and its delivery is requeued under the
 /// retry rules and then sent once. RED against round 2's behaviour (a held attempt is never given
 /// up): nothing is ever sent.
 #[test]
@@ -754,8 +754,8 @@ fn an_ended_task_spends_its_callback_token() {
 
 /// A NOTIFICATION QUEUED WHILE AN ATTEMPT IS HELD DOES NOT WAKE THE DRIVER TICKET: the wake would
 /// make the kernel tick, and a tick's start is the driver ticket's cycle boundary, which forgets
-/// the held attempt's pending exchange (its completion lost, the attempt ended only by the 60 s
-/// abandonment, a replay dialling again). The queued notification waits; the held attempt's own
+/// the held attempt's pending exchange (its completion lost, the attempt ended only by its
+/// deadline's abandonment, a replay dialling again). The queued notification waits; the held attempt's own
 /// completion wake carries it, and the held attempt ends with its own result, sent once. RED
 /// against a queue that wakes while an attempt is held.
 #[test]
