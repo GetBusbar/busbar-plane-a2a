@@ -44,7 +44,7 @@ use crate::a2a::task::Task;
 use crate::agent_door::A2aDoor;
 use crate::door_statement::NEED_OPEN_WEB;
 use crate::local::{self, PushConfig};
-use crate::push::{Attempted, Deliveries, Delivery, DeliverySettled, Owed};
+use crate::push::{Attempted, Deliveries, Delivery, DeliverySettled, Owed, Tokens};
 use crate::records::KIND_PUSH_CONFIG;
 use crate::tasks::{self, Halt, Records, Stamp, Write};
 use crate::TaskRow;
@@ -72,12 +72,27 @@ pub fn queue(deliveries: &Deliveries, row: &TaskRow, config: Option<&PushConfig>
         deliveries.remember_auth(&task.task_id, cfg.authentication.clone());
     }
     let Some(delivery) = Delivery::of(&task) else {
+        // An ended task with nothing to deliver leaves no credential behind: no delivery is left
+        // to present it.
+        if task.state.is_terminal() {
+            deliveries.remember_auth(&task.task_id, None);
+        }
         return false;
     };
     deliveries.enqueue(delivery, 0);
     // The delivery is attempted on this wake of the driver ticket, not at the next scheduled tick.
     deliveries.wake();
     true
+}
+
+/// RELEASE busbar's own callback token for `row`'s task once the move has ENDED it, whichever way
+/// it ended (the relayed answer, a cancel, a mirror refresh, the agent's own push): an ended task
+/// has nothing left to report, and a token held past it would count against
+/// [`crate::push::MAX_TOKENS`] for the life of the instance.
+pub fn ended(tokens: &Tokens, row: &TaskRow) {
+    if Task::from_row(row).is_ok_and(|t| t.state.is_terminal()) {
+        tokens.forget(&row.task_id);
+    }
 }
 
 /// FORGET the webhook credential of every push config `writes` deletes for `caller` (the tombstone

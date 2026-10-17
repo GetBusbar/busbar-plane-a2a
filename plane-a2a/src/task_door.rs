@@ -873,6 +873,7 @@ fn refresh_listed<'h>(
             local::held_config(&mut tasks::Staged::new(via, writes), caller, &row.task_id)?;
         if i >= queued {
             crate::push_door::queue(&plane.deliveries, row, config.as_ref());
+            crate::push_door::ended(&plane.tokens, row);
             plane.units.with(&unit, |u| {
                 if let Some(u) = u {
                     u.pass.refreshed_queued = i + 1;
