@@ -710,3 +710,36 @@ fn the_card_signing_domain_derives_the_exact_pinned_bytes() {
     );
     assert_eq!(crate::door_statement::CARD_KID_PREFIX, "busbar-a2a-card-");
 }
+
+/// A v0.3 CARD'S `additionalInterfaces` AND `preferredTransport` name only what busbar serves at
+/// the agent's address (the JSON-RPC envelope): an entry on another binding is dropped, the rest
+/// point at busbar, and an entry on a host other than the registration's is never published.
+#[test]
+fn a_v03_cards_additional_interfaces_and_preferred_transport_name_only_what_busbar_serves_there() {
+    let backend = json!({
+        "name": "Planner",
+        "url": "https://a.example.com/a2a",
+        "preferredTransport": "GRPC",
+        "additionalInterfaces": [
+            { "url": "https://a.example.com/a2a", "transport": "JSONRPC" },
+            { "url": "https://grpc-a.example.net", "transport": "GRPC" },
+            { "url": "https://a.example.com/rest", "transport": "HTTP+JSON" },
+            { "url": "https://jsonrpc-a.example.net/rpc", "transport": "JSONRPC" },
+        ],
+    });
+    let served =
+        rewrite_card(&backend, "https://a.example.com/a2a", PUBLIC, "planner").expect("served");
+    let endpoint = "https://gw.example/a2a/agents/planner";
+    assert_eq!(served["url"], endpoint);
+    assert_eq!(served["preferredTransport"], "JSONRPC");
+    assert_eq!(
+        served["additionalInterfaces"],
+        json!([
+            { "url": endpoint, "transport": "JSONRPC" },
+            { "url": endpoint, "transport": "JSONRPC" },
+        ])
+    );
+    let text = served.to_string();
+    assert!(!text.contains("example.net"), "{text}");
+    assert!(!text.contains("a.example.com"), "{text}");
+}

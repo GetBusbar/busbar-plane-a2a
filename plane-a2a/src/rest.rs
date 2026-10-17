@@ -39,7 +39,7 @@ pub mod method {
     pub const LIST_TASKS: &str = "ListTasks";
     /// `POST /tasks/{id}:cancel`.
     pub const CANCEL_TASK: &str = "CancelTask";
-    /// `POST /tasks/{id}:subscribe`.
+    /// `GET /tasks/{id}:subscribe` (and `POST`, as the served engine spelled it).
     pub const SUBSCRIBE_TO_TASK: &str = "SubscribeToTask";
     /// `POST /tasks/{id}/pushNotificationConfigs`.
     pub const CREATE_PUSH_CONFIG: &str = "CreateTaskPushNotificationConfig";
@@ -83,11 +83,17 @@ impl Params {
         self
     }
 
-    /// Set `name` only if the caller supplied it, typed by [`json_scalar`].
+    /// Set `name` only if the caller supplied it: typed by [`json_scalar`] where the proto's field
+    /// is not a string ([`TYPED_QUERY_MEMBERS`]), the string as sent otherwise.
     #[must_use]
     pub fn maybe(mut self, name: &str, value: Option<&String>) -> Self {
         if let Some(v) = value {
-            self.0.insert(name.to_string(), json_scalar(v));
+            let value = if TYPED_QUERY_MEMBERS.contains(&name) {
+                json_scalar(v)
+            } else {
+                Value::String(v.clone())
+            };
+            self.0.insert(name.to_string(), value);
         }
         self
     }
@@ -110,6 +116,13 @@ impl Params {
         Value::Object(self.0)
     }
 }
+
+/// THE QUERY MEMBERS WHOSE PROTO FIELD IS NOT A STRING (`ListTasksRequest`'s `page_size`,
+/// `history_length` and `include_artifacts`, `GetTaskRequest`'s `history_length`,
+/// `ListTaskPushNotificationConfigsRequest`'s `page_size`): only these are typed by
+/// [`json_scalar`]. Every other member (`contextId`, `pageToken`, `status`,
+/// `statusTimestampAfter`) is a string in the proto, so an all-digit context id stays a string.
+pub const TYPED_QUERY_MEMBERS: &[&str] = &["pageSize", "historyLength", "includeArtifacts"];
 
 /// A QUERY-STRING VALUE, TYPED THE WAY THE ENVELOPE WANTS IT: an integer is a number, `true` and
 /// `false` are booleans, anything else (a task id, a page token, a status name) stays a string.
@@ -199,8 +212,8 @@ pub fn path_decode(s: &str) -> Option<String> {
 }
 
 /// A request body as the `params`, or the empty object when there is none or it is not JSON: an
-/// empty body is no fault on this binding (`:cancel` and `DELETE` carry none), and a body that is
-/// not JSON reaches the operation as empty `params`, refused there for the member it lacks.
+/// empty body is no fault on this binding (a `DELETE` carries none, a `:cancel` may), and a body
+/// that is not JSON reaches the operation as empty `params`, refused there for the member it lacks.
 #[must_use]
 pub fn json_body(body: &[u8]) -> Value {
     if body.is_empty() {
@@ -308,10 +321,21 @@ pub fn compose_from(
             .maybe("includeArtifacts", query.get("includeArtifacts"));
         (method::LIST_TASKS, params.into_value())
     } else if at("GET", crate::ROUTE_TASK) {
-        let params = Params::new()
-            .set("id", var("id"))
-            .maybe("historyLength", query.get("historyLength"));
-        (method::GET_TASK, params.into_value())
+        // `GET /tasks/{id}:subscribe` (proto `SubscribeToTask`): the verb suffix sits INSIDE the
+        // captured segment, as on the POST verbs, so it is split off before the read is composed.
+        let addressed = var("id");
+        match addressed.rsplit_once(':') {
+            Some((id, VERB_SUBSCRIBE)) => (
+                method::SUBSCRIBE_TO_TASK,
+                Params::new().set("id", id).into_value(),
+            ),
+            _ => {
+                let params = Params::new()
+                    .set("id", addressed)
+                    .maybe("historyLength", query.get("historyLength"));
+                (method::GET_TASK, params.into_value())
+            }
+        }
     } else if at("POST", crate::ROUTE_TASK) {
         let addressed = var("id");
         let Some((id, verb)) = addressed.rsplit_once(':') else {
@@ -322,7 +346,17 @@ pub fn compose_from(
             VERB_SUBSCRIBE => method::SUBSCRIBE_TO_TASK,
             _ => return Err(not_a_verb(&addressed)),
         };
-        (name, Params::new().set("id", id).into_value())
+        // `:cancel` carries its request as the body (proto `CancelTask`, `body: "*"`: its
+        // `metadata`); THE PATH WINS, so the id is set after the merge.
+        let posted = if name == method::CANCEL_TASK {
+            json_body(body)
+        } else {
+            json!({})
+        };
+        (
+            name,
+            Params::new().merge(&posted).set("id", id).into_value(),
+        )
     } else if at("POST", crate::ROUTE_PUSH_CONFIGS) {
         // THE PATH WINS: merged first, `taskId` set after, so a posted member cannot re-point it.
         let params = Params::new()
