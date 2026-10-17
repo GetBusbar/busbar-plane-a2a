@@ -40,6 +40,25 @@ pub fn mint(agent: &str, random: [u8; MINT_BYTES]) -> String {
 /// spelling, `taskId` every verb about a task, `task_id` A2A v1.0's.
 pub const TASK_ID_MEMBERS: [&str; 3] = ["id", "taskId", "task_id"];
 
+/// The members of `envelope`'s `params` that name a task: [`TASK_ID_MEMBERS`], less `id` on a
+/// v1.0 push-config verb, whose `id` is the CONFIG (a2a.proto:716-733: `task_id = 2`, `id = 3`).
+fn task_members(envelope: &Value) -> &'static [&'static str] {
+    use crate::local::{verb_of, Dialect, LocalVerb};
+    match envelope
+        .get("method")
+        .and_then(Value::as_str)
+        .and_then(verb_of)
+    {
+        Some(
+            LocalVerb::CreatePushConfig(Dialect::V10)
+            | LocalVerb::GetPushConfig(Dialect::V10)
+            | LocalVerb::ListPushConfigs(Dialect::V10)
+            | LocalVerb::DeletePushConfig(Dialect::V10),
+        ) => &TASK_ID_MEMBERS[1..],
+        _ => &TASK_ID_MEMBERS[..],
+    }
+}
+
 /// The task ids a request names at the top of its `params`, in [`TASK_ID_MEMBERS`] order: the
 /// candidates for the task the request addresses.
 #[must_use]
@@ -47,7 +66,7 @@ pub fn named_tasks(envelope: &Value) -> Vec<&str> {
     let Some(params) = envelope.get("params").and_then(Value::as_object) else {
         return Vec::new();
     };
-    TASK_ID_MEMBERS
+    task_members(envelope)
         .iter()
         .filter_map(|m| params.get(*m).and_then(Value::as_str))
         .collect()
@@ -98,7 +117,7 @@ pub fn translate_request(
 ) -> Option<Vec<u8>> {
     let params = envelope.get("params")?.as_object()?;
     let mut rewritten = params.clone();
-    let mut any = translate_members(&mut rewritten, &TASK_ID_MEMBERS, backend_of);
+    let mut any = translate_members(&mut rewritten, task_members(envelope), backend_of);
     if let Some(message) = rewritten.get("message").and_then(Value::as_object) {
         let mut msg = message.clone();
         if translate_members(&mut msg, &TASK_ID_MEMBERS[1..], backend_of) {

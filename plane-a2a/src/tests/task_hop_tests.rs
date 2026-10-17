@@ -471,10 +471,15 @@ fn alice_sends(envelope: &Value) -> (TaskHop, Option<Vec<u8>>) {
 /// Ported from busbar-a2a a2a/tests/idmap_tests.rs::no_spelling_of_the_task_member_crosses_the_boundary.
 #[test]
 fn no_spelling_of_the_task_member_crosses_the_boundary() {
-    for member in ["id", "taskId", "task_id"] {
+    // `id` names the task on v0.3's spelling; on v1.0's it is the config's id.
+    for (member, method) in [
+        ("id", "tasks/pushNotificationConfig/get"),
+        ("taskId", "GetTaskPushNotificationConfig"),
+        ("task_id", "GetTaskPushNotificationConfig"),
+    ] {
         let naming = |id: &str| {
             json!({
-                "jsonrpc": "2.0", "id": 7, "method": "GetTaskPushNotificationConfig",
+                "jsonrpc": "2.0", "id": 7, "method": method,
                 "params": { member: id }
             })
         };
