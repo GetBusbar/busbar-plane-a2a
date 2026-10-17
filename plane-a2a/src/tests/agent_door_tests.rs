@@ -553,12 +553,12 @@ fn the_framed_line_marks_its_messages_and_a_late_failure() {
 /// Ported from busbar-a2a a2a/tests/idmap_tests.rs::re_recording_the_same_pair_does_not_churn_the_map.
 #[test]
 fn re_recording_the_same_pair_does_not_churn_the_map() {
-    let map: Keyed<String, String> = Keyed::new();
+    let map = BackendIds::default();
     for k in ["a", "b", "c"] {
-        keep(&map, 3, k.to_string(), format!("far-{k}"));
+        map.record(3, k.to_string(), format!("far-{k}"));
     }
     for _ in 0..1000 {
-        keep(&map, 3, "b".to_string(), "far-b".to_string());
+        map.record(3, "b".to_string(), "far-b".to_string());
     }
     assert_eq!(
         map.len(),
@@ -566,12 +566,12 @@ fn re_recording_the_same_pair_does_not_churn_the_map() {
         "the map is still at its cap and nothing left it"
     );
     for k in ["a", "b", "c"] {
-        assert_eq!(map.get(&k.to_string()), Some(format!("far-{k}")), "{k}");
+        assert_eq!(map.get(k), Some(format!("far-{k}")), "{k}");
     }
     // A NEW key past the cap still makes room, so the bound holds.
-    keep(&map, 3, "d".to_string(), "far-d".to_string());
+    map.record(3, "d".to_string(), "far-d".to_string());
     assert_eq!(map.len(), 3);
-    assert_eq!(map.get(&"d".to_string()), Some("far-d".to_string()));
+    assert_eq!(map.get("d"), Some("far-d".to_string()));
 }
 
 /// THE FAR END'S TASK IDS ARE FORGOTTEN OLDEST FIRST, never by how the callers' references sort:
@@ -580,19 +580,19 @@ fn re_recording_the_same_pair_does_not_churn_the_map() {
 /// smallest key, so `amy`'s id, recorded after `zed`'s, went first and `zed`'s stayed.
 #[test]
 fn the_far_end_task_ids_are_forgotten_oldest_first_never_by_the_callers_name() {
-    let map: Keyed<String, String> = Keyed::new();
-    keep(&map, 3, "zed/t1".to_string(), "far-1".to_string());
-    keep(&map, 3, "amy/t2".to_string(), "far-2".to_string());
-    keep(&map, 3, "bob/t3".to_string(), "far-3".to_string());
-    keep(&map, 3, "cat/t4".to_string(), "far-4".to_string());
+    let map = BackendIds::default();
+    map.record(3, "zed/t1".to_string(), "far-1".to_string());
+    map.record(3, "amy/t2".to_string(), "far-2".to_string());
+    map.record(3, "bob/t3".to_string(), "far-3".to_string());
+    map.record(3, "cat/t4".to_string(), "far-4".to_string());
     assert_eq!(map.len(), 3, "the bound holds");
     assert_eq!(
-        map.get(&"zed/t1".to_string()),
+        map.get("zed/t1"),
         None,
         "the id recorded longest ago is the one forgotten"
     );
     assert_eq!(
-        map.get(&"amy/t2".to_string()),
+        map.get("amy/t2"),
         Some("far-2".to_string()),
         "a newer id stays, however its caller's reference sorts"
     );
