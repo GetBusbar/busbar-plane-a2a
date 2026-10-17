@@ -29,7 +29,7 @@ permissions:
 
 jobs:
   ci:
-    uses: GetBusbar/busbar/.github/workflows/plugin-ci.yml@6cdb637a5af85078d3b86c9cbbae261c71779e01
+    uses: GetBusbar/busbar/.github/workflows/plugin-ci.yml@c181130d146f96c3a3ddab7c0b8a17e538cd4694
     with:
       service: none
       busbar_checkout: true
