@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::*;
 
 /// THE HOST RECORDS, as a test holds them.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub(crate) struct Book {
     rows: BTreeMap<(String, String), Vec<u8>>,
     claims: BTreeSet<(String, String)>,

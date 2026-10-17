@@ -282,3 +282,33 @@ fn push_notification_not_supported_and_extension_support_required_round_trip() {
         assert_ne!(code, -32006, "must not collapse to the gateway-fault code");
     }
 }
+
+/// A TASK'S HISTORY leaves under busbar's identity too: every message in `history` that names the
+/// far end's task or context names busbar's, so no backend id reaches the caller; a message that
+/// names neither is left alone.
+#[test]
+fn a_tasks_history_messages_take_busbars_identity() {
+    let mut task = json!({ "task": { "id": "far-1", "contextId": "far-c",
+        "status": { "state": "TASK_STATE_WORKING" },
+        "history": [
+            { "messageId": "m1", "role": "ROLE_USER", "taskId": "far-1", "contextId": "far-c" },
+            { "messageId": "m2", "role": "ROLE_AGENT", "taskId": "far-1" },
+            { "messageId": "m3", "role": "ROLE_AGENT" },
+        ] } });
+    rewrite_identity(&mut task, "t", "c", None);
+    assert_eq!(
+        task["task"]["history"],
+        json!([
+            { "messageId": "m1", "role": "ROLE_USER", "taskId": "t", "contextId": "c" },
+            { "messageId": "m2", "role": "ROLE_AGENT", "taskId": "t" },
+            { "messageId": "m3", "role": "ROLE_AGENT" },
+        ])
+    );
+    let mut bare = json!({ "kind": "task", "id": "far-1", "contextId": "far-c",
+        "history": [{ "kind": "message", "messageId": "m1", "taskId": "far-1", "contextId": "far-c" }] });
+    rewrite_identity(&mut bare, "t", "c", None);
+    assert_eq!(
+        bare["history"],
+        json!([{ "kind": "message", "messageId": "m1", "taskId": "t", "contextId": "c" }])
+    );
+}
