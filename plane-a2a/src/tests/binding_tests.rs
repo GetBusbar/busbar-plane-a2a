@@ -165,8 +165,8 @@ fn http_json_client_issues_cancel_task() {
     assert!(f.body.is_empty() && !f.has_body);
 }
 
-/// `http_json_client_issues_subscribe_to_task` (and its v1.0 spelling, `task_id`): a POST to the
-/// task's `:subscribe`.
+/// `http_json_client_issues_subscribe_to_task` (and its v1.0 spelling, `task_id`): a GET of the
+/// task's `:subscribe` (proto `SubscribeToTask`: `get: "/tasks/{id=*}:subscribe"`).
 #[test]
 fn http_json_client_issues_subscribe_to_task() {
     for (method, member) in [("tasks/resubscribe", "id"), ("SubscribeToTask", "task_id")] {
@@ -175,7 +175,7 @@ fn http_json_client_issues_subscribe_to_task() {
         let f = compose(AGENT, method, &Value::Object(params)).unwrap();
         assert_eq!(
             (f.verb, f.target.as_str()),
-            ("POST", "/a2a/tasks/BACKEND-OWN-TASK-ID:subscribe"),
+            ("GET", "/a2a/tasks/BACKEND-OWN-TASK-ID:subscribe"),
             "{method}"
         );
     }
