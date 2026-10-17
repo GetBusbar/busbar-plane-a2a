@@ -222,3 +222,40 @@ fn the_cards_interface_url_never_moves_the_hop() {
         f.target
     );
 }
+
+/// SUBSCRIBE IS A GET on the HTTP+JSON binding (proto `SubscribeToTask`:
+/// `get: "/tasks/{id=*}:subscribe"`), with no body, in both dialects' spellings.
+#[test]
+fn http_json_client_subscribes_with_a_get() {
+    for (method, member) in [("tasks/resubscribe", "id"), ("SubscribeToTask", "id")] {
+        let f = compose(AGENT, method, &json!({ member: "BACKEND-OWN-TASK-ID" })).unwrap();
+        assert_eq!(
+            (f.verb, f.target.as_str()),
+            ("GET", "/a2a/tasks/BACKEND-OWN-TASK-ID:subscribe"),
+            "{method}"
+        );
+        assert!(f.body.is_empty() && !f.has_body, "{method}");
+    }
+}
+
+/// A CANCEL CARRIES ITS METADATA in the body (proto `CancelTask`:
+/// `post: "/tasks/{id=*}:cancel" body: "*"`; `CancelTaskRequest.metadata`), never refused as
+/// unframable.
+#[test]
+fn http_json_client_cancel_carries_its_metadata_in_the_body() {
+    let f = compose(
+        AGENT,
+        "CancelTask",
+        &json!({ "id": "BACKEND-OWN-TASK-ID", "metadata": { "why": "done" } }),
+    )
+    .expect("a cancel with metadata is framable");
+    assert_eq!(
+        (f.verb, f.target.as_str()),
+        ("POST", "/a2a/tasks/BACKEND-OWN-TASK-ID:cancel")
+    );
+    assert!(f.has_body);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&f.body).unwrap(),
+        json!({ "metadata": { "why": "done" } })
+    );
+}
