@@ -171,13 +171,13 @@ fn a_request_naming_a_task_the_caller_holds_reuses_it_and_opens_nothing() {
 }
 
 #[test]
-fn a_task_another_caller_holds_is_not_addressed_so_a_fresh_one_is_minted() {
+fn a_task_another_caller_holds_is_not_addressed_and_is_refused_not_found() {
     let mut desk = desk();
     let get_task =
         json!({ "jsonrpc": "2.0", "id": 7, "method": "GetTask", "params": { "id": "t2" } });
-    let (task, _) = hop(opened(&mut desk, &get_task, ALICE));
-    assert_eq!(task.task_id, MINTED);
-    assert!(!task.addressed);
+    let (status, code, _) = refusal_of(opened(&mut desk, &get_task, ALICE));
+    assert_eq!((status, code), (404, -32001));
+    assert_eq!(desk.draws, 0, "no fresh task is minted");
 }
 
 #[test]
@@ -243,10 +243,13 @@ fn a_held_task_id_whose_far_end_id_is_known_is_sent_on_as_the_far_ends() {
     let (_, instead) = hop(opened_with(&mut desk, &cancel, ALICE, &back));
     let sent: Value = serde_json::from_slice(&instead.expect("translated")).unwrap();
     assert_eq!(sent["params"]["id"], "far-t1");
+    // Another caller's task is never sent on, translated or not: it is refused as not found.
     let foreign =
         json!({ "jsonrpc": "2.0", "id": 7, "method": "CancelTask", "params": { "id": "t2" } });
-    let (_, instead) = hop(opened_with(&mut desk, &foreign, ALICE, &back));
-    assert_eq!(instead, None);
+    assert!(matches!(
+        opened_with(&mut desk, &foreign, ALICE, &back),
+        Opened::Refused(_)
+    ));
 }
 
 fn settled(desk: &mut Desk, task: &TaskHop, how: &TaskSettled) -> usize {
@@ -500,7 +503,7 @@ fn no_spelling_of_the_task_member_crosses_the_boundary() {
 
 /// THE WRITE THROUGH THE SECOND TURN. `params.message.taskId` is how a caller continues a
 /// conversation: the owner's second turn reaches its own open task, and an intruder's pointed at
-/// another caller's task is left untranslated, the same as one pointed at a task that never was.
+/// another caller's task is refused, never sent on, exactly as one pointed at a task that never was.
 /// Ported from busbar-a2a a2a/tests/idmap_tests.rs::the_second_turns_task_id_cannot_be_pointed_at_another_principals_conversation.
 #[test]
 fn the_second_turns_task_id_cannot_be_pointed_at_another_principals_conversation() {
@@ -508,14 +511,21 @@ fn the_second_turns_task_id_cannot_be_pointed_at_another_principals_conversation
         send(json!({ "message": { "role": "ROLE_USER", "messageId": "m-9", "taskId": id } }))
     };
 
-    let (_, mine) = alice_sends(&turn("t1"));
+    let (task, mine) = alice_sends(&turn("t1"));
+    assert_eq!(
+        task.task_id, "t1",
+        "the owner's second turn addresses its task"
+    );
     let mine: Value =
         serde_json::from_slice(&mine.expect("the owner's second turn is translated")).unwrap();
     assert_eq!(mine.pointer("/params/message/taskId").unwrap(), "far-t1");
 
-    let (_, at_bobs) = alice_sends(&turn("t2"));
-    let (_, at_nothing) = alice_sends(&turn("never-was"));
-    assert_eq!(at_bobs, None, "another caller's task is not joined");
+    let refused = |id: &str| match opened_with(&mut desk(), &turn(id), ALICE, &far) {
+        Opened::Refused(reply) => reply,
+        opened => panic!("a second turn at `{id}` must be refused: {opened:?}"),
+    };
+    let (at_bobs, at_nothing) = (refused("t2"), refused("never-was"));
+    assert_eq!(at_bobs.status, 404, "another caller's task is not joined");
     assert_eq!(
         at_bobs, at_nothing,
         "a second turn at another caller's task is indistinguishable from one at a task that does not exist"

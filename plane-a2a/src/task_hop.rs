@@ -8,6 +8,11 @@
 //!
 //! * ADDRESSED: the request's `params`, or its message's `taskId` (a second turn), name a task the
 //!   caller holds ([`task_identity::translatable`]): the hop reuses its identity and opens nothing.
+//! * NOT HELD: a request ADDRESSED to a task (`GetTask`, `CancelTask` or `SubscribeToTask` naming
+//!   one, or a message whose `taskId` names one) that the caller does not hold is refused `404`,
+//!   A2A's `TaskNotFoundError` (`-32001`) in the local verbs' words ([`local::NO_SUCH_TASK`]):
+//!   nothing is opened and nothing is relayed. Another caller's task, a retired one and one that
+//!   never was read alike, so the refusal is no existence oracle.
 //! * RESUMED: the caller's message names a `contextId` under which one of its tasks on this agent
 //!   is interrupted: the newest moves back to `working` (refused `409` when it cannot).
 //! * FRESH: busbar mints the id from eight random bytes ([`task_identity::mint`]), the `contextId` is the
@@ -40,6 +45,8 @@ use crate::task_identity::{self, MINT_BYTES};
 use crate::tasks::{self, Halt, Planned, Records, Stamp, Write};
 use crate::TaskRow;
 
+/// `-32001`: no such task for this caller (A2A `TaskNotFoundError`).
+const CODE_TASK_NOT_FOUND: i64 = -32001;
 /// `-32002`: the task cannot be moved.
 const CODE_TASK_NOT_CANCELABLE: i64 = -32002;
 /// `-32603`: busbar failed.
@@ -50,6 +57,8 @@ const CODE_INVALID_PARAMS: i64 = -32602;
 const STATUS_BAD_REQUEST: u32 = 400;
 /// The status a task that cannot be recorded answers with.
 const STATUS_UNAVAILABLE: u32 = 503;
+/// The status a task the caller does not hold answers with (A2A section 5.4, `TaskNotFoundError`).
+const STATUS_NOT_FOUND: u32 = 404;
 /// The status an interrupted task that cannot resume answers with.
 const STATUS_CONFLICT: u32 = 409;
 /// The engine's words for a task it could not record (`busbar-a2a` `receive.rs:2032-2049`).
@@ -234,6 +243,14 @@ pub fn open(
             break;
         }
     }
+    if addressed.is_none() && addresses_a_task(req.envelope) {
+        return Ok(refused(
+            STATUS_NOT_FOUND,
+            rpc_id,
+            CODE_TASK_NOT_FOUND,
+            local::NO_SUCH_TASK,
+        ));
+    }
     let context = task_identity::context_of(req.envelope);
     let resumed = match (&addressed, context.is_empty()) {
         (None, false) => resumable(
@@ -360,6 +377,20 @@ pub fn open(
         callback,
         unrecorded,
     })
+}
+
+/// Whether `envelope` is ADDRESSED to a task, so that a task the caller does not hold refuses it: a
+/// task verb (`GetTask`, `CancelTask`, `SubscribeToTask`, either spelling) naming one in its
+/// `params`, or a message naming one in its `taskId`.
+fn addresses_a_task(envelope: &Value) -> bool {
+    use crate::ops::{row_for, OP_TASK_CANCEL, OP_TASK_GET, OP_TASK_SUBSCRIBE};
+    let task_verb = envelope
+        .get("method")
+        .and_then(Value::as_str)
+        .and_then(row_for)
+        .is_some_and(|row| [OP_TASK_GET, OP_TASK_CANCEL, OP_TASK_SUBSCRIBE].contains(&row.op));
+    (task_verb && !task_identity::named_tasks(envelope).is_empty())
+        || !task_identity::message_tasks(envelope).is_empty()
 }
 
 /// THE INLINE CONFIG OBJECT whose `url` is the callback: the first of the three spellings that
