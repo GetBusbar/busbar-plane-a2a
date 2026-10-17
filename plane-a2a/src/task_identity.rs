@@ -8,7 +8,8 @@
 //!
 //! * A fresh task's id is `a2a-<agent>-<16 hex>` ([`mint`]), its eight bytes from the kernel's
 //!   `random.fill`; its `contextId` is the caller's, or the id when the caller named none.
-//! * A request naming a task the caller holds reuses that task's identity ([`named_tasks`]).
+//! * A request naming a task the caller holds, in its `params` or its message, reuses that task's
+//!   identity ([`translatable`]).
 //! * The far end's answer leaves under busbar's identity ([`rewrite_identity`]); the far end's own
 //!   id is read first ([`backend_task_id`]) so a following request naming busbar's id is sent on under
 //!   the far end's ([`translate_request`]).
@@ -61,22 +62,29 @@ pub fn context_of(envelope: &Value) -> &str {
         .unwrap_or_default()
 }
 
-/// Every task id [`translate_request`] may translate: the top-level members, then the message's
-/// (a message's own `id` is not a task id).
+/// The task ids the caller's MESSAGE names (`params.message.taskId`, or `task_id`): how A2A v1.0
+/// continues a task (`Message.task_id`, a2a.proto:265-266). A message's own `id` is not a task id.
+#[must_use]
+pub fn message_tasks(envelope: &Value) -> Vec<&str> {
+    let Some(message) = envelope
+        .pointer("/params/message")
+        .and_then(Value::as_object)
+    else {
+        return Vec::new();
+    };
+    TASK_ID_MEMBERS
+        .iter()
+        .filter(|m| **m != "id")
+        .filter_map(|m| message.get(*m).and_then(Value::as_str))
+        .collect()
+}
+
+/// Every task id a request ADDRESSES, and so every one [`translate_request`] may translate: the
+/// top-level members ([`named_tasks`]), then the message's ([`message_tasks`]).
 #[must_use]
 pub fn translatable(envelope: &Value) -> Vec<&str> {
     let mut ids = named_tasks(envelope);
-    if let Some(message) = envelope
-        .pointer("/params/message")
-        .and_then(Value::as_object)
-    {
-        ids.extend(
-            TASK_ID_MEMBERS
-                .iter()
-                .filter(|m| **m != "id")
-                .filter_map(|m| message.get(*m).and_then(Value::as_str)),
-        );
-    }
+    ids.extend(message_tasks(envelope));
     ids
 }
 

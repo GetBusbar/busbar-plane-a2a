@@ -6,8 +6,8 @@
 //! unary hop (`busbar-a2a` `receive`: `addressed_task`, `resumable_task`, the mint, the submit and
 //! `record_dispatch`, `record_state`, `end_task`), in its order and with its answers.
 //!
-//! * ADDRESSED: the request's `params` name a task the caller holds ([`task_identity::named_tasks`]):
-//!   the hop reuses its identity and opens nothing.
+//! * ADDRESSED: the request's `params`, or its message's `taskId` (a second turn), name a task the
+//!   caller holds ([`task_identity::translatable`]): the hop reuses its identity and opens nothing.
 //! * RESUMED: the caller's message names a `contextId` under which one of its tasks on this agent
 //!   is interrupted: the newest moves back to `working` (refused `409` when it cannot).
 //! * FRESH: busbar mints the id from eight random bytes ([`task_identity::mint`]), the `contextId` is the
@@ -168,7 +168,7 @@ fn resumable(rows: Vec<TaskRow>, context_id: &str, member: &str) -> Option<TaskR
 
 /// THE MEMBER HOLDING THE TASK a request to a failover pool is about (predev `receive.rs:1858-1868`
 /// and `route.rs` `select_member`), read off the caller's task records: the `agent_id` of the task
-/// the request names and the caller holds, else of the newest of the caller's interrupted tasks
+/// the request names (in its `params` or its message) and the caller holds, else of the newest of the caller's interrupted tasks
 /// under the `contextId` it names held by ANY of the pool's `members` (it resumes AT that member).
 /// `None` = the request is a fresh submission, which the pool's walk places. A read that failed
 /// reads as nothing, as [`open`]'s lookups read it.
@@ -182,7 +182,7 @@ pub fn holder(
     now: u64,
     members: &[String],
 ) -> Result<Option<String>, Halt> {
-    for named in task_identity::named_tasks(envelope) {
+    for named in task_identity::translatable(envelope) {
         if let Some(held) = or_absent(tasks::get(reach, caller, named, now), None)? {
             return Ok(Some(held.row.agent_id));
         }
@@ -228,7 +228,7 @@ pub fn open(
     };
     let url = callback.as_ref().map(|c| c.url.as_str());
     let mut addressed = None;
-    for named in task_identity::named_tasks(req.envelope) {
+    for named in task_identity::translatable(req.envelope) {
         if let Some(held) = or_absent(tasks::get(reach, req.caller, named, req.now), None)? {
             addressed = Some(held.row);
             break;
