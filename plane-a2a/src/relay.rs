@@ -1063,6 +1063,7 @@ impl HopRelay {
             Some(t) => (t.task_id.clone(), t.context_id.clone(), t.skill.clone()),
             None => (String::new(), String::new(), None),
         };
+        let opened = self.task.as_ref().is_some_and(|t| !t.addressed);
         let rest = self.binding == Binding::HttpJson;
         let id = self.id.clone();
         let mut body = Vec::new();
@@ -1075,11 +1076,16 @@ impl HopRelay {
             match events::read_event(&frame, &id, &task_id, &context_id, skill.as_deref()) {
                 Ok(event) => {
                     body.extend_from_slice(&event.sse);
-                    let said =
-                        event.state.is_some() || event.artifact || event.backend_task_id.is_some();
+                    // A message naming no task ends the task this hop opened, as the unary answer.
+                    let state = if opened && event.names_no_task {
+                        Some(TaskState::Completed)
+                    } else {
+                        event.state
+                    };
+                    let said = state.is_some() || event.artifact || event.backend_task_id.is_some();
                     if self.task.is_some() && said {
                         self.settled.push(TaskSettled::Event {
-                            state: event.state,
+                            state,
                             artifact: event.artifact,
                             backend_id: event.backend_task_id,
                         });
@@ -1307,8 +1313,14 @@ impl HopRelay {
         };
         PieceAnswer::ToCaller(match answer {
             Ok(mut result) => {
+                // A message naming no task ends the task this hop opened: there is no other.
+                let state = if !task.addressed && task_identity::names_no_task(&result) {
+                    TaskState::Completed
+                } else {
+                    task_identity::reported_task_state(&result)
+                };
                 self.settled.push(TaskSettled::Reported {
-                    state: task_identity::reported_task_state(&result),
+                    state,
                     backend_id: task_identity::backend_task_id(&result),
                 });
                 task_identity::rewrite_identity(

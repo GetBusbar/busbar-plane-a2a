@@ -41,6 +41,8 @@ pub struct Event {
     pub artifact: bool,
     /// The far end's own task id, before the substitution.
     pub backend_task_id: Option<String>,
+    /// It was a message naming no task ([`task_identity::names_no_task`]).
+    pub names_no_task: bool,
 }
 
 /// One JSON value as a complete event.
@@ -66,6 +68,7 @@ pub fn read_event(
             state: None,
             artifact: false,
             backend_task_id: None,
+            names_no_task: false,
         })
     };
     let Some(data) = sse_data(frame_text) else {
@@ -89,6 +92,7 @@ pub fn read_event(
             state: None,
             artifact: false,
             backend_task_id: None,
+            names_no_task: false,
         });
     };
     let Some(result) = envelope.get_mut("result") else {
@@ -103,12 +107,14 @@ pub fn read_event(
         .and_then(Value::as_str)
         .and_then(task_identity::wire_state);
     let backend_task_id = task_identity::backend_task_id(result);
+    let names_no_task = task_identity::names_no_task(result);
     task_identity::rewrite_identity(result, task_id, context_id, skill);
     Ok(Event {
         sse: json_event(&envelope),
         state,
         artifact,
         backend_task_id,
+        names_no_task,
     })
 }
 
