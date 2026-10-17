@@ -291,6 +291,9 @@ struct Waiting {
     delivery: Delivery,
     attempts: u32,
     not_before_ns: u64,
+    /// A retry's wait not yet counted from a clock reading: the attempt ended where no clock is
+    /// read (`drive`), so the next `tick` counts it from its own `now` ([`Deliveries::anchor`]).
+    wait_ns: Option<u64>,
     open: bool,
 }
 
@@ -383,6 +386,7 @@ impl Deliveries {
                 delivery,
                 attempts: 0,
                 not_before_ns: now_ns,
+                wait_ns: None,
                 open: false,
             });
             dropped
@@ -485,14 +489,43 @@ impl Deliveries {
         self.with(|b| b.unfiled)
     }
 
-    /// Settle the open attempt on `task_id`'s head: done, or back in the queue for its next
-    /// attempt (`jitter` is a random byte, [`jittered_ms`]). A terminal task's last delivery
-    /// forgets its credential.
+    /// Settle the open attempt on `task_id`'s head, the attempt having ENDED at `now_ns`: done, or
+    /// back in the queue for its next attempt, its wait counted from `now_ns` (`jitter` is a
+    /// random byte, [`jittered_ms`]). A terminal task's last delivery forgets its credential.
     pub fn settle(
         &self,
         task_id: &str,
         end: Attempted,
         now_ns: u64,
+        jitter: u8,
+    ) -> DeliverySettled {
+        self.settle_at(task_id, end, Some(now_ns), jitter)
+    }
+
+    /// [`Deliveries::settle`] for an attempt that ended where no clock is read (`drive`): a retry's
+    /// wait is counted from the next [`Deliveries::anchor`] (the `tick` the kernel runs after the
+    /// wake), never from when the attempt began. Its `Retry` time is `u64::MAX` until then.
+    pub fn settle_ended(&self, task_id: &str, end: Attempted, jitter: u8) -> DeliverySettled {
+        self.settle_at(task_id, end, None, jitter)
+    }
+
+    /// COUNT every wait [`Deliveries::settle_ended`] left from `now_ns`, the clock of the `tick`
+    /// that follows the attempt's end.
+    pub fn anchor(&self, now_ns: u64) {
+        self.with(|b| {
+            for w in b.queues.values_mut().filter_map(VecDeque::front_mut) {
+                if let Some(wait) = w.wait_ns.take() {
+                    w.not_before_ns = now_ns.saturating_add(wait);
+                }
+            }
+        });
+    }
+
+    fn settle_at(
+        &self,
+        task_id: &str,
+        end: Attempted,
+        ended_ns: Option<u64>,
         jitter: u8,
     ) -> DeliverySettled {
         self.with(|b| {
@@ -504,8 +537,15 @@ impl Deliveries {
             };
             head.open = false;
             if end.retryable() && head.attempts < MAX_ATTEMPTS {
-                let wait = jittered_ms(RETRY_DELAYS_MS[(head.attempts - 1) as usize], jitter);
-                head.not_before_ns = now_ns.saturating_add(wait.saturating_mul(1_000_000));
+                let wait = jittered_ms(RETRY_DELAYS_MS[(head.attempts - 1) as usize], jitter)
+                    .saturating_mul(1_000_000);
+                match ended_ns {
+                    Some(ended) => head.not_before_ns = ended.saturating_add(wait),
+                    None => {
+                        head.not_before_ns = u64::MAX;
+                        head.wait_ns = Some(wait);
+                    }
+                }
                 return DeliverySettled::Retry(head.not_before_ns);
             }
             let terminal = queue.pop_front().is_some_and(|w| w.delivery.terminal);
@@ -519,8 +559,8 @@ impl Deliveries {
         })
     }
 
-    /// When the lifecycle tick is next wanted: the earliest head no attempt is open on; `0` when
-    /// none waits.
+    /// When the lifecycle tick is next wanted: the earliest head no attempt is open on (at once
+    /// for a wait not yet counted, so a tick counts it); `0` when none waits.
     #[must_use]
     pub fn next_tick_ns(&self) -> u64 {
         self.with(|b| {
@@ -528,7 +568,13 @@ impl Deliveries {
                 .values()
                 .filter_map(VecDeque::front)
                 .filter(|w| !w.open)
-                .map(|w| w.not_before_ns.max(1))
+                .map(|w| {
+                    if w.wait_ns.is_some() {
+                        1
+                    } else {
+                        w.not_before_ns.max(1)
+                    }
+                })
                 .min()
                 .unwrap_or(0)
         })

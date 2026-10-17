@@ -43,7 +43,7 @@ use crate::a2a::task::Task;
 use crate::agent_door::A2aDoor;
 use crate::door_statement::NEED_OPEN_WEB;
 use crate::local::{self, PushConfig};
-use crate::push::{Attempted, Deliveries, Delivery, Owed};
+use crate::push::{Attempted, Deliveries, Delivery, DeliverySettled, Owed};
 use crate::records::KIND_PUSH_CONFIG;
 use crate::tasks::{self, Halt, Records, Stamp, Write};
 use crate::TaskRow;
@@ -383,6 +383,8 @@ fn tick_over(
     attempting: &Attempting,
     now_ns: u64,
 ) -> Outcome {
+    // A retry whose attempt ended in `drive` waits from now, the tick after its end.
+    deliveries.anchor(now_ns);
     if let Some(started) = attempting.started_ns() {
         // A held attempt belongs to `drive`, until it outlives its timeout (its wake was lost):
         // then it is CANCELLED FIRST (its connection closed, so it can never also complete), and
@@ -413,6 +415,7 @@ fn tick_over(
                 exchange: None,
             },
             now_ns,
+            Some(now_ns),
         ),
         None => Outcome::Ready,
     }
@@ -421,30 +424,46 @@ fn tick_over(
 /// [`drive`] over `line`.
 fn drive_over(line: &mut dyn Line, deliveries: &Deliveries, attempting: &Attempting) -> Outcome {
     match attempting.take() {
-        Some((flight, now_ns)) => advance_attempt(line, deliveries, attempting, flight, now_ns),
+        Some((flight, started_ns)) => {
+            advance_attempt(line, deliveries, attempting, flight, started_ns, None)
+        }
         None => Outcome::Ready,
     }
 }
 
-/// One entry of `flight`'s attempt, begun at `now_ns`: held again while its exchange pends, else
-/// settled.
+/// One entry of `flight`'s attempt, begun at `started_ns`: held again while its exchange pends,
+/// else settled. A retry's wait counts from when the attempt ENDED (spec l.391-392, two delays of
+/// 250/500 ms): `now_ns` on a `tick`; a `drive` reads no clock (`None`), so its wait is counted by
+/// the tick the wake is followed by, and the driver ticket is woken for it.
 fn advance_attempt(
     line: &mut dyn Line,
     deliveries: &Deliveries,
     attempting: &Attempting,
     mut flight: Flight,
-    now_ns: u64,
+    started_ns: u64,
+    now_ns: Option<u64>,
 ) -> Outcome {
     let jitter = line.jitter();
     match attempt(line, deliveries, &mut flight) {
         Poll::Pending => {
-            attempting.hold(flight, now_ns);
+            attempting.hold(flight, started_ns);
             Outcome::Pending
         }
         Poll::Ready((end, reached)) => {
             deliveries.reached(&flight.delivery.url, &reached);
             deliveries.owe(&flight.delivery, end);
-            let _ = deliveries.settle(&flight.delivery.task_id, end, now_ns, jitter);
+            let task_id = &flight.delivery.task_id;
+            match now_ns {
+                Some(now_ns) => {
+                    let _ = deliveries.settle(task_id, end, now_ns, jitter);
+                }
+                None => {
+                    if let DeliverySettled::Retry(_) = deliveries.settle_ended(task_id, end, jitter)
+                    {
+                        deliveries.wake();
+                    }
+                }
+            }
             Outcome::Ready
         }
     }
