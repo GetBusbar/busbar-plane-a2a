@@ -651,9 +651,9 @@ fn a_retry_waits_from_when_a_pended_attempt_ended() {
 
 /// A RECEIVER WHOSE ADDRESSES CHANGED IS STILL DELIVERED TO: the destination judge runs on every
 /// attempt and the dial lands only within what it judged (spec l.392-393, "re-runs the destination
-/// judge on every attempt"; THE DESIGN §5, the connector judges every open), so a fresh, allowed
-/// resolution that shares no address with an earlier delivery's is reached. RED against a plane-side
-/// rule that refuses it (`Moved`) for as long as the instance lives.
+/// judge on every attempt"; THE DESIGN, its connections section: the connector judges every open),
+/// so a fresh, allowed resolution that shares no address with an earlier delivery's is reached. RED
+/// against a plane-side rule that refuses it (`Moved`) for as long as the instance lives.
 #[test]
 fn a_receiver_whose_addresses_changed_is_still_delivered() {
     let callback = "https://hook.caller.test/notify";
