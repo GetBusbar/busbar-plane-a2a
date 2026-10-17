@@ -200,7 +200,7 @@ pub const SKILL_METADATA_KEY: &str = "busbar/skill";
 
 /// SUBSTITUTE BUSBAR'S TASK IDENTITY onto a far end's `result`, leaving everything else alone: the
 /// payload's own identity member (inside its wrapper), its `contextId`, the ids a status message
-/// nests, and the matched skill as `metadata["busbar/skill"]`.
+/// and every `history` message nest, and the matched skill as `metadata["busbar/skill"]`.
 pub fn rewrite_identity(
     result: &mut Value,
     task_id: &str,
@@ -238,14 +238,13 @@ pub fn rewrite_identity(
         .and_then(|s| s.get_mut("message"))
         .and_then(Value::as_object_mut)
     {
-        if msg.contains_key("taskId") {
-            msg.insert("taskId".to_string(), Value::String(task_id.to_string()));
-        }
-        if msg.contains_key("contextId") {
-            msg.insert(
-                "contextId".to_string(),
-                Value::String(context_id.to_string()),
-            );
+        rewrite_message_identity(msg, task_id, context_id);
+    }
+    // A task's history is its messages (a2a.proto:179-180): each that names the far end's task or
+    // context names busbar's.
+    if let Some(history) = obj.get_mut("history").and_then(Value::as_array_mut) {
+        for msg in history.iter_mut().filter_map(Value::as_object_mut) {
+            rewrite_message_identity(msg, task_id, context_id);
         }
     }
     if let Some(skill) = matched_skill {
@@ -261,6 +260,20 @@ pub fn rewrite_identity(
                 Value::String(skill.to_string()),
             );
         }
+    }
+}
+
+/// The task and context ids a message nested in a result names, replaced by busbar's; a member the
+/// message does not carry is not added.
+fn rewrite_message_identity(msg: &mut Map<String, Value>, task_id: &str, context_id: &str) {
+    if msg.contains_key("taskId") {
+        msg.insert("taskId".to_string(), Value::String(task_id.to_string()));
+    }
+    if msg.contains_key("contextId") {
+        msg.insert(
+            "contextId".to_string(),
+            Value::String(context_id.to_string()),
+        );
     }
 }
 
