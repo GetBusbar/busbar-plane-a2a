@@ -13,6 +13,9 @@
 //!   A2A's `TaskNotFoundError` (`-32001`) in the local verbs' words ([`local::NO_SUCH_TASK`]):
 //!   nothing is opened and nothing is relayed. Another caller's task, a retired one and one that
 //!   never was read alike, so the refusal is no existence oracle.
+//! * HELD AS TERMINAL: a `CancelTask` of a task the caller holds as terminal is refused `409`, A2A's
+//!   `TaskNotCancelableError` (`-32002`, [`TASK_NOT_CANCELABLE`]): busbar's own row answers it, as
+//!   a subscribe to a terminal task is answered, and nothing is relayed.
 //! * RESUMED: the caller's message names a `contextId` under which one of its tasks on this agent
 //!   is interrupted: the newest moves back to `working` (refused `409` when it cannot).
 //! * FRESH: busbar mints the id from eight random bytes ([`task_identity::mint`]), the `contextId` is the
@@ -66,6 +69,10 @@ const STATUS_NOT_FOUND: u32 = 404;
 const STATUS_CONFLICT: u32 = 409;
 /// The engine's words for a task it could not record (`busbar-a2a` `receive.rs:2032-2049`).
 pub const TASK_UNRECORDED: &str = "the task could not be recorded";
+/// The plane's words for a cancel of a task it holds as terminal (in the style of the subscribe
+/// refusal, `local::subscribe_refusal`).
+pub const TASK_NOT_CANCELABLE: &str =
+    "this task has reached a terminal state, so it cannot be canceled";
 /// The engine's words for an interrupted task it could not move back to `working`
 /// (`busbar-a2a` `receive.rs:1985-2001`).
 pub const TASK_UNRESUMED: &str = "this task cannot be resumed";
@@ -264,6 +271,17 @@ pub fn open(
         _ => None,
     };
     let (task, unrecorded) = match (addressed, resumed) {
+        (Some(row), _)
+            if is_cancel(req.envelope)
+                && TaskState::parse(&row.state).is_ok_and(TaskState::is_terminal) =>
+        {
+            return Ok(refused(
+                STATUS_CONFLICT,
+                rpc_id,
+                CODE_TASK_NOT_CANCELABLE,
+                TASK_NOT_CANCELABLE,
+            ));
+        }
         (Some(row), _) => {
             // An addressed task's callback is a PUSH-CONFIG SET, replace semantics, last writer
             // wins: a put of the task's push_config record, never a write of its row, so no other
@@ -404,6 +422,15 @@ fn addresses_a_task(envelope: &Value) -> bool {
         .is_some_and(|row| [OP_TASK_GET, OP_TASK_CANCEL, OP_TASK_SUBSCRIBE].contains(&row.op));
     (task_verb && !task_identity::named_tasks(envelope).is_empty())
         || !task_identity::message_tasks(envelope).is_empty()
+}
+
+/// Whether `envelope` is a `CancelTask`, in either spelling.
+fn is_cancel(envelope: &Value) -> bool {
+    envelope
+        .get("method")
+        .and_then(Value::as_str)
+        .and_then(crate::ops::row_for)
+        .is_some_and(|row| row.op == crate::ops::OP_TASK_CANCEL)
 }
 
 /// THE INLINE CONFIG OBJECT whose `url` is the callback: the first of the three spellings that

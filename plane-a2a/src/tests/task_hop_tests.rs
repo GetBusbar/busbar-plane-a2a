@@ -1364,10 +1364,7 @@ fn a_cancel_of_a_task_held_as_terminal_is_refused_not_cancelable() {
             json!({ "jsonrpc": "2.0", "id": 7, "method": method, "params": { "id": "t1" } });
         let (status, code, message) = refusal_of(opened(&mut d, &cancel, ALICE));
         assert_eq!((status, code), (409, -32002), "{method}");
-        assert_eq!(
-            message, "this task has reached a terminal state, so it cannot be canceled",
-            "{method}"
-        );
+        assert_eq!(message, TASK_NOT_CANCELABLE, "{method}");
         assert_eq!(d.book, before, "{method}: nothing is written");
 
         let read =
