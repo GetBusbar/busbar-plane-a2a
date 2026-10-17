@@ -89,7 +89,8 @@ pub const STATEMENT: Statement = Statement {
     ..statement(crate::PLANE_KEY, VERSION, MAX_INFLIGHT)
 };
 
-/// The most units the instance keeps state for at once; past it, the oldest is dropped first.
+/// The most units the instance keeps state for at once; past it, the oldest unit the door is done
+/// with makes room first, and only when none is held the oldest unit ([`AgentUnit::over`]).
 pub const MAX_UNITS: usize = 4096;
 
 /// One unit the instance keeps, from its arrival: what the arrival was, the agent the caller
@@ -124,6 +125,12 @@ pub struct AgentUnit {
     /// The failover pool the unit routes over (`ROUTE_POOL`): the pool its addressed agent is a
     /// member of. `None` for every other unit.
     pub pool: Option<String>,
+    /// The unit's own ticket, as its pieces carry it: what the kernel's `cancel` names it by.
+    pub ticket: Ticket,
+    /// THE DOOR IS DONE WITH IT: its answer is written whole, or the kernel cancelled it. Only a
+    /// `refusal` may still read it (the kernel judges the plane's last answer after it returns), and
+    /// that refusal forgets it; until then it is the first to make room (`keep_unit`).
+    pub over: bool,
 }
 
 /// One unit's unary hop, and the answer it is part way through writing.
@@ -639,15 +646,22 @@ fn agents_section(bytes: &[u8]) -> Result<AgentsCfg, Refusal> {
     door_statement::read_agents_section(bytes).map_err(Refusal::refused)
 }
 
-/// Keep `value` under `key` in `map`, dropping the smallest keys first past `cap`.
-fn keep<K: Ord, V>(map: &Keyed<K, V>, cap: usize, key: K, value: V) {
-    map.with_all(|m| {
-        while m.len() >= cap && !m.contains_key(&key) {
-            if m.pop_first().is_none() {
+/// Keep `unit` under `key`. Past [`MAX_UNITS`] room is made first by the oldest unit the door is
+/// done with ([`AgentUnit::over`]), and only when none is held by the oldest unit (unit keys are
+/// minted in arrival order).
+fn keep_unit(units: &Keyed<u64, AgentUnit>, key: u64, unit: AgentUnit) {
+    units.with_all(|m| {
+        while m.len() >= MAX_UNITS && !m.contains_key(&key) {
+            let over = m.iter().find(|(_, u)| u.over).map(|(k, _)| *k);
+            let gone = match over {
+                Some(k) => m.remove(&k),
+                None => m.pop_first().map(|(_, u)| u),
+            };
+            if gone.is_none() {
                 break;
             }
         }
-        m.insert(key, value);
+        m.insert(key, unit);
     });
 }
 
@@ -885,6 +899,16 @@ slot!(
     /// task keeps the last state it reached.
     Cancel, PlaneCancelIn, PlaneCancelOut, |instance, input, mut out| {
         if let Some(plane) = instance.get() {
+            // The cancelled unit is over: a refusal may still render it, so it is kept until then,
+            // the first to make room.
+            let ticket = input.cancel.ticket;
+            if ticket != Ticket::NONE {
+                plane.units.with_all(|m| {
+                    for u in m.values_mut().filter(|u| u.ticket == ticket) {
+                        u.over = true;
+                    }
+                });
+            }
             let woken = plane.flights.abandon(input.cancel.ticket);
             if let Some(host) = plane.host.as_ref() {
                 for waiter in woken {
@@ -1026,9 +1050,8 @@ slot!(
             if matches!(disposition, AgentDisposition::Request { .. }) {
                 out.counted();
             }
-            keep(
+            keep_unit(
                 &plane.units,
-                MAX_UNITS,
                 given.unit,
                 AgentUnit {
                     disposition,
@@ -1041,6 +1064,8 @@ slot!(
                     generation,
                     unreadable_rewrite: false,
                     pool: None,
+                    ticket: Ticket::NONE,
+                    over: false,
                 },
             );
             return Outcome::Ready;
@@ -1145,8 +1170,10 @@ slot!(
             generation,
             unreadable_rewrite: false,
             pool,
+            ticket: Ticket::NONE,
+            over: false,
         };
-        keep(&plane.units, MAX_UNITS, given.unit, unit);
+        keep_unit(&plane.units, given.unit, unit);
         Outcome::Ready
     }
 );
@@ -1209,9 +1236,8 @@ fn arrive_card(
             }
         }
     }
-    keep(
+    keep_unit(
         &plane.units,
-        MAX_UNITS,
         unit,
         AgentUnit {
             disposition: AgentDisposition::Card(ask),
@@ -1224,6 +1250,8 @@ fn arrive_card(
             generation,
             unreadable_rewrite: false,
             pool: None,
+            ticket: Ticket::NONE,
+            over: false,
         },
     );
     Outcome::Ready
@@ -2562,6 +2590,13 @@ slot!(
             return Outcome::Failed;
         };
         let unit = input.get().unit;
+        // The unit's ticket, which the kernel's `cancel` names it by.
+        let ticket = instance.ticket();
+        plane.units.with(&unit, |u| {
+            if let Some(u) = u {
+                u.ticket = ticket;
+            }
+        });
         // A REFUSED PIECE (`TAIL_REFUSED_PIECE`) ends only a relayed hop's task: a unit with no hop
         // has nothing to end, and `refusal` answers it.
         let refused = input.get().from == FROM_KERNEL && input.get().flags & PIECE_REFUSED != 0;
@@ -2956,6 +2991,10 @@ slot!(
             return Outcome::Failed;
         }
         out.set(|o| &o.status, status);
+        // THE UNIT'S LAST CALL: its refusal is rendered, and the door forgets it.
+        if let Some(plane) = instance.get() {
+            plane.units.remove(&given.unit);
+        }
         Outcome::Ready
     }
 );
