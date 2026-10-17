@@ -933,10 +933,11 @@ slot!(
 
 // ── the request path ──────────────────────────────────────────────────────────────────────────
 //
-// Nothing routes to these before the flip: the engine still serves every request, and no
-// production path loads this door (`tests/door_unrouted.rs` holds that). `arrive`, `on_piece`,
-// `refusal` and `project` serve the JSON-RPC and HTTP+JSON lines, their one-reply hops and their
-// hops answering in events; `serve`, `hydrate` and `start` are REFUSED.
+// The kernel's plane driver serves every A2A request through these: the door is exported by the
+// plugin crate and linked by the root. `arrive`, `on_piece`, `refusal` and `project` serve the
+// JSON-RPC, HTTP+JSON and gRPC lines and the open card reads, their one-reply hops and their hops
+// answering in events; `serve` answers the trust verbs and busbar's push callback; `hydrate` and
+// `start` have nothing to do.
 
 slot!(
     /// `arrive`: an arrival on the JSON-RPC line, or on the HTTP+JSON line as the envelope its
