@@ -573,6 +573,30 @@ fn re_recording_the_same_pair_does_not_churn_the_map() {
     assert_eq!(map.len(), 3);
     assert_eq!(map.get(&"d".to_string()), Some("far-d".to_string()));
 }
+
+/// THE FAR END'S TASK IDS ARE FORGOTTEN OLDEST FIRST, never by how the callers' references sort:
+/// one caller's volume past the cap pushes out the ids recorded longest ago, not another caller's
+/// newer one whose reference happens to sort first. RED before the fix: the map dropped its
+/// smallest key, so `amy`'s id, recorded after `zed`'s, went first and `zed`'s stayed.
+#[test]
+fn the_far_end_task_ids_are_forgotten_oldest_first_never_by_the_callers_name() {
+    let map: Keyed<String, String> = Keyed::new();
+    keep(&map, 3, "zed/t1".to_string(), "far-1".to_string());
+    keep(&map, 3, "amy/t2".to_string(), "far-2".to_string());
+    keep(&map, 3, "bob/t3".to_string(), "far-3".to_string());
+    keep(&map, 3, "cat/t4".to_string(), "far-4".to_string());
+    assert_eq!(map.len(), 3, "the bound holds");
+    assert_eq!(
+        map.get(&"zed/t1".to_string()),
+        None,
+        "the id recorded longest ago is the one forgotten"
+    );
+    assert_eq!(
+        map.get(&"amy/t2".to_string()),
+        Some("far-2".to_string()),
+        "a newer id stays, however its caller's reference sorts"
+    );
+}
 // ── THE REWRITE APPLY SITE FAILS CLOSED (predev `hook_tap_tests`, ported to the door) ───────────
 
 /// A COMMITTED REWRITE BUSBAR CANNOT READ BACK REFUSES THE SUBMISSION — it does not fall back to the
