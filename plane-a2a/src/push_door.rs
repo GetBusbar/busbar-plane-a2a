@@ -10,9 +10,10 @@
 //!   task with neither queues nothing.
 //! * The lifecycle `tick` ([`tick_deliveries`]) attempts ONE due notification per op: the kernel's random
 //!   byte for the retry's jitter, then the destination judge over the callback, its name resolved,
-//!   then predev's anti-rebinding rule over the judged addresses
-//!   ([`crate::push::Deliveries::rebound`]), then one exchange over the plane's outbound `open-web`
-//!   need ([`crate::door_statement::NEED_OPEN_WEB`]) landing only on those addresses. An attempt whose
+//!   then one exchange over the plane's outbound `open-web` need
+//!   ([`crate::door_statement::NEED_OPEN_WEB`]) landing only on the addresses it judged. Judging a
+//!   destination is the host's (THE DESIGN §5: the connector judges every open); the plane keeps
+//!   no address rule of its own. An attempt whose
 //!   exchange pends ends its `tick` PENDING (a driver ticket's op is never resumed) and goes on
 //!   through `drive` ([`drive`]), held in plane memory across the entries, each making the same host
 //!   calls in the same order (the replay rule). Its end settles the queue and is OWED to the task's
@@ -171,12 +172,12 @@ impl Calls<'_> {
 /// WHAT ONE ATTEMPT ASKS OF THE HOST after its jitter byte, in its one order: the destination judge
 /// over the callback, then the exchange. A seam, so what a verdict stops and what reaches the
 /// receiver hold under a test's host as under the kernel's ([`attempt`]).
-/// One judgement: the `DEST_*` verdict, the addresses judged, and the set a dial must land within.
-type Judgement = (u64, Vec<String>, String);
+/// One judgement: the `DEST_*` verdict and the set a dial must land within.
+type Judgement = (u64, String);
 
 trait Line {
-    /// The destination judge over `url`: its `DEST_*` verdict, the addresses it judged, and the set
-    /// a dial must land within; `None` when nothing was checked.
+    /// The destination judge over `url`: its `DEST_*` verdict and the set a dial must land within;
+    /// `None` when nothing was checked.
     fn judge(&mut self, url: &str) -> Poll<Option<Judgement>>;
     /// One exchange of `ex` to `url`: the receiver's status; `None` when the connection or the
     /// exchange failed.
@@ -223,11 +224,7 @@ impl Line for Calls<'_> {
         match judged {
             Poll::Pending => Poll::Pending,
             Poll::Ready(Err(_)) => Poll::Ready(None),
-            Poll::Ready(Ok(j)) => Poll::Ready(Some((
-                j.verdict,
-                j.addresses.names().map(str::to_string).collect(),
-                j.within(),
-            ))),
+            Poll::Ready(Ok(j)) => Poll::Ready(Some((j.verdict, j.within()))),
         }
     }
 
@@ -241,45 +238,36 @@ impl Line for Calls<'_> {
     }
 }
 
-/// One attempt of `flight` over `line`: its end once known, with the addresses its request reached.
-/// The destination is judged afresh on EVERY attempt (the engine's delivery re-ran its guard against
-/// a fresh resolution before each one): a refusal, the judge's or the anti-rebinding rule's, ends
-/// the attempt before anything is framed or sent.
-fn attempt(
-    line: &mut dyn Line,
-    deliveries: &Deliveries,
-    flight: &mut Flight,
-) -> Poll<(Attempted, Vec<String>)> {
+/// One attempt of `flight` over `line`: its end once known. The destination is judged afresh on
+/// EVERY attempt (spec l.392-393, "re-runs the destination judge on every attempt"), and the dial
+/// lands only within what that judgement admitted: a refusal ends the attempt before anything is
+/// framed or sent.
+fn attempt(line: &mut dyn Line, deliveries: &Deliveries, flight: &mut Flight) -> Poll<Attempted> {
     let url = flight.delivery.url.clone();
-    let (verdict, addrs, within) = match line.judge(&url) {
+    let (verdict, within) = match line.judge(&url) {
         Poll::Pending => return Poll::Pending,
         // Nothing was checked, so nothing is allowed.
-        Poll::Ready(None) => {
-            return Poll::Ready((Attempted::Judged(DEST_UNRESOLVABLE), Vec::new()))
-        }
+        Poll::Ready(None) => return Poll::Ready(Attempted::Judged(DEST_UNRESOLVABLE)),
         Poll::Ready(Some(judged)) => judged,
     };
     if verdict != DEST_ALLOWED {
-        return Poll::Ready((Attempted::Judged(verdict), Vec::new()));
-    }
-    if let Some(moved) = deliveries.rebound(&url, &addrs) {
-        return Poll::Ready((moved, Vec::new()));
+        return Poll::Ready(Attempted::Judged(verdict));
     }
     // The credential joins the request only now, after the judge has passed.
     if flight.exchange.is_none() {
         match Exchange::request(deliveries.request(&flight.delivery)) {
             Ok(ex) => flight.exchange = Some(ex.landing_within(within)),
             // A request busbar cannot frame sends nothing.
-            Err(_) => return Poll::Ready((Attempted::Judged(DEST_UNRESOLVABLE), Vec::new())),
+            Err(_) => return Poll::Ready(Attempted::Judged(DEST_UNRESOLVABLE)),
         }
     }
     let Some(ex) = flight.exchange.as_mut() else {
-        return Poll::Ready((Attempted::Transport, Vec::new()));
+        return Poll::Ready(Attempted::Transport);
     };
     match line.send(ex, &url) {
         Poll::Pending => Poll::Pending,
-        Poll::Ready(Some(status)) => Poll::Ready((Attempted::of_status(status), addrs)),
-        Poll::Ready(None) => Poll::Ready((Attempted::Transport, addrs)),
+        Poll::Ready(Some(status)) => Poll::Ready(Attempted::of_status(status)),
+        Poll::Ready(None) => Poll::Ready(Attempted::Transport),
     }
 }
 
@@ -449,8 +437,7 @@ fn advance_attempt(
             attempting.hold(flight, started_ns);
             Outcome::Pending
         }
-        Poll::Ready((end, reached)) => {
-            deliveries.reached(&flight.delivery.url, &reached);
+        Poll::Ready(end) => {
             deliveries.owe(&flight.delivery, end);
             let task_id = &flight.delivery.task_id;
             match now_ns {

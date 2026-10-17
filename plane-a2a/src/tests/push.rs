@@ -471,65 +471,6 @@ fn a_callback_token_has_predevs_wire_shape_and_rides_its_bearer_scheme() {
 }
 
 #[test]
-fn a_destination_that_moved_off_every_address_it_reached_is_refused() {
-    let d = Deliveries::new();
-    let url = "https://hook.example/cb";
-    let addrs = |a: &[&str]| -> Vec<String> { a.iter().map(|s| (*s).to_string()).collect() };
-    assert_eq!(
-        d.rebound(url, &addrs(&["203.0.113.7"])),
-        None,
-        "first: the judge alone"
-    );
-    d.reached(url, &addrs(&["203.0.113.7", "203.0.113.8"]));
-    assert_eq!(
-        d.rebound(url, &addrs(&["203.0.113.8", "198.51.100.1"])),
-        None
-    );
-    assert_eq!(
-        d.rebound(url, &addrs(&["198.51.100.1"])),
-        Some(Attempted::Moved)
-    );
-    assert_eq!(d.rebound(url, &[]), Some(Attempted::Moved));
-    assert_eq!(
-        d.rebound("https://other.example/cb", &addrs(&["198.51.100.1"])),
-        None,
-        "per destination"
-    );
-    // The set follows the last delivery.
-    d.reached(url, &addrs(&["198.51.100.1"]));
-    assert_eq!(
-        d.rebound(url, &addrs(&["203.0.113.7"])),
-        Some(Attempted::Moved)
-    );
-    let moved = Attempted::Moved;
-    assert!(!moved.retryable());
-    assert_eq!(moved.record_kind(), vocab::EV_PUSH_REFUSED);
-}
-
-#[test]
-fn reached_addresses_are_bounded() {
-    let d = Deliveries::new();
-    let many: Vec<String> = (0..=MAX_REACHED)
-        .map(|i| format!("203.0.113.{i}"))
-        .collect();
-    d.reached("https://a.example/", &many);
-    let last = many[MAX_REACHED].clone();
-    assert_eq!(
-        d.rebound("https://a.example/", &[last]),
-        Some(Attempted::Moved),
-        "only the first MAX_REACHED are kept"
-    );
-    for i in 0..MAX_DESTINATIONS {
-        d.reached(&format!("https://d{i}.example/"), &many[..1]);
-    }
-    let held = (0..MAX_DESTINATIONS)
-        .filter(|i| d.rebound(&format!("https://d{i}.example/"), &[]).is_some())
-        .count()
-        + usize::from(d.rebound("https://a.example/", &[]).is_some());
-    assert_eq!(held, MAX_DESTINATIONS);
-}
-
-#[test]
 fn the_credential_round_trips_through_the_record_and_stays_redacted() {
     let auth = DeliveryAuth {
         scheme: "Bearer".into(),

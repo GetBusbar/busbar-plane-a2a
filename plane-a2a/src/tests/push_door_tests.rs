@@ -211,10 +211,7 @@ impl Line for TestHost {
         } else {
             self.verdicts[0].clone()
         };
-        Poll::Ready(next.map(|(verdict, addrs)| {
-            let within = addrs.join(",");
-            (verdict, addrs, within)
-        }))
+        Poll::Ready(next.map(|(verdict, addrs)| (verdict, addrs.join(","))))
     }
 
     fn send(&mut self, ex: &mut Exchange, url: &str) -> Poll<Option<u16>> {
@@ -262,16 +259,15 @@ fn tick_once(d: &Deliveries, host: &mut TestHost, now_ns: u64) -> (Attempted, De
         delivery,
         exchange: None,
     };
-    let Poll::Ready((end, reached)) = attempt(host, d, &mut flight) else {
+    let Poll::Ready(end) = attempt(host, d, &mut flight) else {
         panic!("the test's host never pends");
     };
-    d.reached(&flight.delivery.url, &reached);
     d.owe(&flight.delivery, end);
     (end, d.settle(&flight.delivery.task_id, end, now_ns, 128))
 }
 
-/// The base case: a completed task with a callback is POSTed to it once, on the addresses the judge
-/// just judged, and its delivered record is owed; its last delivery drops the credential.
+/// The base case: a completed task with a callback is POSTed to it once, and its delivered record is
+/// owed; its last delivery drops the credential.
 #[test]
 fn a_completed_task_with_a_callback_is_delivered() {
     let callback = "https://hook.caller.test/notify";
@@ -281,11 +277,6 @@ fn a_completed_task_with_a_callback_is_delivered() {
     assert_eq!(end, Attempted::Delivered);
     assert_eq!(settled, DeliverySettled::Done(EV_PUSH_DELIVERED));
     assert_eq!(host.sent, vec![callback.to_string()]);
-    assert_eq!(
-        d.rebound(callback, &["198.51.100.9".to_string()]),
-        Some(Attempted::Moved),
-        "the addresses the delivery reached are the ones the judge judged"
-    );
     assert_eq!(d.take_owed(ALICE, None)[0].kind, EV_PUSH_DELIVERED);
 }
 
@@ -356,13 +347,12 @@ fn the_callers_own_webhook_credential_is_presented_on_the_delivery() {
     );
 }
 
-/// Across a restart no reached address survives, so the anti-rebinding rule has nothing to compare
-/// with: the judge alone still refuses the internal answer.
+/// A callback that now resolves to an internal address (a rebinding) is refused by the judge,
+/// which runs on every attempt, and nothing is sent.
 #[test]
 fn the_rebind_is_still_refused_when_no_pin_survives_the_restart() {
     let callback = "https://hook.caller.test/notify";
     let d = queued(callback);
-    assert_eq!(d.rebound(callback, &[]), None, "nothing reached: a restart");
     let mut host = TestHost::answering(vec![Some((DEST_INTERNAL, &[][..]))], 200);
     let (end, _) = tick_once(&d, &mut host, 0);
     assert_eq!(end, Attempted::Judged(DEST_INTERNAL));
