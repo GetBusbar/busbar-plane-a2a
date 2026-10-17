@@ -723,3 +723,25 @@ fn a_task_that_ends_with_nothing_to_deliver_drops_its_credential() {
         "the ended task's credential is still held"
     );
 }
+
+/// AN ENDED TASK SPENDS ITS CALLBACK TOKEN, whichever move ended it: the token busbar registered
+/// with the agent is released when the move is terminal, so tasks that end through the relayed
+/// answer or a refresh never pile up against `MAX_TOKENS`; a live task keeps its token.
+#[test]
+fn an_ended_task_spends_its_callback_token() {
+    let mut book = Book::default();
+    let mut row = moved(&mut book, "");
+    let tokens = crate::push::Tokens::new();
+    let token = tokens.mint(ALICE, "t1", &[7u8; 32]).expect("minted");
+    ended(&tokens, &row);
+    assert!(
+        tokens.claim(&token).is_some(),
+        "a working task keeps its token"
+    );
+    row.state = "completed".into();
+    ended(&tokens, &row);
+    assert!(
+        tokens.claim(&token).is_none(),
+        "the ended task's token is spent"
+    );
+}
