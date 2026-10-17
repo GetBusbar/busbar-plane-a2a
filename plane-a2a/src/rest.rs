@@ -83,11 +83,17 @@ impl Params {
         self
     }
 
-    /// Set `name` only if the caller supplied it, typed by [`json_scalar`].
+    /// Set `name` only if the caller supplied it: typed by [`json_scalar`] where the proto's field
+    /// is not a string ([`TYPED_QUERY_MEMBERS`]), the string as sent otherwise.
     #[must_use]
     pub fn maybe(mut self, name: &str, value: Option<&String>) -> Self {
         if let Some(v) = value {
-            self.0.insert(name.to_string(), json_scalar(v));
+            let value = if TYPED_QUERY_MEMBERS.contains(&name) {
+                json_scalar(v)
+            } else {
+                Value::String(v.clone())
+            };
+            self.0.insert(name.to_string(), value);
         }
         self
     }
@@ -110,6 +116,13 @@ impl Params {
         Value::Object(self.0)
     }
 }
+
+/// THE QUERY MEMBERS WHOSE PROTO FIELD IS NOT A STRING (`ListTasksRequest`'s `page_size`,
+/// `history_length` and `include_artifacts`, `GetTaskRequest`'s `history_length`,
+/// `ListTaskPushNotificationConfigsRequest`'s `page_size`): only these are typed by
+/// [`json_scalar`]. Every other member (`contextId`, `pageToken`, `status`,
+/// `statusTimestampAfter`) is a string in the proto, so an all-digit context id stays a string.
+pub const TYPED_QUERY_MEMBERS: &[&str] = &["pageSize", "historyLength", "includeArtifacts"];
 
 /// A QUERY-STRING VALUE, TYPED THE WAY THE ENVELOPE WANTS IT: an integer is a number, `true` and
 /// `false` are booleans, anything else (a task id, a page token, a status name) stays a string.
