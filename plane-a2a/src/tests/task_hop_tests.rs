@@ -1218,10 +1218,17 @@ fn a_task_verb_naming_a_task_the_caller_does_not_hold_is_refused_task_not_found(
             assert_eq!(reply.status, 404, "{envelope}");
             let doc: Value = serde_json::from_slice(&reply.body).unwrap();
             assert_eq!(
-                doc,
-                json!({ "jsonrpc": "2.0", "id": 7, "error": {
-                    "code": -32001, "message": crate::local::NO_SUCH_TASK } }),
+                (&doc["id"], &doc["error"]["code"], &doc["error"]["message"]),
+                (
+                    &json!(7),
+                    &json!(-32001),
+                    &json!(crate::local::NO_SUCH_TASK)
+                ),
                 "{envelope}"
+            );
+            assert_eq!(
+                doc["error"]["data"][0]["reason"], "TASK_NOT_FOUND",
+                "{envelope}: A2A's ErrorInfo for the code"
             );
             assert!(out.is_empty(), "{envelope}: nothing is written: {out:?}");
             assert_eq!(d.draws, 0, "{envelope}: no id is minted");
