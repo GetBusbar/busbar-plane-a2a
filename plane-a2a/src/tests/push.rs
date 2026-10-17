@@ -618,3 +618,40 @@ fn the_push_credential_reaches_the_authorization_field_and_no_debug_or_error_tex
     .expect_err("a credential with a control byte cannot be presented");
     assert!(!refused.contains(secret), "{refused}");
 }
+
+/// EACH ATTEMPT IS BOUNDED BY THE REQUEST DEADLINE (ARCHITECT ruling on a slow push receiver): a
+/// webhook has no pool, so the bound is the connector's default, ten seconds, and the request
+/// names it rather than `0` ("the op's deadline", which a driver ticket's op does not bound). A
+/// receiver that never answers then ends its attempt as a transport error, under the
+/// three-attempt rule. RED against an unbounded request.
+#[test]
+fn a_delivery_attempt_is_bounded_by_the_request_deadline() {
+    let d = Deliveries::new();
+    assert_eq!(
+        d.request(&delivery("t1")).timeout_ms,
+        10_000,
+        "the attempt's request is not bounded by the connector's default deadline"
+    );
+}
+
+/// THE PUMP SERVES THE TASKS' QUEUES IN TURN, one attempt per task per turn (ARCHITECT ruling on a
+/// slow push receiver): a task with several notifications waiting never keeps another task's
+/// waiting behind all of them. RED against the longest-waiting-then-lowest-id pick, which serves
+/// every notification of `a` before `b`'s one.
+#[test]
+fn the_pump_serves_each_tasks_queue_in_turn() {
+    let d = Deliveries::new();
+    d.enqueue(delivery("a"), 0);
+    d.enqueue(delivery("a"), 0);
+    d.enqueue(delivery("b"), 0);
+    let first = d.next_due(0).expect("due").task_id;
+    assert_eq!(first, "a");
+    d.settle("a", Attempted::Delivered, 0, 0);
+    assert_eq!(
+        d.next_due(0).map(|x| x.task_id).as_deref(),
+        Some("b"),
+        "b waited behind a second notification of a"
+    );
+    d.settle("b", Attempted::Delivered, 0, 0);
+    assert_eq!(d.next_due(0).map(|x| x.task_id).as_deref(), Some("a"));
+}
