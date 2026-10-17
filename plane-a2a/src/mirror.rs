@@ -50,18 +50,15 @@ pub fn mirrored_verb(verb: LocalVerb) -> Option<&'static str> {
 
 /// Busbar's own callback address for `public_url`, or `None` where busbar offers none: no
 /// `public_url`, or one that is not `https` (a task token in cleartext is refused, with no knob).
+/// Read the one way every published URL is ([`crate::a2a::public::absolute`]): the path is the
+/// served `/a2a/push` route, whatever path or query `public_url` carries.
 #[must_use]
 pub fn callback_url(public_url: &str) -> Option<String> {
     let url = url::Url::parse(public_url).ok()?;
     if url.scheme() != "https" {
         return None;
     }
-    Some(format!(
-        "{}{}{}",
-        public_url.trim_end_matches('/'),
-        crate::MOUNT_PATH,
-        crate::PUSH_PATH_SUFFIX
-    ))
+    crate::a2a::public::absolute(public_url, &crate::mounted_route(crate::PUSH_PATH_SUFFIX))
 }
 
 /// The id of the one config busbar registers for the agent's task `backend_task`.

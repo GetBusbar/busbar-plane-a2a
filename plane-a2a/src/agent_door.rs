@@ -1439,6 +1439,7 @@ fn settle_task(
         };
         if i >= hop.queued {
             crate::push_door::queue(&reach.plane.deliveries, row, config.as_ref());
+            crate::push_door::ended(&reach.plane.tokens, row);
             hop.queued = i + 1;
         }
     }
