@@ -832,3 +832,37 @@ fn a_silent_receiver_delays_another_tasks_delivery_by_one_deadline_at_most() {
         "the second task's delivery lands within one deadline"
     );
 }
+
+/// THE DEADLINE BOUNDS THE WHOLE ATTEMPT, ten seconds from the tick that began it (ARCHITECT ruling
+/// on a slow push receiver: open, write and response together; 1.5.5 had no A2A push client, so no
+/// value of its own). An attempt still held then is abandoned (its connection closed) and counts as
+/// a transport error under the three-attempt rule; the tick is asked for at that moment. RED against
+/// a held attempt kept for sixty seconds.
+#[test]
+fn the_whole_attempt_is_abandoned_at_ten_seconds_as_a_transport_error() {
+    let d = queued("https://hook.caller.test/notify");
+    let attempting = Attempting::default();
+    let mut host = TestHost::answering(vec![Some((DEST_ALLOWED, &[AT_REGISTRATION][..]))], 200);
+    host.pends = 1;
+    assert_eq!(tick_over(&mut host, &d, &attempting, 0), Outcome::Pending);
+    let ten_s = 10_000_000_000;
+    assert_eq!(
+        next_tick_ns(&d, &attempting),
+        ten_s,
+        "the tick is not asked for at the whole attempt's ten-second deadline"
+    );
+    assert_eq!(tick_over(&mut host, &d, &attempting, ten_s), Outcome::Ready);
+    assert_eq!(
+        host.abandoned, 1,
+        "the attempt was not abandoned at ten seconds"
+    );
+    assert_eq!(
+        d.take_owed(ALICE, None)[0].kind,
+        EV_PUSH_FAILED,
+        "the abandoned attempt is a transport error"
+    );
+    assert!(
+        next_tick_ns(&d, &attempting) > ten_s,
+        "its retry is asked for"
+    );
+}
