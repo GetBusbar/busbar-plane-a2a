@@ -23,10 +23,6 @@
 //!   no record write, so the outcome waits in plane memory, bounded, until a piece of its caller's
 //!   files it ([`Deliveries::take_owed`]).
 //!
-//! Before each dial, [`Deliveries::rebound`] keeps predev's anti-rebinding rule: the destination's
-//! fresh addresses must overlap those an earlier delivery to it reached ([`Deliveries::reached`]),
-//! a bounded set in plane memory.
-//!
 //! The caller's webhook credential ([`DeliveryAuth`]) has its home in the push_config host record
 //! (a sealed field of it, `PushConfig::authentication`). It is held here, in plane memory, only
 //! while a delivery is in flight, never logged or printed, and joins the request only after the
@@ -74,13 +70,6 @@ pub const PUSH_RATE_LIMIT: u32 = 60;
 /// `authentication.scheme` (its `credentials` = the token), presented back as
 /// `Authorization: Bearer <token>`.
 pub const TOKEN_SCHEME: &str = "Bearer";
-
-/// The most destinations whose reached addresses one instance holds; past it, the oldest-keyed one
-/// is dropped, and its next delivery is judged as a first one (never unjudged).
-pub const MAX_DESTINATIONS: usize = 4096;
-
-/// The most reached addresses held for one destination.
-pub const MAX_REACHED: usize = 16;
 
 /// The most attempt outcomes held for their chains at once; past it, the oldest is dropped and
 /// counted.
@@ -206,9 +195,6 @@ pub enum Attempted {
     Delivered,
     /// The destination judge refused (its `DEST_*` verdict); nothing went out.
     Judged(u64),
-    /// The destination now resolves only to addresses no earlier delivery reached (a rebinding);
-    /// nothing went out.
-    Moved,
     /// The connection or the exchange failed.
     Transport,
     /// The receiver answered this non-2xx status.
@@ -232,7 +218,7 @@ impl Attempted {
         match self {
             Self::Transport | Self::Status(429) => true,
             Self::Status(s) => matches!(s, 500..=599),
-            Self::Delivered | Self::Judged(_) | Self::Moved => false,
+            Self::Delivered | Self::Judged(_) => false,
         }
     }
 
@@ -242,7 +228,7 @@ impl Attempted {
     pub const fn record_kind(self) -> &'static str {
         match self {
             Self::Delivered => vocab::EV_PUSH_DELIVERED,
-            Self::Judged(_) | Self::Moved => vocab::EV_PUSH_REFUSED,
+            Self::Judged(_) => vocab::EV_PUSH_REFUSED,
             Self::Transport | Self::Status(_) => vocab::EV_PUSH_FAILED,
         }
     }
@@ -314,7 +300,6 @@ struct Book {
     queues: BTreeMap<String, VecDeque<Waiting>>,
     dropped: u64,
     auths: BTreeMap<String, DeliveryAuth>,
-    reached: BTreeMap<String, Vec<String>>,
     owed: VecDeque<Owed>,
     unfiled: u64,
 }
@@ -578,34 +563,6 @@ impl Deliveries {
                 .min()
                 .unwrap_or(0)
         })
-    }
-
-    /// predev's anti-rebinding rule, before a dial: `fresh` (the addresses the destination `url`
-    /// resolves to now, each already judged) must share at least one address with those an earlier
-    /// delivery to `url` reached. `None` = nothing reached before (a first delivery, a restart, or a
-    /// dropped entry): the judge alone decides. `Some(Attempted::Moved)` = refused, nothing goes out.
-    #[must_use]
-    pub fn rebound(&self, url: &str, fresh: &[String]) -> Option<Attempted> {
-        self.with(|b| {
-            let before = b.reached.get(url)?;
-            (!fresh.iter().any(|a| before.contains(a))).then_some(Attempted::Moved)
-        })
-    }
-
-    /// Record the addresses a delivery to `url` reached (after its request went out), replacing the
-    /// earlier set, so the next delivery must overlap them. Bounded by [`MAX_REACHED`] per
-    /// destination and [`MAX_DESTINATIONS`] in all.
-    pub fn reached(&self, url: &str, addrs: &[String]) {
-        if addrs.is_empty() {
-            return;
-        }
-        self.with(|b| {
-            if !b.reached.contains_key(url) && b.reached.len() >= MAX_DESTINATIONS {
-                b.reached.pop_first();
-            }
-            let kept = addrs.iter().take(MAX_REACHED).cloned().collect();
-            b.reached.insert(url.to_string(), kept);
-        });
     }
 
     /// Hold the credential `task_id`'s receiver wants presented; `None` drops the one held (a
