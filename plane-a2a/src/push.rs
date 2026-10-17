@@ -76,6 +76,13 @@ pub const TOKEN_SCHEME: &str = "Bearer";
 /// counted.
 pub const MAX_OWED: usize = 4096;
 
+/// THE BOUND ON ONE ATTEMPT'S REQUEST, milliseconds (ARCHITECT ruling on a slow push receiver: each
+/// attempt is bounded by the destination's request deadline, the connector's default when none is
+/// set). A webhook names no pool, so it is the connector's default bound, ten seconds
+/// (`busbar-core-connector` `DEFAULT_OPEN_TIMEOUT`). A receiver that has not answered by then ends
+/// the attempt as a transport error, under the three-attempt rule.
+pub const ATTEMPT_TIMEOUT_MS: u64 = 10_000;
+
 /// The field every delivery carries, and its value.
 pub const CONTENT_TYPE: (&str, &str) = ("content-type", "application/json");
 
@@ -303,6 +310,8 @@ struct Book {
     auths: BTreeMap<String, DeliveryAuth>,
     owed: VecDeque<Owed>,
     unfiled: u64,
+    /// The task the pump attempted last: the next turn starts after it.
+    last_served: Option<String>,
 }
 
 /// What [`Deliveries::settle`] did with the head of a task's queue.
@@ -409,24 +418,31 @@ impl Deliveries {
         })
     }
 
-    /// THE ONE DELIVERY TO ATTEMPT NOW, for one `tick` op: of the heads whose time has come and no
-    /// attempt is open on, the one waiting longest (then the lowest task id). Marked open until
-    /// [`Deliveries::settle`]; `None` when none is due.
+    /// THE ONE DELIVERY TO ATTEMPT NOW, for one `tick` op: the tasks' queues are served IN TURN,
+    /// one attempt per task per turn (ARCHITECT ruling on a slow push receiver), so a slow receiver
+    /// delays another task's delivery by at most one attempt's deadline: of the heads whose time
+    /// has come and no attempt is open on, the first after the task attempted last, in task-id
+    /// order, wrapping round. Marked open until [`Deliveries::settle`]; `None` when none is due.
     #[must_use]
     pub fn next_due(&self, now_ns: u64) -> Option<Delivery> {
         self.with(|b| {
-            let head = b
+            let due = |w: &Waiting| !w.open && w.not_before_ns <= now_ns;
+            let after = b.last_served.clone().unwrap_or_default();
+            let id = b
                 .queues
-                .values_mut()
-                .filter_map(VecDeque::front_mut)
-                .filter(|w| !w.open && w.not_before_ns <= now_ns)
-                .min_by(|x, y| {
-                    (x.not_before_ns, &x.delivery.task_id)
-                        .cmp(&(y.not_before_ns, &y.delivery.task_id))
-                })?;
+                .iter()
+                .filter(|(id, q)| {
+                    (b.last_served.is_none() || **id > after) && q.front().is_some_and(due)
+                })
+                .chain(b.queues.iter().filter(|(_, q)| q.front().is_some_and(due)))
+                .map(|(id, _)| id.clone())
+                .next()?;
+            let head = b.queues.get_mut(&id)?.front_mut()?;
             head.open = true;
             head.attempts += 1;
-            Some(head.delivery.clone())
+            let delivery = head.delivery.clone();
+            b.last_served = Some(id);
+            Some(delivery)
         })
     }
 
@@ -610,7 +626,7 @@ pub fn request(delivery: &Delivery, auth: Option<&DeliveryAuth>) -> Request {
         target: target.into_bytes(),
         fields,
         body: delivery.body.clone(),
-        timeout_ms: 0,
+        timeout_ms: ATTEMPT_TIMEOUT_MS,
     }
 }
 

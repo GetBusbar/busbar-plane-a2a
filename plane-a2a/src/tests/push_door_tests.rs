@@ -182,6 +182,8 @@ struct TestHost {
     pends: u32,
     /// How many attempts were abandoned (their connection closed).
     abandoned: u32,
+    /// A receiver that never answers: its exchange ends at the request's deadline, a failed one.
+    silent: Option<String>,
 }
 
 impl TestHost {
@@ -199,6 +201,7 @@ impl TestHost {
             framed: Vec::new(),
             pends: 0,
             abandoned: 0,
+            silent: None,
         }
     }
 }
@@ -220,6 +223,9 @@ impl Line for TestHost {
             return Poll::Pending;
         }
         self.sent.push(url.to_string());
+        if self.silent.as_deref() == Some(url) {
+            return Poll::Ready(None);
+        }
         let fields = ex
             .framed_fields()
             .into_iter()
@@ -785,4 +791,44 @@ fn a_notification_queued_during_a_held_attempt_waits_for_that_attempts_own_wake(
     // The tick that follows the wake attempts what was queued meanwhile.
     assert_eq!(tick_over(&mut host, &d, &attempting, 1), Outcome::Ready);
     assert_eq!(host.sent.len(), 2, "the queued notification goes next");
+}
+
+/// ONE RECEIVER THAT NEVER ANSWERS HOLDS THE PUMP FOR ONE ATTEMPT'S DEADLINE AT MOST (ARCHITECT
+/// ruling on a slow push receiver): its attempt ends at the request's deadline as a transport error
+/// and waits for its retry, and a second task's delivery goes out on the tick that follows, within
+/// one deadline of the first attempt's start.
+#[test]
+fn a_silent_receiver_delays_another_tasks_delivery_by_one_deadline_at_most() {
+    let silent = "https://silent.caller.test/notify";
+    let prompt = "https://prompt.caller.test/notify";
+    let d = Deliveries::new();
+    for (task, url) in [("a", silent), ("b", prompt)] {
+        d.enqueue(
+            Delivery {
+                task_id: task.into(),
+                caller: ALICE.into(),
+                url: url.into(),
+                body: Vec::new(),
+                terminal: false,
+            },
+            0,
+        );
+    }
+    let attempting = Attempting::default();
+    let mut host = TestHost::answering(vec![Some((DEST_ALLOWED, &[AT_REGISTRATION][..]))], 200);
+    host.silent = Some(silent.to_string());
+    host.pends = 1;
+    assert_eq!(tick_over(&mut host, &d, &attempting, 0), Outcome::Pending);
+    // The connector ends the silent receiver's exchange at the request's deadline.
+    assert_eq!(drive_over(&mut host, &d, &attempting), Outcome::Ready);
+    let deadline = crate::push::ATTEMPT_TIMEOUT_MS * 1_000_000;
+    assert_eq!(
+        tick_over(&mut host, &d, &attempting, deadline),
+        Outcome::Ready
+    );
+    assert_eq!(
+        host.sent,
+        vec![silent.to_string(), prompt.to_string()],
+        "the second task's delivery lands within one deadline"
+    );
 }

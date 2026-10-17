@@ -486,18 +486,18 @@ fn the_credential_round_trips_through_the_record_and_stays_redacted() {
     assert!(!format!("{back:?}").contains("s3cret"));
 }
 
-/// One `tick` op attempts one notification: the head waiting longest, marked open so the next op
-/// takes another; a task's later notification waits behind its open head.
+/// One `tick` op attempts one notification: the next task's head in turn (task-id order), marked
+/// open so the next op takes another; a task's later notification waits behind its open head.
 #[test]
-fn the_next_due_is_one_head_at_a_time_the_longest_waiting_first() {
+fn the_next_due_is_one_head_at_a_time_each_task_in_turn() {
     let d = Deliveries::new();
     assert_eq!(d.next_due(0), None);
     d.enqueue(delivery("t2"), 5 * MS);
     d.enqueue(delivery("t1"), 9 * MS);
     d.enqueue(delivery("t2"), 6 * MS);
     assert_eq!(d.next_due(4 * MS), None, "nothing is due yet");
-    assert_eq!(d.next_due(10 * MS).map(|x| x.task_id), Some("t2".into()));
     assert_eq!(d.next_due(10 * MS).map(|x| x.task_id), Some("t1".into()));
+    assert_eq!(d.next_due(10 * MS).map(|x| x.task_id), Some("t2".into()));
     assert_eq!(
         d.next_due(10 * MS),
         None,
