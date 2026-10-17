@@ -621,3 +621,115 @@ fn an_abandoned_attempt_never_also_completes() {
     );
     assert_eq!(host.abandoned, 1);
 }
+
+/// A RETRY'S WAIT IS COUNTED FROM WHEN THE ATTEMPT ENDED (spec l.391-392: three attempts, two
+/// delays of 250/500 ms ±20 %). An attempt whose exchange pends, and whose `503` arrives two
+/// seconds after the tick that began it, is not retried on the tick that follows its `drive`: the
+/// retry waits out its 250 ms from then. RED against a wait counted from the attempt's start (the
+/// delay is already spent when the failure lands, so the retry goes out at once).
+#[test]
+fn a_retry_waits_from_when_a_pended_attempt_ended() {
+    let callback = "https://hook.caller.test/notify";
+    let d = queued(callback);
+    let attempting = Attempting::default();
+    let mut host = TestHost::answering(vec![Some((DEST_ALLOWED, &[AT_REGISTRATION][..]))], 503);
+    host.pends = 1;
+    assert_eq!(tick_over(&mut host, &d, &attempting, 0), Outcome::Pending);
+    // The receiver's 503 lands: the wake runs `drive`, which settles the attempt.
+    assert_eq!(drive_over(&mut host, &d, &attempting), Outcome::Ready);
+    assert_eq!(host.sent.len(), 1, "the first attempt reached the receiver");
+    // The re-poll tick after that wake, two seconds after the attempt began.
+    let ended = 2_000_000_000;
+    assert_eq!(tick_over(&mut host, &d, &attempting, ended), Outcome::Ready);
+    assert_eq!(
+        host.sent.len(),
+        1,
+        "the retry went out at once, with no delay after the failure"
+    );
+    let again = next_tick_ns(&d, &attempting);
+    assert!(
+        again >= ended + 200_000_000 && again <= ended + 300_000_000,
+        "the retry is asked for 250 ms ±20 % after the attempt ended: {again}"
+    );
+    assert_eq!(tick_over(&mut host, &d, &attempting, again), Outcome::Ready);
+    assert_eq!(
+        host.sent.len(),
+        2,
+        "the retry goes out once its wait is over"
+    );
+}
+
+/// A RECEIVER WHOSE ADDRESSES CHANGED IS STILL DELIVERED TO: the destination judge runs on every
+/// attempt and the dial lands only within what it judged (spec l.392-393, "re-runs the destination
+/// judge on every attempt"; THE DESIGN §5, the connector judges every open), so a fresh, allowed
+/// resolution that shares no address with an earlier delivery's is reached. RED against a plane-side
+/// rule that refuses it (`Moved`) for as long as the instance lives.
+#[test]
+fn a_receiver_whose_addresses_changed_is_still_delivered() {
+    let callback = "https://hook.caller.test/notify";
+    let d = queued(callback);
+    let mut host = TestHost::answering(
+        vec![
+            Some((DEST_ALLOWED, &[AT_REGISTRATION][..])),
+            Some((DEST_ALLOWED, &["198.51.100.9"][..])),
+        ],
+        200,
+    );
+    let (first, _) = tick_once(&d, &mut host, 0);
+    assert_eq!(first, Attempted::Delivered);
+    d.enqueue(
+        Delivery {
+            task_id: "t2".into(),
+            caller: ALICE.into(),
+            url: callback.into(),
+            body: Vec::new(),
+            terminal: false,
+        },
+        0,
+    );
+    let (second, settled) = tick_once(&d, &mut host, 0);
+    assert_eq!(
+        second,
+        Attempted::Delivered,
+        "the judged, allowed new address was refused"
+    );
+    assert_eq!(settled, DeliverySettled::Done(EV_PUSH_DELIVERED));
+    assert_eq!(
+        host.sent.len(),
+        2,
+        "both notifications reached the receiver"
+    );
+}
+
+/// A TASK THAT ENDS WITH NOTHING TO DELIVER DROPS ITS WEBHOOK CREDENTIAL: a terminal move that
+/// queues no notification leaves no credential in plane memory, since no delivery is left to
+/// present it. RED against a credential released only by a terminal delivery's settle.
+#[test]
+fn a_task_that_ends_with_nothing_to_deliver_drops_its_credential() {
+    let mut book = Book::default();
+    let mut row = moved(&mut book, "");
+    row.state = "completed".into();
+    let d = Deliveries::new();
+    d.remember_auth(
+        "t1",
+        Some(DeliveryAuth {
+            scheme: "Bearer".into(),
+            credentials: crate::push::PushCredential::new("tok".into()),
+        }),
+    );
+    assert!(!queue(&d, &row, None), "nothing to deliver");
+    let probe = Delivery {
+        task_id: "t1".into(),
+        caller: ALICE.into(),
+        url: "https://hook.caller.test/notify".into(),
+        body: Vec::new(),
+        terminal: true,
+    };
+    assert!(
+        !d.request(&probe)
+            .fields
+            .iter()
+            .any(|(n, _)| n == b"authorization"),
+        "the ended task's credential is still held"
+    );
+}
