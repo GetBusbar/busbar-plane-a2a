@@ -24,14 +24,14 @@ use busbar_contract::abi::host::conn::connector::{
     REPLY_HEAD, SERVICES as CONN_SERVICES,
 };
 use busbar_contract::abi::host::service::{
-    ClockNowIn, HostSlots, ServiceOut, DEST_ALLOWED, DISTRUST_NONE, ENTITLED,
-    SERVICES as HOST_SERVICES,
+    ClockNowIn, HostSlots, ItemSpan, RecordsListIn, ServiceOut, DEST_ALLOWED, DISTRUST_NONE,
+    ENTITLED, SERVICES as HOST_SERVICES,
 };
 use busbar_contract::abi::mechanism::call::{
     AbiStr, Blob, InHead, OutHead, Outcome, RawOutcome, BLOB_OCTETS,
 };
 use busbar_contract::abi::mechanism::lifecycle::{
-    slot as life, CancelIn, OpenIn, OpenOut, OpsHead,
+    slot as life, CancelIn, OpenIn, OpenOut, OpsHead, TickIn, TickOut,
 };
 use busbar_contract::abi::mechanism::ticket::{HostCtx, HostTables, Ticket};
 use busbar_contract::abi::plane::{
@@ -92,12 +92,83 @@ extern "C" fn judged(_: HostCtx, _: *const c_void, out: *mut ServiceOut) -> RawO
     answer(out, Outcome::Ready, DEST_ALLOWED, 0)
 }
 
+/// THE STORE the host keeps for the plane, across instances: what the plane's answers wrote, as
+/// `(kind, key, value)`, the last write of a key standing.
+static STORE: Mutex<Vec<(String, String, Vec<u8>)>> = Mutex::new(Vec::new());
+
+fn store() -> MutexGuard<'static, Vec<(String, String, Vec<u8>)>> {
+    STORE.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// `records.list`: every stored record of the kind asked, in key order, one page.
+extern "C" fn records_list(_: HostCtx, input: *const c_void, out: *mut ServiceOut) -> RawOutcome {
+    // SAFETY: the SDK hands a `RecordsListIn` over its own text and buffers.
+    let i = unsafe { input.cast::<RecordsListIn>().read() };
+    // SAFETY: as above.
+    let text = |s: AbiStr| unsafe {
+        if s.ptr.is_null() {
+            Vec::new()
+        } else {
+            std::slice::from_raw_parts(s.ptr, s.len).to_vec()
+        }
+    };
+    let (kind, after) = (text(i.kind), text(i.after));
+    let mut rows: Vec<(String, Vec<u8>)> = store()
+        .iter()
+        .filter(|(k, _, _)| k.as_bytes() == kind.as_slice())
+        .map(|(_, key, value)| (key.clone(), value.clone()))
+        .collect();
+    rows.sort();
+    if !after.is_empty() {
+        rows.clear();
+    }
+    // SAFETY: the SDK's buffers of the capacities it states.
+    let (buf, spans) = unsafe {
+        (
+            std::slice::from_raw_parts_mut(i.into.buf, i.into.cap),
+            std::slice::from_raw_parts_mut(i.into.spans, i.into.spans_cap),
+        )
+    };
+    let mut at = 0_usize;
+    for (n, (key, value)) in rows.iter().enumerate() {
+        let span = |at: usize, len: usize| busbar_contract::abi::mechanism::call::Span {
+            offset: u32::try_from(at).unwrap(),
+            len: u32::try_from(len).unwrap(),
+        };
+        buf[at..at + key.len()].copy_from_slice(key.as_bytes());
+        buf[at + key.len()..at + key.len() + value.len()].copy_from_slice(value);
+        spans[n] = ItemSpan {
+            key: span(at, key.len()),
+            value: span(at + key.len(), value.len()),
+        };
+        at += key.len() + value.len();
+    }
+    // SAFETY: the SDK's `out`, live for the call.
+    unsafe {
+        out.write(ServiceOut {
+            size: std::mem::size_of::<ServiceOut>() as u32,
+            outcome: RawOutcome::of(Outcome::Ready),
+            _reserved: [0; 3],
+            value: 0,
+            len: at as u64,
+            items: rows.len() as u64,
+            needed_bytes: 0,
+            needed_items: 0,
+            error: AbiStr {
+                ptr: std::ptr::null(),
+                len: 0,
+            },
+        });
+    }
+    RawOutcome::of(Outcome::Ready)
+}
+
 static HOST_SLOTS: HostSlots = HostSlots {
     size: std::mem::size_of::<HostSlots>() as u32,
     slots: HOST_SERVICES,
     clock_now: Some(clock_now),
     records_get: None,
-    records_list: None,
+    records_list: Some(records_list),
     records_claim: None,
     dest_judge: Some(judged),
     sign: None,
@@ -568,8 +639,37 @@ impl Door {
             std::ptr::from_ref(&i).cast(),
             std::ptr::from_mut(&mut o).cast(),
         );
+        // The kernel writes the answer's record writes to the store.
+        let held = busbar_plane_a2a::records::HELD_KINDS;
+        for w in &records[..(o.records_written as usize).min(records.len())] {
+            let at = |s: busbar_contract::abi::mechanism::call::Span| {
+                arena[s.offset as usize..(s.offset + s.len) as usize].to_vec()
+            };
+            let kind = held[w.kind as usize].to_string();
+            let key = String::from_utf8(at(w.key)).unwrap();
+            let mut stored = store();
+            stored.retain(|(k, id, _)| !(*k == kind && *id == key));
+            stored.push((kind, key, at(w.value)));
+        }
         let body = String::from_utf8_lossy(&reply[..o.reply_written as usize]).into_owned();
         (ret.outcome(), o.status, body)
+    }
+
+    /// The kernel's `tick` of the instance, on its driver ticket: when it wants the next.
+    fn tick(&self) -> (Outcome, u64) {
+        let i = TickIn {
+            head: head::<TickIn>(life::TICK, ticket(1 << 29)),
+            now_ns: 5_000_000_000,
+        };
+        let mut o: TickOut = z();
+        o.head = out_head::<TickOut>();
+        let f = lifecycle().tick.expect("tick");
+        let ret = f(
+            self.instance,
+            std::ptr::from_ref(&i).cast(),
+            std::ptr::from_mut(&mut o).cast(),
+        );
+        (ret.outcome(), o.next_tick_ns)
     }
 
     /// The kernel's `cancel` of `unit`'s ticket.
@@ -737,5 +837,42 @@ fn a_hop_refused_for_its_credential_before_the_dial_reports_its_fee_and_bytes_at
     assert!(
         refused.emitted.is_empty(),
         "the refused piece answers nothing"
+    );
+}
+
+// ── (B2) an approved agent's card outlives the instance ─────────────────────────────────────────
+
+/// A RESTART SERVES THE AGENTS APPROVED BEFORE IT (ARCHITECT ruling B2, as amended: the `connect`
+/// and `approve` answers write the agent's `card` host record, `BUSBAR-1.6.0.md` l.290 "record
+/// writes ride `on_piece`'s answer", and the first tick after `open` warms the held cards from
+/// those records). An operator's `connect` held the agent's card; the instance is opened again over
+/// the same store and ticked once, and a card read addressed to the agent is admitted, never refused
+/// for a card the instance does not hold. RED before the fix: the cards lived only in the first
+/// instance's memory, so the new one refused every agent until the operator looked again.
+#[test]
+fn a_restarted_instance_serves_an_agent_from_its_recorded_card() {
+    let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    store().clear();
+    let before = open();
+    let (outcome, status, body) = before.connect("vendor");
+    assert_eq!(
+        (outcome, status),
+        (Outcome::Ready, 200),
+        "`connect` holds the agent's card: {body}"
+    );
+    let route = ("POST", "/a2a/agents/{agent_id}");
+    assert_eq!(
+        before.arrive(7, route, "/a2a/agents/vendor", CARD_READ),
+        (Outcome::Ready, 0),
+        "the instance that looked serves the agent"
+    );
+
+    let after = open();
+    let (ticked, _) = after.tick();
+    assert_eq!(ticked, Outcome::Ready, "the first tick after `open`");
+    assert_eq!(
+        after.arrive(8, route, "/a2a/agents/vendor", CARD_READ),
+        (Outcome::Ready, 0),
+        "the instance opened again serves the agent from its recorded card"
     );
 }
