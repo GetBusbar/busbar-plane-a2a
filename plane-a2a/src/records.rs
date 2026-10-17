@@ -54,8 +54,8 @@ pub const KIND_TASK_EVENT: &str = "task_event";
 pub const KIND_PUSH_CONFIG: &str = "push_config";
 
 /// The `card` kind — an agent's verified card, keyed by agent id under the operator's scope (no
-/// principal prefix): the card fetch writes it on the plane's tick, and the plane holds a mirror of
-/// it in memory ([`crate::cards::Cards`]).
+/// principal prefix): the `connect` and `approve` answers write it, and the first tick after `open`
+/// warms the plane's mirror of it in memory ([`crate::cards::Cards`]).
 pub const KIND_CARD: &str = "card";
 
 /// The plane-record kinds this plane keeps on the store's plane-record seam — its declaration's
