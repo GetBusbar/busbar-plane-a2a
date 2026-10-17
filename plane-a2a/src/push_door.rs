@@ -12,9 +12,8 @@
 //!   byte for the retry's jitter, then the destination judge over the callback, its name resolved,
 //!   then one exchange over the plane's outbound `open-web` need
 //!   ([`crate::door_statement::NEED_OPEN_WEB`]) landing only on the addresses it judged. Judging a
-//!   destination is the host's (THE DESIGN §5: the connector judges every open); the plane keeps
-//!   no address rule of its own. An attempt whose
-//!   exchange pends ends its `tick` PENDING (a driver ticket's op is never resumed) and goes on
+//!   destination is the host's (THE DESIGN, its connections section: the connector judges every
+//!   open); the plane keeps no address rule of its own. An attempt whose exchange pends ends its `tick` PENDING (a driver ticket's op is never resumed) and goes on
 //!   through `drive` ([`drive`]), held in plane memory across the entries, each making the same host
 //!   calls in the same order (the replay rule). Its end settles the queue and is OWED to the task's
 //!   chain. A queued notification wakes the driver ticket ([`queue`]), so the kernel runs `drive`
