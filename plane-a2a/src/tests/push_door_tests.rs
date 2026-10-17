@@ -745,3 +745,44 @@ fn an_ended_task_spends_its_callback_token() {
         "the ended task's token is spent"
     );
 }
+
+/// A NOTIFICATION QUEUED WHILE AN ATTEMPT IS HELD DOES NOT WAKE THE DRIVER TICKET: the wake would
+/// make the kernel tick, and a tick's start is the driver ticket's cycle boundary, which forgets
+/// the held attempt's pending exchange (its completion lost, the attempt ended only by the 60 s
+/// abandonment, a replay dialling again). The queued notification waits; the held attempt's own
+/// completion wake carries it, and the held attempt ends with its own result, sent once. RED
+/// against a queue that wakes while an attempt is held.
+#[test]
+fn a_notification_queued_during_a_held_attempt_waits_for_that_attempts_own_wake() {
+    let callback = "https://hook.caller.test/notify";
+    let mut book = Book::default();
+    let row = moved(&mut book, callback);
+    let d = Deliveries::new();
+    let (told, woken) = std::sync::mpsc::channel::<()>();
+    d.arm(|| {
+        Box::new(move || {
+            let _ = told.send(());
+        })
+    });
+    assert!(queue(&d, &row, None));
+    assert_eq!(woken.try_iter().count(), 1, "nothing held: the queue wakes");
+    let attempting = Attempting::default();
+    let mut host = TestHost::answering(vec![Some((DEST_ALLOWED, &[AT_REGISTRATION][..]))], 200);
+    host.pends = 1;
+    assert_eq!(tick_over(&mut host, &d, &attempting, 0), Outcome::Pending);
+    let mut other = row.clone();
+    other.task_id = "t2".into();
+    assert!(queue(&d, &other, None), "the notification is recorded");
+    assert_eq!(
+        woken.try_iter().count(),
+        0,
+        "a queue during a held attempt woke the driver ticket"
+    );
+    // The held attempt's own completion wake: `drive` ends it with its own result.
+    assert_eq!(drive_over(&mut host, &d, &attempting), Outcome::Ready);
+    assert_eq!(host.sent, vec![callback.to_string()], "sent once");
+    assert_eq!(d.take_owed(ALICE, None).len(), 1, "its own result is owed");
+    // The tick that follows the wake attempts what was queued meanwhile.
+    assert_eq!(tick_over(&mut host, &d, &attempting, 1), Outcome::Ready);
+    assert_eq!(host.sent.len(), 2, "the queued notification goes next");
+}
