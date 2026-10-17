@@ -312,3 +312,31 @@ fn a_tasks_history_messages_take_busbars_identity() {
         json!([{ "kind": "message", "messageId": "m1", "taskId": "t", "contextId": "c" }])
     );
 }
+
+/// A v1.0 PUSH-CONFIG VERB'S `id` IS THE CONFIG, NOT THE TASK (a2a.proto:716-733: `task_id = 2`,
+/// `id = 3`): it is neither a task the request names nor one translated, even when it equals a
+/// held task's id. v0.3's `id` is the task.
+#[test]
+fn a_push_config_verbs_config_id_is_not_a_task() {
+    for method in [
+        "GetTaskPushNotificationConfig",
+        "DeleteTaskPushNotificationConfig",
+    ] {
+        let env = json!({ "method": method, "params": { "taskId": "t1", "id": "c1" } });
+        assert_eq!(named_tasks(&env), vec!["t1"], "{method}");
+        let same = json!({ "method": method, "params": { "taskId": "t1", "id": "t1" } });
+        let sent: Value = serde_json::from_slice(
+            &translate_request(&same, &|id| (id == "t1").then(|| "far-t1".to_string()))
+                .expect("the task is translated"),
+        )
+        .unwrap();
+        assert_eq!(sent["params"]["taskId"], "far-t1", "{method}");
+        assert_eq!(
+            sent["params"]["id"], "t1",
+            "{method}: the config id is left alone"
+        );
+    }
+    let v03 = json!({ "method": "tasks/pushNotificationConfig/get",
+        "params": { "id": "t1", "pushNotificationConfigId": "c1" } });
+    assert_eq!(named_tasks(&v03), vec!["t1"]);
+}

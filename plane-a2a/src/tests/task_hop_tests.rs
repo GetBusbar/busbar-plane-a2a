@@ -1271,3 +1271,108 @@ fn a_second_turn_naming_a_held_task_in_its_message_addresses_that_task() {
     assert_eq!(d.draws, 0, "no id is minted");
     assert_eq!(d.book, before, "nothing is opened");
 }
+
+// ── an inline callback on an addressed task, racing another writer ──────────────────────────────
+
+/// The writes opening `envelope` for Alice makes at 300, NOT applied: what the piece's answer
+/// carries out while other units may land theirs first.
+fn writes_of(desk: &mut Desk, envelope: &Value) -> Vec<Write> {
+    let mut out = Vec::new();
+    let req = Request {
+        envelope,
+        relayed: None,
+        caller: ALICE,
+        member: MEMBER,
+        addressed: None,
+        now: 300,
+    };
+    let opened = open(desk, &req, &json!(7), &|_| None, &mut out).unwrap();
+    assert!(matches!(opened, Opened::Hop { .. }), "{opened:?}");
+    out
+}
+
+/// AN INLINE CALLBACK ON AN ADDRESSED TASK IS A PUSH-CONFIG SET, last writer wins: two sets read
+/// the same task and land in turn, with another unit's move of the task landing between their read
+/// and their writes. The later set is the config held, and the other writer's move stands: the
+/// task's state and its chain's next sequence never go back, so the task moves on afterwards.
+#[test]
+fn two_inline_callbacks_on_an_addressed_task_leave_the_later_and_never_regress_the_task() {
+    let mut d = desk();
+    let set = |url: &str| {
+        send(json!({
+            "id": "t1",
+            "configuration": { "pushNotificationConfig": { "id": "c1", "url": url } },
+        }))
+    };
+    let next = get(&mut d.book, ALICE, "t1", 300)
+        .unwrap()
+        .unwrap()
+        .next_seq;
+    let first = writes_of(&mut d, &set("https://hook.example/a"));
+    let second = writes_of(&mut d, &set("https://hook.example/b"));
+
+    let mut theirs = Vec::new();
+    let other = Stamp {
+        caller: ALICE,
+        request_id: "another-unit",
+        now: 300,
+    };
+    tasks::transition(&mut d.book, &other, "t1", TaskState::Working, &mut theirs)
+        .unwrap()
+        .expect("it moved");
+    d.book.apply(&theirs);
+    d.book.apply(&first);
+    d.book.apply(&second);
+
+    let held = get(&mut d.book, ALICE, "t1", 300).unwrap().unwrap();
+    assert_eq!(held.row.state, "working", "the other writer's move stands");
+    assert_eq!(
+        held.next_seq,
+        next + 1,
+        "the chain's position never goes back"
+    );
+    let mut after = Vec::new();
+    tasks::transition(&mut d.book, &other, "t1", TaskState::Completed, &mut after)
+        .expect("the task still moves")
+        .expect("it moved");
+    let cfg = crate::local::held_config(&mut d.book, ALICE, "t1")
+        .unwrap()
+        .expect("the set is held as the task's push config");
+    assert_eq!(cfg.id, "c1");
+    assert_eq!(cfg.url, "https://hook.example/b", "the later set wins");
+}
+
+// ── a cancel of a task busbar holds as terminal ────────────────────────────────────────────────
+
+/// A CANCEL OF A TASK BUSBAR HOLDS AS TERMINAL is answered by busbar, never relayed: A2A's
+/// `TaskNotCancelableError` (`-32002`, `409`) in the plane's words, nothing written. A read of the
+/// same task is still the agent's to answer.
+#[test]
+fn a_cancel_of_a_task_held_as_terminal_is_refused_not_cancelable() {
+    for method in ["CancelTask", "tasks/cancel"] {
+        let mut d = desk();
+        let mut out = Vec::new();
+        let at = Stamp {
+            caller: ALICE,
+            request_id: "r",
+            now: 150,
+        };
+        tasks::transition(&mut d.book, &at, "t1", TaskState::Completed, &mut out).unwrap();
+        d.book.apply(&out);
+        let before = d.book.clone();
+        let cancel =
+            json!({ "jsonrpc": "2.0", "id": 7, "method": method, "params": { "id": "t1" } });
+        let (status, code, message) = refusal_of(opened(&mut d, &cancel, ALICE));
+        assert_eq!((status, code), (409, -32002), "{method}");
+        assert_eq!(
+            message, "this task has reached a terminal state, so it cannot be canceled",
+            "{method}"
+        );
+        assert_eq!(d.book, before, "{method}: nothing is written");
+
+        let read =
+            json!({ "jsonrpc": "2.0", "id": 7, "method": "GetTask", "params": { "id": "t1" } });
+        let (task, _) = hop(opened(&mut d, &read, ALICE));
+        assert!(task.addressed, "a read of a terminal task is relayed");
+    }
+}
