@@ -178,7 +178,7 @@ fn every_spelling_of_the_task_member_is_translated() {
     for member in ["id", "taskId", "task_id"] {
         let out = translate_request(
             &json!({
-                "method": "GetTaskPushNotificationConfig",
+                "method": "GetTask",
                 "params": { member: "busbar-t", "keep": 3 }
             }),
             &back,
@@ -188,7 +188,7 @@ fn every_spelling_of_the_task_member_is_translated() {
         assert_eq!(doc["params"][member], "backend-t", "{member}");
         // Everything else survives: the translation is about identity and about nothing else.
         assert_eq!(doc["params"]["keep"], 3, "{member}");
-        assert_eq!(doc["method"], "GetTaskPushNotificationConfig", "{member}");
+        assert_eq!(doc["method"], "GetTask", "{member}");
     }
 }
 
