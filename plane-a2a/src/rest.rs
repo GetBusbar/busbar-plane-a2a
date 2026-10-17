@@ -199,8 +199,8 @@ pub fn path_decode(s: &str) -> Option<String> {
 }
 
 /// A request body as the `params`, or the empty object when there is none or it is not JSON: an
-/// empty body is no fault on this binding (`:cancel` and `DELETE` carry none), and a body that is
-/// not JSON reaches the operation as empty `params`, refused there for the member it lacks.
+/// empty body is no fault on this binding (a `DELETE` carries none, a `:cancel` may), and a body
+/// that is not JSON reaches the operation as empty `params`, refused there for the member it lacks.
 #[must_use]
 pub fn json_body(body: &[u8]) -> Value {
     if body.is_empty() {
@@ -333,7 +333,17 @@ pub fn compose_from(
             VERB_SUBSCRIBE => method::SUBSCRIBE_TO_TASK,
             _ => return Err(not_a_verb(&addressed)),
         };
-        (name, Params::new().set("id", id).into_value())
+        // `:cancel` carries its request as the body (proto `CancelTask`, `body: "*"`: its
+        // `metadata`); THE PATH WINS, so the id is set after the merge.
+        let posted = if name == method::CANCEL_TASK {
+            json_body(body)
+        } else {
+            json!({})
+        };
+        (
+            name,
+            Params::new().merge(&posted).set("id", id).into_value(),
+        )
     } else if at("POST", crate::ROUTE_PUSH_CONFIGS) {
         // THE PATH WINS: merged first, `taskId` set after, so a posted member cannot re-point it.
         let params = Params::new()

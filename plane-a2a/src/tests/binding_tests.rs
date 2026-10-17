@@ -149,7 +149,8 @@ fn http_json_client_issues_send_stream_message() {
 }
 
 /// `http_json_client_issues_cancel_task`: a POST to the task's `:cancel`, naming the id it was
-/// handed (the far end's own, once the door translated it).
+/// handed (the far end's own, once the door translated it), the rest of the request as the body
+/// (proto `CancelTask`: `body: "*"`), here the empty object.
 #[test]
 fn http_json_client_issues_cancel_task() {
     let f = compose(
@@ -162,7 +163,8 @@ fn http_json_client_issues_cancel_task() {
         (f.verb, f.target.as_str()),
         ("POST", "/a2a/tasks/BACKEND-OWN-TASK-ID:cancel")
     );
-    assert!(f.body.is_empty() && !f.has_body);
+    assert!(f.has_body);
+    assert_eq!(f.body, b"{}");
 }
 
 /// `http_json_client_issues_subscribe_to_task` (and its v1.0 spelling, `task_id`): a GET of the
