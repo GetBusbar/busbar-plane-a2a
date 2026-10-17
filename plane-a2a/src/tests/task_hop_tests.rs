@@ -1169,3 +1169,88 @@ fn an_opening_states_the_engines_answer_should_the_store_refuse_its_writes() {
         "the engine sent an addressed task's hop whether or not its callback was recorded"
     );
 }
+
+// ── a task-addressed verb naming a task the caller does not hold ───────────────────────────────
+
+/// A GetTask, CancelTask or second-turn SendMessage naming a task the caller does NOT hold is
+/// refused locally with A2A's `TaskNotFoundError` (`-32001`, `404`), and nothing is opened: no id
+/// is minted, nothing is written, and nothing is relayed. Another caller's task and a task that
+/// never was are refused with the same bytes, so the refusal is no existence oracle.
+#[test]
+fn a_task_verb_naming_a_task_the_caller_does_not_hold_is_refused_task_not_found() {
+    let requests = |id: &str| {
+        [
+            json!({ "jsonrpc": "2.0", "id": 7, "method": "GetTask", "params": { "id": id } }),
+            json!({ "jsonrpc": "2.0", "id": 7, "method": "tasks/get", "params": { "id": id } }),
+            json!({ "jsonrpc": "2.0", "id": 7, "method": "CancelTask", "params": { "id": id } }),
+            json!({ "jsonrpc": "2.0", "id": 7, "method": "tasks/cancel", "params": { "id": id } }),
+            send(json!({ "message": { "messageId": "m", "taskId": id } })),
+        ]
+    };
+    for (foreign, missing) in requests("t2").into_iter().zip(requests("never-was")) {
+        let mut bodies = Vec::new();
+        for envelope in [foreign, missing] {
+            let mut d = desk();
+            let before = d.book.clone();
+            let mut out = Vec::new();
+            let req = Request {
+                envelope: &envelope,
+                relayed: None,
+                caller: ALICE,
+                member: MEMBER,
+                addressed: None,
+                now: 300,
+            };
+            let opened = open(&mut d, &req, &json!(7), &far, &mut out).unwrap();
+            let Opened::Refused(reply) = opened else {
+                panic!("{envelope}: a task the caller does not hold must be refused, not opened: {opened:?}");
+            };
+            assert_eq!(reply.status, 404, "{envelope}");
+            let doc: Value = serde_json::from_slice(&reply.body).unwrap();
+            assert_eq!(
+                doc,
+                json!({ "jsonrpc": "2.0", "id": 7, "error": {
+                    "code": -32001, "message": crate::local::NO_SUCH_TASK } }),
+                "{envelope}"
+            );
+            assert!(out.is_empty(), "{envelope}: nothing is written: {out:?}");
+            assert_eq!(d.draws, 0, "{envelope}: no id is minted");
+            assert_eq!(d.book, before, "{envelope}: the store is untouched");
+            bodies.push(reply.body);
+        }
+        assert_eq!(
+            bodies[0], bodies[1],
+            "another caller's task reads exactly as a missing one"
+        );
+    }
+}
+
+/// A SECOND TURN (`params.message.taskId`, A2A v1.0 `Message.task_id`) naming a task the caller
+/// holds ADDRESSES that task: its identity is reused, nothing is minted or opened, and a pooled
+/// request is pinned to the member holding it.
+#[test]
+fn a_second_turn_naming_a_held_task_in_its_message_addresses_that_task() {
+    let mut d = desk();
+    let mut out = Vec::new();
+    let at = Stamp {
+        caller: ALICE,
+        request_id: "r",
+        now: 150,
+    };
+    tasks::dispatch(&mut d.book, &at, "t1", "planner-b", &mut out).unwrap();
+    d.book.apply(&out);
+    let before = d.book.clone();
+    let turn = send(json!({ "message": { "messageId": "m-2", "taskId": "t1" } }));
+    let members = ["planner-a".to_string(), "planner-b".to_string()];
+    assert_eq!(
+        holder(&mut d, &turn, ALICE, 300, &members).unwrap(),
+        Some("planner-b".to_string()),
+        "the continuation is pinned to the member holding its task"
+    );
+    let (task, _) = hop(opened(&mut d, &turn, ALICE));
+    assert_eq!(task.task_id, "t1", "the held task is the one continued");
+    assert_eq!(task.context_id, "ctx-1");
+    assert!(task.addressed);
+    assert_eq!(d.draws, 0, "no id is minted");
+    assert_eq!(d.book, before, "nothing is opened");
+}

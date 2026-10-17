@@ -1093,3 +1093,62 @@ fn a_refused_hops_journal_line_names_the_backend_and_the_callers_answer_does_not
         );
     }
 }
+
+/// A MESSAGE-ONLY ANSWER SETTLES THE TASK THE HOP OPENED `completed`: a server message names a
+/// task only if one was created (A2A v1.0 `Message`, a2a.proto:254-259), so a standalone message is
+/// the whole interaction, and busbar's task for it is terminal (and so swept by retention), never
+/// left `working`. In both vocabularies, unary and streamed. A message in a task, or one answering
+/// a hop addressed to a held task, reads as before.
+#[test]
+fn a_message_only_answer_settles_the_opened_task_completed() {
+    for far in [
+        br#"{"jsonrpc":"2.0","id":7,"result":{"message":{"messageId":"m","role":"ROLE_AGENT","parts":[]}}}"#.as_slice(),
+        br#"{"jsonrpc":"2.0","id":7,"result":{"kind":"message","messageId":"m","role":"agent","parts":[]}}"#.as_slice(),
+    ] {
+        let mut r = task_sent(false);
+        let reply = answered(&mut r, 200, far);
+        assert_eq!(reply.status, 200);
+        assert_eq!(
+            r.take_settled(),
+            vec![TaskSettled::Reported {
+                state: TaskState::Completed,
+                backend_id: None,
+            }],
+            "{}",
+            String::from_utf8_lossy(far)
+        );
+    }
+    let in_a_task = br#"{"jsonrpc":"2.0","id":7,"result":{"message":{"messageId":"m","taskId":"far-1","parts":[]}}}"#;
+    let mut r = task_sent(false);
+    let _ = answered(&mut r, 200, in_a_task);
+    assert_eq!(
+        r.take_settled(),
+        vec![TaskSettled::Reported {
+            state: TaskState::Working,
+            backend_id: Some("far-1".into()),
+        }]
+    );
+    let alone = br#"{"jsonrpc":"2.0","id":7,"result":{"message":{"messageId":"m","parts":[]}}}"#;
+    let mut r = task_sent(true);
+    let _ = answered(&mut r, 200, alone);
+    assert_eq!(
+        r.take_settled(),
+        vec![TaskSettled::Reported {
+            state: TaskState::Working,
+            backend_id: None,
+        }],
+        "a held task is not closed by a message"
+    );
+
+    let (mut r, _) = events_sent();
+    let only = event(json!({ "message": { "messageId": "m", "role": "ROLE_AGENT", "parts": [] } }));
+    let _ = r.on_piece(far(Some(200), &only, true));
+    assert_eq!(
+        r.take_settled(),
+        vec![TaskSettled::Event {
+            state: Some(TaskState::Completed),
+            artifact: false,
+            backend_id: None,
+        }]
+    );
+}
