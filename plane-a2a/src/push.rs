@@ -312,6 +312,8 @@ struct Book {
     unfiled: u64,
     /// The task the pump attempted last: the next turn starts after it.
     last_served: Option<String>,
+    /// An attempt is held across `drive` entries: no wake is raised for a queued notification.
+    holding: bool,
 }
 
 /// What [`Deliveries::settle`] did with the head of a task's queue.
@@ -357,13 +359,26 @@ impl Deliveries {
     }
 
     /// Wake the driver ticket so the kernel ticks now; a no-op until armed (the first `tick` runs
-    /// at boot and finds what is queued). The host's wake never blocks and never reaches back here.
+    /// at boot and finds what is queued), and a no-op while an attempt is HELD
+    /// ([`Deliveries::holding`]): the tick a wake causes starts the driver ticket's next cycle,
+    /// which forgets the held attempt's pending exchange, so what is queued meanwhile waits for the
+    /// held attempt's own completion wake (its `drive`, then the tick after it). The host's wake
+    /// never blocks and never reaches back here.
     pub fn wake(&self) {
+        if self.with(|b| b.holding) {
+            return;
+        }
         self.wake.with(&(), |armed| {
             if let Some(wake) = armed {
                 wake();
             }
         });
+    }
+
+    /// Whether an attempt is held across `drive` entries (set while its exchange pends, cleared when
+    /// it ends or is abandoned).
+    pub fn holding(&self, held: bool) {
+        self.with(|b| b.holding = held);
     }
 
     /// File `delivery` behind its task's earlier ones. Answers whether the oldest waiting one was
