@@ -195,6 +195,20 @@ pub fn reported_task_state(result: &Value) -> TaskState {
         .unwrap_or(TaskState::Working)
 }
 
+/// Whether a `result` is a MESSAGE THAT NAMES NO TASK (A2A v1.0 `SendMessageResponse.message`, or
+/// v0.3's `kind: "message"`, with no `taskId`): a server message names a task only if one was
+/// created (a2a.proto:254-259), so such an answer is the whole interaction.
+#[must_use]
+pub fn names_no_task(result: &Value) -> bool {
+    let message = match wrapper_of(result) {
+        Some(("message", _)) => &result["message"],
+        Some(_) => return false,
+        None if result.get("kind").and_then(Value::as_str) == Some("message") => result,
+        None => return false,
+    };
+    !matches!(message.get("taskId").and_then(Value::as_str), Some(id) if !id.is_empty())
+}
+
 /// The metadata key the matched skill rides under: busbar's own, namespaced annotation.
 pub const SKILL_METADATA_KEY: &str = "busbar/skill";
 
