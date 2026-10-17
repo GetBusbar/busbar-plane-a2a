@@ -413,10 +413,10 @@ fn an_inline_callback_that_passes_is_the_opened_tasks_callback() {
     assert_eq!(held.next_seq, 3, "submitted and delegated, nothing more");
 }
 
-/// A request addressing a task the caller holds registers the callback on THAT task, keeping its
-/// chain where it was (the engine's `set_push_callback` chains no event).
+/// A request addressing a task the caller holds registers the callback as THAT task's push config,
+/// leaving its row and its chain where they were (no event is chained, and no row is rewritten).
 #[test]
-fn an_inline_callback_on_an_addressed_task_is_registered_without_an_event() {
+fn an_inline_callback_on_an_addressed_task_is_its_push_config_without_an_event() {
     let mut desk = desk();
     let before = get(&mut desk.book, ALICE, "t1", 300).unwrap().unwrap();
     let envelope = send(json!({
@@ -426,11 +426,11 @@ fn an_inline_callback_on_an_addressed_task_is_registered_without_an_event() {
     let (task, _) = hop(opened(&mut desk, &envelope, ALICE));
     assert_eq!(task.task_id, "t1");
     let after = get(&mut desk.book, ALICE, "t1", 300).unwrap().unwrap();
-    assert_eq!(after.row.push_callback, "https://hook.example/t1");
-    assert_eq!(
-        after.next_seq, before.next_seq,
-        "no event was chained: the chain's position is kept"
-    );
+    assert_eq!(after, before, "the row and the chain's position are kept");
+    let cfg = crate::local::held_config(&mut desk.book, ALICE, "t1")
+        .unwrap()
+        .expect("the push config");
+    assert_eq!(cfg.url, "https://hook.example/t1");
 }
 
 /// A request with no inline callback carries none back, and opens a task with none.

@@ -27,8 +27,10 @@
 //! [`CALLBACK_CONFIG_POINTERS`] names) is judged before anything is opened, by the same floor the
 //! push-config verbs use ([`local::judge_callback`]), and a callback or a credential busbar cannot
 //! honour refuses the request `400` in the engine's words. One that passes is the task's
-//! `push_callback`, on the row it opens, resumes or addresses, and its credential rides back to the
-//! door ([`Callback`]), which holds it in plane memory as the engine's delivery does.
+//! `push_callback`, on the row it opens or resumes (in that change's own claimed write); on a task
+//! it addresses it is the task's push config, put as the push-config verbs put one, the later set
+//! winning. Its credential rides back to the door ([`Callback`]), which holds it in plane memory as
+//! the engine's delivery does.
 
 use std::collections::BTreeMap;
 
@@ -39,6 +41,7 @@ use crate::a2a::task::{plan_transition, Direction, Task, TaskState};
 use crate::agent_arrival::{AgentRefusal, JSON_MEDIA_TYPE};
 use crate::local::{self, Reach};
 use crate::push::DeliveryAuth;
+use crate::records::KIND_PUSH_CONFIG;
 use crate::relay::{RelayReply, TaskHop, TaskSettled};
 use crate::skill::CALLBACK_CONFIG_POINTERS;
 use crate::task_identity::{self, MINT_BYTES};
@@ -262,16 +265,26 @@ pub fn open(
     };
     let (task, unrecorded) = match (addressed, resumed) {
         (Some(row), _) => {
-            if let Some(url) = url {
-                let at = Stamp {
-                    caller: req.caller,
-                    request_id: &row.task_id,
-                    now: req.now,
+            // An addressed task's callback is a PUSH-CONFIG SET, replace semantics, last writer
+            // wins: a put of the task's push_config record, never a write of its row, so no other
+            // writer's move of the task is undone.
+            if let Some(callback) = callback.as_ref() {
+                let stored = local::PushConfig {
+                    id: inline_config(req.envelope)
+                        .and_then(|c| c.get("id"))
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                    url: callback.url.clone(),
+                    authentication: callback.auth.clone(),
                 };
                 // A callback that cannot be registered leaves the task as it was: the hop goes on.
-                if let Err(Halt::Pending) = tasks::set_callback(reach, &at, &row.task_id, url, out)
-                {
-                    return Err(Halt::Pending);
+                if let Ok(value) = serde_json::to_vec(&stored) {
+                    out.push(Write {
+                        kind: KIND_PUSH_CONFIG,
+                        key: tasks::task_key(req.caller, &row.task_id),
+                        value,
+                    });
                 }
             }
             let task = TaskHop {
