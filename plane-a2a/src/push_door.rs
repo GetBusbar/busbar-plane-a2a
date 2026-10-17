@@ -79,7 +79,8 @@ pub fn queue(deliveries: &Deliveries, row: &TaskRow, config: Option<&PushConfig>
         return false;
     };
     deliveries.enqueue(delivery, 0);
-    // The delivery is attempted on this wake of the driver ticket, not at the next scheduled tick.
+    // The delivery is attempted on this wake of the driver ticket, not at the next scheduled tick;
+    // while an attempt is held, on that attempt's own completion wake ([`Deliveries::wake`]).
     deliveries.wake();
     true
 }
@@ -394,6 +395,7 @@ fn tick_over(
         // flight at once.
         if now_ns >= started.saturating_add(DELIVERY_TIMEOUT_NS) {
             if let Some((flight, _)) = attempting.take() {
+                deliveries.holding(false);
                 line.abandon(flight.exchange.as_ref().and_then(Exchange::stream));
                 let jitter = line.jitter();
                 deliveries.owe(&flight.delivery, Attempted::Transport);
@@ -449,9 +451,11 @@ fn advance_attempt(
     match attempt(line, deliveries, &mut flight) {
         Poll::Pending => {
             attempting.hold(flight, started_ns);
+            deliveries.holding(true);
             Outcome::Pending
         }
         Poll::Ready(end) => {
+            deliveries.holding(false);
             deliveries.owe(&flight.delivery, end);
             let task_id = &flight.delivery.task_id;
             match now_ns {
