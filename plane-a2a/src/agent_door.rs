@@ -531,7 +531,7 @@ pub struct A2aDoor {
     pub(crate) swept: Keyed<(), u64>,
     /// `<caller>/<busbar task id>` to the far end's own id for the task: plane memory, so a
     /// restart forgets it (the engine's `idmap`, its bound included).
-    backends: Keyed<String, String>,
+    backends: BackendIds,
     /// The agents' verified cards, held in plugin memory to their refresh generation.
     pub(crate) cards: crate::cards::Cards,
     /// The push notifications waiting for delivery, and the webhook credentials they present.
@@ -578,6 +578,58 @@ impl A2aDoor {
 
 /// The most far-end task ids the instance remembers (the engine's `idmap::CAPACITY`).
 pub const MAX_BACKEND_IDS: usize = 100_000;
+
+/// THE FAR END'S OWN TASK IDS, by `<caller>/<busbar task id>`, bounded: past the bound the id
+/// recorded longest ago is forgotten first, whichever caller it is for, so one caller's volume
+/// never pushes out another caller's newer ids because of how their references sort.
+#[derive(Debug, Default)]
+pub(crate) struct BackendIds(Keyed<(), Recorded>);
+
+/// The ids, each with when it was first recorded, and that order.
+#[derive(Debug, Default)]
+struct Recorded {
+    ids: std::collections::BTreeMap<String, (u64, String)>,
+    order: std::collections::BTreeMap<u64, String>,
+    next: u64,
+}
+
+impl BackendIds {
+    /// The far end's id held under `key`.
+    pub(crate) fn get(&self, key: &str) -> Option<String> {
+        self.0.with(&(), |r| {
+            r.and_then(|r| r.ids.get(key).map(|(_, id)| id.clone()))
+        })
+    }
+
+    /// How many ids are held.
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.0.with(&(), |r| r.map_or(0, |r| r.ids.len()))
+    }
+
+    /// Hold `id` under `key`; past `cap`, the id recorded longest ago is forgotten. A key held
+    /// already keeps its place and forgets nothing (the engine's `idmap`: insertion order, its
+    /// bound included).
+    pub(crate) fn record(&self, cap: usize, key: String, id: String) {
+        self.0.with_all(|m| {
+            let r = m.entry(()).or_default();
+            if let Some((_, held)) = r.ids.get_mut(&key) {
+                *held = id;
+                return;
+            }
+            while r.ids.len() >= cap {
+                let Some((_, oldest)) = r.order.pop_first() else {
+                    break;
+                };
+                r.ids.remove(&oldest);
+            }
+            let at = r.next;
+            r.next += 1;
+            r.order.insert(at, key.clone());
+            r.ids.insert(key, (at, id));
+        });
+    }
+}
 
 /// The settings blob read as the `agents:` section, or the refusal in the grammar's words.
 fn agents_section(bytes: &[u8]) -> Result<AgentsCfg, Refusal> {
@@ -699,7 +751,7 @@ slot!(
             units: Keyed::new(),
             swept: Keyed::new(),
             latches: crate::task_hop::Latches::new(),
-            backends: Keyed::new(),
+            backends: BackendIds::default(),
             cards: crate::cards::Cards::new(),
             deliveries: crate::push::Deliveries::new(),
             attempting: crate::push_door::Attempting::default(),
@@ -1469,12 +1521,10 @@ fn settle_task(
         };
         // A far end that issued the SAME id busbar did needs no translation and holds no slot.
         if let Some(backend) = backend.filter(|b| *b != task.task_id) {
-            keep(
-                &reach.plane.backends,
-                MAX_BACKEND_IDS,
-                task_key(caller, &task.task_id),
-                backend,
-            );
+            reach
+                .plane
+                .backends
+                .record(MAX_BACKEND_IDS, task_key(caller, &task.task_id), backend);
         }
     }
     hop.outbox.writes.extend(writes.split_off(seeded));
