@@ -541,32 +541,6 @@ pub fn dispatch(
     change(rec, at, task, &mut plan, out)
 }
 
-/// REGISTER `callback` as task `task`'s push callback (the engine's `set_push_callback`): the row
-/// changes and no event is chained, so the chain's position is kept. `None` when the caller holds
-/// no such task.
-///
-/// # Errors
-/// [`Halt`].
-pub fn set_callback(
-    rec: &mut dyn Records,
-    at: &Stamp<'_>,
-    task: &str,
-    callback: &str,
-    out: &mut Vec<Write>,
-) -> Result<Option<TaskRow>, Halt> {
-    let Some(mut held) = get(rec, at.caller, task, at.now)? else {
-        return Ok(None);
-    };
-    held.row.push_callback = callback.to_string();
-    held.row.updated_at = at.now;
-    out.push(Write {
-        kind: KIND_TASK,
-        key: task_key(at.caller, task),
-        value: encode(&held)?,
-    });
-    Ok(Some(held.row))
-}
-
 /// ADVANCE the artifact cursor to `cursor`, monotonic, with a `task.artifact` event; nothing when it
 /// would not move forward.
 ///

@@ -762,11 +762,6 @@ fn a_mutation_against_an_unknown_task_is_refused() {
             other => panic!("an unknown task id must be refused, got {other:?}"),
         }
     }
-    assert_eq!(
-        set_callback(&mut book, &at, "nope", "https://cb.example/", &mut out).unwrap(),
-        None,
-        "a callback for a task nobody holds registers nothing"
-    );
     assert!(out.is_empty(), "nothing was written: {out:?}");
     assert_eq!(book.rows.len(), 0, "and nothing was created");
 }
