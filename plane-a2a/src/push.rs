@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! PUSH DELIVERY, IN PLANE MEMORY (`BUSBAR-1.6.0.md`, the a2a plane rulings: push delivery retries
-//! at most three times, 250/500 ms ±20 %, on a transport error, 5xx or 429 only, on an async timer,
-//! holding no slot, re-running the destination judge on every attempt; event-stream sink delivery
-//! through a per-task ordered bounded queue, 64, drop-oldest, counted).
+//! PUSH DELIVERY, IN PLANE MEMORY (`BUSBAR-1.6.0.md`, the a2a plane rulings: push delivery makes
+//! three attempts, two delays of 250/500 ms ±20 %, on a transport error, 5xx or 429 only, on an
+//! async timer, holding no slot, re-running the destination judge on every attempt; event-stream
+//! sink delivery through a per-task ordered bounded queue, 64, drop-oldest, counted).
 //!
 //! Everything here is sans I/O. The instance holds one [`Deliveries`] and one [`Tokens`]:
 //!
