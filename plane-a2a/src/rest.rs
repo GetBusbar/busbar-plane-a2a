@@ -39,7 +39,7 @@ pub mod method {
     pub const LIST_TASKS: &str = "ListTasks";
     /// `POST /tasks/{id}:cancel`.
     pub const CANCEL_TASK: &str = "CancelTask";
-    /// `POST /tasks/{id}:subscribe`.
+    /// `GET /tasks/{id}:subscribe` (and `POST`, as the served engine spelled it).
     pub const SUBSCRIBE_TO_TASK: &str = "SubscribeToTask";
     /// `POST /tasks/{id}/pushNotificationConfigs`.
     pub const CREATE_PUSH_CONFIG: &str = "CreateTaskPushNotificationConfig";
@@ -308,10 +308,21 @@ pub fn compose_from(
             .maybe("includeArtifacts", query.get("includeArtifacts"));
         (method::LIST_TASKS, params.into_value())
     } else if at("GET", crate::ROUTE_TASK) {
-        let params = Params::new()
-            .set("id", var("id"))
-            .maybe("historyLength", query.get("historyLength"));
-        (method::GET_TASK, params.into_value())
+        // `GET /tasks/{id}:subscribe` (proto `SubscribeToTask`): the verb suffix sits INSIDE the
+        // captured segment, as on the POST verbs, so it is split off before the read is composed.
+        let addressed = var("id");
+        match addressed.rsplit_once(':') {
+            Some((id, VERB_SUBSCRIBE)) => (
+                method::SUBSCRIBE_TO_TASK,
+                Params::new().set("id", id).into_value(),
+            ),
+            _ => {
+                let params = Params::new()
+                    .set("id", addressed)
+                    .maybe("historyLength", query.get("historyLength"));
+                (method::GET_TASK, params.into_value())
+            }
+        }
     } else if at("POST", crate::ROUTE_TASK) {
         let addressed = var("id");
         let Some((id, verb)) = addressed.rsplit_once(':') else {

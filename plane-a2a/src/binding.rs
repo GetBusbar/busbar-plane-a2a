@@ -151,7 +151,7 @@ fn rest_op(method: &str) -> Option<RestOp> {
             false,
         ),
         "CancelTask" | "tasks/cancel" => ("POST", "/tasks/{id}:cancel", &[], false),
-        "SubscribeToTask" | "tasks/resubscribe" => ("POST", "/tasks/{id}:subscribe", &[], false),
+        "SubscribeToTask" | "tasks/resubscribe" => ("GET", "/tasks/{id}:subscribe", &[], false),
         "CreateTaskPushNotificationConfig" | "tasks/pushNotificationConfig/set" => {
             ("POST", "/tasks/{taskId}/pushNotificationConfigs", &[], true)
         }
