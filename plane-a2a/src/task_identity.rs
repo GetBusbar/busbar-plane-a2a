@@ -8,7 +8,8 @@
 //!
 //! * A fresh task's id is `a2a-<agent>-<16 hex>` ([`mint`]), its eight bytes from the kernel's
 //!   `random.fill`; its `contextId` is the caller's, or the id when the caller named none.
-//! * A request naming a task the caller holds reuses that task's identity ([`named_tasks`]).
+//! * A request naming a task the caller holds, in its `params` or its message, reuses that task's
+//!   identity ([`translatable`]).
 //! * The far end's answer leaves under busbar's identity ([`rewrite_identity`]); the far end's own
 //!   id is read first ([`backend_task_id`]) so a following request naming busbar's id is sent on under
 //!   the far end's ([`translate_request`]).
@@ -39,6 +40,25 @@ pub fn mint(agent: &str, random: [u8; MINT_BYTES]) -> String {
 /// spelling, `taskId` every verb about a task, `task_id` A2A v1.0's.
 pub const TASK_ID_MEMBERS: [&str; 3] = ["id", "taskId", "task_id"];
 
+/// The members of `envelope`'s `params` that name a task: [`TASK_ID_MEMBERS`], less `id` on a
+/// v1.0 push-config verb, whose `id` is the CONFIG (a2a.proto:716-733: `task_id = 2`, `id = 3`).
+fn task_members(envelope: &Value) -> &'static [&'static str] {
+    use crate::local::{verb_of, Dialect, LocalVerb};
+    match envelope
+        .get("method")
+        .and_then(Value::as_str)
+        .and_then(verb_of)
+    {
+        Some(
+            LocalVerb::CreatePushConfig(Dialect::V10)
+            | LocalVerb::GetPushConfig(Dialect::V10)
+            | LocalVerb::ListPushConfigs(Dialect::V10)
+            | LocalVerb::DeletePushConfig(Dialect::V10),
+        ) => &TASK_ID_MEMBERS[1..],
+        _ => &TASK_ID_MEMBERS[..],
+    }
+}
+
 /// The task ids a request names at the top of its `params`, in [`TASK_ID_MEMBERS`] order: the
 /// candidates for the task the request addresses.
 #[must_use]
@@ -46,7 +66,7 @@ pub fn named_tasks(envelope: &Value) -> Vec<&str> {
     let Some(params) = envelope.get("params").and_then(Value::as_object) else {
         return Vec::new();
     };
-    TASK_ID_MEMBERS
+    task_members(envelope)
         .iter()
         .filter_map(|m| params.get(*m).and_then(Value::as_str))
         .collect()
@@ -61,22 +81,29 @@ pub fn context_of(envelope: &Value) -> &str {
         .unwrap_or_default()
 }
 
-/// Every task id [`translate_request`] may translate: the top-level members, then the message's
-/// (a message's own `id` is not a task id).
+/// The task ids the caller's MESSAGE names (`params.message.taskId`, or `task_id`): how A2A v1.0
+/// continues a task (`Message.task_id`, a2a.proto:265-266). A message's own `id` is not a task id.
+#[must_use]
+pub fn message_tasks(envelope: &Value) -> Vec<&str> {
+    let Some(message) = envelope
+        .pointer("/params/message")
+        .and_then(Value::as_object)
+    else {
+        return Vec::new();
+    };
+    TASK_ID_MEMBERS
+        .iter()
+        .filter(|m| **m != "id")
+        .filter_map(|m| message.get(*m).and_then(Value::as_str))
+        .collect()
+}
+
+/// Every task id a request ADDRESSES, and so every one [`translate_request`] may translate: the
+/// top-level members ([`named_tasks`]), then the message's ([`message_tasks`]).
 #[must_use]
 pub fn translatable(envelope: &Value) -> Vec<&str> {
     let mut ids = named_tasks(envelope);
-    if let Some(message) = envelope
-        .pointer("/params/message")
-        .and_then(Value::as_object)
-    {
-        ids.extend(
-            TASK_ID_MEMBERS
-                .iter()
-                .filter(|m| **m != "id")
-                .filter_map(|m| message.get(*m).and_then(Value::as_str)),
-        );
-    }
+    ids.extend(message_tasks(envelope));
     ids
 }
 
@@ -90,7 +117,7 @@ pub fn translate_request(
 ) -> Option<Vec<u8>> {
     let params = envelope.get("params")?.as_object()?;
     let mut rewritten = params.clone();
-    let mut any = translate_members(&mut rewritten, &TASK_ID_MEMBERS, backend_of);
+    let mut any = translate_members(&mut rewritten, task_members(envelope), backend_of);
     if let Some(message) = rewritten.get("message").and_then(Value::as_object) {
         let mut msg = message.clone();
         if translate_members(&mut msg, &TASK_ID_MEMBERS[1..], backend_of) {
@@ -187,12 +214,26 @@ pub fn reported_task_state(result: &Value) -> TaskState {
         .unwrap_or(TaskState::Working)
 }
 
+/// Whether a `result` is a MESSAGE THAT NAMES NO TASK (A2A v1.0 `SendMessageResponse.message`, or
+/// v0.3's `kind: "message"`, with no `taskId`): a server message names a task only if one was
+/// created (a2a.proto:254-259), so such an answer is the whole interaction.
+#[must_use]
+pub fn names_no_task(result: &Value) -> bool {
+    let message = match wrapper_of(result) {
+        Some(("message", _)) => &result["message"],
+        Some(_) => return false,
+        None if result.get("kind").and_then(Value::as_str) == Some("message") => result,
+        None => return false,
+    };
+    !matches!(message.get("taskId").and_then(Value::as_str), Some(id) if !id.is_empty())
+}
+
 /// The metadata key the matched skill rides under: busbar's own, namespaced annotation.
 pub const SKILL_METADATA_KEY: &str = "busbar/skill";
 
 /// SUBSTITUTE BUSBAR'S TASK IDENTITY onto a far end's `result`, leaving everything else alone: the
 /// payload's own identity member (inside its wrapper), its `contextId`, the ids a status message
-/// nests, and the matched skill as `metadata["busbar/skill"]`.
+/// and every `history` message nest, and the matched skill as `metadata["busbar/skill"]`.
 pub fn rewrite_identity(
     result: &mut Value,
     task_id: &str,
@@ -230,14 +271,13 @@ pub fn rewrite_identity(
         .and_then(|s| s.get_mut("message"))
         .and_then(Value::as_object_mut)
     {
-        if msg.contains_key("taskId") {
-            msg.insert("taskId".to_string(), Value::String(task_id.to_string()));
-        }
-        if msg.contains_key("contextId") {
-            msg.insert(
-                "contextId".to_string(),
-                Value::String(context_id.to_string()),
-            );
+        rewrite_message_identity(msg, task_id, context_id);
+    }
+    // A task's history is its messages (a2a.proto:179-180): each that names the far end's task or
+    // context names busbar's.
+    if let Some(history) = obj.get_mut("history").and_then(Value::as_array_mut) {
+        for msg in history.iter_mut().filter_map(Value::as_object_mut) {
+            rewrite_message_identity(msg, task_id, context_id);
         }
     }
     if let Some(skill) = matched_skill {
@@ -253,6 +293,20 @@ pub fn rewrite_identity(
                 Value::String(skill.to_string()),
             );
         }
+    }
+}
+
+/// The task and context ids a message nested in a result names, replaced by busbar's; a member the
+/// message does not carry is not added.
+fn rewrite_message_identity(msg: &mut Map<String, Value>, task_id: &str, context_id: &str) {
+    if msg.contains_key("taskId") {
+        msg.insert("taskId".to_string(), Value::String(task_id.to_string()));
+    }
+    if msg.contains_key("contextId") {
+        msg.insert(
+            "contextId".to_string(),
+            Value::String(context_id.to_string()),
+        );
     }
 }
 
