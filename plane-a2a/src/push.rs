@@ -92,6 +92,7 @@ pub const AUTHORIZATION: &str = "authorization";
 /// THE A2A PUSH NOTIFICATION BODY: a `StreamResponse` with the task nested under `"task"`, under
 /// busbar's ids. Not a JSON-RPC envelope: the receiver is not a JSON-RPC peer and correlates on
 /// the task id (A2A 4.3.3). `status.timestamp` is RFC 3339, as every revision types it.
+/// The body is predev's, kept as is: it was validated against the official A2A suite's schema.
 #[must_use]
 pub fn notification_body(task: &Task) -> Vec<u8> {
     let doc = serde_json::json!({
