@@ -876,3 +876,33 @@ fn a_restarted_instance_serves_an_agent_from_its_recorded_card() {
         "the instance opened again serves the agent from its recorded card"
     );
 }
+
+/// A KERNEL REFUSAL WITH NO UNIT ANSWERS THE BASELINE BYTES: the kernel refused the request before
+/// any unit was made (no credential, a body over the cap), so the plane renders the bytes v1.5.5
+/// answered on that route, a JSON-RPC error with no id, at the kernel's status. RED before the fix:
+/// the door rendered its own words for the kernel's text.
+#[test]
+fn a_kernel_refusal_with_no_unit_answers_the_baseline_json_rpc_bytes() {
+    let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    let door = open();
+    for (reason, status, body) in [
+        (
+            RefusalCode::Unauthenticated,
+            401,
+            r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"authentication failed"}}"#,
+        ),
+        (
+            RefusalCode::BodyTooLarge,
+            413,
+            r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"request body exceeds the maximum allowed size"}}"#,
+        ),
+    ] {
+        let (outcome, answered, rendered) = door.refusal(0, reason, status);
+        assert_eq!(outcome, Outcome::Ready, "{reason:?}: {rendered}");
+        assert_eq!(rendered, body, "{reason:?}: the v1.5.5 bytes");
+        assert!(
+            answered == 0 || answered == status,
+            "{reason:?}: the kernel's status {status} stands, the door answered {answered}"
+        );
+    }
+}
