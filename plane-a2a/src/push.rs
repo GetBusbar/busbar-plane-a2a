@@ -89,23 +89,36 @@ pub const CONTENT_TYPE: (&str, &str) = ("content-type", "application/json");
 /// The field a webhook credential is presented on.
 pub const AUTHORIZATION: &str = "authorization";
 
-/// THE A2A PUSH NOTIFICATION BODY: a `StreamResponse` with the task nested under `"task"`, under
-/// busbar's ids. Not a JSON-RPC envelope: the receiver is not a JSON-RPC peer and correlates on
-/// the task id (A2A 4.3.3). `status.timestamp` is RFC 3339, as every revision types it.
-/// The body is predev's, kept as is: it was validated against the official A2A suite's schema.
+/// THE A2A PUSH NOTIFICATION BODY, in the shape of the version its callback was registered under
+/// ([`Task::push_version`]; Q128 a2a M13, ruled version-consistent), under busbar's ids. Not a
+/// JSON-RPC envelope: the receiver is not a JSON-RPC peer and correlates on the task id.
+/// `status.timestamp` is RFC 3339, as every revision types it.
+///
+/// * v1.0 (and a row written before the version was kept): a `StreamResponse` with the task nested
+///   under `"task"` (A2A 4.3.3), its state the ProtoJSON `TASK_STATE_*` token, no `kind`.
+/// * v0.3: the `Task` object itself, `kind: "task"` and the lower-case state word.
 #[must_use]
 pub fn notification_body(task: &Task) -> Vec<u8> {
-    let doc = serde_json::json!({
-        "task": {
+    let timestamp = busbar_contract::civil::rfc3339_from_secs(task.updated_at);
+    let doc = if task.push_version == crate::local::Dialect::V03.version() {
+        serde_json::json!({
             "id": task.task_id,
             "contextId": task.context_id,
             "kind": "task",
-            "status": {
-                "state": task.state.as_str(),
-                "timestamp": busbar_contract::civil::rfc3339_from_secs(task.updated_at),
-            },
-        }
-    });
+            "status": { "state": task.state.as_str(), "timestamp": timestamp },
+        })
+    } else {
+        serde_json::json!({
+            "task": {
+                "id": task.task_id,
+                "contextId": task.context_id,
+                "status": {
+                    "state": crate::local::wire_state(task.state),
+                    "timestamp": timestamp,
+                },
+            }
+        })
+    };
     serde_json::to_vec(&doc).unwrap_or_default()
 }
 

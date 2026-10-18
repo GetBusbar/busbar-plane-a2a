@@ -239,8 +239,8 @@ fn the_notification_is_the_task_nested_under_task_with_an_rfc3339_timestamp() {
     let body: serde_json::Value = serde_json::from_slice(&notification_body(&t)).expect("JSON");
     assert_eq!(
         body,
-        serde_json::json!({"task": {"id": "t1", "contextId": "ctx", "kind": "task",
-            "status": {"state": "completed", "timestamp": "1970-01-01T00:00:02Z"}}})
+        serde_json::json!({"task": {"id": "t1", "contextId": "ctx",
+            "status": {"state": "TASK_STATE_COMPLETED", "timestamp": "1970-01-01T00:00:02Z"}}})
     );
     assert!(body.get("jsonrpc").is_none());
     let mut silent = t;

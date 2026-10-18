@@ -34,6 +34,29 @@ pub enum Dialect {
     V10,
 }
 
+impl Dialect {
+    /// The version a JSON-RPC method name is spelled in: v0.3's are slash paths
+    /// (`message/send`, `tasks/pushNotificationConfig/set`), v1.0's are PascalCase
+    /// (`SendMessage`, `CreateTaskPushNotificationConfig`).
+    #[must_use]
+    pub fn of_method(method: &str) -> Self {
+        if method.contains('/') {
+            Dialect::V03
+        } else {
+            Dialect::V10
+        }
+    }
+
+    /// The version token a callback is registered under ([`PushConfig::version`]).
+    #[must_use]
+    pub const fn version(self) -> &'static str {
+        match self {
+            Dialect::V03 => "0.3",
+            Dialect::V10 => "1.0",
+        }
+    }
+}
+
 /// A verb this plane answers WITHOUT a backend hop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LocalVerb {
@@ -344,6 +367,10 @@ pub struct PushConfig {
     /// before the field existed reads as `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authentication: Option<DeliveryAuth>,
+    /// The A2A version the config was registered under (`0.3` or `1.0`): the shape its
+    /// notifications take. A record written before the field existed reads empty, as `1.0`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub version: String,
 }
 
 /// The config as `dialect` spells it; never with `authentication`.
@@ -581,6 +608,7 @@ fn create_push_config(
         id,
         url: url.to_string(),
         authentication,
+        version: dialect.version().to_string(),
     };
     out.push(Write {
         kind: KIND_PUSH_CONFIG,
