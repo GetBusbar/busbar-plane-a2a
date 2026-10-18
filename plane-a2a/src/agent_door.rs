@@ -741,6 +741,7 @@ fn agents_section(bytes: &[u8]) -> Result<AgentsCfg, Refusal> {
 /// done with ([`AgentUnit::over`]), and only when none is held by the oldest unit (unit keys are
 /// minted in arrival order).
 fn keep_unit(units: &Keyed<u64, AgentUnit>, key: u64, unit: AgentUnit) {
+    eprintln!("A9DBG keep_unit key={key} hop={}", unit.hop.is_some());
     units.with_all(|m| {
         while m.len() >= MAX_UNITS && !m.contains_key(&key) {
             let over = m.iter().find(|(_, u)| u.over).map(|(k, _)| *k);
@@ -2731,6 +2732,7 @@ slot!(
             return crate::task_door::card_piece(plane, &instance, input, out, ask);
         }
         let relayed = plane.units.with(&unit, |u| u.is_some_and(|u| u.hop.is_some()));
+        eprintln!("A9DBG on_piece unit={unit} from={} flags={:#x} attempt_no={} has_unit={} relayed={relayed} member={:?}", input.get().from, input.get().flags, input.get().attempt_no, plane.units.with(&unit, |u| u.is_some()), input.field(|i| &i.member).as_str().unwrap_or_default());
         if !relayed {
             return crate::task_door::on_piece(plane, &instance, input, out)
                 .unwrap_or(Outcome::Refused);
@@ -2743,6 +2745,7 @@ slot!(
             Some(u) => hop_piece(&reach, u, input, &mut out),
             None => (Outcome::Refused, false),
         });
+        eprintln!("A9DBG hop_piece unit={unit} ready={} pending={} refused={} done={done}", matches!(outcome, Outcome::Ready), matches!(outcome, Outcome::Pending), matches!(outcome, Outcome::Refused));
         if done {
             plane.units.remove(&unit);
         }
