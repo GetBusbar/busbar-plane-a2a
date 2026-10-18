@@ -63,7 +63,7 @@ fn a_moved_task_with_a_registered_config_queues_its_notification_to_that_config(
     assert_eq!(due.caller, ALICE);
     assert_eq!(due.task_id, "t1");
     let body: serde_json::Value = serde_json::from_slice(&due.body).unwrap();
-    assert_eq!(body["task"]["status"]["state"], "working");
+    assert_eq!(body["task"]["status"]["state"], "TASK_STATE_WORKING");
     let request = d.request(&due);
     assert!(request
         .fields
