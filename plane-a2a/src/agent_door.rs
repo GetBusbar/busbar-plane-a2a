@@ -42,8 +42,8 @@ use busbar_contract::abi::plane::{
     ProjectIn, ProjectOut, RecordWrite, RefusalIn, RefusalOut, ServeIn, ServeOut, UnitCount,
     CANCEL_ABORTED, EMIT_DONE, EMIT_TO_FAR_END, FROM_CALLER, FROM_FAR_END, FROM_KERNEL,
     PIECE_HAS_STATUS, PIECE_LAST, PIECE_REFUSED, PRINCIPAL_NONE, PRINCIPAL_REQUIRED, RECORD_PUT,
-    REFUSAL_ARRIVE, ROUTE_DIRECT, ROUTE_POOL, ROUTE_SCOPE, ROUTE_SCOPE_LOCAL, UNITS_REPORTED,
-    VERDICT_RETRY,
+    REFUSAL_ARRIVE, REFUSAL_KERNEL, ROUTE_DIRECT, ROUTE_POOL, ROUTE_SCOPE, ROUTE_SCOPE_LOCAL,
+    UNITS_REPORTED, VERDICT_RETRY,
 };
 use busbar_contract::abi::sdk::conn::Host;
 // THE ONE SHARED FAULT READING (ARCHITECT row 68): the breaker's vocabulary, stated on `OnPieceOut`.
@@ -2943,7 +2943,20 @@ slot!(
             })
         })
         .flatten();
-        let rendered = if let Some(refusal) = &unreadable {
+        // A KERNEL REFUSAL WITH NO UNIT (no credential, a body over the cap: refused before any
+        // unit was made) answers the bytes v1.5.5 answered on the route, a JSON-RPC error with no
+        // id, at the kernel's own status, on every line.
+        let unitless = (given.unit == 0 && given.cause == REFUSAL_KERNEL)
+            .then(|| unitless_kernel_body(given.reason))
+            .flatten();
+        let rendered = if let Some(body) = unitless {
+            // `0`: the kernel's status stands.
+            agent_arrival::Rendered {
+                status: 0,
+                body: body.to_vec(),
+                content_type: "application/json",
+            }
+        } else if let Some(refusal) = &unreadable {
             agent_arrival::render(dialect, refusal, true)
         } else if let Some(refusal) = &unrecorded {
             agent_arrival::render(dialect, refusal, true)
@@ -3016,7 +3029,7 @@ slot!(
         // and its details, stated as the closing block the stream's framer sends as the whole
         // answer, at the refusal's neutral status (SEAM-4l: a block stating `grpc-status` is the
         // close; the neutral status is what a framer maps when the block states none).
-        let (body, head, status) = if dialect == Dialect::Framed {
+        let (body, head, status) = if dialect == Dialect::Framed && unitless.is_none() {
             let neutral = if rendered.status == 0 {
                 given.status
             } else {
@@ -4314,6 +4327,24 @@ pub fn invocation_of(envelope: &[u8]) -> busbar_contract::ir::invoke::InvokeReq 
             .cloned()
             .unwrap_or(serde_json::Value::Null),
         extra: Default::default(),
+    }
+}
+
+/// v1.5.5's answer to a request refused before any unit was made: no credential.
+const UNITLESS_UNAUTHENTICATED: &[u8] =
+    br#"{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"authentication failed"}}"#;
+/// v1.5.5's answer to a request refused before any unit was made: a body over the cap.
+const UNITLESS_BODY_TOO_LARGE: &[u8] = br#"{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"request body exceeds the maximum allowed size"}}"#;
+
+/// The v1.5.5 bytes for a kernel refusal of `reason` that names no unit, if v1.5.5 had its own.
+fn unitless_kernel_body(reason: u32) -> Option<&'static [u8]> {
+    use busbar_contract::abi::plane::RefusalCode as Code;
+    if reason == Code::Unauthenticated.code() {
+        Some(UNITLESS_UNAUTHENTICATED)
+    } else if reason == Code::BodyTooLarge.code() {
+        Some(UNITLESS_BODY_TOO_LARGE)
+    } else {
+        None
     }
 }
 
