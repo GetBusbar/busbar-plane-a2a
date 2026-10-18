@@ -38,6 +38,7 @@ fn config(url: &str, auth: Option<DeliveryAuth>) -> PushConfig {
         id: "cfg".into(),
         url: url.into(),
         authentication: auth,
+        version: String::new(),
     }
 }
 
