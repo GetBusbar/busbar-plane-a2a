@@ -98,14 +98,40 @@ fn main() -> Result<(), Box<dyn Error>> {
     generated = generated.replace(NULL_MAP.0, NULL_MAP.1);
     for member in NULL_REPEATED {
         let needle = format!("{member}__ = Some(map_.next_value()?);");
-        if !generated.contains(&needle) {
+        let patch =
+            format!("{member}__ = Some(map_.next_value::<Option<_>>()?.unwrap_or_default());");
+        let (patched, hits) = replace_whole(&generated, &needle, &patch);
+        if hits == 0 {
             return Err(format!("the null-repeated patch for `{member}` matched nothing").into());
         }
-        generated = generated.replace(
-            &needle,
-            &format!("{member}__ = Some(map_.next_value::<Option<_>>()?.unwrap_or_default());"),
-        );
+        generated = patched;
     }
     std::fs::write(serde_path, generated)?;
     Ok(())
+}
+
+/// `text` with every `needle` that starts a whole identifier replaced by `with`, and how many were:
+/// `output_modes__ = …` must not match inside `accepted_output_modes__ = …`, which is its own
+/// member's line (a substring match patched it under the shorter name, and the longer name's own
+/// patch then matched nothing).
+fn replace_whole(text: &str, needle: &str, with: &str) -> (String, usize) {
+    let mut out = String::with_capacity(text.len());
+    let (mut at, mut hits) = (0, 0);
+    while let Some(found) = text[at..].find(needle) {
+        let start = at + found;
+        let whole = text[..start]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '_'));
+        out.push_str(&text[at..start]);
+        if whole {
+            out.push_str(with);
+            hits += 1;
+        } else {
+            out.push_str(needle);
+        }
+        at = start + needle.len();
+    }
+    out.push_str(&text[at..]);
+    (out, hits)
 }
