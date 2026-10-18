@@ -2626,6 +2626,7 @@ fn hop_piece(
             ob.at = 0;
         }
     }
+    eprintln!("A9DBG out head={} to_far={} done={} bytes={}", match &ob.head { Some(AnswerHead::Attempt(_)) => "attempt", Some(AnswerHead::Reply(..)) => "reply", Some(AnswerHead::Events) => "events", Some(AnswerHead::Framed) => "framed", None => "none" }, ob.to_far, ob.done, String::from_utf8_lossy(&ob.bytes[..ob.bytes.len().min(400)]));
     ob.head = None;
     ob.writes.clear();
     ob.recall = false;
