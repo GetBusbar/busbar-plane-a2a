@@ -44,6 +44,9 @@ const NULL_MAP: (&str, &str) = (
     "map_.next_value::<Option<std::collections::HashMap<_, _>>>()?.unwrap_or_default()",
 );
 
+/// How many map fields the vendored proto has: the null-map patch must match each.
+const NULL_MAP_FIELDS: usize = 7;
+
 fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=proto");
     // THE ROOT CELLS' ADDRESS (this crate's `links` row): the composition root compiles this
@@ -82,10 +85,24 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let serde_path = out_dir.join("lf.a2a.v1.serde.rs");
     let mut generated = std::fs::read_to_string(&serde_path)?;
+    // COUNTED, so a change in pbjson's output shape fails the build instead of silently matching
+    // nothing (a null map or list would then be refused): every map field's line is patched, and
+    // every listed repeated member is patched at least once.
+    let maps = generated.matches(NULL_MAP.0).count();
+    if maps != NULL_MAP_FIELDS {
+        return Err(format!(
+            "the null-map patch matched {maps} map field(s), not the vendored proto's {NULL_MAP_FIELDS}"
+        )
+        .into());
+    }
     generated = generated.replace(NULL_MAP.0, NULL_MAP.1);
     for member in NULL_REPEATED {
+        let needle = format!("{member}__ = Some(map_.next_value()?);");
+        if !generated.contains(&needle) {
+            return Err(format!("the null-repeated patch for `{member}` matched nothing").into());
+        }
         generated = generated.replace(
-            &format!("{member}__ = Some(map_.next_value()?);"),
+            &needle,
             &format!("{member}__ = Some(map_.next_value::<Option<_>>()?.unwrap_or_default());"),
         );
     }
