@@ -1102,7 +1102,10 @@ slot!(
             // names none.
             Some(_) => agent_arrival::decide_arrival(envelope.as_deref().unwrap_or(body), |name| {
                 if name.eq_ignore_ascii_case(agent_arrival::H_VERSION) {
-                    field(name).or(Some(crate::framed::DEFAULT_VERSION))
+                    // An EMPTY `a2a-version` names none either: the line's own version.
+                    field(name)
+                        .filter(|v| !v.is_empty())
+                        .or(Some(crate::framed::DEFAULT_VERSION))
                 } else if name.eq_ignore_ascii_case(agent_arrival::H_CONTENT_TYPE)
                     || name.eq_ignore_ascii_case(agent_arrival::H_ORIGIN)
                 {
