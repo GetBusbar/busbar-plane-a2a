@@ -252,6 +252,33 @@ fn the_notification_is_the_task_nested_under_task_with_an_rfc3339_timestamp() {
     );
 }
 
+/// THE NOTIFICATION TAKES THE SHAPE OF THE VERSION ITS CALLBACK WAS REGISTERED UNDER (Q128 a2a M13,
+/// ruled version-consistent). v1.0: a `StreamResponse` carrying the task, its state a ProtoJSON
+/// `TASK_STATE_*` token and no `kind`. v0.3: the `Task` object itself, `kind: "task"` and the
+/// lower-case state word. RED before the fix: one mixed body, the v1.0 wrapper around v0.3 words.
+#[test]
+fn the_notification_is_the_registered_versions_shape() {
+    let mut t = task("t1", TaskState::Completed);
+    t.push_version = "1.0".into();
+    let v10: serde_json::Value = serde_json::from_slice(&notification_body(&t)).expect("JSON");
+    assert_eq!(
+        v10,
+        serde_json::json!({"task": {"id": "t1", "contextId": "ctx",
+            "status": {"state": "TASK_STATE_COMPLETED", "timestamp": "1970-01-01T00:00:02Z"}}})
+    );
+    t.push_version = "0.3".into();
+    let v03: serde_json::Value = serde_json::from_slice(&notification_body(&t)).expect("JSON");
+    assert_eq!(
+        v03,
+        serde_json::json!({"id": "t1", "contextId": "ctx", "kind": "task",
+            "status": {"state": "completed", "timestamp": "1970-01-01T00:00:02Z"}})
+    );
+    // A row written before the version was kept reads as v1.0.
+    t.push_version = String::new();
+    let old: serde_json::Value = serde_json::from_slice(&notification_body(&t)).expect("JSON");
+    assert_eq!(old, v10);
+}
+
 #[test]
 fn a_callback_token_names_its_one_task_and_nothing_else() {
     let tokens = Tokens::new();
