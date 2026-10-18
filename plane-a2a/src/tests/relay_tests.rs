@@ -1152,3 +1152,31 @@ fn a_message_only_answer_settles_the_opened_task_completed() {
         }]
     );
 }
+
+/// THE FAR END'S RESULT LEAVES AS ITS OWN BYTES, BUSBAR'S IDENTITY SPLICED IN (Law 5: a relay sends
+/// the bytes with governed byte-level splices; Q128 a2a M8). Member order, an integer past 64 bits
+/// and a number past `f64`'s range reach the caller as the far end wrote them; only the task's id
+/// and context are busbar's. RED before the fix: the result was re-serialised through a JSON value
+/// (members re-ordered, the long integer rounded) and the out-of-range number refused it whole.
+#[test]
+fn a_relayed_result_is_the_far_ends_bytes_with_busbars_identity_spliced_in() {
+    let mut r = task_sent(false);
+    let far = br#"{"jsonrpc":"2.0","id":7,"result":{"status":{"state":"completed"},"id":"far-1","n":123456789012345678901234567890,"big":1e400,"contextId":"far-c","kind":"task"}}"#;
+    let reply = answered(&mut r, 200, far);
+    assert_eq!(reply.status, 200);
+    assert_eq!(
+        String::from_utf8(reply.body).unwrap(),
+        r#"{"jsonrpc":"2.0","id":7,"result":{"status":{"state":"completed"},"id":"a2a-p-0102030405060708","n":123456789012345678901234567890,"big":1e400,"contextId":"ctx-1","kind":"task"}}"#
+    );
+    // No task: the result is relayed verbatim, in the far end's member order.
+    let mut r = sent();
+    let reply = answered(
+        &mut r,
+        200,
+        br#"{"jsonrpc":"2.0","id":7,"result":{"z":1,"a":12345678901234567890123}}"#,
+    );
+    assert_eq!(
+        String::from_utf8(reply.body).unwrap(),
+        r#"{"jsonrpc":"2.0","id":7,"result":{"z":1,"a":12345678901234567890123}}"#
+    );
+}
