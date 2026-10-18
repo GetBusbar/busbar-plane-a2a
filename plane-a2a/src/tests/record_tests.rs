@@ -21,6 +21,7 @@ fn task_rows_round_trip_through_the_store_seam_encoding() {
         agent_id: "planner".into(),
         artifact_cursor: 7,
         push_callback: "https://caller.example/cb".into(),
+        push_version: "0.3".into(),
         created_at: 10,
         updated_at: 20,
     };
@@ -60,6 +61,7 @@ fn a_terminal_task_state_marks_the_envelope_terminal() {
         agent_id: String::new(),
         artifact_cursor: 0,
         push_callback: String::new(),
+        push_version: String::new(),
         created_at: 1,
         updated_at: 2,
     };
