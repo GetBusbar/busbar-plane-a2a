@@ -157,7 +157,7 @@ fn translate_members(
 
 /// The wrapper members an A2A v1.0 `result` puts its payload under, each with the member that
 /// identifies the task inside it.
-const WRAPPERS: [(&str, &str); 4] = [
+pub(crate) const WRAPPERS: [(&str, &str); 4] = [
     ("task", "id"),
     ("message", "taskId"),
     ("statusUpdate", "taskId"),
