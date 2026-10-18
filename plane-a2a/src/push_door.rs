@@ -68,6 +68,7 @@ pub fn queue(deliveries: &Deliveries, row: &TaskRow, config: Option<&PushConfig>
     };
     if let Some(cfg) = config {
         task.push_callback = Some(cfg.url.clone());
+        task.push_version.clone_from(&cfg.version);
         deliveries.remember_auth(&task.task_id, cfg.authentication.clone());
     }
     let Some(delivery) = Delivery::of(&task) else {

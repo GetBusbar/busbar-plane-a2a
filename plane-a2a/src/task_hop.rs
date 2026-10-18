@@ -246,6 +246,14 @@ pub fn open(
         }
     };
     let url = callback.as_ref().map(|c| c.url.as_str());
+    // The version the callback is registered under: the one the request's method is spelled in.
+    let version = local::Dialect::of_method(
+        req.envelope
+            .get("method")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+    )
+    .version();
     let mut addressed = None;
     for named in task_identity::translatable(req.envelope) {
         if let Some(held) = or_absent(tasks::get(reach, req.caller, named, req.now), None)? {
@@ -295,6 +303,7 @@ pub fn open(
                         .to_string(),
                     url: callback.url.clone(),
                     authentication: callback.auth.clone(),
+                    version: version.to_string(),
                 };
                 // A callback that cannot be registered leaves the task as it was: the hop goes on.
                 if let Ok(value) = serde_json::to_vec(&stored) {
@@ -323,6 +332,7 @@ pub fn open(
                 plan_transition(TaskState::Working, at.now)(held).map(|(mut next, kind)| {
                     if let Some(url) = url {
                         next.push_callback = url.to_string();
+                        next.push_version = version.to_string();
                     }
                     Some((next, kind))
                 })
@@ -377,6 +387,9 @@ pub fn open(
             .map_err(|e| Halt::Failed(e.to_string()))
             .and_then(|mut t| {
                 t.push_callback = url.map(str::to_string);
+                if url.is_some() {
+                    t.push_version = version.to_string();
+                }
                 tasks::open(reach, &at, t.to_row(), req.member, out)
             });
             match opened {
