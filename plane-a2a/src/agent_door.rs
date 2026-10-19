@@ -2701,6 +2701,18 @@ slot!(
         let Some(plane) = instance.get() else {
             return Outcome::Failed;
         };
+        // THE HELD CARDS ARE WARM BEFORE ANY PIECE IS SERVED: a unit's admission reads the card it
+        // fits, so a unit whose first piece came before the instance's first tick warms them here,
+        // on its own ticket ([`warm_cards`]), rather than being refused for want of a card its
+        // operator approved (`NoCachedCard`).
+        if !plane.cards_warmed.get(&()).unwrap_or(false) {
+            match warm_cards(plane, instance.ticket()) {
+                Poll::Ready(()) => {
+                    plane.cards_warmed.insert((), true);
+                }
+                Poll::Pending => return Outcome::Pending,
+            }
+        }
         let unit = input.get().unit;
         // The unit's ticket, which the kernel's `cancel` names it by.
         let ticket = instance.ticket();
