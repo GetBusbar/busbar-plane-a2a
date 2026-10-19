@@ -28,6 +28,11 @@ license = "Apache-2.0"
 publish = false
 repository = "https://github.com/GetBusbar/busbar-plane-a2a"
 
+# `T { .., ..T::ZERO }` and `..Default::default()` are the fleet's forward-compatible literal idiom
+# (coordinator ruling (a)): a spread that fills no field today still compiles when the type grows one.
+[workspace.lints.clippy]
+needless_update = "allow"
+
 [workspace.dependencies]
 busbar-contract = { git = "https://github.com/GetBusbar/busbar", rev = "d41587120122823228292158622798cf4987616f" }
 busbar-plugin-loader = { git = "https://github.com/GetBusbar/busbar", rev = "d41587120122823228292158622798cf4987616f" }

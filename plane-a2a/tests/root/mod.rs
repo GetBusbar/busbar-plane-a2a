@@ -8173,6 +8173,7 @@ fn pooled(entries: &str, members: &[&str]) -> String {
         busbar_kernel::failover::CandidatePoolCfg {
             members: members.iter().map(|m| (*m).to_string()).collect(),
             repeatable: Vec::new(),
+            ..Default::default()
         },
     )]
     .into();
