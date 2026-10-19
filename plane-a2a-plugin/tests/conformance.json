@@ -292,7 +292,13 @@
   "far_ends": [
     {
       "url": "https://vendor.example/.well-known/agent-card.json",
-      "cert_pem": "-----BEGIN CERTIFICATE-----\nY29uZm9ybWFuY2UtaXNzdWVyLWNlcnRpZmljYXRl\n-----END CERTIFICATE-----\n",
+      "cert_pem": null,
+      "status": 200,
+      "body": "{\"name\": \"Vendor\", \"description\": \"the conformance agent\", \"url\": \"https://vendor.example/agent\", \"version\": \"1.0.0\", \"protocolVersion\": \"0.3.0\", \"capabilities\": {}, \"defaultInputModes\": [\"text/plain\"], \"defaultOutputModes\": [\"text/plain\"], \"skills\": [{\"id\": \"reply\", \"name\": \"reply\", \"description\": \"replies\", \"tags\": [\"reply\"]}]}"
+    },
+    {
+      "url": "https://vendor.example/.well-known/agent.json",
+      "cert_pem": null,
       "status": 200,
       "body": "{\"name\": \"Vendor\", \"description\": \"the conformance agent\", \"url\": \"https://vendor.example/agent\", \"version\": \"1.0.0\", \"protocolVersion\": \"0.3.0\", \"capabilities\": {}, \"defaultInputModes\": [\"text/plain\"], \"defaultOutputModes\": [\"text/plain\"], \"skills\": [{\"id\": \"reply\", \"name\": \"reply\", \"description\": \"replies\", \"tags\": [\"reply\"]}]}"
     }
