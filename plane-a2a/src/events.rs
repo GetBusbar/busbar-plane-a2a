@@ -124,7 +124,7 @@ pub fn read_event(
     let sse = match spliced {
         Some(bytes) => {
             let mut sse = b"data: ".to_vec();
-            sse.extend_from_slice(&crate::answer_bytes::reply(rpc_id, &bytes));
+            sse.extend_from_slice(&crate::answer_bytes::result_reply(rpc_id, &bytes));
             sse.extend_from_slice(b"\n\n");
             sse
         }

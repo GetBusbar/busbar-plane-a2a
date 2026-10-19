@@ -335,7 +335,7 @@ pub fn relayed_bytes(id: &Value, result: &[u8]) -> RelayReply {
     RelayReply {
         status: STATUS_OK,
         content_type: JSON_MEDIA_TYPE,
-        body: crate::answer_bytes::reply(id, result),
+        body: crate::answer_bytes::result_reply(id, result),
     }
 }
 

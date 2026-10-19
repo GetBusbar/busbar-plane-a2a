@@ -16,130 +16,76 @@
 use std::borrow::Cow;
 use std::ops::Range;
 
+use busbar_contract::spans::{resolve_pointer, Resolved};
 use serde_json::Value;
-
-/// The nesting a scan follows before it gives up (`serde_json`'s own recursion limit).
-const MAX_DEPTH: usize = 128;
 
 /// One member of a JSON object: its decoded key and its value's span.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Member {
+struct ObjectMember {
     key: String,
     value: Range<usize>,
 }
 
-fn ws(b: &[u8], mut i: usize) -> usize {
+/// `i` moved past the JSON whitespace at it.
+fn past_blank(b: &[u8], mut i: usize) -> usize {
     while i < b.len() && matches!(b[i], b' ' | b'\t' | b'\n' | b'\r') {
         i += 1;
     }
     i
 }
 
-/// The end of the string whose opening quote is at `i`.
-fn string_end(b: &[u8], i: usize) -> Option<usize> {
-    let mut j = i + 1;
-    while j < b.len() {
-        match b[j] {
-            b'"' => return Some(j + 1),
-            b'\\' => j += 2,
-            _ => j += 1,
+/// The span of the JSON value at `i` (whitespace before it allowed), read by the contract's one
+/// span grammar (`busbar_contract::spans`), never a plane-local copy of it. A number that runs to
+/// the end of `b` ends there: the grammar answers `NeedMore` for it, as a later chunk could add
+/// digits, and the bytes here are the whole answer.
+fn value_at(b: &[u8], i: usize) -> Option<Range<usize>> {
+    let rest = b.get(i..)?;
+    match resolve_pointer(rest, "") {
+        Resolved::Found(span) => Some(i + span.start..i + span.end),
+        Resolved::NeedMore => {
+            let at = past_blank(b, i);
+            let digits = b.get(at..)?;
+            let number = matches!(digits.first(), Some(b'-' | b'0'..=b'9'))
+                && digits
+                    .iter()
+                    .all(|c| matches!(c, b'0'..=b'9' | b'-' | b'+' | b'.' | b'e' | b'E'));
+            number.then_some(at..b.len())
         }
-    }
-    None
-}
-
-fn number_end(b: &[u8], i: usize) -> usize {
-    let mut j = i;
-    while j < b.len() && matches!(b[j], b'0'..=b'9' | b'-' | b'+' | b'.' | b'e' | b'E') {
-        j += 1;
-    }
-    j
-}
-
-/// The end of the JSON value starting at `i` (no leading whitespace), or `None` when it is not one.
-fn value_end(b: &[u8], i: usize, depth: usize) -> Option<usize> {
-    if depth > MAX_DEPTH {
-        return None;
-    }
-    match *b.get(i)? {
-        b'"' => string_end(b, i),
-        b'{' => {
-            let mut j = ws(b, i + 1);
-            if b.get(j) == Some(&b'}') {
-                return Some(j + 1);
-            }
-            loop {
-                if b.get(j) != Some(&b'"') {
-                    return None;
-                }
-                j = ws(b, string_end(b, j)?);
-                if b.get(j) != Some(&b':') {
-                    return None;
-                }
-                j = value_end(b, ws(b, j + 1), depth + 1)?;
-                j = ws(b, j);
-                match b.get(j)? {
-                    b',' => j = ws(b, j + 1),
-                    b'}' => return Some(j + 1),
-                    _ => return None,
-                }
-            }
-        }
-        b'[' => {
-            let mut j = ws(b, i + 1);
-            if b.get(j) == Some(&b']') {
-                return Some(j + 1);
-            }
-            loop {
-                j = ws(b, value_end(b, j, depth + 1)?);
-                match b.get(j)? {
-                    b',' => j = ws(b, j + 1),
-                    b']' => return Some(j + 1),
-                    _ => return None,
-                }
-            }
-        }
-        b't' => b[i..].starts_with(b"true").then_some(i + 4),
-        b'f' => b[i..].starts_with(b"false").then_some(i + 5),
-        b'n' => b[i..].starts_with(b"null").then_some(i + 4),
-        b'-' | b'0'..=b'9' => Some(number_end(b, i)),
-        _ => None,
+        Resolved::Missing | Resolved::Malformed => None,
     }
 }
 
 /// The span of the one JSON value `b` holds (whitespace around it allowed), or `None`.
-fn whole(b: &[u8]) -> Option<Range<usize>> {
-    let start = ws(b, 0);
-    let end = value_end(b, start, 0)?;
-    (ws(b, end) == b.len()).then_some(start..end)
+fn document(b: &[u8]) -> Option<Range<usize>> {
+    let span = value_at(b, 0)?;
+    (past_blank(b, span.end) == b.len()).then_some(span)
 }
 
 /// The members of the object spanning `span` (`b[span.start]` is `{`), in byte order.
-fn members(b: &[u8], span: &Range<usize>) -> Option<Vec<Member>> {
+fn object_members(b: &[u8], span: &Range<usize>) -> Option<Vec<ObjectMember>> {
     if b.get(span.start) != Some(&b'{') {
         return None;
     }
     let mut out = Vec::new();
-    let mut j = ws(b, span.start + 1);
+    let mut j = past_blank(b, span.start + 1);
     if b.get(j) == Some(&b'}') {
         return Some(out);
     }
     loop {
-        let key_end = string_end(b, j)?;
-        let key: String = serde_json::from_slice(&b[j..key_end]).ok()?;
-        j = ws(b, key_end);
+        if b.get(j) != Some(&b'"') {
+            return None;
+        }
+        let key_span = value_at(b, j)?;
+        let key: String = serde_json::from_slice(&b[key_span.clone()]).ok()?;
+        j = past_blank(b, key_span.end);
         if b.get(j) != Some(&b':') {
             return None;
         }
-        let start = ws(b, j + 1);
-        let end = value_end(b, start, 1)?;
-        out.push(Member {
-            key,
-            value: start..end,
-        });
-        j = ws(b, end);
+        let value = value_at(b, j + 1)?;
+        j = past_blank(b, value.end);
+        out.push(ObjectMember { key, value });
         match b.get(j)? {
-            b',' => j = ws(b, j + 1),
+            b',' => j = past_blank(b, j + 1),
             b'}' => return Some(out),
             _ => return None,
         }
@@ -147,7 +93,7 @@ fn members(b: &[u8], span: &Range<usize>) -> Option<Vec<Member>> {
 }
 
 /// The value of the LAST `key` among `members` (a duplicate reads as the last, as a parse does).
-fn last<'m>(members: &'m [Member], key: &str) -> Option<&'m Member> {
+fn last<'m>(members: &'m [ObjectMember], key: &str) -> Option<&'m ObjectMember> {
     members.iter().rev().find(|m| m.key == key)
 }
 
@@ -160,9 +106,9 @@ pub fn readable(b: &[u8]) -> Cow<'_, [u8]> {
     let mut shift = 0isize;
     while i < b.len() {
         match b[i] {
-            b'"' => i = string_end(b, i).unwrap_or(b.len()),
+            b'"' => i = value_at(b, i).map_or(b.len(), |v| v.end),
             b'-' | b'0'..=b'9' => {
-                let end = number_end(b, i);
+                let end = value_at(b, i).map_or(i + 1, |v| v.end);
                 let past = std::str::from_utf8(&b[i..end])
                     .ok()
                     .and_then(|t| t.parse::<f64>().ok())
@@ -184,13 +130,13 @@ pub fn readable(b: &[u8]) -> Cow<'_, [u8]> {
 /// The span of `result` in the JSON-RPC envelope `envelope` (its last `result` member).
 #[must_use]
 pub fn result_span(envelope: &[u8]) -> Option<Range<usize>> {
-    let span = whole(envelope)?;
-    last(&members(envelope, &span)?, "result").map(|m| m.value.clone())
+    let span = document(envelope)?;
+    last(&object_members(envelope, &span)?, "result").map(|m| m.value.clone())
 }
 
 /// The caller's reply: `result` (the far end's bytes, spliced) under the caller's own `id`.
 #[must_use]
-pub fn reply(id: &Value, result: &[u8]) -> Vec<u8> {
+pub fn result_reply(id: &Value, result: &[u8]) -> Vec<u8> {
     let id = serde_json::to_vec(id).unwrap_or_else(|_| b"null".to_vec());
     let mut out = Vec::with_capacity(result.len() + id.len() + 32);
     out.extend_from_slice(b"{\"jsonrpc\":\"2.0\",\"id\":");
@@ -208,12 +154,12 @@ pub fn reply(id: &Value, result: &[u8]) -> Vec<u8> {
 /// The body is not JSON.
 pub fn rewrap(body: &[u8], id: &Value) -> Result<Vec<u8>, String> {
     if body.iter().all(u8::is_ascii_whitespace) {
-        return Ok(reply(id, b"null"));
+        return Ok(result_reply(id, b"null"));
     }
-    let span = whole(body).ok_or_else(|| "the answer is not JSON".to_string())?;
+    let span = document(body).ok_or_else(|| "the answer is not JSON".to_string())?;
     serde_json::from_slice::<serde::de::IgnoredAny>(&readable(&body[span.clone()]))
         .map_err(|e| format!("the answer is not JSON: {e}"))?;
-    Ok(reply(id, &body[span]))
+    Ok(result_reply(id, &body[span]))
 }
 
 /// The edits to one object: values replaced, and members appended before its closing brace.
@@ -229,7 +175,14 @@ impl Edits {
 
     /// Set `key` of the object `obj` (its members `ms`) to `value`: every occurrence replaced, or
     /// the member appended.
-    fn put(&mut self, b: &[u8], obj: &Range<usize>, ms: &[Member], key: &str, value: Vec<u8>) {
+    fn put(
+        &mut self,
+        b: &[u8],
+        obj: &Range<usize>,
+        ms: &[ObjectMember],
+        key: &str,
+        value: Vec<u8>,
+    ) {
         let mut found = false;
         for m in ms.iter().filter(|m| m.key == key) {
             self.set(m.value.clone(), value.clone());
@@ -278,7 +231,7 @@ fn json_str(s: &str) -> Vec<u8> {
 
 /// A message's identity: its `taskId` and `contextId`, where it names them, are busbar's.
 fn message_identity(b: &[u8], msg: &Range<usize>, task_id: &str, context_id: &str, e: &mut Edits) {
-    let Some(ms) = members(b, msg) else {
+    let Some(ms) = object_members(b, msg) else {
         return;
     };
     for m in &ms {
@@ -302,8 +255,8 @@ pub fn rewrite_identity(
     skill: Option<(&str, &str)>,
 ) -> Option<Vec<u8>> {
     let b = result;
-    let top = whole(b)?;
-    let top_ms = members(b, &top)?;
+    let top = document(b)?;
+    let top_ms = object_members(b, &top)?;
     let wrapped = wrappers.iter().find_map(|(w, id)| {
         last(&top_ms, w)
             .filter(|m| b[m.value.start] == b'{')
@@ -313,14 +266,14 @@ pub fn rewrite_identity(
         Some((w, id, span)) => (Some(w), id, span),
         None => (None, "id", top),
     };
-    let ms = members(b, &payload)?;
+    let ms = object_members(b, &payload)?;
     let mut e = Edits::default();
     if id_member != "taskId" || wrapper != Some("message") || last(&ms, "taskId").is_some() {
         e.put(b, &payload, &ms, id_member, json_str(task_id));
     }
     e.put(b, &payload, &ms, "contextId", json_str(context_id));
     if let Some(status) = last(&ms, "status").filter(|m| b[m.value.start] == b'{') {
-        if let Some(msg) = members(b, &status.value)
+        if let Some(msg) = object_members(b, &status.value)
             .as_deref()
             .and_then(|s| last(s, "message"))
             .filter(|m| b[m.value.start] == b'{')
@@ -329,15 +282,15 @@ pub fn rewrite_identity(
         }
     }
     if let Some(history) = last(&ms, "history").filter(|m| b[m.value.start] == b'[') {
-        let mut j = ws(b, history.value.start + 1);
+        let mut j = past_blank(b, history.value.start + 1);
         while j < history.value.end - 1 {
-            let end = value_end(b, j, 1)?;
-            if b[j] == b'{' {
-                message_identity(b, &(j..end), task_id, context_id, &mut e);
+            let item = value_at(b, j)?;
+            if b[item.start] == b'{' {
+                message_identity(b, &item, task_id, context_id, &mut e);
             }
-            j = ws(b, end);
+            j = past_blank(b, item.end);
             if b.get(j) == Some(&b',') {
-                j = ws(b, j + 1);
+                j = past_blank(b, j + 1);
             }
         }
     }
@@ -353,7 +306,7 @@ pub fn rewrite_identity(
         match last(&ms, "metadata") {
             Some(meta) if b[meta.value.start] == b'{' => {
                 let span = meta.value.clone();
-                let meta_ms = members(b, &span)?;
+                let meta_ms = object_members(b, &span)?;
                 e.put(b, &span, &meta_ms, key, json_str(name));
             }
             Some(_) => {
