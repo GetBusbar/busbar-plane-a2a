@@ -33,14 +33,12 @@
 
 use busbar_contract::abi::mechanism::call::{InHead, OutHead, Outcome};
 use busbar_contract::abi::mechanism::door::{KindTailHead, Statement};
-use busbar_contract::abi::mechanism::lifecycle::{
-    GenIn, RefreshIn, ReleaseIn, TickIn, TickOut, ValidateIn,
-};
+use busbar_contract::abi::mechanism::lifecycle::{GenIn, ReleaseIn, TickIn, TickOut, ValidateIn};
 use busbar_contract::abi::plane::{
     ArriveIn, ArriveOut, OnPieceIn, OnPieceOut, OutField, PlaneCancelIn, PlaneCancelOut,
-    PlaneDriveIn, PlaneDriveOut, PlaneOpenIn, PlaneOpenOut, PlaneRefreshOut, PlaneSnapshot,
-    ProjectIn, ProjectOut, RecordWrite, RefusalIn, RefusalOut, ServeIn, ServeOut, UnitCount,
-    CANCEL_ABORTED, EMIT_DONE, EMIT_TO_FAR_END, FROM_CALLER, FROM_FAR_END, FROM_KERNEL,
+    PlaneDriveIn, PlaneDriveOut, PlaneOpenIn, PlaneOpenOut, PlaneRefreshIn, PlaneRefreshOut,
+    PlaneSnapshot, ProjectIn, ProjectOut, RecordWrite, RefusalIn, RefusalOut, ServeIn, ServeOut,
+    UnitCount, CANCEL_ABORTED, EMIT_DONE, EMIT_TO_FAR_END, FROM_CALLER, FROM_FAR_END, FROM_KERNEL,
     PIECE_HAS_STATUS, PIECE_LAST, PIECE_REFUSED, PRINCIPAL_NONE, PRINCIPAL_REQUIRED, RECORD_PUT,
     REFUSAL_ARRIVE, ROUTE_DIRECT, ROUTE_POOL, ROUTE_SCOPE, ROUTE_SCOPE_LOCAL, UNITS_REPORTED,
     VERDICT_RETRY,
@@ -721,17 +719,17 @@ slot!(
 slot!(
     /// `refresh`: the new section judged, and the next generation's snapshot over the same public base
     /// URL.
-    Refresh, RefreshIn, PlaneRefreshOut, |instance, input, mut out| {
+    Refresh, PlaneRefreshIn, PlaneRefreshOut, |instance, input, mut out| {
         let Some(plane) = instance.get() else {
             return Outcome::Failed;
         };
-        let cfg = match agents_section(input.field(|i| &i.settings).bytes()) {
+        let cfg = match agents_section(input.field(|i| &i.refresh.settings).bytes()) {
             Ok(cfg) => cfg,
             Err(refusal) => return out.fail(refusal),
         };
         // The applied `agent_push:` section rides the refresh's extensions blob
         // (`abi::plane::EXT_OWNED`), judged as `open` judges it.
-        let extensions = input.field(|i| &i.head.extensions).bytes();
+        let extensions = input.field(|i| &i.refresh.head.extensions).bytes();
         let owned = busbar_contract::abi::mechanism::extensions::get(
             extensions,
             busbar_contract::abi::plane::EXT_OWNED,
@@ -741,7 +739,7 @@ slot!(
             return out.fail(Refusal::refused(words));
         }
         let spec = door_statement::agents_snapshot_spec(plane.public_url.as_deref(), !cfg.agents.is_empty());
-        let generation = input.get().generation;
+        let generation = input.get().refresh.generation;
         // THE CARDS A KEPT REGISTRATION HOLDS are held under the new generation too: the apply
         // keeps the operator's approval (it is the kernel's trust book's, ARCHITECT
         // Q-DEL-A2A-APPLY), and an approved agent whose registration the apply did not touch is
