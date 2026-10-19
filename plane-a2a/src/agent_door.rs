@@ -2633,6 +2633,7 @@ fn hop_piece(
             ob.at = 0;
         }
     }
+    eprintln!("A9DBG out head={} to_far={} done={} bytes={}", match &ob.head { Some(AnswerHead::Attempt(_)) => "attempt", Some(AnswerHead::Reply(..)) => "reply", Some(AnswerHead::Events) => "events", Some(AnswerHead::Framed) => "framed", None => "none" }, ob.to_far, ob.done, String::from_utf8_lossy(&ob.bytes[..ob.bytes.len().min(400)]));
     ob.head = None;
     ob.writes.clear();
     ob.recall = false;
@@ -2751,6 +2752,7 @@ slot!(
             return crate::task_door::card_piece(plane, &instance, input, out, ask);
         }
         let relayed = plane.units.with(&unit, |u| u.is_some_and(|u| u.hop.is_some()));
+        eprintln!("A9DBG on_piece unit={unit} from={} flags={:#x} has_unit={} relayed={relayed}", input.get().from, input.get().flags, plane.units.with(&unit, |u| u.is_some()));
         if !relayed {
             return crate::task_door::on_piece(plane, &instance, input, out)
                 .unwrap_or(Outcome::Refused);
