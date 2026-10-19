@@ -671,7 +671,6 @@ fn served_full(
         None,
         false,
         None,
-        &|_| true,
     )
 }
 
@@ -700,7 +699,6 @@ fn served_pushing(
         None,
         true,
         None,
-        &|_| true,
     )
 }
 
@@ -729,7 +727,6 @@ fn served_push_trusting(
         None,
         true,
         push_ca,
-        &|_| true,
     )
 }
 
@@ -816,33 +813,6 @@ fn served_priced(instance: &'static str, section: &str, priced: &Priced) -> Serv
         Some(priced),
         false,
         None,
-        &|_| true,
-    )
-}
-
-/// [`served`] (loopback admitted) over a connector carrying only the linked transport doors
-/// `carried` keeps.
-fn served_carrying(
-    instance: &'static str,
-    section: &str,
-    carried: &dyn Fn(&str) -> bool,
-) -> Served {
-    served_core(
-        instance,
-        section,
-        busbar_kernel::config::Destinations {
-            block_private_addresses: true,
-            ..Default::default()
-        },
-        None,
-        None,
-        None,
-        None,
-        Facing::Routes,
-        None,
-        false,
-        None,
-        carried,
     )
 }
 
@@ -860,7 +830,6 @@ fn served_core(
     priced: Option<&Priced>,
     ticking: bool,
     push_ca: Option<String>,
-    carried: &dyn Fn(&str) -> bool,
 ) -> Served {
     // The caller's group, when it is limited: `requests` requests in all.
     let groups: BTreeMap<String, busbar_kernel::config::GroupCfg> = requests
@@ -968,16 +937,9 @@ fn served_core(
     ));
     // Its connection reads through a ticket (a trust verb's card fetch) wake on the dispatcher.
     let settings = busbar_contract::transport::TransportSettings::default();
-    // The build's linked transport doors the cell's connector carries: every one, unless the
-    // cell leaves one out.
-    let carried_doors: Vec<(&str, DoorFn)> = crate::LINKED_TRANSPORT_DOORS
-        .iter()
-        .copied()
-        .filter(|(key, _)| carried(key))
-        .collect();
     let connector = match root {
         None => busbar_core_connector::process::build(
-            || crate::root::connector::entries(&carried_doors, &settings),
+            || crate::root::connector::entries(crate::LINKED_TRANSPORT_DOORS, &settings),
             judge,
             &[],
             dispatcher.conn_waker(),
@@ -993,7 +955,8 @@ fn served_core(
             )
             .expect("the client config");
             let view = busbar_core_connector::registry::Transports::new(
-                crate::root::connector::entries(&carried_doors, &settings).expect("the entries"),
+                crate::root::connector::entries(crate::LINKED_TRANSPORT_DOORS, &settings)
+                    .expect("the entries"),
             )
             .expect("the view");
             Arc::new(busbar_core_connector::Connector::serving(
@@ -6410,10 +6373,7 @@ async fn an_a2a_hop_rides_the_hosts_grpc_need_to_an_in_process_grpc_agent() {
     let instance = "serve-agent-door-grpc-need";
     let _published = Published(instance);
     let mut agent = GrpcAgent::start(grpc_working_answer()).await;
-    // RED: the cell's connector leaves the grpc transport out, so the door's grpc need is unwired.
-    let s = served_carrying(instance, &agent.entry("planner"), &|key| {
-        key != busbar_plane_a2a::claims::FRAMED_TRANSPORT
-    });
+    let s = served(instance, &agent.entry("planner"), false, None);
     approve(&s, "planner").await;
     let params = r#"{"message":{"messageId":"m-174","role":"ROLE_USER","parts":[{"text":"ROUTE THE ROW"}]}}"#;
     let (status, body) = answered(
