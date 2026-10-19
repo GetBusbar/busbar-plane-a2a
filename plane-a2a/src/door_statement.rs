@@ -23,11 +23,12 @@ use busbar_contract::abi::host::conn::connector::{
     Need, DIRECTION_OUTBOUND, EGRESS_OPEN_WEB, EGRESS_PROVIDER, KEEP_NAMED,
 };
 use busbar_contract::abi::mechanism::call::{AbiStr, Blob, BLOB_ABSENT};
-use busbar_contract::abi::mechanism::door::{KindTailHead, Section, SECTION_DECLARING};
+use busbar_contract::abi::mechanism::door::{
+    KindTailHead, Section, SECTION_DECLARING, SECTION_NAMED_MAP,
+};
 use busbar_contract::abi::plane::{
     AdminRoute, BillableClass, OpClass, PinMechanism, PlaneTail, RecordChain, RecordRetention,
-    TrustKey,
-    ANSWER_LAYOUT, CHAIN_DIGESTS_SCOPE, CHAIN_LENGTH_PREFIXED, INGRESS_REQUEST_RESPONSE,
+    TrustKey, ANSWER_LAYOUT, CHAIN_DIGESTS_SCOPE, CHAIN_LENGTH_PREFIXED, INGRESS_REQUEST_RESPONSE,
     INGRESS_RESPONSE_STREAM, MECHANISM_PEER_KEY, MECHANISM_ROOT, PIN_FINGERPRINT, SHAPE_PIECEWISE,
     TAIL_HOOKS_GATED, TAIL_REFUSED_PIECE, TRUST_PIN, TRUST_PRIVATE_REACH, TRUST_RECOVERY_BACKOFF,
     TRUST_REVERIFY_TTL,
@@ -74,7 +75,7 @@ const NONE: AbiStr = AbiStr {
 pub const SECTIONS: &[Section] = &[
     Section {
         name: abi_str(crate::CONFIG_SECTION),
-        flags: SECTION_DECLARING,
+        flags: SECTION_DECLARING | SECTION_NAMED_MAP,
         _reserved: 0,
         ..Section::ZERO
     },
@@ -804,6 +805,7 @@ pub fn agents_snapshot_spec(public_url: Option<&str>, fronts: bool) -> SnapshotS
         resource_metadata,
         resource_facts: None,
         listed: Vec::new(),
+        ..SnapshotSpec::default()
     }
 }
 
