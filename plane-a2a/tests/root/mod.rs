@@ -6104,12 +6104,12 @@ mod upstream_credential {
             (
                 "serve-agent-cred-source-env",
                 format!("{{secret: {{env: {var}}}, placement: bearer, lease_ttl_ms: 60000}}"),
-                busbar_contract::secret_ref::SecretRef::env(&var),
+                busbar_contract::secret_ref::SecretRef::sugar("env", var.clone()),
             ),
             (
                 "serve-agent-cred-source-file",
                 format!("{{secret: {{file: '{path}'}}, placement: bearer, lease_ttl_ms: 60000}}"),
-                busbar_contract::secret_ref::SecretRef::file(&path),
+                busbar_contract::secret_ref::SecretRef::sugar("file", path.clone()),
             ),
         ];
         for (instance, credential, secret) in cases {
