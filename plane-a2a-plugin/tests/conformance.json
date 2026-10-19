@@ -179,7 +179,19 @@
         {
           "target": "agent:vendor"
         }
-      ]
+      ],
+      "trusted": [
+        [
+          "vendor",
+          null,
+          "none"
+        ]
+      ],
+      "resolve": {
+        "vendor.example": [
+          "93.184.216.34"
+        ]
+      }
     },
     "arrive_each": true,
     "claimed": {
