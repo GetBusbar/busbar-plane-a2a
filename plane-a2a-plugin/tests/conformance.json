@@ -275,6 +275,7 @@
     },
     "caller_ref": "c0ffee01"
   },
+  "unreached_schemes": ["grpc"],
   "far_ends": [
     {
       "url": "https://vendor.example/.well-known/agent-card.json",
