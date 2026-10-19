@@ -32,3 +32,5 @@ busbar-plugin-loader = { workspace = true, features = ["conformance"] }
 # The both-ways op-by-op script (`tests/both_ways.rs`, moved here with the crate from busbar's
 # crates/busbar-plane-a2a) reads the door's answers as JSON.
 serde_json = { workspace = true }
+# The both-ways script frames its gRPC requests with the generated protobuf types' `encode_to_vec`.
+prost = { workspace = true }
