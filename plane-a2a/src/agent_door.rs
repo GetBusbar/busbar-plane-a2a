@@ -34,7 +34,7 @@
 use busbar_contract::abi::mechanism::call::{InHead, OutHead, Outcome};
 use busbar_contract::abi::mechanism::door::{KindTailHead, Statement};
 use busbar_contract::abi::mechanism::lifecycle::{
-    GenIn, RefreshIn, ReleaseIn, TickIn, TickOut, ValidateIn,
+    GenIn, ReadyIn, RefreshIn, ReleaseIn, TickIn, TickOut, ValidateIn,
 };
 use busbar_contract::abi::plane::{
     ArriveIn, ArriveOut, OnPieceIn, OnPieceOut, OutField, PlaneCancelIn, PlaneCancelOut,
@@ -945,6 +945,29 @@ slot!(
             }
         });
         Outcome::Ready
+    }
+);
+
+slot!(
+    /// `ready` (after `open`, before any unit arrives; boot awaits it): the held CARDS are warmed
+    /// from the `card` host records ([`warm_cards`]), on the op's real ticket, so the agents the
+    /// operator approved before are served from the first unit, their arrival admitted against the
+    /// card they fit. PENDING while the listing is in flight; a listing the host refuses leaves the
+    /// cards to the first tick, as before, and the instance serves.
+    ReadyOp, ReadyIn, OutHead, |instance, _, _| {
+        let Some(plane) = instance.get() else {
+            return Outcome::Ready;
+        };
+        if plane.cards_warmed.get(&()).unwrap_or(false) {
+            return Outcome::Ready;
+        }
+        match warm_cards(plane, instance.ticket()) {
+            Poll::Ready(()) => {
+                plane.cards_warmed.insert((), true);
+                Outcome::Ready
+            }
+            Poll::Pending => Outcome::Pending,
+        }
     }
 );
 
@@ -4383,7 +4406,7 @@ busbar_contract::plugin_door! {
     lifecycle: {
         validate: Safe<Validate>, open: Safe<Open>, refresh: Safe<Refresh>, retire: Safe<Retire>,
         tick: Safe<Tick>, drive: Safe<Drive>, cancel: Safe<Cancel>, release: Safe<Release>,
-        close: Safe<Close>,
+        close: Safe<Close>, ready: Safe<ReadyOp>,
     },
     kind_ops: {
         arrive: Safe<Arrive>, on_piece: Safe<OnPiece>, refusal: Safe<RefusalSlot>,
