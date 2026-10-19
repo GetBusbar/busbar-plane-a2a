@@ -3675,6 +3675,7 @@ fn verify_agent_on_call(
     }
     if hop.verifying.is_none() {
         if !cadence.due(&standing.ledger, now_ms) {
+            eprintln!("A9DBG verify notdue sighting={:?} verdict={}", standing.sighting, verdict(plane, member));
             return Poll::Ready(serves(&standing));
         }
         // SINGLE-FLIGHT (the engine's `VerifyGate::ensure_fresh`): one look per agent at a time;
@@ -3706,6 +3707,7 @@ fn verify_agent_on_call(
         plane.cards.hold(member, generation, card);
     }
     let serving = serves(&standing);
+    eprintln!("A9DBG verify look sighting={:?} verdict={} serving={serving}", standing.sighting, verdict(plane, member));
     plane.trust.insert(key.clone(), standing);
     // THE FLIGHT LANDS: every unit that waited on it is woken to take its verdict.
     if let Some(host) = plane.host.as_ref() {
