@@ -24,7 +24,7 @@ mod both_ways {
 
     use busbar_contract::abi::mechanism::call::{AbiStr, Blob, Field, Outcome, Span, BLOB_OCTETS};
     use busbar_contract::abi::mechanism::lifecycle::{
-        slot as life, GenIn, RefreshIn, TickIn, TickOut, ValidateIn,
+        slot as life, GenIn, TickIn, TickOut, ValidateIn,
     };
     use busbar_contract::abi::plane::{
         slot, ArriveIn, ArriveOut, OutField, PlaneCancelIn, PlaneCancelOut, PlaneDriveIn,
@@ -344,9 +344,10 @@ mod both_ways {
         let (c, s) = p.open(&mut o);
         t.push(format!("open {:?} {}", c.outcome, snapshot(s)));
 
-        let mut r: Frame<RefreshIn, PlaneRefreshOut> = Frame::new(z(), z());
-        (r.input.head, r.out.head) = (in_head(), out_head());
-        (r.input.generation, r.input.settings) = (2, octets(GOOD));
+        let mut r: Frame<busbar_contract::abi::plane::PlaneRefreshIn, PlaneRefreshOut> =
+            Frame::new(z(), z());
+        (r.input.refresh.head, r.out.head) = (in_head(), out_head());
+        (r.input.refresh.generation, r.input.refresh.settings) = (2, octets(GOOD));
         let (c, s) = p.refresh(&mut r);
         t.push(format!("refresh {:?} {}", c.outcome, snapshot(s)));
         t.push(format!(
