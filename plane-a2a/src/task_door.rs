@@ -185,7 +185,7 @@ impl<'h> Via<'h> {
         CompletionHandle {
             ticket: self.ticket,
             seq,
-            _reserved: 0,
+            ..CompletionHandle::ZERO
         }
     }
 }
@@ -261,7 +261,7 @@ impl Via<'_> {
         let handle = self.next_handle();
         let absent = Span {
             offset: SPAN_ABSENT,
-            len: 0,
+            ..Span::ZERO
         };
         let (b, i) = self.sized(handle, bytes, items);
         let mut buf = vec![0u8; b];
@@ -366,7 +366,7 @@ impl Reach for Via<'_> {
         let handle = self.next_handle();
         let absent = Span {
             offset: SPAN_ABSENT,
-            len: 0,
+            ..Span::ZERO
         };
         let mut bytes = [0u8; JUDGED_BYTES];
         let mut spans = [ItemSpan {
@@ -1249,12 +1249,12 @@ impl HostSigner<'_> {
         let handle = CompletionHandle {
             ticket: self.ticket,
             seq: self.seq,
-            _reserved: 0,
+            ..CompletionHandle::ZERO
         };
         self.seq += 1;
         let absent = Span {
             offset: SPAN_ABSENT,
-            len: 0,
+            ..Span::ZERO
         };
         let mut buf = vec![0u8; 1024];
         let mut spans = [ItemSpan {
@@ -1276,7 +1276,7 @@ impl HostSigner<'_> {
         let handle = CompletionHandle {
             ticket: self.ticket,
             seq: self.seq,
-            _reserved: 0,
+            ..CompletionHandle::ZERO
         };
         self.seq += 1;
         services.entitled(handle, target).unwrap_or(false)

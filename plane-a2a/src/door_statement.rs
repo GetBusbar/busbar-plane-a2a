@@ -26,8 +26,7 @@ use busbar_contract::abi::mechanism::call::{AbiStr, Blob, BLOB_ABSENT};
 use busbar_contract::abi::mechanism::door::{KindTailHead, Section, SECTION_DECLARING};
 use busbar_contract::abi::plane::{
     AdminRoute, BillableClass, OpClass, PinMechanism, PlaneTail, RecordChain, RecordRetention,
-    TrustKey,
-    ANSWER_LAYOUT, CHAIN_DIGESTS_SCOPE, CHAIN_LENGTH_PREFIXED, INGRESS_REQUEST_RESPONSE,
+    TrustKey, ANSWER_LAYOUT, CHAIN_DIGESTS_SCOPE, CHAIN_LENGTH_PREFIXED, INGRESS_REQUEST_RESPONSE,
     INGRESS_RESPONSE_STREAM, MECHANISM_PEER_KEY, MECHANISM_ROOT, PIN_FINGERPRINT, SHAPE_PIECEWISE,
     TAIL_HOOKS_GATED, TAIL_REFUSED_PIECE, TRUST_PIN, TRUST_PRIVATE_REACH, TRUST_RECOVERY_BACKOFF,
     TRUST_REVERIFY_TTL,
@@ -64,10 +63,7 @@ pub const FEE_PER_REQUEST: &str = busbar_contract::plane::PER_REQUEST;
 pub const DEFAULT_RECOVERY_BACKOFF: &str = "15m";
 
 /// An absent string.
-const NONE: AbiStr = AbiStr {
-    ptr: std::ptr::null(),
-    len: 0,
-};
+const NONE: AbiStr = AbiStr::ZERO;
 
 /// The plane's settings sections, as its Statement states them: `agents:` is the one it declares;
 /// `agent_push:` ([`PUSH_SECTION`]) is its own beside it, handed as written at `open`.
@@ -440,7 +436,7 @@ pub const NEEDS: &[Need] = &[
 pub const TAIL: &PlaneTail = &PlaneTail {
     head: KindTailHead {
         size: std::mem::size_of::<PlaneTail>() as u32,
-        _reserved: 0,
+        ..KindTailHead::ZERO
     },
     // THE HOOK ORDER 1.5.5 USED FOR THIS PLANE (ARCHITECT ruling Q-FOLD-A2A-2; spec Part 3 section
     // 12 "Hooks", per attachment where 1.5.5 differed): the agent's gates screen the projected
