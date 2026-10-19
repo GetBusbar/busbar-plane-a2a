@@ -76,11 +76,13 @@ pub const SECTIONS: &[Section] = &[
         name: abi_str(crate::CONFIG_SECTION),
         flags: SECTION_DECLARING,
         _reserved: 0,
+        ..Section::ZERO
     },
     Section {
         name: abi_str(PUSH_SECTION),
         flags: 0,
         _reserved: 0,
+        ..Section::ZERO
     },
 ];
 
@@ -157,6 +159,7 @@ const fn op_class(i: usize) -> OpClass {
     OpClass {
         op: abi_str(crate::ops::OP_CLASSES[i].as_str()),
         name: abi_str(crate::ops::OP_CLASSES[i].as_str()),
+        ..OpClass::ZERO
     }
 }
 
@@ -180,6 +183,7 @@ const BILLABLE_CLASSES: &[BillableClass] = &[
     BillableClass {
         class: abi_str(crate::meta::CLASS_BYTES.as_str()),
         family: abi_str(BYTES_FAMILY),
+        ..BillableClass::ZERO
     },
     // THE FEE UNIT is also a class (the tail check holds `fee_units ⊆ billable_classes`, ARCHITECT
     // Q-L5-FEE (C)): reported `1` once the unit is served (its hop left the plane for the agent, or
@@ -189,6 +193,7 @@ const BILLABLE_CLASSES: &[BillableClass] = &[
     BillableClass {
         class: abi_str(FEE_PER_REQUEST),
         family: abi_str(FEE_FAMILY),
+        ..BillableClass::ZERO
     },
 ];
 
@@ -229,6 +234,7 @@ const RECORD_CHAINS: &[RecordChain] = &[RecordChain {
     framing: CHAIN_LENGTH_PREFIXED,
     flags: CHAIN_DIGESTS_SCOPE,
     _reserved: 0,
+    ..RecordChain::ZERO
 }];
 
 /// The pin's four mechanisms; three are authenticity roots and `unpinned` is not. `cert_spki` and
@@ -239,21 +245,25 @@ const PIN_MECHANISMS: &[PinMechanism] = &[
         token: abi_str("jws_issuer_key"),
         flags: MECHANISM_ROOT,
         _reserved: 0,
+        ..PinMechanism::ZERO
     },
     PinMechanism {
         token: abi_str("cert_spki"),
         flags: MECHANISM_ROOT | MECHANISM_PEER_KEY,
         _reserved: 0,
+        ..PinMechanism::ZERO
     },
     PinMechanism {
         token: abi_str("mtls"),
         flags: MECHANISM_ROOT | MECHANISM_PEER_KEY,
         _reserved: 0,
+        ..PinMechanism::ZERO
     },
     PinMechanism {
         token: abi_str("unpinned"),
         flags: 0,
         _reserved: 0,
+        ..PinMechanism::ZERO
     },
 ];
 
@@ -269,6 +279,7 @@ const TRUST_KEYS: &[TrustKey] = &[
         default: NONE,
         mechanisms: PIN_MECHANISMS.as_ptr(),
         mechanisms_len: PIN_MECHANISMS.len(),
+        ..TrustKey::ZERO
     },
     TrustKey {
         key: abi_str("reverify_ttl"),
@@ -277,6 +288,7 @@ const TRUST_KEYS: &[TrustKey] = &[
         default: abi_str(DEFAULT_REVERIFY_TTL),
         mechanisms: std::ptr::null(),
         mechanisms_len: 0,
+        ..TrustKey::ZERO
     },
     TrustKey {
         key: abi_str("recovery_backoff"),
@@ -285,6 +297,7 @@ const TRUST_KEYS: &[TrustKey] = &[
         default: abi_str(DEFAULT_RECOVERY_BACKOFF),
         mechanisms: std::ptr::null(),
         mechanisms_len: 0,
+        ..TrustKey::ZERO
     },
     // THE REGISTRATION'S PRIVATE REACH (1.5.5's per-agent `allow_private: true`, ARCHITECT ruling
     // on FLIP-A2A, SEAM-4f1): the host seals it into the agent's anchors and the one guard admits
@@ -297,6 +310,7 @@ const TRUST_KEYS: &[TrustKey] = &[
         default: NONE,
         mechanisms: std::ptr::null(),
         mechanisms_len: 0,
+        ..TrustKey::ZERO
     },
 ];
 
@@ -363,6 +377,7 @@ pub const NEEDS: &[Need] = &[
             len: 0,
             fmt: BLOB_ABSENT,
             flags: 0,
+            ..Blob::ZERO
         },
         keep_response_headers: std::ptr::null(),
         keep_response_headers_len: 0,
@@ -371,6 +386,7 @@ pub const NEEDS: &[Need] = &[
         _reserved: 0,
         deny_response_headers: std::ptr::null(),
         deny_response_headers_len: 0,
+        ..Need::ZERO
     },
     Need {
         direction: DIRECTION_OUTBOUND,
@@ -384,6 +400,7 @@ pub const NEEDS: &[Need] = &[
             len: 0,
             fmt: BLOB_ABSENT,
             flags: 0,
+            ..Blob::ZERO
         },
         keep_response_headers: KEEP_RESPONSE_HEADERS.as_ptr(),
         keep_response_headers_len: KEEP_RESPONSE_HEADERS.len(),
@@ -392,6 +409,7 @@ pub const NEEDS: &[Need] = &[
         _reserved: 0,
         deny_response_headers: std::ptr::null(),
         deny_response_headers_len: 0,
+        ..Need::ZERO
     },
     Need {
         direction: DIRECTION_OUTBOUND,
@@ -405,6 +423,7 @@ pub const NEEDS: &[Need] = &[
             len: 0,
             fmt: BLOB_ABSENT,
             flags: 0,
+            ..Blob::ZERO
         },
         keep_response_headers: KEEP_RESPONSE_HEADERS.as_ptr(),
         keep_response_headers_len: KEEP_RESPONSE_HEADERS.len(),
@@ -413,6 +432,7 @@ pub const NEEDS: &[Need] = &[
         _reserved: 0,
         deny_response_headers: std::ptr::null(),
         deny_response_headers_len: 0,
+        ..Need::ZERO
     },
 ];
 
@@ -466,6 +486,7 @@ pub const TAIL: &PlaneTail = &PlaneTail {
         len: ADMIN_OPENAPI.len(),
         fmt: busbar_contract::abi::mechanism::call::BLOB_JSON,
         flags: 0,
+        ..Blob::ZERO
     },
     // THE COUNTERS' LANE WORDS: the binding words a hop goes out on (predev's relay counted each
     // attempt under its binding, relay.rs:1705), the same vocabulary as the dialects.
