@@ -21,6 +21,11 @@ fn walk(dir: &Path, f: &mut impl FnMut(&Path, &str)) {
         .flatten()
     {
         let path = entry.path();
+        // The crate's unit-test modules (`src/tests/`) are test code, not the plane: a test may read
+        // a fixture off disk or the environment the CI hands it; the plane itself may not.
+        if path.is_dir() && path.file_name().is_some_and(|n| n == "tests") {
+            continue;
+        }
         if path.is_dir() {
             walk(&path, f);
         } else if path.extension().is_some_and(|e| e == "rs") {
