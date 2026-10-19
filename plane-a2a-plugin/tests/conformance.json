@@ -179,6 +179,43 @@
         {
           "target": "agent:vendor"
         }
+      ],
+      "trusted": [
+        [
+          "vendor",
+          null,
+          "none"
+        ]
+      ],
+      "records": [
+        {
+          "kind": "card",
+          "key": "vendor",
+          "value": {
+            "name": "Vendor",
+            "description": "the conformance agent",
+            "url": "https://vendor.example/agent",
+            "version": "1.0.0",
+            "protocolVersion": "0.3.0",
+            "capabilities": {},
+            "defaultInputModes": [
+              "text/plain"
+            ],
+            "defaultOutputModes": [
+              "text/plain"
+            ],
+            "skills": [
+              {
+                "id": "reply",
+                "name": "reply",
+                "description": "replies",
+                "tags": [
+                  "reply"
+                ]
+              }
+            ]
+          }
+        }
       ]
     },
     "arrive_each": true,
