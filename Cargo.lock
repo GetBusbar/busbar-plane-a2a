@@ -64,7 +64,7 @@ dependencies = [
 [[package]]
 name = "busbar-contract"
 version = "1.6.0"
-source = "git+https://github.com/GetBusbar/busbar?rev=6bd0a7ad2f3f7956515290b4318d28eeee2c9886#6bd0a7ad2f3f7956515290b4318d28eeee2c9886"
+source = "git+https://github.com/GetBusbar/busbar?rev=6cdb637a5af85078d3b86c9cbbae261c71779e01#6cdb637a5af85078d3b86c9cbbae261c71779e01"
 dependencies = [
  "async-trait",
  "base64",
@@ -109,13 +109,14 @@ dependencies = [
  "busbar-contract",
  "busbar-plane-a2a",
  "busbar-plugin-loader",
+ "prost",
  "serde_json",
 ]
 
 [[package]]
 name = "busbar-plugin-loader"
 version = "1.5.0"
-source = "git+https://github.com/GetBusbar/busbar?rev=6bd0a7ad2f3f7956515290b4318d28eeee2c9886#6bd0a7ad2f3f7956515290b4318d28eeee2c9886"
+source = "git+https://github.com/GetBusbar/busbar?rev=6cdb637a5af85078d3b86c9cbbae261c71779e01#6cdb637a5af85078d3b86c9cbbae261c71779e01"
 dependencies = [
  "busbar-contract",
  "ed25519-dalek",
@@ -663,16 +664,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "prettyplease"
-version = "0.2.37"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "479ca8adacdd7ce8f1fb39ce9ecccbfe93a3f1344b3d0d97f20bc0196208f62b"
-dependencies = [
- "proc-macro2",
- "syn 2.0.117",
-]
-
-[[package]]
 name = "proc-macro2"
 version = "1.0.106"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -702,11 +693,9 @@ dependencies = [
  "log",
  "multimap",
  "petgraph",
- "prettyplease",
  "prost",
  "prost-types",
  "regex",
- "syn 2.0.117",
  "tempfile",
 ]
 

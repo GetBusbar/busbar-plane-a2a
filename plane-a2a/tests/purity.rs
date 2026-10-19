@@ -21,6 +21,11 @@ fn walk(dir: &Path, f: &mut impl FnMut(&Path, &str)) {
         .flatten()
     {
         let path = entry.path();
+        // The crate's test modules (`src/tests`, `src/a2a/tests`) are not the plane: they read
+        // fixtures and the environment, as tests do.
+        if path.is_dir() && path.file_name().is_some_and(|n| n == "tests") {
+            continue;
+        }
         if path.is_dir() {
             walk(&path, f);
         } else if path.extension().is_some_and(|e| e == "rs") {
