@@ -4406,8 +4406,9 @@ busbar_contract::plugin_door! {
     lifecycle: {
         validate: Safe<Validate>, open: Safe<Open>, refresh: Safe<Refresh>, retire: Safe<Retire>,
         tick: Safe<Tick>, drive: Safe<Drive>, cancel: Safe<Cancel>, release: Safe<Release>,
-        close: Safe<Close>, ready: Safe<ReadyOp>,
+        close: Safe<Close>,
     },
+    ready: Safe<ReadyOp>,
     kind_ops: {
         arrive: Safe<Arrive>, on_piece: Safe<OnPiece>, refusal: Safe<RefusalSlot>,
         serve: Safe<Serve>, hydrate: Safe<Hydrate>, start: Safe<Start>, project: Safe<Project>,
