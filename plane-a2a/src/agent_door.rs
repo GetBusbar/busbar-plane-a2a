@@ -600,10 +600,14 @@ fn warm_cards(plane: &A2aDoor, ticket: Ticket) -> Poll<()> {
         return Poll::Ready(());
     };
     let mut via = Via::new(host, plane.services, ticket, 0, &plane.grown);
-    match via.list(crate::records::KIND_CARD, "") {
+    let listed = via.list(crate::records::KIND_CARD, "");
+    eprintln!("A9DBG warm_cards listed ok={} pending={}", listed.is_ok(), matches!(listed, Err(Halt::Pending)));
+    if let Err(Halt::Failed(e)) = &listed { eprintln!("A9DBG warm_cards failed {e:?}"); }
+    match listed {
         Err(Halt::Pending) => Poll::Pending,
         Err(Halt::Failed(_)) => Poll::Ready(()),
         Ok(rows) => {
+            eprintln!("A9DBG warm_cards rows={}", rows.len());
             let generation = plane.newest();
             for (agent, value) in rows {
                 if let Ok(card) = serde_json::from_slice::<serde_json::Value>(&value) {
@@ -1807,6 +1811,7 @@ pub(crate) fn admit_unit(
     use crate::card_trust::{not_serving, verdict_state, UNTRUSTED_STATUS};
     let distrust = verdict(plane, member);
     if distrust != busbar_contract::abi::host::service::DISTRUST_NONE {
+        eprintln!("A9DBG admit_unit {member} distrust={distrust}");
         return Err(not_serving(
             addressed,
             verdict_state(distrust),
@@ -1818,8 +1823,11 @@ pub(crate) fn admit_unit(
         None => agent_arrival::scope_refusal(""),
     };
     let Some(card) = plane.cards.at(member, generation) else {
+        eprintln!("A9DBG admit_unit {member} gen={generation} no card; distrust={distrust}");
         return Err(excluded(crate::skill::Unfit::NoCachedCard));
     };
+    let fitted = crate::skill::fit(&card, &envelope.map(crate::skill::TaskShape::of).unwrap_or_default());
+    eprintln!("A9DBG admit_unit {member} fit={:?}", fitted.as_ref().map_err(|e| format!("{e:?}")));
     let shape = envelope
         .map(crate::skill::TaskShape::of)
         .unwrap_or_default();
