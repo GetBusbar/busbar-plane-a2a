@@ -591,10 +591,9 @@ impl A2aDoor {
 /// THE HELD CARDS, WARMED FROM THE `card` HOST RECORDS (ARCHITECT ruling B2, as amended: the
 /// `connect` and `approve` answers write them, `BUSBAR-1.6.0.md` l.290 "record writes ride
 /// `on_piece`'s answer" keeping every write on an answer): every agent's recorded card held under
-/// the newest generation, so an instance opened again serves the agents its operator approved
-/// before. READY once the listing has landed (a host that answers none, or no host, has nothing
-/// to load); PENDING while it is in flight.
-fn warm_cards(plane: &A2aDoor, ticket: Ticket) -> Poll<()> {
+/// `generation`, so an instance opened again serves the agents its operator approved before. READY once the listing has landed (a host that answers none, or no
+/// host, has nothing to load); PENDING while it is in flight.
+fn warm_cards(plane: &A2aDoor, ticket: Ticket, generation: u64) -> Poll<()> {
     use crate::tasks::Records;
     let Some(host) = plane.host.as_ref() else {
         return Poll::Ready(());
@@ -604,7 +603,6 @@ fn warm_cards(plane: &A2aDoor, ticket: Ticket) -> Poll<()> {
         Err(Halt::Pending) => Poll::Pending,
         Err(Halt::Failed(_)) => Poll::Ready(()),
         Ok(rows) => {
-            let generation = plane.newest();
             for (agent, value) in rows {
                 if let Ok(card) = serde_json::from_slice::<serde_json::Value>(&value) {
                     plane.cards.hold(&agent, generation, card);
@@ -968,7 +966,7 @@ slot!(
         // tried again a second later.
         if !plane.cards_warmed.get(&()).unwrap_or(false) {
             let now = input.get().now_ns;
-            let next = match warm_cards(plane, instance.ticket()) {
+            let next = match warm_cards(plane, instance.ticket(), plane.newest()) {
                 Poll::Ready(()) => {
                     plane.cards_warmed.insert((), true);
                     now
@@ -3999,11 +3997,28 @@ fn approve_key(plane: &A2aDoor, at: &LookAt<'_>, agent: &str, seen: &str) -> Res
 const TRUST_DECIDE_SEQ: u32 = u32::MAX - 1;
 
 slot!(
-    /// `hydrate`: nothing to load. The door's durable state is host records (its tasks, their push
-    /// configs and chains), read on demand through `records.get`/`records.list`; what it holds in
-    /// memory (cards, the far-end id map, owed push outcomes) is plane memory a restart forgets, as
-    /// the engine's was.
-    Hydrate, GenIn, OutHead, |_, _, _| { Outcome::Ready }
+    /// `hydrate`: the held CARDS are warmed from the `card` host records under the generation being
+    /// hydrated ([`warm_cards`]), so an instance opened again serves the agents its operator approved
+    /// before from its first unit, not only after its first tick (a unit that arrived first was
+    /// refused for want of the card, `NoCachedCard`). PENDING while the listing is in flight. The
+    /// rest of the door's durable state is host records (its tasks, their push configs and chains),
+    /// read on demand through `records.get`/`records.list`; the far-end id map and owed push
+    /// outcomes are plane memory a restart forgets, as the engine's was.
+    Hydrate, GenIn, OutHead, |instance, input, _| {
+        let Some(plane) = instance.get() else {
+            return Outcome::Ready;
+        };
+        if plane.cards_warmed.get(&()).unwrap_or(false) {
+            return Outcome::Ready;
+        }
+        match warm_cards(plane, instance.ticket(), input.get().generation) {
+            Poll::Ready(()) => {
+                plane.cards_warmed.insert((), true);
+                Outcome::Ready
+            }
+            Poll::Pending => Outcome::Pending,
+        }
+    }
 );
 
 slot!(
