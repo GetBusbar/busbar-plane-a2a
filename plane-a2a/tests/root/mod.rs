@@ -713,9 +713,7 @@ fn served_core(
     // The caller's group, when it is limited: `requests` requests in all.
     let groups: BTreeMap<String, busbar_kernel::config::GroupCfg> = requests
         .map(|amount| (busbar_kernel::config::groups::LimitMetric::Requests, amount))
-        .or_else(|| {
-            priced.map(|p| (busbar_kernel::config::groups::LimitMetric::Budget, p.budget))
-        })
+        .or_else(|| priced.map(|p| (busbar_kernel::config::groups::LimitMetric::Budget, p.budget)))
         .map(|(metric, amount)| {
             let limit = busbar_kernel::config::groups::LimitCfg {
                 metric,
@@ -1579,8 +1577,7 @@ async fn an_unaddressed_agent_unit_is_routed_to_the_one_agent_the_grant_reaches(
     let mut agent = Agent::start(200, ANSWER).await;
     let s = served(instance, &agent.entry("planner", "1h"), false, None);
     approve(&s, "planner").await;
-    let (status, body) =
-        answered(&s.router, rpc("", "message/send", SEND, Some(&s.token))).await;
+    let (status, body) = answered(&s.router, rpc("", "message/send", SEND, Some(&s.token))).await;
     assert_eq!(
         status,
         StatusCode::OK,
@@ -1606,8 +1603,7 @@ async fn an_unaddressed_agent_unit_several_agents_reach_is_refused_naming_them()
         agent.entry("scout", "1h")
     );
     let s = served(instance, &section, false, None);
-    let (status, body) =
-        answered(&s.router, rpc("", "message/send", SEND, Some(&s.token))).await;
+    let (status, body) = answered(&s.router, rpc("", "message/send", SEND, Some(&s.token))).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     let doc: serde_json::Value = serde_json::from_str(&body).expect("a JSON-RPC envelope");
     assert_eq!(
@@ -1623,8 +1619,7 @@ async fn an_unaddressed_agent_unit_several_agents_reach_is_refused_naming_them()
     );
     approve(&s, "planner").await;
     approve(&s, "scout").await;
-    let (status, body) =
-        answered(&s.router, rpc("", "message/send", SEND, Some(&s.token))).await;
+    let (status, body) = answered(&s.router, rpc("", "message/send", SEND, Some(&s.token))).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     let doc: serde_json::Value = serde_json::from_str(&body).expect("a JSON-RPC envelope");
     assert_eq!(doc["error"]["code"], -32602, "{body}");
@@ -1652,8 +1647,7 @@ async fn an_unaddressed_agent_unit_no_agent_reaches_is_refused_in_its_1_5_5_word
     let _published = Published(instance);
     let (port, mut heard) = far_agent().await;
     let s = served(instance, &agents(port, true), false, Some(Vec::new()));
-    let (status, body) =
-        answered(&s.router, rpc("", "message/send", SEND, Some(&s.token))).await;
+    let (status, body) = answered(&s.router, rpc("", "message/send", SEND, Some(&s.token))).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     let doc: serde_json::Value = serde_json::from_str(&body).expect("a JSON-RPC envelope");
     assert_eq!(doc["error"]["code"], -32004, "{body}");
@@ -2379,8 +2373,7 @@ fn a_present_agents_card_silent_about_an_agent_refuses_the_config() {
              payments: {{ url: https://payments.example/rpc, pin: {{ mechanism: unpinned }} }}\n  \
              rate_card:\n{card}"
         );
-        let deploy =
-            busbar_kernel::config::deploy_from_yaml_str(&text).expect("the config parses");
+        let deploy = busbar_kernel::config::deploy_from_yaml_str(&text).expect("the config parses");
         busbar_kernel::config::resolve(&deploy, &Default::default()).expect("resolves")
     };
     let silent = resolved(&format!(
@@ -2641,17 +2634,15 @@ impl Agent {
                     };
                     match moved.load(Ordering::SeqCst) {
                         2 => return Some(to("/loop")),
-                        3 => return Some(to(
-                            "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
-                        )),
-                        4 => {
+                        3 => {
                             return Some(to(
-                                "http://metadata.google.internal/computeMetadata/v1/",
+                                "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
                             ))
                         }
-                        1 if request.starts_with(CARD_PATH) => {
-                            return Some(to("/cards/card.json"))
+                        4 => {
+                            return Some(to("http://metadata.google.internal/computeMetadata/v1/"))
                         }
+                        1 if request.starts_with(CARD_PATH) => return Some(to("/cards/card.json")),
                         5 if request.starts_with(CARD_PATH) => return Some(to("/cards/one")),
                         5 if request.starts_with("GET /cards/one ") => {
                             return Some(to("/cards/card.json"))
@@ -3154,7 +3145,11 @@ async fn an_approved_agents_card_resigned_by_another_key_stops_it_being_served()
     let send = || rpc("planner", "message/send", SEND, Some(&s.token));
 
     let (status, body) = answered(&s.router, send()).await;
-    assert_eq!(status, StatusCode::OK, "the approved agent is served: {body}");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the approved agent is served: {body}"
+    );
     assert!(body.contains("m-far"), "the far agent's answer: {body}");
     assert!(agent.relayed(), "the approved agent was dialled");
 
@@ -3360,8 +3355,7 @@ async fn a_request_the_card_does_not_fit_is_judged_after_the_trust_gate() {
 /// call and a locally answered
 /// one alike — and the key is charged for neither.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_unit_to_an_agent_that_is_not_serving_is_refused_after_its_grant_and_charges_nothing()
-{
+async fn a_unit_to_an_agent_that_is_not_serving_is_refused_after_its_grant_and_charges_nothing() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-gate";
     let _published = Published(instance);
@@ -3421,8 +3415,7 @@ async fn an_unaddressed_unit_is_routed_to_the_one_granted_agent_that_serves() {
     );
     let s = served(instance, &section, false, None);
     approve(&s, "planner").await;
-    let (status, body) =
-        answered(&s.router, rpc("", "message/send", SEND, Some(&s.token))).await;
+    let (status, body) = answered(&s.router, rpc("", "message/send", SEND, Some(&s.token))).await;
     assert_eq!(
         status,
         StatusCode::OK,
@@ -3688,8 +3681,7 @@ async fn an_abandoned_card_look_wakes_its_waiters_at_once() {
         .store(30_000, std::sync::atomic::Ordering::SeqCst);
     let fetched = agent.fetches();
     let send = || rpc("planner", "message/send", SEND, Some(&s.token));
-    let abandoned =
-        tokio::time::timeout(Duration::from_millis(400), answered(&s.router, send()));
+    let abandoned = tokio::time::timeout(Duration::from_millis(400), answered(&s.router, send()));
     let waiting = async {
         tokio::time::sleep(Duration::from_millis(100)).await;
         tokio::time::timeout(Duration::from_secs(5), answered(&s.router, send())).await
@@ -4175,8 +4167,7 @@ async fn a_fronted_agents_card_is_served_rewritten_through_busbar_behind_its_gra
     let _published = Published(instance);
     let agent = Agent::start(200, ANSWER).await;
     let s = served(instance, &agent.entry("planner", "1h"), false, None);
-    let (status, _) =
-        answered(&s.router, get(&format!("{}/agents/planner", mount()), None)).await;
+    let (status, _) = answered(&s.router, get(&format!("{}/agents/planner", mount()), None)).await;
     assert_eq!(
         status,
         StatusCode::UNAUTHORIZED,
@@ -4432,8 +4423,7 @@ async fn rejected_battery(
     use tower::ServiceExt as _;
     let mut tripped = false;
     for _ in 0..32 {
-        let (_, body) =
-            answered(&s.router, rpc("planner", method, params, Some(&s.token))).await;
+        let (_, body) = answered(&s.router, rpc("planner", method, params, Some(&s.token))).await;
         if body.contains("breaker_open") {
             tripped = true;
             break;
@@ -4491,9 +4481,7 @@ async fn rejected_battery(
     let row = listed["result"]["tasks"]
         .as_array()
         .and_then(|tasks| tasks.iter().find(|t| t["id"] == task.as_str()))
-        .unwrap_or_else(|| {
-            panic!("[{line}] the named task must resolve in the store: {listed}")
-        });
+        .unwrap_or_else(|| panic!("[{line}] the named task must resolve in the store: {listed}"));
     let state = row["status"]["state"]
         .as_str()
         .unwrap_or_default()
@@ -4749,13 +4737,10 @@ fn rpc_presenting(
 /// The cell's own token's binding generation, as the book minted it.
 fn generation_of(s: &Served) -> Option<String> {
     let signer = TokenSigner::from_secret_bytes(&[9u8; 32], DEFAULT_KID);
-    busbar_kernel::governance::signing::TokenVerifier::single(
-        signer.kid(),
-        signer.verifying_key(),
-    )
-    .verify(&s.token, 1_700_000_000, None)
-    .expect("the cell's own token verifies")
-    .generation
+    busbar_kernel::governance::signing::TokenVerifier::single(signer.kid(), signer.verifying_key())
+        .verify(&s.token, 1_700_000_000, None)
+        .expect("the cell's own token verifies")
+        .generation
 }
 
 /// The cell's own key's token bound to the resource `audience` (RFC 8707), as the book's
@@ -4780,11 +4765,7 @@ fn agent_scope(agent: &str) -> ScopeRef {
 
 /// Another caller on `s`'s book: a key minted beside the cell's own, its grant then written as
 /// exactly `scopes` (`None` = every scope); its row and its token.
-fn another_caller(
-    s: &Served,
-    name: &str,
-    scopes: Option<Vec<ScopeRef>>,
-) -> (VirtualKey, String) {
+fn another_caller(s: &Served, name: &str, scopes: Option<Vec<ScopeRef>>) -> (VirtualKey, String) {
     let (key, token) = s
         .gov
         .mint_signed(
@@ -4928,8 +4909,7 @@ async fn a_section_carrying_only_the_reserved_keys_is_still_no_plane() {
 
     let absent = "serve-agent-door-no-section";
     let published = Published(absent);
-    let unconfigured =
-        served_facing(absent, &agent.entry("planner", "1h"), Facing::Unconfigured);
+    let unconfigured = served_facing(absent, &agent.entry("planner", "1h"), Facing::Unconfigured);
     let baseline = asked(&unconfigured, &metadata, card).await;
     drop(published);
 
@@ -5428,8 +5408,7 @@ mod upstream_credential {
             let issuer = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
             let log = Arc::new(std::sync::Mutex::new(Vec::new()));
             let held = Arc::new(std::sync::Mutex::new(serde_json::Value::Null));
-            let (served_card, signer, kept) =
-                (Arc::clone(&held), issuer.clone(), Arc::clone(&log));
+            let (served_card, signer, kept) = (Arc::clone(&held), issuer.clone(), Arc::clone(&log));
             let (port, _heard) = far_end_over(
                 Arc::new(move |request: &str| {
                     kept.lock().expect("the log").push(request.to_string());
@@ -5998,12 +5977,18 @@ mod upstream_credential {
             (
                 "serve-agent-cred-source-env",
                 format!("{{secret: {{env: {var}}}, placement: bearer, lease_ttl_ms: 60000}}"),
-                busbar_contract::secret_ref::SecretRef::env(&var),
+                serde_json::from_value::<busbar_contract::secret_ref::SecretRef>(
+                    serde_json::json!({ "env": var.clone() }),
+                )
+                .expect("a sugar reference"),
             ),
             (
                 "serve-agent-cred-source-file",
                 format!("{{secret: {{file: '{path}'}}, placement: bearer, lease_ttl_ms: 60000}}"),
-                busbar_contract::secret_ref::SecretRef::file(&path),
+                serde_json::from_value::<busbar_contract::secret_ref::SecretRef>(
+                    serde_json::json!({ "file": path.clone() }),
+                )
+                .expect("a sugar reference"),
             ),
         ];
         for (instance, credential, secret) in cases {
@@ -6018,7 +6003,11 @@ mod upstream_credential {
                 rpc("planner", "message/send", SEND, Some(&s.token)),
             )
             .await;
-            assert_eq!(status, StatusCode::OK, "{instance}: served while it resolves: {body}");
+            assert_eq!(
+                status,
+                StatusCode::OK,
+                "{instance}: served while it resolves: {body}"
+            );
             std::env::remove_var(&var);
             let _ = std::fs::remove_file(&path);
             refreshed().await;
@@ -6161,9 +6150,9 @@ impl GrpcAgent {
                                 hyper::Response::builder()
                                     .status(if get { 200 } else { http })
                                     .header("content-type", media)
-                                    .body(http_body_util::StreamBody::new(
-                                        futures::stream::iter(frames),
-                                    ))
+                                    .body(http_body_util::StreamBody::new(futures::stream::iter(
+                                        frames,
+                                    )))
                             }
                         },
                     );
@@ -6278,14 +6267,27 @@ async fn a_grpc_callers_send_message_is_answered_ok_with_its_status_in_the_trail
         .header("authorization", format!("Bearer {}", s.token))
         .body(axum::body::Body::from(body))
         .expect("a request");
-    let response = s.router.clone().oneshot(req).await.expect("the router answers");
+    let response = s
+        .router
+        .clone()
+        .oneshot(req)
+        .await
+        .expect("the router answers");
     let (parts, body) = response.into_parts();
     let collected = body.collect().await.expect("the answer");
     let trailers = collected.trailers().cloned();
     let bytes = collected.to_bytes();
-    assert_eq!(parts.status, StatusCode::OK, "{:?} {bytes:?}", parts.headers);
     assert_eq!(
-        parts.headers.get("content-type").and_then(|v| v.to_str().ok()),
+        parts.status,
+        StatusCode::OK,
+        "{:?} {bytes:?}",
+        parts.headers
+    );
+    assert_eq!(
+        parts
+            .headers
+            .get("content-type")
+            .and_then(|v| v.to_str().ok()),
         Some("application/grpc"),
         "the head states the gRPC media type, as predev's gRPC line did: {:?}",
         parts.headers
@@ -6296,7 +6298,10 @@ async fn a_grpc_callers_send_message_is_answered_ok_with_its_status_in_the_trail
         Some("0"),
         "{trailers:?}"
     );
-    assert!(bytes.len() > 5 && bytes[0] == 0, "one length-prefixed message: {bytes:?}");
+    assert!(
+        bytes.len() > 5 && bytes[0] == 0,
+        "one length-prefixed message: {bytes:?}"
+    );
     let len = u32::from_be_bytes([bytes[1], bytes[2], bytes[3], bytes[4]]) as usize;
     assert_eq!(bytes.len(), 5 + len, "exactly one message");
     let result = response_result(Rpc::SendMessage, &bytes[5..]).expect("a SendMessageResponse");
@@ -6339,12 +6344,25 @@ async fn a_grpc_call_naming_a_version_this_endpoint_does_not_speak_is_unimplemen
         .header("authorization", format!("Bearer {}", s.token))
         .body(axum::body::Body::from(body))
         .expect("a request");
-    let response = s.router.clone().oneshot(req).await.expect("the router answers");
+    let response = s
+        .router
+        .clone()
+        .oneshot(req)
+        .await
+        .expect("the router answers");
     let (parts, body) = response.into_parts();
     let bytes = body.collect().await.expect("the answer").to_bytes();
-    assert_eq!(parts.status, StatusCode::OK, "{:?} {bytes:?}", parts.headers);
     assert_eq!(
-        parts.headers.get("grpc-status").and_then(|v| v.to_str().ok()),
+        parts.status,
+        StatusCode::OK,
+        "{:?} {bytes:?}",
+        parts.headers
+    );
+    assert_eq!(
+        parts
+            .headers
+            .get("grpc-status")
+            .and_then(|v| v.to_str().ok()),
         Some("12"),
         "trailers-only, the version error's status: {:?}",
         parts.headers
@@ -6394,12 +6412,22 @@ async fn a_grpc_call_refused_before_any_message_closes_trailers_only_as_predev()
         .header("authorization", format!("Bearer {}", s.token))
         .body(axum::body::Body::from(body))
         .expect("a request");
-    let response = s.router.clone().oneshot(req).await.expect("the router answers");
+    let response = s
+        .router
+        .clone()
+        .oneshot(req)
+        .await
+        .expect("the router answers");
     let (parts, body) = response.into_parts();
     let collected = body.collect().await.expect("the answer");
     let trailers = collected.trailers().cloned();
     let bytes = collected.to_bytes();
-    assert_eq!(parts.status, StatusCode::OK, "{:?} {bytes:?}", parts.headers);
+    assert_eq!(
+        parts.status,
+        StatusCode::OK,
+        "{:?} {bytes:?}",
+        parts.headers
+    );
     let head: Vec<(String, String)> = parts
         .headers
         .iter()
@@ -6420,7 +6448,10 @@ async fn a_grpc_call_refused_before_any_message_closes_trailers_only_as_predev()
     assert_eq!(head[0].1, "application/grpc", "{head:?}");
     assert_eq!(head[1].1, "5", "NOT_FOUND: {head:?}");
     assert!(bytes.is_empty(), "no message: {bytes:?}");
-    assert!(trailers.is_none(), "trailers-only, no trailer block: {trailers:?}");
+    assert!(
+        trailers.is_none(),
+        "trailers-only, no trailer block: {trailers:?}"
+    );
 }
 
 /// MONEY (this cell touches money: it reads the units' lines on the node's book). A RELAYED
@@ -6643,8 +6674,7 @@ async fn a_pushed_state_reaches_the_callers_own_webhook_through_busbar() {
     tls.rekey();
     let mut hook = Agent::start_over(200, "{}", Some(tls.acceptor())).await;
     let mut agent =
-        Agent::start_answering(200, Arc::new(|r: &str| far_answer(r, "working", "working")))
-            .await;
+        Agent::start_answering(200, Arc::new(|r: &str| far_answer(r, "working", "working"))).await;
     let s = served_pushing(
         instance,
         &agent.entry("planner", "1h"),
@@ -6749,22 +6779,16 @@ async fn a_delivery_to_a_webhook_under_the_operators_agent_push_ca_is_made() {
     tls.rekey();
     let mut hook = Agent::start_over(200, "{}", Some(tls.acceptor())).await;
     let mut agent =
-        Agent::start_answering(200, Arc::new(|r: &str| far_answer(r, "working", "working")))
-            .await;
+        Agent::start_answering(200, Arc::new(|r: &str| far_answer(r, "working", "working"))).await;
     let s = served_push_trusting(
         instance,
         &agent.entry("planner", "1h"),
         vec!["127.0.0.1".to_string()],
         Some(pem_of(&tls.root)),
     );
-    let delivered = delivered_within(
-        &s,
-        &mut agent,
-        &mut hook,
-        std::time::Duration::from_secs(2),
-    )
-    .await
-    .expect("a webhook under the operator's CA is delivered to");
+    let delivered = delivered_within(&s, &mut agent, &mut hook, std::time::Duration::from_secs(2))
+        .await
+        .expect("a webhook under the operator's CA is delivered to");
     assert!(delivered.starts_with("POST /hook"), "{delivered}");
 }
 
@@ -6781,8 +6805,7 @@ async fn a_delivery_to_a_webhook_under_another_ca_is_refused() {
     let other = AgentTls::new();
     let mut hook = Agent::start_over(200, "{}", Some(tls.acceptor())).await;
     let mut agent =
-        Agent::start_answering(200, Arc::new(|r: &str| far_answer(r, "working", "working")))
-            .await;
+        Agent::start_answering(200, Arc::new(|r: &str| far_answer(r, "working", "working"))).await;
     let s = served_push_trusting(
         instance,
         &agent.entry("planner", "1h"),
@@ -6814,8 +6837,7 @@ async fn without_an_agent_push_section_a_delivery_trusts_the_public_roots_alone(
     tls.rekey();
     let mut hook = Agent::start_over(200, "{}", Some(tls.acceptor())).await;
     let mut agent =
-        Agent::start_answering(200, Arc::new(|r: &str| far_answer(r, "working", "working")))
-            .await;
+        Agent::start_answering(200, Arc::new(|r: &str| far_answer(r, "working", "working"))).await;
     let s = served_push_trusting(
         instance,
         &agent.entry("planner", "1h"),
@@ -6844,8 +6866,7 @@ async fn a_malformed_agent_push_ca_refuses_the_boot() {
     let instance = "serve-agent-door-push-bad-ca";
     let _published = Published(instance);
     let agent =
-        Agent::start_answering(200, Arc::new(|r: &str| far_answer(r, "working", "working")))
-            .await;
+        Agent::start_answering(200, Arc::new(|r: &str| far_answer(r, "working", "working"))).await;
     let section = agent.entry("planner", "1h");
     let runtime = tokio::runtime::Handle::current();
     let composed = std::thread::spawn(move || {
@@ -6854,8 +6875,10 @@ async fn a_malformed_agent_push_ca_refuses_the_boot() {
             instance,
             &section,
             vec!["127.0.0.1".to_string()],
-            Some("-----BEGIN CERTIFICATE-----\nnot a certificate\n-----END CERTIFICATE-----\n"
-                .to_string()),
+            Some(
+                "-----BEGIN CERTIFICATE-----\nnot a certificate\n-----END CERTIFICATE-----\n"
+                    .to_string(),
+            ),
         );
     })
     .join();
@@ -6891,8 +6914,7 @@ async fn an_apply_carrying_a_malformed_agent_push_ca_is_refused_and_deliveries_k
     tls.rekey();
     let mut hook = Agent::start_over(200, "{}", Some(tls.acceptor())).await;
     let mut agent =
-        Agent::start_answering(200, Arc::new(|r: &str| far_answer(r, "working", "working")))
-            .await;
+        Agent::start_answering(200, Arc::new(|r: &str| far_answer(r, "working", "working"))).await;
     let s = served_push_trusting(
         instance,
         &agent.entry("planner", "1h"),
@@ -6941,14 +6963,9 @@ async fn an_apply_carrying_a_malformed_agent_push_ca_is_refused_and_deliveries_k
     );
 
     // Nothing was swapped: the running door delivers under the anchor it was composed with.
-    let delivered = delivered_within(
-        &s,
-        &mut agent,
-        &mut hook,
-        std::time::Duration::from_secs(2),
-    )
-    .await
-    .expect("the previous anchor still delivers");
+    let delivered = delivered_within(&s, &mut agent, &mut hook, std::time::Duration::from_secs(2))
+        .await
+        .expect("the previous anchor still delivers");
     assert!(delivered.starts_with("POST /hook"), "{delivered}");
 }
 
@@ -6964,8 +6981,7 @@ async fn a_pushed_state_reaches_the_callers_own_webhook_exactly_once() {
     tls.rekey();
     let mut hook = Agent::start_over(200, "{}", Some(tls.acceptor())).await;
     let mut agent =
-        Agent::start_answering(200, Arc::new(|r: &str| far_answer(r, "working", "working")))
-            .await;
+        Agent::start_answering(200, Arc::new(|r: &str| far_answer(r, "working", "working"))).await;
     let s = served_pushing(
         instance,
         &agent.entry("planner", "1h"),
@@ -7199,8 +7215,7 @@ async fn a_token_is_not_spent_by_being_used_while_the_task_is_live() {
     let instance = "serve-agent-door-token-live";
     let _published = Published(instance);
     let mut agent =
-        Agent::start_answering(200, Arc::new(|r: &str| far_answer(r, "working", "working")))
-            .await;
+        Agent::start_answering(200, Arc::new(|r: &str| far_answer(r, "working", "working"))).await;
     let s = served(instance, &agent.entry("planner", "1h"), false, None);
     approve(&s, "planner").await;
     let task = open_task(&s).await;
@@ -7235,8 +7250,7 @@ async fn a_token_for_a_task_that_has_ended_authorises_nothing() {
     let instance = "serve-agent-door-token-ended";
     let _published = Published(instance);
     let mut agent =
-        Agent::start_answering(200, Arc::new(|r: &str| far_answer(r, "working", "working")))
-            .await;
+        Agent::start_answering(200, Arc::new(|r: &str| far_answer(r, "working", "working"))).await;
     let s = served(instance, &agent.entry("planner", "1h"), false, None);
     approve(&s, "planner").await;
     let task = open_task(&s).await;
@@ -7290,8 +7304,7 @@ async fn a_delete_whose_durable_clear_fails_keeps_the_config_and_returns_the_err
     let instance = "serve-agent-door-delete-refused";
     let _published = Published(instance);
     let agent =
-        Agent::start_answering(200, Arc::new(|r: &str| far_answer(r, "working", "working")))
-            .await;
+        Agent::start_answering(200, Arc::new(|r: &str| far_answer(r, "working", "working"))).await;
     let s = served(instance, &agent.entry("planner", "1h"), false, None);
     approve(&s, "planner").await;
     let task = open_task(&s).await;
@@ -7389,8 +7402,7 @@ async fn a_registration_the_store_refuses_answers_the_engines_internal_error() {
     let instance = "serve-agent-door-create-refused";
     let _published = Published(instance);
     let agent =
-        Agent::start_answering(200, Arc::new(|r: &str| far_answer(r, "working", "working")))
-            .await;
+        Agent::start_answering(200, Arc::new(|r: &str| far_answer(r, "working", "working"))).await;
     let s = served(instance, &agent.entry("planner", "1h"), false, None);
     approve(&s, "planner").await;
     let task = open_task(&s).await;
@@ -7501,8 +7513,7 @@ async fn a_resumption_the_store_refuses_answers_the_engines_409() {
     let _ = heard(&mut agent);
 
     *s.refuse.lock().expect("unpoisoned") = Some(task.as_bytes().to_vec());
-    let (status, doc) =
-        document(&s, rpc("planner", "message/send", turn, Some(&s.token))).await;
+    let (status, doc) = document(&s, rpc("planner", "message/send", turn, Some(&s.token))).await;
     assert_eq!(
         (status, doc),
         (
@@ -7888,8 +7899,7 @@ async fn each_registration_presents_its_own_certificate_and_not_another_registra
     let tls = AgentTls::new();
     let pin = tls.rekey();
     let (planner_root, planner_cert, planner_key) = client_identity_files(instance, "planner");
-    let (payments_root, payments_cert, payments_key) =
-        client_identity_files(instance, "payments");
+    let (payments_root, payments_cert, payments_key) = client_identity_files(instance, "payments");
     let planner_peer =
         Agent::start_over(200, ANSWER, Some(tls.mutual_acceptor(&planner_root))).await;
     let payments_peer =
@@ -8096,8 +8106,7 @@ async fn a_tripped_pool_primary_reroutes_a_fresh_submission_on_the_grpc_binding(
     // UNAUTHENTICATED (16): the gRPC binding's refusal of busbar itself, as a 401 is on
     // JSON-RPC.
     let mut primary = GrpcAgent::serving(Vec::new(), "16", 200, None).await;
-    let mut twin =
-        GrpcAgent::serving(grpc_working_answer(), "0", 200, Some(primary.port)).await;
+    let mut twin = GrpcAgent::serving(grpc_working_answer(), "0", 200, Some(primary.port)).await;
     let entries = format!(
         "{}\n{}",
         primary.entry("planner-a"),
