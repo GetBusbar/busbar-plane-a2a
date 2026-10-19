@@ -1568,8 +1568,7 @@ pub(crate) fn verdict(plane: &A2aDoor, agent: &str) -> u64 {
     };
     let handle = CompletionHandle {
         ticket: Ticket::NONE,
-        seq: 0,
-        _reserved: 0,
+        ..CompletionHandle::ZERO
     };
     services
         .trust_serves(handle, agent, None, None)
@@ -1656,7 +1655,7 @@ fn caller_stands(
     let handle = CompletionHandle {
         ticket: reach.ticket,
         seq: pass.issued,
-        _reserved: 0,
+        ..CompletionHandle::ZERO
     };
     pass.issued += 1;
     let entitled = reach.plane.services.is_some_and(|services| {
@@ -1806,7 +1805,7 @@ fn entitled(reach: &Reach<'_>, pass: &mut crate::task_door::Pass, target: &str) 
     let handle = CompletionHandle {
         ticket: reach.ticket,
         seq: pass.issued,
-        _reserved: 0,
+        ..CompletionHandle::ZERO
     };
     pass.issued += 1;
     reach
@@ -2927,7 +2926,7 @@ impl LookAt<'_> {
         CompletionHandle {
             ticket: self.ticket,
             seq,
-            _reserved: 0,
+            ..CompletionHandle::ZERO
         }
     }
 }
@@ -2986,7 +2985,7 @@ fn judge_hop(
     };
     let absent = busbar_contract::abi::mechanism::call::Span {
         offset: SPAN_ABSENT,
-        len: 0,
+        ..busbar_contract::abi::mechanism::call::Span::ZERO
     };
     let mut bytes = vec![0u8; JUDGED_BYTES];
     let mut spans = [ItemSpan {
