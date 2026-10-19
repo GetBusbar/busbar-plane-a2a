@@ -444,30 +444,20 @@ pub const TAIL: &PlaneTail = &PlaneTail {
     cli_help: NONE,
     dialects: DIALECTS.as_ptr(),
     dialects_len: DIALECTS.len(),
-    dialect_auth: std::ptr::null(),
-    dialect_auth_len: 0,
     scope_kinds: SCOPE_KINDS.as_ptr(),
     scope_kinds_len: SCOPE_KINDS.len(),
     op_classes: OP_CLASS_TABLE.as_ptr(),
     op_classes_len: OP_CLASS_TABLE.len(),
     billable_classes: BILLABLE_CLASSES.as_ptr(),
     billable_classes_len: BILLABLE_CLASSES.len(),
-    route_cost: std::ptr::null(),
-    route_cost_len: 0,
     fee_units: FEE_UNITS.as_ptr(),
     fee_units_len: FEE_UNITS.len(),
     record_kinds: RECORD_KINDS.as_ptr(),
     record_kinds_len: RECORD_KINDS.len(),
-    record_retentions: RECORD_RETENTIONS.as_ptr(),
-    record_retentions_len: RECORD_RETENTIONS.len(),
-    egress_targets: std::ptr::null(),
-    egress_targets_len: 0,
     record_chains: RECORD_CHAINS.as_ptr(),
     record_chains_len: RECORD_CHAINS.len(),
     trust_keys: TRUST_KEYS.as_ptr(),
     trust_keys_len: TRUST_KEYS.len(),
-    refusal_statuses: std::ptr::null(),
-    refusal_statuses_len: 0,
     caller_credential_refusal: abi_str(REFUSE_PASSTHROUGH_SECTION),
     admin_routes: ADMIN_ROUTES.as_ptr(),
     admin_routes_len: ADMIN_ROUTES.len(),
@@ -485,6 +475,7 @@ pub const TAIL: &PlaneTail = &PlaneTail {
     // most `RELAY_STREAM_TIMEOUT` (predev transport.rs:94-98), and a caller that stopped reading
     // released it there (receive.rs `send_or_expire`, :2829-2850, :3000-3012).
     stream_ceiling_secs: STREAM_CEILING_SECS,
+    ..PlaneTail::ZERO
 };
 
 /// How long a unit whose answer streams may run (predev `RELAY_STREAM_TIMEOUT`, 600 s,
