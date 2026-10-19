@@ -167,13 +167,12 @@ fn a_correlated_result_is_relayed_whole_under_the_callers_id() {
     };
     assert_eq!(reply.status, 200);
     assert_eq!(reply.content_type, "application/json");
-    let expected = serde_json::to_vec(&json!({
-        "jsonrpc": "2.0",
-        "id": 7,
-        "result": {"name": "Vendor", "skills": []},
-    }))
-    .expect("json");
-    assert_eq!(reply.body, expected);
+    // The far end's own bytes, its member order kept (Q128 M8): the caller's id is the far end's,
+    // so nothing is rewritten.
+    assert_eq!(
+        reply.body,
+        br#"{"jsonrpc":"2.0","id":7,"result":{"name":"Vendor","skills":[]}}"#.to_vec()
+    );
     assert!(r.answered());
     assert_eq!(r.on_piece(far(None, b"late", true)), PieceAnswer::Nothing);
 }
