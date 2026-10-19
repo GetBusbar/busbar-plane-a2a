@@ -216,7 +216,12 @@
             ]
           }
         }
-      ]
+      ],
+      "resolve": {
+        "vendor.example": [
+          "93.184.216.34"
+        ]
+      }
     },
     "arrive_each": true,
     "claimed": {
@@ -269,5 +274,13 @@
       "reply": "{\"error\":{\"code\":-32004,\"data\":[{\"@type\":\"type.googleapis.com/google.rpc.ErrorInfo\",\"domain\":\"a2a-protocol.org\",\"reason\":\"UNSUPPORTED_OPERATION\"}],\"message\":\"denied\"},\"id\":null,\"jsonrpc\":\"2.0\"}"
     },
     "caller_ref": "c0ffee01"
-  }
+  },
+  "far_ends": [
+    {
+      "url": "https://vendor.example/.well-known/agent-card.json",
+      "cert_pem": "-----BEGIN CERTIFICATE-----\nY29uZm9ybWFuY2UtaXNzdWVyLWNlcnRpZmljYXRl\n-----END CERTIFICATE-----\n",
+      "status": 200,
+      "body": "{\"name\": \"Vendor\", \"description\": \"the conformance agent\", \"url\": \"https://vendor.example/agent\", \"version\": \"1.0.0\", \"protocolVersion\": \"0.3.0\", \"capabilities\": {}, \"defaultInputModes\": [\"text/plain\"], \"defaultOutputModes\": [\"text/plain\"], \"skills\": [{\"id\": \"reply\", \"name\": \"reply\", \"description\": \"replies\", \"tags\": [\"reply\"]}]}"
+    }
+  ]
 }
