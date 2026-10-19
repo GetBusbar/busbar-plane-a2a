@@ -54,6 +54,7 @@ const fn http(selector: Selector) -> Claim {
         // today, and declaring one here would change the shape of every request that reaches an
         // agent, which is precisely the behaviour this crate is not allowed to change.
         idempotency: None,
+        ..Claim::ZERO
     }
 }
 
@@ -65,6 +66,7 @@ const fn grpc(selector: Selector) -> Claim {
         scheme: Some(SCHEME),
         scheme_alternatives: SCHEME_ALTS,
         idempotency: None,
+        ..Claim::ZERO
     }
 }
 
@@ -79,6 +81,7 @@ const fn open_http(selector: Selector) -> Claim {
         scheme: None,
         scheme_alternatives: &[],
         idempotency: None,
+        ..Claim::ZERO
     }
 }
 
