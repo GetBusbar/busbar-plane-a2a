@@ -394,7 +394,8 @@ pub fn open(
             });
             match opened {
                 Err(Halt::Pending) => return Err(Halt::Pending),
-                Err(Halt::Failed(_)) => {
+                Err(Halt::Failed(e)) => {
+                    eprintln!("A9DBG tasks::open failed: {e:?}");
                     return Ok(refused(
                         STATUS_UNAVAILABLE,
                         rpc_id,

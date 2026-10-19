@@ -267,6 +267,7 @@
       "status": 403,
       "text": "denied",
       "reply": "{\"error\":{\"code\":-32004,\"data\":[{\"@type\":\"type.googleapis.com/google.rpc.ErrorInfo\",\"domain\":\"a2a-protocol.org\",\"reason\":\"UNSUPPORTED_OPERATION\"}],\"message\":\"denied\"},\"id\":null,\"jsonrpc\":\"2.0\"}"
-    }
+    },
+    "caller_ref": "c0ffee01"
   }
 }
