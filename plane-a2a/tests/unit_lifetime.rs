@@ -10,10 +10,17 @@
 //!   unit out; a cancelled unit is the first to go when the instance is full;
 //! * a hop the kernel refused for the agent's credential before it dialled reports its fee unit at
 //!   `0` and no bytes on its refused piece, so the kernel's checkpoint refunds it
-//!   (`BUSBAR-1.6.0.md` l.1126: "a hop refused before the socket ledgers nothing").
+//!   (`BUSBAR-1.6.0.md` l.1126: "a hop refused before the socket ledgers nothing");
+//! * a READY arrival on a warmed instance allocates an exact, pinned count: the route name an
+//!   arrival names is the instance's kept copy, never a fresh heap string (THE DESIGN, the plugin
+//!   ABI: "no allocation and no blocking on the hot path"), so the dropped-in twin, built from this
+//!   repo's pin, carries the SDK the linked build carries (compiled in or dropped in, "NOTHING
+//!   CHANGES about the plugin itself").
 
 #![allow(unsafe_code)]
 
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::os::raw::c_void;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -41,6 +48,43 @@ use busbar_contract::abi::plane::{
 };
 use busbar_plane_a2a::agent_door::{self, MAX_UNITS};
 use busbar_plane_a2a::door_statement::{self, CLASS_FEE_INDEX, DIALECT_DOCUMENT};
+
+// ── the allocation count ────────────────────────────────────────────────────────────────────────
+
+thread_local! {
+    /// Allocations made by THIS thread since the counter was last read.
+    static ALLOCS: Cell<u64> = const { Cell::new(0) };
+}
+
+/// The system allocator, counting.
+struct Counting;
+
+// SAFETY: every call is forwarded verbatim to the system allocator; the counter is a thread-local
+// `Cell` of a plain integer, touched only on the allocating thread, and never reads or writes the
+// memory being handed out.
+unsafe impl GlobalAlloc for Counting {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        let _ = ALLOCS.try_with(|c| c.set(c.get() + 1));
+        unsafe { System.alloc(layout) }
+    }
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        unsafe { System.dealloc(ptr, layout) }
+    }
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        let _ = ALLOCS.try_with(|c| c.set(c.get() + 1));
+        unsafe { System.realloc(ptr, layout, new_size) }
+    }
+}
+
+#[global_allocator]
+static ALLOC: Counting = Counting;
+
+/// How many allocations `f` made on this thread, and what it returned.
+fn allocations_of<R>(f: impl FnOnce() -> R) -> (u64, R) {
+    let before = ALLOCS.with(Cell::get);
+    let r = f();
+    (ALLOCS.with(Cell::get) - before, r)
+}
 
 // ── the host's services ─────────────────────────────────────────────────────────────────────────
 
@@ -894,4 +938,46 @@ fn a_kernel_refusal_with_no_unit_answers_the_baseline_json_rpc_bytes() {
             "{reason:?}: the kernel's status {status} stands, the door answered {answered}"
         );
     }
+}
+
+// ── the READY path the dropped-in twin carries ──────────────────────────────────────────────────
+
+/// What one addressed READY arrival allocates on a warmed instance (the agent's card held, its
+/// route entry already named by earlier arrivals). The bound is exact (the plane's own unit state,
+/// task rows and relay set-up; the route name costs none): a change that moves it moves this
+/// constant in the same commit, with the reason.
+const READY_ARRIVAL_ALLOCATIONS: u64 = 64;
+
+/// A WARMED READY ARRIVAL NAMES ITS ROUTE WITHOUT THE HEAP (THE DESIGN, the plugin ABI: "no
+/// allocation and no blocking on the hot path"; compiled in or dropped in, "NOTHING CHANGES about
+/// the plugin itself"). An arrival addressed to a held agent routes `ROUTE_DIRECT` to it through the SDK's
+/// `Out::route`; once the instance has named that entry, naming it again is a load of the kept
+/// copy. RED at a busbar-contract pin whose SDK kept a fresh `String` for every route name (under
+/// the instance-wide mutex): every arrival paid that allocation, so the count sat above the pin,
+/// and the dropped-in twin built from this repo's pin was a slower plane than the linked one.
+#[test]
+fn a_warmed_ready_arrival_allocates_its_pinned_count() {
+    let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    let door = open();
+    let (outcome, status, body) = door.connect("vendor");
+    assert_eq!(
+        (outcome, status),
+        (Outcome::Ready, 200),
+        "`connect` holds the agent's card: {body}"
+    );
+    let route = ("POST", "/a2a/agents/{agent_id}");
+    for unit in 20..24 {
+        assert_eq!(
+            door.arrive(unit, route, "/a2a/agents/vendor", CARD_READ),
+            (Outcome::Ready, 0),
+            "warming arrival {unit}"
+        );
+    }
+    let (allocations, arrived) =
+        allocations_of(|| door.arrive(24, route, "/a2a/agents/vendor", CARD_READ));
+    assert_eq!(arrived, (Outcome::Ready, 0), "the measured arrival");
+    assert_eq!(
+        allocations, READY_ARRIVAL_ALLOCATIONS,
+        "a warmed READY arrival allocated {allocations}, pinned {READY_ARRIVAL_ALLOCATIONS}"
+    );
 }
