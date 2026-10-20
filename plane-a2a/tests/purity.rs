@@ -38,7 +38,7 @@ fn walk(dir: &Path, f: &mut impl FnMut(&Path, &str)) {
 /// THE GENERATED MESSAGES (`build.rs`, the gRPC line's `lf.a2a.v1` package): the plane's source
 /// includes them from the build's output directory, so the scans read them as the plane's own
 /// source and read the include line itself as what it is, a compile-time inclusion.
-const GENERATED: &[&str] = &["lf.a2a.v1.rs", "lf.a2a.v1.serde.rs"];
+const GENERATED: &[&str] = &["lf.a2a.v1.rs", "lf.a2a.v1.serde.rs", "method_inventory.rs"];
 
 /// Every source file of the plane: its own, then the generated messages it includes.
 fn each_source(f: &mut impl FnMut(&Path, &str)) {

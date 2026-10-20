@@ -216,6 +216,9 @@ struct Served {
     /// The bytes a record key must hold for the cell's store to refuse writing it
     /// ([`Refusing`]); `None` = the store takes every write.
     refuse: Arc<std::sync::Mutex<Option<Vec<u8>>>>,
+    /// The table the kernel's egress walk reached the far ends through, every open it made on it
+    /// recorded ([`Riding`]).
+    riding: Arc<Riding>,
 }
 
 /// THE CELL'S STORE, REFUSING ON CUE (predev's `RefuseOneTaskRow`, `local_tests.rs:1300-1356`):
@@ -399,6 +402,124 @@ impl busbar_contract::store_calls::StoreCalls for Refusing {
         now: u64,
     ) -> busbar_contract::store_calls::StoreCall<'a, bool> {
         self.inner.plane_token_live(kind, token, expires_at, now)
+    }
+}
+
+/// THE EGRESS WALK'S TABLE, WATCHED: the cell's connector as the kernel's walk reaches it (the
+/// `conns` of the door's reach), every call the connector's own, and the `(owner, need)` of every
+/// open the walk made recorded, so a cell reads which of the door's needs a hop rode.
+struct Riding {
+    inner: Arc<busbar_core_connector::Connector>,
+    opened: std::sync::Mutex<
+        Vec<(
+            busbar_contract::conn::InstanceId,
+            busbar_contract::conn::NeedId,
+        )>,
+    >,
+}
+
+impl Riding {
+    /// Every `(owner, need)` the walk opened on, in order.
+    fn opened(
+        &self,
+    ) -> Vec<(
+        busbar_contract::conn::InstanceId,
+        busbar_contract::conn::NeedId,
+    )> {
+        self.opened.lock().expect("the opens").clone()
+    }
+}
+
+impl busbar_contract::conn::Conns for Riding {
+    fn open(
+        &self,
+        caller: busbar_contract::conn::InstanceId,
+        need: busbar_contract::conn::NeedId,
+        desc: &busbar_contract::conn::OpenDesc<'_>,
+    ) -> Result<busbar_contract::conn::ConnId, busbar_contract::conn::ConnError> {
+        self.opened.lock().expect("the opens").push((caller, need));
+        busbar_contract::conn::Conns::open(&*self.inner, caller, need, desc)
+    }
+    fn write(
+        &self,
+        caller: busbar_contract::conn::InstanceId,
+        conn: busbar_contract::conn::ConnId,
+        bytes: &[u8],
+        end: bool,
+        text: bool,
+    ) -> Result<usize, busbar_contract::conn::ConnError> {
+        busbar_contract::conn::Conns::write(&*self.inner, caller, conn, bytes, end, text)
+    }
+    fn read(
+        &self,
+        caller: busbar_contract::conn::InstanceId,
+        conn: busbar_contract::conn::ConnId,
+        ticket: busbar_contract::conn::Ticket,
+        buf: &mut [u8],
+    ) -> Result<busbar_contract::conn::Piece, busbar_contract::conn::ConnError> {
+        busbar_contract::conn::Conns::read(&*self.inner, caller, conn, ticket, buf)
+    }
+    fn wait(
+        &self,
+        caller: busbar_contract::conn::InstanceId,
+        set: &[busbar_contract::conn::ConnId],
+        ticket: busbar_contract::conn::Ticket,
+    ) -> Result<usize, busbar_contract::conn::ConnError> {
+        busbar_contract::conn::Conns::wait(&*self.inner, caller, set, ticket)
+    }
+    fn facts(
+        &self,
+        caller: busbar_contract::conn::InstanceId,
+        conn: busbar_contract::conn::ConnId,
+    ) -> Result<busbar_contract::transport::ConnFacts, busbar_contract::conn::ConnError> {
+        busbar_contract::conn::Conns::facts(&*self.inner, caller, conn)
+    }
+    fn close(
+        &self,
+        caller: busbar_contract::conn::InstanceId,
+        conn: busbar_contract::conn::ConnId,
+    ) -> Result<(), busbar_contract::conn::ConnError> {
+        busbar_contract::conn::Conns::close(&*self.inner, caller, conn)
+    }
+}
+
+impl busbar_contract::conn::PollConns for Riding {
+    fn poll_read(
+        &self,
+        caller: busbar_contract::conn::InstanceId,
+        conn: busbar_contract::conn::ConnId,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut [u8],
+    ) -> std::task::Poll<Result<busbar_contract::conn::Piece, busbar_contract::conn::ConnError>>
+    {
+        busbar_contract::conn::PollConns::poll_read(&*self.inner, caller, conn, cx, buf)
+    }
+    fn anchor(
+        &self,
+        owner: busbar_contract::conn::InstanceId,
+        need: busbar_contract::conn::NeedId,
+        member: &str,
+        target: &str,
+        anchors: &busbar_contract::transport::trust::Anchors,
+    ) -> Result<(), busbar_contract::conn::ConnError> {
+        busbar_contract::conn::PollConns::anchor(&*self.inner, owner, need, member, target, anchors)
+    }
+    fn seal_reach(
+        &self,
+        owner: busbar_contract::conn::InstanceId,
+        need: busbar_contract::conn::NeedId,
+        member: &str,
+        target: &str,
+        reach: bool,
+    ) -> Result<(), busbar_contract::conn::ConnError> {
+        busbar_contract::conn::PollConns::seal_reach(
+            &*self.inner,
+            owner,
+            need,
+            member,
+            target,
+            reach,
+        )
     }
 }
 
@@ -920,11 +1041,16 @@ fn served_core(
             Arc::clone(&connector) as Arc<dyn DeclaredConns>
         ),
     );
+    // The walk reaches the far ends through the cell's connector, every open it makes recorded.
+    let riding = Arc::new(Riding {
+        inner: Arc::clone(&connector),
+        opened: std::sync::Mutex::default(),
+    });
     let reach = crate::root::door_steps::DoorReach {
         providers: &providers,
         secrets: Arc::clone(&secrets),
         auths: Arc::new(auths),
-        conns: Arc::clone(&connector) as Arc<dyn busbar_contract::conn::PollConns>,
+        conns: Arc::clone(&riding) as Arc<dyn busbar_contract::conn::PollConns>,
         stream_ceiling_secs: 600,
         catalog: None,
         upgrades: Vec::new(),
@@ -1079,6 +1205,7 @@ fn served_core(
         post: end,
         routes,
         refuse,
+        riding,
     }
 }
 
@@ -6231,6 +6358,98 @@ async fn an_agent_whose_card_names_only_grpc_is_dialled_over_grpc() {
     );
 }
 
+/// AN A2A HOP RIDES THE HOST'S gRPC NEED ON THE gRPC TRANSPORT, END TO END (status row 174): the
+/// door linked and bound through the loader's one load over the cell's connector, which carries the
+/// build's linked transport doors (the gRPC transport plugin among them); an agent whose card names
+/// only the gRPC binding, standing in process as an A2A gRPC service on loopback, approved over its
+/// card. A caller's `SendMessage` is admitted, takes the card's binding (`binding_of`), and its
+/// ATTEMPT names the door's gRPC need (`attempt_need`): the kernel's egress walk opens it on
+/// `NEED_GRPC`, which the door declared over the grpc scheme, and the connector serves it through
+/// the loaded grpc transport. Proven three ways: the far end received the rpc at the service's own
+/// `SendMessage` path, one length-prefixed `SendMessageRequest` carrying the caller's message; the
+/// caller got the far end's task back as the JSON-RPC result; and every open the walk made rode
+/// `NEED_GRPC` over the grpc transport, none the agent's http need. RED with the grpc transport
+/// unloaded: the door's grpc need is served by no transport, so the hop never reaches the far end.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_a2a_hop_rides_the_hosts_grpc_need_to_an_in_process_grpc_agent() {
+    use busbar_plane_a2a::door_statement::{NEED_AGENT, NEED_GRPC};
+    use busbar_plane_a2a::proto::pb;
+    use prost::Message as _;
+    let _one = PUBLISHING.lock().await;
+    let instance = "serve-agent-door-grpc-need";
+    let _published = Published(instance);
+    let mut agent = GrpcAgent::start(grpc_working_answer()).await;
+    let s = served(instance, &agent.entry("planner"), false, None);
+    approve(&s, "planner").await;
+    let params = r#"{"message":{"messageId":"m-174","role":"ROLE_USER","parts":[{"text":"ROUTE THE ROW"}]}}"#;
+    let (status, body) = answered(
+        &s.router,
+        rpc("planner", "SendMessage", params, Some(&s.token)),
+    )
+    .await;
+
+    // THE FAR END received the rpc: the service's own SendMessage path, one length-prefixed
+    // request message, the caller's message in it.
+    let (path, sent) = agent
+        .heard
+        .try_recv()
+        .unwrap_or_else(|_| panic!("the hop never reached the gRPC agent ({status}): {body}"));
+    assert_eq!(
+        path,
+        format!("/{}/SendMessage", busbar_plane_a2a::proto::SERVICE_NAME)
+    );
+    assert!(sent.len() > 5, "a length-prefixed message: {sent:?}");
+    assert_eq!(sent[0], 0, "no compression");
+    let len = u32::from_be_bytes([sent[1], sent[2], sent[3], sent[4]]) as usize;
+    assert_eq!(sent.len(), 5 + len, "exactly one length-prefixed message");
+    let request = pb::SendMessageRequest::decode(&sent[5..])
+        .unwrap_or_else(|e| panic!("the far end reads a SendMessageRequest: {e}"));
+    let message = request.message.expect("the request carries the message");
+    assert_eq!(message.message_id, "m-174");
+    assert_eq!(message.role, pb::Role::User as i32);
+    let texts: Vec<&str> = message
+        .parts
+        .iter()
+        .filter_map(|p| match &p.content {
+            Some(pb::part::Content::Text(t)) => Some(t.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(texts, ["ROUTE THE ROW"], "the caller's one text part");
+
+    // THE CALLER got the far end's answer: its working task, as the JSON-RPC result.
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let doc: serde_json::Value = serde_json::from_str(&body).expect("an answer");
+    assert_eq!(doc["id"], 1, "{body}");
+    assert_eq!(
+        doc["result"]["task"]["status"]["state"], "TASK_STATE_WORKING",
+        "{body}"
+    );
+
+    // THE HOP RODE THE gRPC NEED: the walk opened on NEED_GRPC and never on the agent's http
+    // need, and that need is the one the door declared over the grpc scheme, which a loaded
+    // transport serves.
+    let opened = s.riding.opened();
+    let &(owner, need) = opened
+        .iter()
+        .find(|(_, n)| n.0 == NEED_GRPC)
+        .unwrap_or_else(|| panic!("no open on the gRPC need; the walk opened {opened:?}"));
+    assert!(
+        opened.iter().all(|(_, n)| n.0 != NEED_AGENT),
+        "the hop rode the agent's http need: {opened:?}"
+    );
+    let spec = s
+        .riding
+        .inner
+        .declared_spec(owner, need)
+        .expect("the door declared its gRPC need on the connector");
+    assert_eq!(spec.transport, busbar_plane_a2a::claims::FRAMED_TRANSPORT);
+    assert!(
+        s.riding.inner.framer_for(&spec.transport).is_some(),
+        "a loaded transport serves the gRPC need's scheme"
+    );
+}
+
 /// A gRPC CALLER IS ANSWERED THROUGH ITS STREAM'S FRAMER (SEAM-4l): `SendMessage` over the gRPC
 /// binding goes out under the listener's `200`, its one message length-prefixed, and the call
 /// closes with `grpc-status: 0` in the trailers, as predev's gRPC line answered it. RED before the
@@ -7953,7 +8172,10 @@ async fn each_registration_presents_its_own_certificate_and_not_another_registra
 const TASK_ANSWER: &str = r#"{"jsonrpc":"2.0","id":1,"result":{"kind":"task","id":"far-task","contextId":"far-ctx","status":{"state":"working"}}}"#;
 
 /// The `agents:` section `entries`, with the pool `planner` of `members` (in that order) handed
-/// to it as the root hands a named-definition section its unified pools.
+/// to it as the root hands a named-definition section its unified pools. The pool literal ends
+/// `..Default::default()` so it compiles before and after the pool grows a field (ruling (a)); the
+/// allow travels with it, since busbar compiles these cells under its own lints.
+#[allow(clippy::needless_update)]
 fn pooled(entries: &str, members: &[&str]) -> String {
     let key = surface("section");
     let section: serde_yaml::Value = serde_yaml::from_str(entries).expect("a section");
@@ -7962,6 +8184,7 @@ fn pooled(entries: &str, members: &[&str]) -> String {
         busbar_kernel::failover::CandidatePoolCfg {
             members: members.iter().map(|m| (*m).to_string()).collect(),
             repeatable: Vec::new(),
+            ..Default::default()
         },
     )]
     .into();
