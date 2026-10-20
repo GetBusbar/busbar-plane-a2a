@@ -197,3 +197,23 @@ fn a_listing_moves_only_what_busbar_can_match() {
     assert!(listed_states(Binding::JsonRpc, Some((502, b"")), &ours).is_empty());
     assert!(listed_states(Binding::JsonRpc, None, &ours).is_empty());
 }
+
+/// BUSBAR'S OWN CALLBACK IS READ FROM `public_url` THE ONE WAY every published URL is
+/// ([`crate::a2a::public::absolute`]): the path is replaced, query and fragment dropped, so the
+/// callback the agent is told is the `/a2a/push` route busbar serves. RED against an append, which
+/// keeps `public_url`'s own path (or query) in front of the route.
+#[test]
+fn busbars_callback_replaces_the_public_urls_path_as_every_published_url_does() {
+    assert_eq!(
+        callback_url("https://gw.example/busbar").as_deref(),
+        Some("https://gw.example/a2a/push")
+    );
+    assert_eq!(
+        callback_url("https://gw.example/?q=1").as_deref(),
+        Some("https://gw.example/a2a/push")
+    );
+    assert_eq!(
+        callback_url("https://gw.example/busbar").as_deref(),
+        crate::a2a::public::absolute("https://gw.example/busbar", "/a2a/push").as_deref()
+    );
+}

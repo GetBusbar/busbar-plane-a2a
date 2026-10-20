@@ -263,3 +263,82 @@ fn a_string_coded_refusal_re_frames_from_its_http_status() {
     assert_eq!(body["error"]["status"], "UNAVAILABLE");
     assert_eq!(body["error"]["message"], "no card yet");
 }
+
+/// SUBSCRIBE IS A GET (proto `SubscribeToTask`: `get: "/tasks/{id=*}:subscribe"`). The verb suffix
+/// sits inside the `{id}` segment, so a GET of `/tasks/{id}:subscribe` is the subscribe, never a
+/// read of a task whose id ends in `:subscribe`; a GET with no verb suffix stays the read.
+#[test]
+fn a_get_of_a_tasks_subscribe_suffix_is_subscribe_to_task() {
+    let task = "/a2a/tasks/{id}";
+    assert_eq!(
+        composed("GET", task, "/a2a/tasks/abc:subscribe", b""),
+        envelope(method::SUBSCRIBE_TO_TASK, json!({"id": "abc"}))
+    );
+    assert_eq!(
+        composed("GET", task, "/a2a/tasks/a:b:subscribe", b""),
+        envelope(method::SUBSCRIBE_TO_TASK, json!({"id": "a:b"}))
+    );
+    assert_eq!(
+        composed("GET", task, "/a2a/tasks/abc", b""),
+        envelope(method::GET_TASK, json!({"id": "abc"}))
+    );
+}
+
+/// A CANCEL'S BODY IS ITS PARAMS (proto `CancelTask`: `post: "/tasks/{id=*}:cancel" body: "*"`), so
+/// the caller's `metadata` reaches the operation; the path's id wins over a posted one.
+#[test]
+fn a_posted_cancel_body_reaches_the_params_and_the_path_wins() {
+    assert_eq!(
+        composed(
+            "POST",
+            "/a2a/tasks/{id}",
+            "/a2a/tasks/t-1:cancel",
+            br#"{"id":"somebody-elses","metadata":{"why":"done"}}"#
+        ),
+        envelope(
+            method::CANCEL_TASK,
+            json!({"id": "t-1", "metadata": {"why": "done"}})
+        )
+    );
+}
+
+/// ONLY THE PROTO'S NON-STRING QUERY MEMBERS ARE TYPED. `contextId`, `pageToken`, `status` and
+/// `statusTimestampAfter` are strings in the proto (`ListTasksRequest`,
+/// `ListTaskPushNotificationConfigsRequest`), so an all-digit or `true`-spelled value stays the
+/// string it was; `pageSize`, `historyLength` and `includeArtifacts` are typed.
+#[test]
+fn only_the_protos_non_string_query_members_are_typed() {
+    assert_eq!(
+        composed(
+            "GET",
+            "/a2a/tasks",
+            "/a2a/tasks?contextId=12345&pageToken=007&status=true&statusTimestampAfter=1\
+             &pageSize=5&historyLength=2&includeArtifacts=false",
+            b""
+        ),
+        envelope(
+            method::LIST_TASKS,
+            json!({
+                "contextId": "12345",
+                "pageToken": "007",
+                "status": "true",
+                "statusTimestampAfter": "1",
+                "pageSize": 5,
+                "historyLength": 2,
+                "includeArtifacts": false,
+            })
+        )
+    );
+    assert_eq!(
+        composed(
+            "GET",
+            "/a2a/tasks/{id}/pushNotificationConfigs",
+            "/a2a/tasks/t-1/pushNotificationConfigs?pageToken=42&pageSize=3",
+            b""
+        ),
+        envelope(
+            method::LIST_PUSH_CONFIGS,
+            json!({"taskId": "t-1", "pageToken": "42", "pageSize": 3})
+        )
+    );
+}

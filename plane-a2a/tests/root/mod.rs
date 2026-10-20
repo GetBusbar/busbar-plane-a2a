@@ -6104,12 +6104,18 @@ mod upstream_credential {
             (
                 "serve-agent-cred-source-env",
                 format!("{{secret: {{env: {var}}}, placement: bearer, lease_ttl_ms: 60000}}"),
-                busbar_contract::secret_ref::SecretRef::env(&var),
+                serde_json::from_value::<busbar_contract::secret_ref::SecretRef>(
+                    serde_json::json!({ "env": var.clone() }),
+                )
+                .expect("a sugar reference"),
             ),
             (
                 "serve-agent-cred-source-file",
                 format!("{{secret: {{file: '{path}'}}, placement: bearer, lease_ttl_ms: 60000}}"),
-                busbar_contract::secret_ref::SecretRef::file(&path),
+                serde_json::from_value::<busbar_contract::secret_ref::SecretRef>(
+                    serde_json::json!({ "file": path.clone() }),
+                )
+                .expect("a sugar reference"),
             ),
         ];
         for (instance, credential, secret) in cases {
@@ -6592,7 +6598,9 @@ async fn a_grpc_call_naming_a_version_this_endpoint_does_not_speak_is_unimplemen
 /// `no-such-task`): `HTTP/2 200`, `content-type: application/grpc`, `grpc-status: 5`,
 /// `grpc-message: the%20backend%20agent%20refused%20this%20task`, `grpc-status-details-bin: …`,
 /// `content-length: 0`, in one block. RED before the fix: the head went out alone (with no media
-/// type) and the status followed in a trailer block.
+/// type) and the status followed in a trailer block. The caller holds no `no-such-task`, so busbar
+/// now refuses it itself, `TaskNotFoundError` (`404`, `NOT_FOUND`), without dialling the agent; the
+/// answer's shape is the same trailers-only block.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_grpc_call_refused_before_any_message_closes_trailers_only_as_predev() {
     use busbar_plane_a2a::framed::{request_message, Rpc};
