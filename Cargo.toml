@@ -34,8 +34,8 @@ repository = "https://github.com/GetBusbar/busbar-plane-a2a"
 needless_update = "allow"
 
 [workspace.dependencies]
-busbar-contract = { git = "https://github.com/GetBusbar/busbar", rev = "aab77f742ac6fdd1c67bc96c3bfceace4b538aa9" }
-busbar-plugin-loader = { git = "https://github.com/GetBusbar/busbar", rev = "aab77f742ac6fdd1c67bc96c3bfceace4b538aa9" }
+busbar-contract = { git = "https://github.com/GetBusbar/busbar", rev = "5756cdf25d505e15e58222d1a0e42e3157b16d29" }
+busbar-plugin-loader = { git = "https://github.com/GetBusbar/busbar", rev = "5756cdf25d505e15e58222d1a0e42e3157b16d29" }
 # busbar's root [workspace.dependencies], third-party rows, at 804aced00db2e2e891f8746cace448601b6c0064
 aes = { version = "0.8", default-features = false }
 arc-swap = "1"
