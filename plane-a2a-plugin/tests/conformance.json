@@ -223,6 +223,12 @@
         ]
       }
     },
+    "serve_first": [
+      {
+        "route": 0,
+        "target": "/agents/vendor/connect"
+      }
+    ],
     "arrive_each": true,
     "claimed": {
       "unit": 7,
