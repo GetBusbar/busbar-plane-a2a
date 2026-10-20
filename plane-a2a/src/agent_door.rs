@@ -2982,9 +2982,10 @@ slot!(
         .flatten();
         // A KERNEL REFUSAL WITH NO UNIT (no credential, a body over the cap: refused before any
         // unit was made) answers the bytes v1.5.5 answered on the route, a JSON-RPC error with no
-        // id, at the kernel's own status, on every line.
+        // id, at the kernel's own status, on every line. The bytes live once, in the contract's
+        // JSON-RPC module, beside the envelope they are an instance of.
         let unitless = (given.unit == 0 && given.cause == REFUSAL_KERNEL)
-            .then(|| unitless_kernel_body(given.reason))
+            .then(|| busbar_contract::jsonrpc::unitless_kernel_body(given.reason))
             .flatten();
         let rendered = if let Some(body) = unitless {
             // `0`: the kernel's status stands.
@@ -4364,24 +4365,6 @@ pub fn invocation_of(envelope: &[u8]) -> busbar_contract::ir::invoke::InvokeReq 
             .cloned()
             .unwrap_or(serde_json::Value::Null),
         extra: Default::default(),
-    }
-}
-
-/// v1.5.5's answer to a request refused before any unit was made: no credential.
-const UNITLESS_UNAUTHENTICATED: &[u8] =
-    br#"{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"authentication failed"}}"#;
-/// v1.5.5's answer to a request refused before any unit was made: a body over the cap.
-const UNITLESS_BODY_TOO_LARGE: &[u8] = br#"{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"request body exceeds the maximum allowed size"}}"#;
-
-/// The v1.5.5 bytes for a kernel refusal of `reason` that names no unit, if v1.5.5 had its own.
-fn unitless_kernel_body(reason: u32) -> Option<&'static [u8]> {
-    use busbar_contract::abi::plane::RefusalCode as Code;
-    if reason == Code::Unauthenticated.code() {
-        Some(UNITLESS_UNAUTHENTICATED)
-    } else if reason == Code::BodyTooLarge.code() {
-        Some(UNITLESS_BODY_TOO_LARGE)
-    } else {
-        None
     }
 }
 
