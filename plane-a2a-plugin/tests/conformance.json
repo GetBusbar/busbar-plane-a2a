@@ -279,5 +279,15 @@
         ]
       }
     }
+  ],
+  "unreached_schemes": [
+    {
+      "scheme": "grpc",
+      "why": "the agent's gRPC binding is reached only when its card names one; the suite's card names the JSON-RPC binding, so the grpc relay is proven by the plane's own client-leg cells",
+      "covered_by": [
+        "plane-a2a/src/tests/relay_grpc_tests.rs::grpc_client_issues_send_message",
+        "plane-a2a/src/tests/relay_grpc_tests.rs::grpc_client_issues_get_task"
+      ]
+    }
   ]
 }
