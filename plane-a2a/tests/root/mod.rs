@@ -8164,7 +8164,10 @@ async fn each_registration_presents_its_own_certificate_and_not_another_registra
 const TASK_ANSWER: &str = r#"{"jsonrpc":"2.0","id":1,"result":{"kind":"task","id":"far-task","contextId":"far-ctx","status":{"state":"working"}}}"#;
 
 /// The `agents:` section `entries`, with the pool `planner` of `members` (in that order) handed
-/// to it as the root hands a named-definition section its unified pools.
+/// to it as the root hands a named-definition section its unified pools. The pool literal ends
+/// `..Default::default()` so it compiles before and after the pool grows a field (ruling (a)); the
+/// allow travels with it, since busbar compiles these cells under its own lints.
+#[allow(clippy::needless_update)]
 fn pooled(entries: &str, members: &[&str]) -> String {
     let key = surface("section");
     let section: serde_yaml::Value = serde_yaml::from_str(entries).expect("a section");
