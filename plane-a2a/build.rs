@@ -44,6 +44,9 @@ const NULL_MAP: (&str, &str) = (
     "map_.next_value::<Option<std::collections::HashMap<_, _>>>()?.unwrap_or_default()",
 );
 
+/// How many map fields the vendored proto has: the null-map patch must match each.
+const NULL_MAP_FIELDS: usize = 7;
+
 fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=proto");
     // THE METHOD INVENTORY a unit test holds the plane's JSON-RPC names to: busbar's
@@ -105,13 +108,53 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let serde_path = out_dir.join("lf.a2a.v1.serde.rs");
     let mut generated = std::fs::read_to_string(&serde_path)?;
+    // COUNTED, so a change in pbjson's output shape fails the build instead of silently matching
+    // nothing (a null map or list would then be refused): every map field's line is patched, and
+    // every listed repeated member is patched at least once.
+    let maps = generated.matches(NULL_MAP.0).count();
+    if maps != NULL_MAP_FIELDS {
+        return Err(format!(
+            "the null-map patch matched {maps} map field(s), not the vendored proto's {NULL_MAP_FIELDS}"
+        )
+        .into());
+    }
     generated = generated.replace(NULL_MAP.0, NULL_MAP.1);
     for member in NULL_REPEATED {
-        generated = generated.replace(
-            &format!("{member}__ = Some(map_.next_value()?);"),
-            &format!("{member}__ = Some(map_.next_value::<Option<_>>()?.unwrap_or_default());"),
-        );
+        let needle = format!("{member}__ = Some(map_.next_value()?);");
+        let patch =
+            format!("{member}__ = Some(map_.next_value::<Option<_>>()?.unwrap_or_default());");
+        let (patched, hits) = replace_whole(&generated, &needle, &patch);
+        if hits == 0 {
+            return Err(format!("the null-repeated patch for `{member}` matched nothing").into());
+        }
+        generated = patched;
     }
     std::fs::write(serde_path, generated)?;
     Ok(())
+}
+
+/// `text` with every `needle` that starts a whole identifier replaced by `with`, and how many were:
+/// `output_modes__ = …` must not match inside `accepted_output_modes__ = …`, which is its own
+/// member's line (a substring match patched it under the shorter name, and the longer name's own
+/// patch then matched nothing).
+fn replace_whole(text: &str, needle: &str, with: &str) -> (String, usize) {
+    let mut out = String::with_capacity(text.len());
+    let (mut at, mut hits) = (0, 0);
+    while let Some(found) = text[at..].find(needle) {
+        let start = at + found;
+        let whole = text[..start]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '_'));
+        out.push_str(&text[at..start]);
+        if whole {
+            out.push_str(with);
+            hits += 1;
+        } else {
+            out.push_str(needle);
+        }
+        at = start + needle.len();
+    }
+    out.push_str(&text[at..]);
+    (out, hits)
 }
