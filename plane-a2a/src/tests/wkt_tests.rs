@@ -97,7 +97,7 @@ fn a_value_is_the_json_value_it_is() {
     );
     assert!(serde_json::from_value::<Value>(serde_json::json!(9_007_199_254_740_993_i64)).is_err());
     let nan = Value {
-        kind: Some(value::Kind::NumberValue(f64::NAN)),
+        kind: Some(value::Kind::Number(f64::NAN)),
     };
     assert!(serde_json::to_value(&nan).is_err());
 }

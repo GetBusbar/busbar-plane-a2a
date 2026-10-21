@@ -36,29 +36,27 @@ pub struct Value {
 
 /// `google.protobuf.Value`'s kinds.
 pub mod value {
-    /// The kind of a [`super::Value`]. The variants are the protobuf `oneof`'s own member names,
-    /// which the generated ProtoJSON code spells.
-    #[allow(clippy::enum_variant_names)]
+    /// The kind of a [`super::Value`]: the protobuf `oneof`, one variant per member by its tag.
     #[derive(Clone, PartialEq, prost::Oneof)]
     pub enum Kind {
         /// `null`.
         #[prost(enumeration = "super::NullValue", tag = "1")]
-        NullValue(i32),
+        Null(i32),
         /// A number.
         #[prost(double, tag = "2")]
-        NumberValue(f64),
+        Number(f64),
         /// A string.
         #[prost(string, tag = "3")]
-        StringValue(String),
+        String(String),
         /// A boolean.
         #[prost(bool, tag = "4")]
-        BoolValue(bool),
+        Bool(bool),
         /// An object.
         #[prost(message, tag = "5")]
-        StructValue(super::Struct),
+        Struct(super::Struct),
         /// An array.
         #[prost(message, tag = "6")]
-        ListValue(super::ListValue),
+        List(super::ListValue),
     }
 }
 
@@ -183,12 +181,12 @@ impl Serialize for value::Kind {
     fn serialize<S: Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
         use value::Kind;
         match self {
-            Kind::NullValue(_) => ().serialize(ser),
-            Kind::StringValue(v) => v.serialize(ser),
-            Kind::BoolValue(v) => v.serialize(ser),
-            Kind::StructValue(v) => v.serialize(ser),
-            Kind::ListValue(v) => v.serialize(ser),
-            Kind::NumberValue(v) => {
+            Kind::Null(_) => ().serialize(ser),
+            Kind::String(v) => v.serialize(ser),
+            Kind::Bool(v) => v.serialize(ser),
+            Kind::Struct(v) => v.serialize(ser),
+            Kind::List(v) => v.serialize(ser),
+            Kind::Number(v) => {
                 if v.is_nan() {
                     Err(ser::Error::custom(
                         "Cannot serialize NaN as google.protobuf.Value.number_value",
@@ -225,21 +223,21 @@ impl<'de> Visitor<'de> for KindVisitor {
         f.write_str("google.protobuf.Value")
     }
     fn visit_bool<E: de::Error>(self, v: bool) -> Result<value::Kind, E> {
-        Ok(value::Kind::BoolValue(v))
+        Ok(value::Kind::Bool(v))
     }
     fn visit_i8<E: de::Error>(self, v: i8) -> Result<value::Kind, E> {
-        Ok(value::Kind::NumberValue(v.into()))
+        Ok(value::Kind::Number(v.into()))
     }
     fn visit_i16<E: de::Error>(self, v: i16) -> Result<value::Kind, E> {
-        Ok(value::Kind::NumberValue(v.into()))
+        Ok(value::Kind::Number(v.into()))
     }
     fn visit_i32<E: de::Error>(self, v: i32) -> Result<value::Kind, E> {
-        Ok(value::Kind::NumberValue(v.into()))
+        Ok(value::Kind::Number(v.into()))
     }
     #[allow(clippy::cast_precision_loss)]
     fn visit_i64<E: de::Error>(self, v: i64) -> Result<value::Kind, E> {
         if v > -EXACT && v < EXACT {
-            return Ok(value::Kind::NumberValue(v as f64));
+            return Ok(value::Kind::Number(v as f64));
         }
         Err(de::Error::custom(OUT_OF_RANGE_INTEGRAL))
     }
@@ -247,18 +245,18 @@ impl<'de> Visitor<'de> for KindVisitor {
         self.visit_i64(v.try_into().map_err(de::Error::custom)?)
     }
     fn visit_u8<E: de::Error>(self, v: u8) -> Result<value::Kind, E> {
-        Ok(value::Kind::NumberValue(v.into()))
+        Ok(value::Kind::Number(v.into()))
     }
     fn visit_u16<E: de::Error>(self, v: u16) -> Result<value::Kind, E> {
-        Ok(value::Kind::NumberValue(v.into()))
+        Ok(value::Kind::Number(v.into()))
     }
     fn visit_u32<E: de::Error>(self, v: u32) -> Result<value::Kind, E> {
-        Ok(value::Kind::NumberValue(v.into()))
+        Ok(value::Kind::Number(v.into()))
     }
     #[allow(clippy::cast_precision_loss, clippy::cast_sign_loss)]
     fn visit_u64<E: de::Error>(self, v: u64) -> Result<value::Kind, E> {
         if v < EXACT as u64 {
-            return Ok(value::Kind::NumberValue(v as f64));
+            return Ok(value::Kind::Number(v as f64));
         }
         Err(de::Error::custom(OUT_OF_RANGE_INTEGRAL))
     }
@@ -266,45 +264,45 @@ impl<'de> Visitor<'de> for KindVisitor {
         self.visit_u64(v.try_into().map_err(de::Error::custom)?)
     }
     fn visit_f32<E: de::Error>(self, v: f32) -> Result<value::Kind, E> {
-        Ok(value::Kind::NumberValue(v.into()))
+        Ok(value::Kind::Number(v.into()))
     }
     fn visit_f64<E: de::Error>(self, v: f64) -> Result<value::Kind, E> {
-        Ok(value::Kind::NumberValue(v))
+        Ok(value::Kind::Number(v))
     }
     fn visit_char<E: de::Error>(self, v: char) -> Result<value::Kind, E> {
-        Ok(value::Kind::StringValue(v.into()))
+        Ok(value::Kind::String(v.into()))
     }
     fn visit_str<E: de::Error>(self, v: &str) -> Result<value::Kind, E> {
-        Ok(value::Kind::StringValue(v.into()))
+        Ok(value::Kind::String(v.into()))
     }
     fn visit_borrowed_str<E: de::Error>(self, v: &'de str) -> Result<value::Kind, E> {
-        Ok(value::Kind::StringValue(v.into()))
+        Ok(value::Kind::String(v.into()))
     }
     fn visit_string<E: de::Error>(self, v: String) -> Result<value::Kind, E> {
-        Ok(value::Kind::StringValue(v))
+        Ok(value::Kind::String(v))
     }
     fn visit_none<E: de::Error>(self) -> Result<value::Kind, E> {
-        Ok(value::Kind::NullValue(0))
+        Ok(value::Kind::Null(0))
     }
     fn visit_some<D: Deserializer<'de>>(self, de: D) -> Result<value::Kind, D::Error> {
         Deserialize::deserialize(de)
     }
     fn visit_unit<E: de::Error>(self) -> Result<value::Kind, E> {
-        Ok(value::Kind::NullValue(0))
+        Ok(value::Kind::Null(0))
     }
     fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<value::Kind, A::Error> {
         let mut values = Vec::new();
         while let Some(value) = seq.next_element()? {
             values.push(value);
         }
-        Ok(value::Kind::ListValue(ListValue { values }))
+        Ok(value::Kind::List(ListValue { values }))
     }
     fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<value::Kind, A::Error> {
         let mut fields = HashMap::new();
         while let Some((key, value)) = map.next_entry()? {
             fields.insert(key, value);
         }
-        Ok(value::Kind::StructValue(Struct { fields }))
+        Ok(value::Kind::Struct(Struct { fields }))
     }
 }
 

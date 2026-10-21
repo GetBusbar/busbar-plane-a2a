@@ -9,14 +9,6 @@ use busbar_contract::bounded::PlaneAlloc;
 #[cfg(test)]
 use busbar_contract::ids::{CorrelationRef, CorrelationValue};
 
-/// The method name the request carried, exactly as it was spelled.
-#[cfg(test)]
-pub const FACT_METHOD: &str = "method";
-
-/// Which of the two vocabularies the method name came from.
-#[cfg(test)]
-pub const FACT_WORDING: &str = "wording";
-
 /// The request identifier, as the raw bytes it arrived as.
 ///
 /// This is also the correlation's declared key. The bytes are kept as well as the reference because
@@ -31,10 +23,6 @@ pub const FACT_VERSION: &str = "a2a_version";
 /// Which agent of the catalogue the unit is for.
 #[cfg(test)]
 pub const FACT_AGENT_ID: &str = "agent_id";
-
-/// Whether the answer is a stream of events rather than one reply.
-#[cfg(test)]
-pub const FACT_MULTI_FRAME: &str = "streaming";
 
 /// The task the answer is about.
 #[cfg(test)]

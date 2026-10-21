@@ -46,22 +46,6 @@ pub const PTR_ID: &str = "/id";
 #[cfg(test)]
 pub const PTR_PARAMS: &str = "/params";
 
-/// The member carrying the task identifier, where the parameters name one.
-#[cfg(test)]
-pub const PTR_PARAMS_ID: &str = "/params/id";
-
-/// The member carrying the result of an answer.
-#[cfg(test)]
-pub const PTR_RESULT: &str = "/result";
-
-/// The member carrying the error of an answer.
-#[cfg(test)]
-pub const PTR_ERROR: &str = "/error";
-
-/// The member carrying an error's code.
-#[cfg(test)]
-pub const PTR_ERROR_CODE: &str = "/error/code";
-
 // THE ERROR BAND AND ITS DETAIL TAGS ARE THE DIALECT'S, AND THERE IS ONE OF EACH.
 //
 // Until the codec fold these lived in a crate this one could only READ, so they were restated here
@@ -72,24 +56,8 @@ pub const PTR_ERROR_CODE: &str = "/error/code";
 #[cfg(test)]
 use crate::{ERRORS, ERROR_INFO_DOMAIN, ERROR_INFO_TYPE};
 
-/// The request was not well formed.
-#[cfg(test)]
-pub const CODE_INVALID_REQUEST: i64 = -32600;
-
-/// The method named is not one this node answers.
-#[cfg(test)]
-pub const CODE_METHOD_NOT_FOUND: i64 = -32601;
-
-/// The parameters were not admissible.
-#[cfg(test)]
-pub const CODE_INVALID_PARAMS: i64 = -32602;
-
 /// Something on this side failed.
 pub const CODE_INTERNAL: i64 = -32603;
-
-/// The caller is not permitted to perform this operation.
-#[cfg(test)]
-pub const CODE_UNSUPPORTED_OPERATION: i64 = -32004;
 
 /// What kind of scalar the identifier member held.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -113,10 +81,10 @@ pub struct Envelope {
     pub params: Option<Span>,
 }
 
+#[cfg(test)]
 impl Envelope {
     /// The method name, with its quotes stripped.
     #[must_use]
-    #[cfg(test)]
     pub fn method_str<'b>(&self, body: &'b [u8]) -> Option<&'b str> {
         let raw = body.get(self.method.start..self.method.end)?;
         let inner = raw.strip_prefix(b"\"")?.strip_suffix(b"\"")?;
@@ -127,60 +95,11 @@ impl Envelope {
     ///
     /// Quotes included on a string identifier, because those bytes are what an answer must echo.
     #[must_use]
-    #[cfg(test)]
     pub fn id_bytes<'b>(&self, body: &'b [u8]) -> Option<&'b [u8]> {
         let (span, _) = self.id?;
         body.get(span.start..span.end)
     }
 }
-
-/// Every pointer this plane declares over a REQUEST body, in one table.
-///
-/// The table is what the unit's span view is built from: the plane resolves these once, at the one
-/// step entitled to read the bytes, and the loop reads the spans off the draft rather than scanning
-/// the body again. A pointer named here that the body does not carry is simply absent from the
-/// view, which is how "not sent" stays distinguishable from "sent empty".
-#[cfg(test)]
-pub const REQUEST_PTRS: &[&str] = &[PTR_VERSION, PTR_METHOD, PTR_ID, PTR_PARAMS, PTR_PARAMS_ID];
-
-/// Every pointer this plane declares over a RESPONSE body, in one table.
-#[cfg(test)]
-pub const RESPONSE_PTRS: &[&str] = &[
-    PTR_ID,
-    PTR_RESULT,
-    PTR_ERROR,
-    PTR_ERROR_CODE,
-    PTR_RESULT_STATE,
-    PTR_RESULT_ID,
-    PTR_RESULT_CONTEXT_ID,
-    PTR_RESULT_FINAL,
-    PTR_RESULT_KIND,
-    PTR_TASK_ID,
-];
-
-/// Where an answer reports the task's state.
-#[cfg(test)]
-pub const PTR_RESULT_STATE: &str = "/result/status/state";
-
-/// Where an answer names the task it is about.
-#[cfg(test)]
-pub const PTR_RESULT_ID: &str = "/result/id";
-
-/// Where an answer names the conversation the task belongs to.
-#[cfg(test)]
-pub const PTR_RESULT_CONTEXT_ID: &str = "/result/contextId";
-
-/// Where a streamed answer says it is the last one.
-#[cfg(test)]
-pub const PTR_RESULT_FINAL: &str = "/result/final";
-
-/// Where a streamed answer says what kind of event it is.
-#[cfg(test)]
-pub const PTR_RESULT_KIND: &str = "/result/kind";
-
-/// Where an agent's own pushed event names its task.
-#[cfg(test)]
-pub const PTR_TASK_ID: &str = "/taskId";
 
 /// Read one envelope out of a request body.
 ///

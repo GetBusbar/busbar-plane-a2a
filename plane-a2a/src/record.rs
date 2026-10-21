@@ -9,7 +9,7 @@
 
 #[cfg(test)]
 use busbar_contract::records::{
-    PlaneDisposition, PlaneRecord, PlaneSelector, RecordStoreError, RecordStoreResult,
+    PlaneDisposition, PlaneRecord, RecordStoreError, RecordStoreResult,
 };
 
 // THE TWO KIND STRINGS ARE THE PLANE'S, AND ARE READ FROM IT. A record kind is the name the plane
@@ -161,12 +161,6 @@ impl TaskEventRow {
             disposition: PlaneDisposition::Active,
             body: encode(self)?,
         })
-    }
-
-    /// The list selector that reads one task's `task_event` chain back, oldest-first.
-    #[cfg(test)]
-    pub fn parent_selector(task_id: &str) -> PlaneSelector<'_> {
-        PlaneSelector::Parent(task_id.into())
     }
 
     /// Reconstruct an event from an opaque `task_event` body — the inverse of

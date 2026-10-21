@@ -68,11 +68,11 @@ pub trait Normal {
 
 fn value(v: &mut Value) {
     match &mut v.kind {
-        None | Some(Kind::NullValue(_)) => v.kind = Some(Kind::NullValue(0)),
-        Some(Kind::NumberValue(n)) if !n.is_finite() => v.kind = Some(Kind::NullValue(0)),
-        Some(Kind::ListValue(list)) => list.values.iter_mut().for_each(value),
-        Some(Kind::StructValue(s)) => strukt(s),
-        Some(Kind::NumberValue(_) | Kind::StringValue(_) | Kind::BoolValue(_)) => {}
+        None | Some(Kind::Null(_)) => v.kind = Some(Kind::Null(0)),
+        Some(Kind::Number(n)) if !n.is_finite() => v.kind = Some(Kind::Null(0)),
+        Some(Kind::List(list)) => list.values.iter_mut().for_each(value),
+        Some(Kind::Struct(s)) => strukt(s),
+        Some(Kind::Number(_) | Kind::String(_) | Kind::Bool(_)) => {}
     }
 }
 

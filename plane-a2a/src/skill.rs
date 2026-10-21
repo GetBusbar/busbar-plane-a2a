@@ -13,17 +13,10 @@ use serde_json::Value;
 
 use crate::a2a::agent_card::AgentCard;
 
-/// EVERY PLACE A2A SPELLS "the callback to call when this task moves", in both revisions: v0.3's
-/// `pushNotificationConfig`, v1.0's `taskPushNotificationConfig`, flat or nested.
-#[cfg(test)]
-pub const CALLBACK_POINTERS: [&str; 3] = [
-    "/params/configuration/pushNotificationConfig/url",
-    "/params/configuration/taskPushNotificationConfig/url",
-    "/params/configuration/taskPushNotificationConfig/pushNotificationConfig/url",
-];
-
-/// The CONFIG OBJECTS those three URLs sit in, in the same order, so the URL and the credential
-/// beside it are read out of ONE object.
+/// EVERY PLACE A2A SPELLS "the callback to call when this task moves", in both revisions (v0.3's
+/// `pushNotificationConfig`, v1.0's `taskPushNotificationConfig`, flat or nested): the CONFIG
+/// OBJECTS the callback URL sits in, so the URL and the credential beside it are read out of ONE
+/// object.
 pub const CALLBACK_CONFIG_POINTERS: [&str; 3] = [
     "/params/configuration/pushNotificationConfig",
     "/params/configuration/taskPushNotificationConfig",
