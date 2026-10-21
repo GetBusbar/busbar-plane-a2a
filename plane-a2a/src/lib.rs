@@ -36,8 +36,7 @@
 //! span table, the introspection verb that takes no argument, and the single byte class that cannot
 //! separate what was sent from what came back.
 
-#![cfg_attr(not(test), forbid(unsafe_code))]
-#![cfg_attr(test, deny(unsafe_code))]
+#![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
 /// The wire dialect's own modules, keeping the `a2a::` parent they carried in the codec crate so
@@ -346,13 +345,15 @@ impl Plugin for A2aPlane {
 /// because the crate's only public item is the door.
 #[cfg(test)]
 mod tests {
-    /// The crate's one `#[global_allocator]` and its count, every allocation gate's.
-    #[allow(unsafe_code)]
-    mod alloc_counter;
+    /// The crate's one `#[global_allocator]`, every allocation gate's count: busbar-contract's
+    /// test-only `alloc-counter` (a dev-dependency feature), so this crate holds no `unsafe`.
+    #[global_allocator]
+    static A: busbar_contract::alloc_counter::Counting =
+        busbar_contract::alloc_counter::Counting::new();
+
     mod alloc_gate;
     mod conformance;
+    mod door_facts;
     mod frame;
-    mod project_session;
     mod purity;
-    mod unit_lifetime;
 }

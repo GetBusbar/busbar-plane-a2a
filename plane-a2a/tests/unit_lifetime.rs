@@ -17,15 +17,20 @@
 //!   repo's pin, carries the SDK the linked build carries (compiled in or dropped in, "NOTHING
 //!   CHANGES about the plugin itself").
 
-#![allow(unsafe_code)]
+// A door-driven test crate: it reaches the plane only through `door`, the crate's one public item,
+// and plays the kernel's plane driver and the host over the raw door table, so the `unsafe` the
+// host side needs lives here, outside the plugin crate (whose root keeps the literal
+// `#![forbid(unsafe_code)]`). The door's private constants it needs are `door_facts`, held to the
+// crate's own items by the crate's unit test `door_facts`.
+
+#[path = "support/door_facts.rs"]
+mod door_facts;
 
 use std::collections::HashMap;
 use std::os::raw::c_void;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use crate::agent_door::{self, MAX_UNITS};
-use crate::door_statement::{self, CLASS_BYTES_INDEX, CLASS_FEE_INDEX, DIALECT_DOCUMENT};
 use busbar_contract::abi::host::conn::connector::{
     ConnectorSlots, ReplyIn, ReplyPiece, RequestIn, RequestPiece, StreamIn, REPLY_BODY, REPLY_END,
     REPLY_HEAD, SERVICES as CONN_SERVICES,
@@ -48,10 +53,15 @@ use busbar_contract::abi::plane::{
     RefusalOut, ServeIn, ServeOut, UnitCount, EMIT_DONE, FROM_CALLER, FROM_FAR_END, FROM_KERNEL,
     PIECE_HAS_STATUS, PIECE_LAST, PIECE_REFUSED, REFUSAL_KERNEL,
 };
+use door_facts::{CLASS_BYTES_INDEX, CLASS_FEE_INDEX, DIALECT_DOCUMENT, MAX_UNITS};
 
-// ── the allocation count: the crate's one counter ([`super::alloc_counter`]) ──────────────────────
+// ── the allocation count: busbar-contract's test-only counter, this test binary's allocator ──────
 
-use super::alloc_counter::allocations_of;
+use busbar_contract::alloc_counter::allocations_with as allocations_of;
+
+#[global_allocator]
+static A: busbar_contract::alloc_counter::Counting =
+    busbar_contract::alloc_counter::Counting::new();
 
 // ── the host's services ─────────────────────────────────────────────────────────────────────────
 
@@ -460,7 +470,7 @@ fn out_head<T>() -> OutHead {
 
 fn ops() -> &'static Ops {
     // SAFETY: the door is a `'static` table whose ops are the plane kind's.
-    unsafe { &*(*agent_door::door()).ops.cast::<Ops>() }
+    unsafe { &*(*busbar_plane_a2a::door()).ops.cast::<Ops>() }
 }
 
 fn lifecycle() -> &'static OpsHead {
@@ -588,11 +598,7 @@ impl Given<'_> {
 
 /// The route index of `(verb, target)` in the door's table, the claim an arrival carries.
 fn claim(verb: &str, target: &str) -> u32 {
-    let i = door_statement::ROUTES
-        .iter()
-        .position(|r| r.verb == verb && r.target == target)
-        .unwrap_or_else(|| panic!("the door routes {verb} {target}"));
-    u32::try_from(i).unwrap()
+    door_facts::claim(verb, target)
 }
 
 fn open() -> Door {
@@ -658,8 +664,8 @@ impl Door {
 
     /// Busbar's own card read, on the open line.
     fn arrive_own_card(&self, unit: u64) {
-        let route = ("GET", crate::WELL_KNOWN_CARD_PATH);
-        let (outcome, _) = self.arrive(unit, route, crate::WELL_KNOWN_CARD_PATH, b"");
+        let route = ("GET", door_facts::WELL_KNOWN_CARD_PATH);
+        let (outcome, _) = self.arrive(unit, route, door_facts::WELL_KNOWN_CARD_PATH, b"");
         assert_eq!(outcome, Outcome::Ready, "busbar's own card read arrives");
     }
 
@@ -800,7 +806,7 @@ impl Door {
             std::ptr::from_mut(&mut o).cast(),
         );
         // The kernel writes the answer's record writes to the store, in order.
-        let held = crate::records::HELD_KINDS;
+        let held = door_facts::HELD_KINDS;
         let mut status = o.status;
         for w in &records[..(o.records_written as usize).min(records.len())] {
             let at = |s: busbar_contract::abi::mechanism::call::Span| {

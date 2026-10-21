@@ -18,11 +18,9 @@
 
 use crate::binding::Binding;
 use crate::relay::{From, HopRelay, Piece, PieceAnswer};
-/// How many allocations one call made on this thread (the crate's one counter,
-/// [`super::alloc_counter`]).
-fn allocations_of(f: impl FnOnce()) -> u64 {
-    super::alloc_counter::allocations_of(f).0
-}
+// How many allocations one call made on this thread (the crate's one counter, busbar-contract's
+// `alloc_counter`).
+use busbar_contract::alloc_counter::allocations_of;
 
 /// One well-formed request of this protocol, carrying no task identifier to rewrite: the request
 /// the retired engine's pin measured.
