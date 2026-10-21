@@ -58,7 +58,7 @@ use busbar_contract::abi::transport::{
 use std::sync::Arc;
 use std::task::Poll;
 
-use busbar_contract::abi::mechanism::ticket::{CompletionHandle, HostTables, Ticket};
+use busbar_contract::abi::mechanism::ticket::{CompletionHandle, Ticket};
 
 use crate::a2a::config::AgentsCfg;
 use crate::agent_arrival::{self, AgentDisposition, Dialect};
@@ -969,27 +969,6 @@ macro_rules! slot {
     };
 }
 
-/// THE HOST TABLES `open` WAS LENT, IN THE FORM THE SDK TAKES THEM (status row 159, busbar
-/// #1469). Before #1469 `Host::of` and `Services::of` take `&HostTables`; from it they are sealed
-/// to take the [`Lent`] the `open` `in`'s `host()` returns. The parameter's type picks the impl,
-/// so one call compiles against either contract.
-trait LentTables<'a> {
-    /// The tables `open` was lent, as the SDK's `of` takes them.
-    fn lent(tables: Lent<'a, HostTables>) -> Self;
-}
-
-impl<'a> LentTables<'a> for &'a HostTables {
-    fn lent(tables: Lent<'a, HostTables>) -> Self {
-        tables.get()
-    }
-}
-
-impl<'a> LentTables<'a> for Lent<'a, HostTables> {
-    fn lent(tables: Lent<'a, HostTables>) -> Self {
-        tables
-    }
-}
-
 slot!(
     /// `validate`: the settings read as the section, or refused in the grammar's words.
     Validate, ValidateIn, OutHead, |_, input, mut out| {
@@ -1015,14 +994,11 @@ slot!(
         let generation = input.get().open.generation;
         let plane = A2aDoor {
             public_url: input.field(|i| &i.public_url).stated(),
-            host: input
-                .field(|i| &i.open)
-                .host()
-                .map(|h| Host::of(LentTables::lent(h))),
+            host: input.field(|i| &i.open).host().map(|h| Host::of(&h)),
             services: input
                 .field(|i| &i.open)
                 .host()
-                .and_then(|h| Services::of(LentTables::lent(h))),
+                .and_then(|h| Services::of(&h)),
             generations: Generations::new(),
             units: Keyed::new(),
             swept: Keyed::new(),
