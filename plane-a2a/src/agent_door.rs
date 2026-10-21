@@ -654,7 +654,7 @@ fn warm_cards(plane: &A2aDoor, ticket: Ticket, issued: u32) -> (Poll<()>, u32) {
     (Poll::Ready(()), issued)
 }
 
-/// One held kind's listed `rows` read back whole ([`crate::split_record::join`]): a card or an
+/// One held kind's listed `rows` read back whole ([`crate::split_record::rejoin`]): a card or an
 /// approval past the host's record ceiling is reassembled from its parts and verified. A head whose
 /// parts are missing or do not verify is not read (that agent is looked at afresh) and is reported,
 /// as is a part no whole value names; every part listed is remembered under its key, so the next
@@ -670,7 +670,7 @@ fn joined(
         .filter(|(key, _)| is_part(key))
         .map(|(key, _)| key.clone())
         .collect();
-    let joined = crate::split_record::join(rows);
+    let joined = crate::split_record::rejoin(rows);
     plane.record_parts.with_all(|known| {
         known.retain(|(k, _), _| *k != kind);
         for part in listed {
@@ -736,11 +736,11 @@ struct HeldParts {
 /// The host records that keep `value` under `agent` of `kind`, whatever its length: a record is at
 /// most [`busbar_contract::bounded::MAX_RECORD_BYTES`] (busbar dev's store refuses a longer one,
 /// and the kernel answers the whole verb `500` for a write it cannot make), so a longer value is
-/// its parts, then its head ([`crate::split_record::split`]); then a tombstone of every part the
-/// store may hold under the key that the new value does not name ([`HeldParts`]), written after
-/// the head, so no head is ever left naming a part that is gone.
+/// its parts, then its head ([`crate::split_record::split_value`]); then a tombstone of every
+/// part the store may hold under the key that the new value does not name ([`HeldParts`]), written
+/// after the head, so no head is ever left naming a part that is gone.
 fn kept_records(plane: &A2aDoor, kind: &'static str, agent: &str, value: &[u8]) -> Vec<Write> {
-    let mut writes = crate::split_record::split(kind, agent, value);
+    let mut writes = crate::split_record::split_value(kind, agent, value);
     let named: Vec<String> = writes
         .iter()
         .filter(|w| crate::split_record::is_part(&w.key))

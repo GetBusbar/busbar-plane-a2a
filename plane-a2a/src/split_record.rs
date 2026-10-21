@@ -6,15 +6,17 @@
 //! A host record is at most [`MAX_RECORD_BYTES`] by design (`busbar_contract::kinds::RecordBytes`:
 //! a journal of fixed-size records replays by arithmetic), and an agent's card or the skills its
 //! operator approved are routinely longer. What must survive a restart goes to its records
-//! (`BUSBAR-1.6.0.md` l.345-346), so a value past the ceiling is kept as several records of its kind:
+//! (`BUSBAR-1.6.0.md` l.345-346), so a value past the ceiling is kept as several records of its
+//! kind:
 //!
 //! * a value that fits is ONE record under its key, as it always was;
 //! * a longer one is its PARTS, each at most the ceiling, under the derived keys
-//!   `<key>/<digest>/<n>` (`<digest>` the first [`PART_DIGEST_HEX`] hex digits of the whole value's
-//!   SHA-256, so a new value never writes over the parts an older head names), then its HEAD under
-//!   `<key>`: [`HEAD_TAG`], the part count, the whole length and the whole SHA-256 in hex. The parts
-//!   go first and the head last, so a head is only ever read over parts that were written before it;
-//! * a read ([`join`]) reassembles each head's parts and checks the length and the digest: a set
+//!   `<key>/<digest>/<n>` (`<digest>` the first [`PART_DIGEST_HEX`] hex digits of the whole
+//!   value's SHA-256, so a new value never writes over the parts an older head names), then its
+//!   HEAD under `<key>`: [`HEAD_TAG`], the part count, the whole length and the whole SHA-256 in
+//!   hex. The parts go first and the head last, so a head is only ever read over parts that were
+//!   written before it;
+//! * a read ([`rejoin`]) reassembles each head's parts and checks the length and the digest: a set
 //!   that is partial or does not verify is refused (never read as whole), and a part no whole value
 //!   names is stray. A later write of the key tombstones the parts it no longer names.
 //!
@@ -53,7 +55,7 @@ fn part_key(key: &str, hex: &str, n: usize) -> String {
 /// The records that keep `value` under `key` of `kind`, in the order they are to be written: the
 /// one record when it fits the ceiling; otherwise every part, then the head.
 #[must_use]
-pub fn split(kind: &'static str, key: &str, value: &[u8]) -> Vec<Write> {
+pub fn split_value(kind: &'static str, key: &str, value: &[u8]) -> Vec<Write> {
     if value.len() <= MAX_RECORD_BYTES {
         return vec![Write {
             kind,
@@ -80,7 +82,7 @@ pub fn split(kind: &'static str, key: &str, value: &[u8]) -> Vec<Write> {
     writes
 }
 
-/// What a [`join`] of one kind's records read.
+/// What a [`rejoin`] of one kind's records read.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Joined {
     /// Every value read whole, by its key.
@@ -94,7 +96,7 @@ pub struct Joined {
 /// One kind's `rows` (`(key, value)`, as `records.list` answers them) read back: each value
 /// written whole, and each split value reassembled from its parts and verified.
 #[must_use]
-pub fn join(rows: Vec<(String, Vec<u8>)>) -> Joined {
+pub fn rejoin(rows: Vec<(String, Vec<u8>)>) -> Joined {
     let (parts, heads): (Vec<_>, Vec<_>) = rows.into_iter().partition(|(key, _)| is_part(key));
     let mut parts: std::collections::BTreeMap<String, Vec<u8>> = parts.into_iter().collect();
     let mut joined = Joined::default();
