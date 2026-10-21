@@ -1138,7 +1138,7 @@ fn served_core(
         crate::LINKED.auths,
         crate::root::auth_bindings::operator_words(),
     );
-    busbar_kernel::preflight::install_auth_axis(crate::root::dispatch::auth_axis);
+    busbar_kernel::test_support::install_root_auth_axis(crate::root::dispatch::auth_axis);
     let mut builder = busbar_kernel::test_support::TestApp::new()
         .keys_chain()
         .admin_chain(vec![busbar_kernel::config::operator_provider().to_string()])
