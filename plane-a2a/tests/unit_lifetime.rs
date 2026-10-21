@@ -670,9 +670,18 @@ impl Door {
 
     /// Busbar's own card read, on the open line.
     fn arrive_own_card(&self, unit: u64) {
+        assert!(
+            self.arrives_own_card(unit),
+            "busbar's own card read arrives"
+        );
+    }
+
+    /// Whether busbar's own card read under `unit` is admitted (`arrive` answers READY; a full
+    /// instance refuses it `429`).
+    fn arrives_own_card(&self, unit: u64) -> bool {
         let route = ("GET", door_facts::WELL_KNOWN_CARD_PATH);
         let (outcome, _) = self.arrive(unit, route, door_facts::WELL_KNOWN_CARD_PATH, b"");
-        assert_eq!(outcome, Outcome::Ready, "busbar's own card read arrives");
+        outcome == Outcome::Ready
     }
 
     /// One `on_piece` of `unit`, its reply buffer `reply_cap` bytes.
@@ -986,14 +995,18 @@ fn units_whose_answer_is_written_never_push_a_live_unit_out() {
     let door = open();
     door.begin_own_card(1);
     for unit in 2..=(MAX_UNITS as u64 + 1) {
-        door.arrive_own_card(unit);
+        assert!(
+            door.arrives_own_card(unit),
+            "unit {unit} was refused: the card reads the door had already finished still held \
+             their places"
+        );
         let whole = door.piece(unit, Given::caller(b""), 1 << 16);
         assert_eq!(whole.outcome, Some(Outcome::Ready), "unit {unit}");
         assert_ne!(whole.flags & EMIT_DONE, 0, "unit {unit}'s answer is whole");
     }
     assert!(
         door.still_answers(1),
-        "a live unit was evicted by {MAX_UNITS} card reads the door had already finished"
+        "the live unit 1 was dropped to make room for {MAX_UNITS} finished card reads"
     );
 }
 
@@ -1006,13 +1019,17 @@ fn units_whose_refusal_is_rendered_never_push_a_live_unit_out() {
     let door = open();
     door.begin_own_card(1);
     for unit in 2..=(MAX_UNITS as u64 + 1) {
-        door.arrive_own_card(unit);
+        assert!(
+            door.arrives_own_card(unit),
+            "unit {unit} was refused: the units whose refusal the door had rendered were not \
+             forgotten"
+        );
         let (outcome, _, body) = door.refusal(unit, RefusalCode::RateLimited, 429);
         assert_eq!(outcome, Outcome::Ready, "unit {unit}: {body}");
     }
     assert!(
         door.still_answers(1),
-        "a live unit was evicted by {MAX_UNITS} units whose refusal the door had already rendered"
+        "the live unit 1 was dropped to make room for {MAX_UNITS} units whose refusal was rendered"
     );
 }
 
@@ -1030,7 +1047,7 @@ fn cancelled_units_make_room_before_a_live_unit_does() {
     }
     assert!(
         door.still_answers(1),
-        "a live unit was evicted while {MAX_UNITS} cancelled units were held"
+        "the live unit 1 was dropped to make room while {MAX_UNITS} cancelled units were held"
     );
 }
 
@@ -1056,7 +1073,7 @@ fn an_instance_full_of_live_units_refuses_the_next_arrival_and_evicts_none() {
     );
     assert!(
         door.still_answers(1),
-        "a live unit was evicted to make room for an arrival"
+        "the live unit 1 was dropped to make room for a refused arrival"
     );
 }
 
@@ -1077,11 +1094,15 @@ fn a_unit_cancelled_before_its_first_piece_makes_room() {
             "unit {unit}'s cancel"
         );
     }
-    door.arrive_own_card(MAX_UNITS as u64 + 1);
+    assert!(
+        door.arrives_own_card(MAX_UNITS as u64 + 1),
+        "the arrival past {MAX_UNITS} units was refused: the units cancelled before their first \
+         piece are still live"
+    );
     assert!(
         door.still_answers(1),
-        "a live unit was evicted while {MAX_UNITS} units cancelled before their first piece were \
-         held"
+        "the live unit 1 was dropped to make room while {MAX_UNITS} units cancelled before their \
+         first piece were held"
     );
 }
 
