@@ -55,7 +55,8 @@ pub const KIND_PUSH_CONFIG: &str = "push_config";
 
 /// The `card` kind — an agent's verified card, keyed by agent id under the operator's scope (no
 /// principal prefix): the `connect` and `approve` answers write it, and the first tick after `open`
-/// warms the plane's mirror of it in memory ([`crate::cards::Cards`]).
+/// warms the plane's mirror of it in memory ([`crate::cards::Cards`]). A card past the host's
+/// record ceiling is its parts and their head ([`crate::split_record`]), as is an approval.
 pub const KIND_CARD: &str = "card";
 
 /// The `card_approval` kind — the skills (`id -> digest`) of the card the operator approved for an

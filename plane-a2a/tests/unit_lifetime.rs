@@ -1129,7 +1129,8 @@ fn an_empty_envelope_from_a_reached_agent_reports_the_hops_fee_and_bytes() {
 /// (`busbar_contract::bounded::MAX_RECORD_BYTES`, 512 bytes: busbar dev's store refuses a longer
 /// record, and the kernel answers the whole `serve` `500` for a record write it cannot make). An
 /// operator's `connect` to an agent whose card is longer answers its view, holds the card for the
-/// relay, and carries no `card` record. RED before the fix: the answer carried the whole card as
+/// relay, and carries no record past the ceiling (since the split records, its `card` records are
+/// the card's parts and their head, each within the ceiling). RED before the fix: the answer carried the whole card as
 /// its `card` record (the busbar root cells `root::serve::plane_a2a_door::*` over the gRPC agent,
 /// whose signed card with its interface is past 512 bytes, at busbar-plane-a2a bcc9cff241 against
 /// busbar dev: every `connect` answered `500` `internal error`).
