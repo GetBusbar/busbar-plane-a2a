@@ -407,6 +407,7 @@ fn commit(
 ///
 /// # Errors
 /// [`Halt`]; `Failed` when there is no caller or the task id is already taken.
+#[cfg(test)]
 pub fn submit(
     rec: &mut dyn Records,
     at: &Stamp<'_>,
@@ -532,6 +533,7 @@ pub fn transition(
 ///
 /// # Errors
 /// As [`change`].
+#[cfg(test)]
 pub fn dispatch(
     rec: &mut dyn Records,
     at: &Stamp<'_>,
@@ -553,6 +555,7 @@ pub fn dispatch(
 ///
 /// # Errors
 /// As [`change`].
+#[cfg(test)]
 pub fn advance_cursor(
     rec: &mut dyn Records,
     at: &Stamp<'_>,

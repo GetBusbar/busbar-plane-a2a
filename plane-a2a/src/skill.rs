@@ -15,6 +15,7 @@ use crate::a2a::agent_card::AgentCard;
 
 /// EVERY PLACE A2A SPELLS "the callback to call when this task moves", in both revisions: v0.3's
 /// `pushNotificationConfig`, v1.0's `taskPushNotificationConfig`, flat or nested.
+#[cfg(test)]
 pub const CALLBACK_POINTERS: [&str; 3] = [
     "/params/configuration/pushNotificationConfig/url",
     "/params/configuration/taskPushNotificationConfig/url",

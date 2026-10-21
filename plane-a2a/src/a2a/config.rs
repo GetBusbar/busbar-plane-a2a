@@ -49,10 +49,9 @@
 //! reference, because a dropped reference is an operator believing a control is attached that is
 //! not.
 
-use busbar_contract::{
-    plane::{PinMechanismDecl, TrustKeyDecl, TrustRole},
-    section::split_section,
-};
+#[cfg(test)]
+use busbar_contract::plane::{PinMechanismDecl, TrustKeyDecl, TrustRole};
+use busbar_contract::section::split_section;
 use serde::{Deserialize, Serialize};
 
 /// The default MAX VERIFICATION STALENESS for a registration that names none: five seconds.
@@ -77,11 +76,13 @@ pub const DEFAULT_REVERIFY_TTL: &str = "5s";
 /// Non-zero on purpose: zero is a legitimate PER-AGENT setting for an upstream an operator knows to
 /// be flaky for boring reasons, but the boring explanation and the hostile one look identical from
 /// here, so it is not what an unconfigured deployment gets.
+#[cfg(test)]
 pub const DEFAULT_RECOVERY_BACKOFF_MS: u64 = 15 * 60 * 1_000;
 
 /// THE KERNEL-OWNED TRUST KEYS of one `agents:` entry, declared for the kernel to parse and judge:
 /// the `pin:` object (with its optional `fingerprint`) over this plane's four mechanisms, and the two
 /// cadence durations with their defaults. Declaration order is judgement order.
+#[cfg(test)]
 pub const TRUST_KEYS: &[TrustKeyDecl] = &[
     TrustKeyDecl {
         key: "pin",
@@ -179,6 +180,7 @@ impl PinMechanism {
     /// question the kernel's trust reader asks of a mechanism, so the reader that builds the
     /// artifact and the refusal that fires at boot cannot come to disagree about what "rooted"
     /// means.
+    #[cfg(test)]
     pub fn is_a_root(self) -> bool {
         !matches!(self, PinMechanism::Unpinned)
     }

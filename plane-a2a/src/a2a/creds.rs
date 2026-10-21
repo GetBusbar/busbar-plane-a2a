@@ -87,6 +87,7 @@ impl<'de> serde::Deserialize<'de> for CredentialPlacement {
 
 impl CredentialPlacement {
     /// The header this placement writes.
+    #[cfg(test)]
     pub fn header_name(&self) -> &str {
         match self {
             CredentialPlacement::AuthorizationHeader => "authorization",

@@ -419,12 +419,14 @@ impl Deliveries {
 
     /// How many notifications were dropped from full queues.
     #[must_use]
+    #[cfg(test)]
     pub fn dropped(&self) -> u64 {
         self.with(|b| b.dropped)
     }
 
     /// How many notifications `task_id`'s queue holds.
     #[must_use]
+    #[cfg(test)]
     pub fn depth(&self, task_id: &str) -> usize {
         self.with(|b| b.queues.get(task_id).map_or(0, VecDeque::len))
     }
@@ -432,6 +434,7 @@ impl Deliveries {
     /// The deliveries to attempt now: each task's head, when its time has come and no attempt on
     /// it is open. Each is marked open until [`Deliveries::settle`].
     #[must_use]
+    #[cfg(test)]
     pub fn due(&self, now_ns: u64) -> Vec<Delivery> {
         self.with(|b| {
             b.queues
@@ -516,6 +519,7 @@ impl Deliveries {
 
     /// How many owed outcomes were dropped unfiled from a full book.
     #[must_use]
+    #[cfg(test)]
     pub fn unfiled(&self) -> u64 {
         self.with(|b| b.unfiled)
     }

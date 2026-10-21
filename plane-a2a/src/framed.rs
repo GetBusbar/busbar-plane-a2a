@@ -118,12 +118,14 @@ impl CallStatus {
 
     /// The encoded `google.rpc.Status` details; empty when there are none.
     #[must_use]
+    #[cfg(test)]
     pub fn details(&self) -> &[u8] {
         &self.details
     }
 
     /// The `ErrorInfo` the details carry, read back.
     #[must_use]
+    #[cfg(test)]
     pub fn error_info(&self) -> Option<ErrorInfo> {
         let status = rpc::Status::decode(self.details.as_slice()).ok()?;
         status

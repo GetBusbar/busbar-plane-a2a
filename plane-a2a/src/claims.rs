@@ -18,6 +18,7 @@
 //! naming a constant per route, and a formatted string is not something a constant can borrow. The
 //! tests pin every one of them against the codec's own route table.
 
+#[cfg(test)]
 use busbar_contract::grammar::{Claim, PathSeg, Selector};
 
 /// The request transport every one of this plane's document claims is made against.
@@ -30,6 +31,7 @@ pub const FRAMED_TRANSPORT: &str = "grpc";
 ///
 /// One scheme with alternatives, not several schemes: which alternative a unit uses is the
 /// authenticate step's answer, and a plane may only narrow within the set declared here.
+#[cfg(test)]
 const SCHEME: &str = "a2a-inbound";
 
 /// The alternatives a unit may be narrowed to.
@@ -41,9 +43,11 @@ const SCHEME: &str = "a2a-inbound";
 /// meaning "none" is exactly what makes the authenticate step's narrowing check toothless, because
 /// narrowing DOWN to it would pass. This protocol's three deliberately open surfaces say it in the
 /// one place it belongs instead: their own claims declare no scheme.
+#[cfg(test)]
 const SCHEME_ALTS: &[&str] = &["bearer"];
 
 /// Build one claim over a selector on the document transport.
+#[cfg(test)]
 const fn http(selector: Selector) -> Claim {
     Claim {
         transport: DOCUMENT_TRANSPORT,
@@ -58,6 +62,7 @@ const fn http(selector: Selector) -> Claim {
 }
 
 /// Build one claim over a selector on the framed transport.
+#[cfg(test)]
 const fn grpc(selector: Selector) -> Claim {
     Claim {
         transport: FRAMED_TRANSPORT,
@@ -72,6 +77,7 @@ const fn grpc(selector: Selector) -> Claim {
 ///
 /// Not "a scheme called anonymous": no scheme. The claim admits the anonymous principal without
 /// consulting one, which is what a deliberately open surface actually is.
+#[cfg(test)]
 const fn open_http(selector: Selector) -> Claim {
     Claim {
         transport: DOCUMENT_TRANSPORT,
@@ -83,36 +89,47 @@ const fn open_http(selector: Selector) -> Claim {
 }
 
 /// The single-message surface.
+#[cfg(test)]
 const P_MESSAGE_SEND: &str = "/a2a/message:send";
 
 /// The streamed-message surface.
+#[cfg(test)]
 const P_MESSAGE_STREAM: &str = "/a2a/message:stream";
 
 /// The task collection.
+#[cfg(test)]
 const P_TASKS: &str = "/a2a/tasks";
 
 /// The extended-card surface.
+#[cfg(test)]
 const P_EXTENDED_CARD: &str = "/a2a/extendedAgentCard";
 
 /// The callback an agent this node dialled posts back to.
+#[cfg(test)]
 const P_PUSH: &str = "/a2a/push";
 
 /// The plane's own request surface, and the same surface with a trailing separator.
+#[cfg(test)]
 const P_ROOT: &str = "/a2a";
 
 /// The same surface written with the trailing separator some clients send.
+#[cfg(test)]
 const P_ROOT_SLASH: &str = "/a2a/";
 
 /// The discovery document naming the resource this protocol is protected as.
+#[cfg(test)]
 const P_METADATA: &str = "/.well-known/oauth-protected-resource/a2a";
 
 /// The discovery document carrying the agent's own card.
+#[cfg(test)]
 const P_CARD: &str = "/.well-known/agent-card.json";
 
 /// One task, by identifier.
+#[cfg(test)]
 const PAT_TASK: &[PathSeg] = &[PathSeg::Lit("a2a"), PathSeg::Lit("tasks"), PathSeg::Var];
 
 /// A task's push-notification configurations, as a collection.
+#[cfg(test)]
 const PAT_TASK_PUSH: &[PathSeg] = &[
     PathSeg::Lit("a2a"),
     PathSeg::Lit("tasks"),
@@ -121,6 +138,7 @@ const PAT_TASK_PUSH: &[PathSeg] = &[
 ];
 
 /// One of a task's push-notification configurations.
+#[cfg(test)]
 const PAT_TASK_PUSH_ONE: &[PathSeg] = &[
     PathSeg::Lit("a2a"),
     PathSeg::Lit("tasks"),
@@ -130,9 +148,11 @@ const PAT_TASK_PUSH_ONE: &[PathSeg] = &[
 ];
 
 /// One agent of the catalogue, by identifier.
+#[cfg(test)]
 const PAT_AGENT: &[PathSeg] = &[PathSeg::Lit("a2a"), PathSeg::Lit("agents"), PathSeg::Var];
 
 /// One method of the framed binding's one service.
+#[cfg(test)]
 const PAT_GRPC: &[PathSeg] = &[PathSeg::Lit("lf.a2a.v1.A2AService"), PathSeg::Var];
 
 /// The claims, most specific first.
@@ -140,6 +160,7 @@ const PAT_GRPC: &[PathSeg] = &[PathSeg::Lit("lf.a2a.v1.A2AService"), PathSeg::Va
 /// The order is the order the codec mounts its routes in, which is the order a request is matched
 /// in today. Keeping the two the same is what makes "this plane claims exactly what the codec
 /// serves" a checkable sentence rather than a hopeful one.
+#[cfg(test)]
 pub const CLAIMS: &[Claim] = &[
     // The two unauthenticated discovery documents. Exact paths, and the tightest thing here.
     // They declare no scheme, which is how a claim says its units carry no credential.
