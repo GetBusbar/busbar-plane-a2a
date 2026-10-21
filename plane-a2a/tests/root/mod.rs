@@ -9114,8 +9114,19 @@ async fn a_config_apply_keeps_the_pool_walking() {
     if let Some(map) = written.as_mapping_mut() {
         map.remove(busbar_contract::section::RESERVED_POOLS_KEY);
     }
+    // The section is parsed through the door that declares it: the row the running generation's
+    // table holds for it.
+    let row = s
+        .app
+        .doors
+        .plane_decl_for_config_section(surface("section"))
+        .expect("the lent table holds the door's row");
     let slot = busbar_kernel::plane_driver::door::DoorSlot {
-        section: busbar_kernel::plane_driver::door::DoorSection::new(surface("section"), written),
+        section: busbar_kernel::plane_driver::door::DoorSection::new(
+            row.door,
+            surface("section"),
+            written,
+        ),
         facing: busbar_contract::plane_calls::DoorFacing {
             claims: Vec::new(),
             admission: None,
