@@ -1079,6 +1079,7 @@ fn served_core(
                     })
                 },
                 gov: Arc::clone(&gov),
+                journal: None,
             })
             .as_ref(),
     )
