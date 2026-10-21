@@ -35,6 +35,7 @@ pub const A2A_TASK_CHAIN_VERIFY_FAILED: Diagnostic = Diagnostic {
 };
 
 /// An agent is dropped from the extended card because its card names the backend authority in text.
+#[cfg(test)]
 pub const A2A_EXTENDED_CARD_AGENT_OMITTED: Diagnostic = Diagnostic {
     code: 7001,
     class: Class::Plane,
@@ -52,6 +53,7 @@ pub const A2A_EXTENDED_CARD_AGENT_OMITTED: Diagnostic = Diagnostic {
 };
 
 /// A local push-notification config could not be written to the durable task store — a store outage.
+#[cfg(test)]
 pub const A2A_PUSH_CONFIG_UNRECORDED: Diagnostic = Diagnostic {
     code: 7002,
     class: Class::Plane,
@@ -87,6 +89,7 @@ pub const A2A_POOL_NOT_INTERCHANGEABLE: Diagnostic = Diagnostic {
 };
 
 /// A pin-refused task could not be recorded as rejected — a store outage on the durable task store.
+#[cfg(test)]
 pub const A2A_PIN_REFUSAL_UNRECORDED: Diagnostic = Diagnostic {
     code: 7004,
     class: Class::Plane,
@@ -105,6 +108,7 @@ pub const A2A_PIN_REFUSAL_UNRECORDED: Diagnostic = Diagnostic {
 };
 
 /// The extended agent card could not be built for a request — a card-composition failure.
+#[cfg(test)]
 pub const A2A_EXTENDED_CARD_BUILD_FAILED: Diagnostic = Diagnostic {
     code: 7005,
     class: Class::Plane,
@@ -124,6 +128,7 @@ pub const A2A_EXTENDED_CARD_BUILD_FAILED: Diagnostic = Diagnostic {
 };
 
 /// No CSPRNG at startup, so busbar registers no push callback of its own with any backend.
+#[cfg(test)]
 pub const A2A_NO_CSPRNG_CALLBACK: Diagnostic = Diagnostic {
     code: 7006,
     class: Class::Plane,
@@ -142,6 +147,7 @@ pub const A2A_NO_CSPRNG_CALLBACK: Diagnostic = Diagnostic {
 };
 
 /// A pushed state was not delivered onward to the caller's callback — a per-request delivery miss.
+#[cfg(test)]
 pub const A2A_PUSHBACK_NOT_DELIVERED: Diagnostic = Diagnostic {
     code: 7007,
     class: Class::Plane,
@@ -160,6 +166,7 @@ pub const A2A_PUSHBACK_NOT_DELIVERED: Diagnostic = Diagnostic {
 };
 
 /// busbar's own agent card could not be built at boot/config — a card-composition failure.
+#[cfg(test)]
 pub const A2A_OWN_CARD_BUILD_FAILED: Diagnostic = Diagnostic {
     code: 7008,
     class: Class::Plane,
@@ -177,6 +184,7 @@ pub const A2A_OWN_CARD_BUILD_FAILED: Diagnostic = Diagnostic {
 };
 
 /// busbar is refusing to serve an agent card for a specific agent — a per-request card refusal.
+#[cfg(test)]
 pub const A2A_REFUSE_SERVE_CARD: Diagnostic = Diagnostic {
     code: 7009,
     class: Class::Plane,
@@ -194,6 +202,7 @@ pub const A2A_REFUSE_SERVE_CARD: Diagnostic = Diagnostic {
 };
 
 /// An interrupted task could not be resumed on the relay path — the hop cannot continue.
+#[cfg(test)]
 pub const A2A_INTERRUPTED_TASK_UNRESUMED: Diagnostic = Diagnostic {
     code: 7010,
     class: Class::Plane,
@@ -211,6 +220,7 @@ pub const A2A_INTERRUPTED_TASK_UNRESUMED: Diagnostic = Diagnostic {
 };
 
 /// An inbound task could not be opened (the task object failed to construct) — usually a store outage.
+#[cfg(test)]
 pub const A2A_INBOUND_TASK_UNOPENED: Diagnostic = Diagnostic {
     code: 7011,
     class: Class::Plane,
@@ -228,6 +238,7 @@ pub const A2A_INBOUND_TASK_UNOPENED: Diagnostic = Diagnostic {
 };
 
 /// An inbound task could not be recorded (the submit write failed) — usually a store outage.
+#[cfg(test)]
 pub const A2A_INBOUND_TASK_UNRECORDED: Diagnostic = Diagnostic {
     code: 7012,
     class: Class::Plane,
@@ -261,6 +272,7 @@ pub const A2A_OUTBOUND_CRED_UNLEASED: Diagnostic = Diagnostic {
 };
 
 /// A registered agent's card declares no binding busbar can speak — a registration/config problem.
+#[cfg(test)]
 pub const A2A_AGENT_BINDING_UNSPEAKABLE: Diagnostic = Diagnostic {
     code: 7014,
     class: Class::Plane,
@@ -278,6 +290,7 @@ pub const A2A_AGENT_BINDING_UNSPEAKABLE: Diagnostic = Diagnostic {
 };
 
 /// A relay thread did not complete (a join failure) — an internal panic on the relay path.
+#[cfg(test)]
 pub const A2A_RELAY_THREAD_INCOMPLETE: Diagnostic = Diagnostic {
     code: 7015,
     class: Class::Plane,
@@ -294,6 +307,7 @@ pub const A2A_RELAY_THREAD_INCOMPLETE: Diagnostic = Diagnostic {
 };
 
 /// A push notification was not delivered onward — a per-request best-effort delivery miss.
+#[cfg(test)]
 pub const A2A_PUSH_NOTIFY_UNDELIVERED: Diagnostic = Diagnostic {
     code: 7016,
     class: Class::Plane,
@@ -311,6 +325,7 @@ pub const A2A_PUSH_NOTIFY_UNDELIVERED: Diagnostic = Diagnostic {
 };
 
 /// A backend's stream carried no event — a per-request empty-stream observation.
+#[cfg(test)]
 pub const A2A_STREAM_EMPTY: Diagnostic = Diagnostic {
     code: 7017,
     class: Class::Plane,
@@ -344,6 +359,7 @@ pub const A2A_RELAYED_STREAM_REFUSED: Diagnostic = Diagnostic {
 };
 
 /// A streaming relay thread did not complete (a join failure) — an internal panic on the stream path.
+#[cfg(test)]
 pub const A2A_STREAM_RELAY_INCOMPLETE: Diagnostic = Diagnostic {
     code: 7019,
     class: Class::Plane,
@@ -395,6 +411,7 @@ pub const A2A_RELAYED_SUBMISSION_FAILED: Diagnostic = Diagnostic {
 };
 
 /// A breaker-refused task could not be recorded as rejected — usually a store outage.
+#[cfg(test)]
 pub const A2A_BREAKER_REFUSAL_UNRECORDED: Diagnostic = Diagnostic {
     code: 7022,
     class: Class::Plane,
@@ -469,6 +486,7 @@ pub const A2A_TASK_STATE_UNREAD: Diagnostic = Diagnostic {
 };
 
 /// A card fetch panicked during an operator-driven verb — an internal fault on an operator action.
+#[cfg(test)]
 pub const A2A_CARD_FETCH_PANICKED: Diagnostic = Diagnostic {
     code: 7026,
     class: Class::Plane,
@@ -485,6 +503,7 @@ pub const A2A_CARD_FETCH_PANICKED: Diagnostic = Diagnostic {
 };
 
 /// A re-verification cadence did not parse; the registration keeps the release default — config bug.
+#[cfg(test)]
 pub const A2A_REVERIFY_CADENCE_UNPARSED: Diagnostic = Diagnostic {
     code: 7027,
     class: Class::Plane,
@@ -502,6 +521,7 @@ pub const A2A_REVERIFY_CADENCE_UNPARSED: Diagnostic = Diagnostic {
 };
 
 /// A card endpoint's certificate yielded no SPKI pin — a trust/pin configuration problem.
+#[cfg(test)]
 pub const A2A_CARD_CERT_NO_KEY_PIN: Diagnostic = Diagnostic {
     code: 7028,
     class: Class::Plane,
@@ -520,6 +540,7 @@ pub const A2A_CARD_CERT_NO_KEY_PIN: Diagnostic = Diagnostic {
 };
 
 /// A push-notification delivery outcome could not be chained — a per-request provenance write miss.
+#[cfg(test)]
 pub const A2A_PUSH_OUTCOME_UNCHAINED: Diagnostic = Diagnostic {
     code: 7029,
     class: Class::Plane,
@@ -537,6 +558,7 @@ pub const A2A_PUSH_OUTCOME_UNCHAINED: Diagnostic = Diagnostic {
 };
 
 /// The `task.delegated` chain event could not be written after a successful Submit — store outage.
+#[cfg(test)]
 pub const A2A_DISPATCH_UNRECORDED: Diagnostic = Diagnostic {
     code: 7100,
     class: Class::Plane,
@@ -557,6 +579,7 @@ pub const A2A_DISPATCH_UNRECORDED: Diagnostic = Diagnostic {
 };
 
 /// A submission-inline push callback could not be persisted to the durable task row.
+#[cfg(test)]
 pub const A2A_PUSH_CALLBACK_UNPERSISTED: Diagnostic = Diagnostic {
     code: 7101,
     class: Class::Plane,
@@ -577,6 +600,7 @@ pub const A2A_PUSH_CALLBACK_UNPERSISTED: Diagnostic = Diagnostic {
 };
 
 /// A push-config delete could not clear the durable row — the delete is refused, caller retries.
+#[cfg(test)]
 pub const A2A_PUSH_CONFIG_UNDELETED: Diagnostic = Diagnostic {
     code: 7102,
     class: Class::Plane,
@@ -597,6 +621,7 @@ pub const A2A_PUSH_CONFIG_UNDELETED: Diagnostic = Diagnostic {
 };
 
 /// A per-task push-delivery queue was full and dropped its oldest, not-yet-attempted notification.
+#[cfg(test)]
 pub const A2A_PUSH_QUEUE_DROPPED: Diagnostic = Diagnostic {
     code: 7105,
     class: Class::Plane,
@@ -617,6 +642,7 @@ pub const A2A_PUSH_QUEUE_DROPPED: Diagnostic = Diagnostic {
 };
 
 /// The reconciliation found busbar's own push registration gone at the agent and the re-arm failed.
+#[cfg(test)]
 pub const A2A_PUSH_REARM_FAILED: Diagnostic = Diagnostic {
     code: 7103,
     class: Class::Plane,
@@ -660,6 +686,7 @@ pub const PLANE_SSE_FRAME_NOT_UTF8: Diagnostic = Diagnostic {
 /// The last, `BUSBAR-7104`, came out of the host registry with the relay's frame reader that emits
 /// it (#83a O4): the plane defines it and the composition root installs it, and it stays published
 /// on the host page, under its frozen number, rather than this plane's own.
+#[cfg(test)]
 pub static DIAGNOSTICS: &[&Diagnostic] = &[
     &A2A_TASK_CHAIN_VERIFY_FAILED,
     &A2A_EXTENDED_CARD_AGENT_OMITTED,

@@ -42,6 +42,7 @@
 //! two name state the codec keeps in memory today and therefore forgets on restart; declaring them
 //! here is what makes that forgetting visible.
 
+#[cfg(test)]
 use busbar_contract::ids::RecordSchemaId;
 
 /// The `task` kind — the durable task record's tag on the store seam.
@@ -67,6 +68,7 @@ pub const KIND_CARD_APPROVAL: &str = "card_approval";
 
 /// The plane-record kinds this plane keeps on the store's plane-record seam — its declaration's
 /// `record_kinds`, so the administrative `plane_record_write` verb writes only these under it.
+#[cfg(test)]
 pub const RECORD_KINDS: &[&str] = &[KIND_TASK, KIND_TASK_EVENT];
 
 /// The host-record kinds the door's tail states (`PlaneTail::record_kinds`), in order: a record
@@ -131,18 +133,23 @@ pub fn retention_of(kind: &str) -> Retention {
 pub const TASK_EVENT_INDEX: u32 = 1;
 
 /// The task rows: one per governed exchange this node is tracking.
+#[cfg(test)]
 pub const SCHEMA_TASK: RecordSchemaId = RecordSchemaId::new(KIND_TASK);
 
 /// The task event rows: the hash-linked history behind each task.
+#[cfg(test)]
 pub const SCHEMA_TASK_EVENT: RecordSchemaId = RecordSchemaId::new(KIND_TASK_EVENT);
 
 /// The push-notification configurations a caller registered against a task.
+#[cfg(test)]
 pub const SCHEMA_PUSH_CONFIG: RecordSchemaId = RecordSchemaId::new(KIND_PUSH_CONFIG);
 
 /// The pinned callback addresses a delivery is allowed to reach.
+#[cfg(test)]
 pub const SCHEMA_PIN: RecordSchemaId = RecordSchemaId::new("pin");
 
 /// The record schemas this plane keeps kernel-held durable records under.
+#[cfg(test)]
 pub const RECORD_SCHEMAS: &[RecordSchemaId] = &[
     SCHEMA_TASK,
     SCHEMA_TASK_EVENT,
@@ -151,18 +158,23 @@ pub const RECORD_SCHEMAS: &[RecordSchemaId] = &[
 ];
 
 /// Read one record back by key.
+#[cfg(test)]
 pub const OP_GET: &str = "get";
 
 /// Write one record, replacing any earlier one under the same key.
+#[cfg(test)]
 pub const OP_PUT: &str = "put";
 
 /// Read every record of a schema under one parent.
+#[cfg(test)]
 pub const OP_SCAN: &str = "scan";
 
 /// Add one record to a schema's append-only side.
+#[cfg(test)]
 pub const OP_APPEND: &str = "append";
 
 /// Remove one record.
+#[cfg(test)]
 pub const OP_DELETE: &str = "delete";
 
 /// Ask whether a callback token is STILL LIVE, and spend nothing asking.
@@ -177,6 +189,7 @@ pub const OP_DELETE: &str = "delete";
 /// LIVE means all three of: the configuration is still there, the task it names has not reached a
 /// terminal state, and the task's deadline has not passed. The moment any of those stops holding the
 /// token is dead and every later callback carrying it is refused.
+#[cfg(test)]
 pub const OP_VERIFY_LIVE: &str = "verify_live";
 
 /// Revoke a callback token, so nothing presenting it is authorised again.
@@ -186,9 +199,11 @@ pub const OP_VERIFY_LIVE: &str = "verify_live";
 /// busbar retiring a capability whose task has finished. They happen at different moments for
 /// different reasons, and folding them together would make the revocation invisible in the one place
 /// the push-event plan is read.
+#[cfg(test)]
 pub const OP_REVOKE: &str = "revoke";
 
 /// Every operation any of this plane's schemas declares.
+#[cfg(test)]
 pub const OPERATIONS: &[&str] = &[
     OP_GET,
     OP_PUT,
@@ -204,6 +219,7 @@ pub const OPERATIONS: &[&str] = &[
 /// A leg naming an operation its schema does not declare is refused by the trust unit, so the
 /// answer has to be a declaration rather than a convention.
 #[must_use]
+#[cfg(test)]
 pub fn operations_for(schema: RecordSchemaId) -> &'static [&'static str] {
     match schema.as_str() {
         s if s == SCHEMA_TASK.as_str() => &[OP_GET, OP_PUT, OP_SCAN, OP_DELETE],

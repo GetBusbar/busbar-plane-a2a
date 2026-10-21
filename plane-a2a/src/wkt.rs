@@ -36,7 +36,9 @@ pub struct Value {
 
 /// `google.protobuf.Value`'s kinds.
 pub mod value {
-    /// The kind of a [`super::Value`].
+    /// The kind of a [`super::Value`]. The variants are the protobuf `oneof`'s own member names,
+    /// which the generated ProtoJSON code spells.
+    #[allow(clippy::enum_variant_names)]
     #[derive(Clone, PartialEq, prost::Oneof)]
     pub enum Kind {
         /// `null`.

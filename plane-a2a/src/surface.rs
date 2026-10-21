@@ -48,10 +48,12 @@
 //! `const` can borrow. Every one of them is PINNED against the codec's own table by the tests, and a
 //! copy that is checked is not a second opinion.
 
+#[cfg(test)]
 use busbar_contract::transport::surface::{
     Answering, Bar, BindingDecl, Dispatch, Operation, WireSurface,
 };
 
+#[cfg(test)]
 use crate::ops;
 
 /// The document binding's name, as a published card spells it lower-cased.
@@ -68,27 +70,35 @@ pub const BINDING_FRAMED: &str = "grpc";
 /// The `.proto`'s own, which is why it is the codec's mount-path constant with its leading separator
 /// removed rather than a literal: a gRPC client derives its target from the descriptor and cannot be
 /// pointed off it, so the service name and the path the node claims must be the same string.
+#[cfg(test)]
 pub const SERVICE: &str = "lf.a2a.v1.A2AService";
 
 /// The member of a posted document that names the operation.
+#[cfg(test)]
 pub const METHOD_MEMBER: &str = "method";
 
 /// The media type every request body of this protocol carries.
+#[cfg(test)]
 pub const MEDIA_JSON: &str = "application/json";
 
 /// The media type a streamed answer carries.
+#[cfg(test)]
 pub const MEDIA_EVENT_STREAM: &str = "text/event-stream";
 
 /// The request method a document is posted with, and the one every write-shaped target row uses.
+#[cfg(test)]
 const POST: &str = "POST";
 
 /// The request method every read-shaped target row uses.
+#[cfg(test)]
 const GET: &str = "GET";
 
 /// The request method the one removal-shaped target row uses.
+#[cfg(test)]
 const DELETE: &str = "DELETE";
 
 /// The plane's own mount, where a posted document is read.
+#[cfg(test)]
 const MOUNT: &str = "/a2a";
 
 /// The same mount with the trailing separator a great many clients send.
@@ -96,39 +106,51 @@ const MOUNT: &str = "/a2a";
 /// Not cosmetic and not a guess: an HTTP client handed `/a2a` as a BASE URL resolves a request for
 /// `/` against it and sends `/a2a/`, which is what the official suite's own JSON-RPC client does.
 /// A mount declared only one way leaves the most likely spelling of this endpoint answering 404.
+#[cfg(test)]
 const MOUNT_SLASH: &str = "/a2a/";
 
 /// The single-message target.
+#[cfg(test)]
 const T_MESSAGE_SEND: &str = "/a2a/message:send";
 
 /// The streamed-message target.
+#[cfg(test)]
 const T_MESSAGE_STREAM: &str = "/a2a/message:stream";
 
 /// The task collection.
+#[cfg(test)]
 const T_TASKS: &str = "/a2a/tasks";
 
 /// One task, by identifier.
+#[cfg(test)]
 const T_TASK: &str = "/a2a/tasks/{id}";
 
 /// A task's push-notification configurations, as a collection.
+#[cfg(test)]
 const T_PUSH_CONFIGS: &str = "/a2a/tasks/{id}/pushNotificationConfigs";
 
 /// One of a task's push-notification configurations.
+#[cfg(test)]
 const T_PUSH_CONFIG: &str = "/a2a/tasks/{id}/pushNotificationConfigs/{config_id}";
 
 /// The extended-card target.
+#[cfg(test)]
 const T_EXTENDED_CARD: &str = "/a2a/extendedAgentCard";
 
 /// The discovery document naming the resource this protocol is protected as.
+#[cfg(test)]
 const T_METADATA: &str = "/.well-known/oauth-protected-resource/a2a";
 
 /// The discovery document carrying the agent's own card.
+#[cfg(test)]
 const T_CARD: &str = "/.well-known/agent-card.json";
 
 /// The callback an agent this node dialled posts back to.
+#[cfg(test)]
 const T_PUSH: &str = "/a2a/push";
 
 /// Both spellings of one operation on the document binding, as a pair of dispatches.
+#[cfg(test)]
 const fn document(slashed: &'static str, verb: &'static str) -> [Dispatch; 2] {
     [
         Dispatch::Document {
@@ -149,6 +171,7 @@ const fn document(slashed: &'static str, verb: &'static str) -> [Dispatch; 2] {
 }
 
 /// One framed call.
+#[cfg(test)]
 const fn framed(method: &'static str) -> Dispatch {
     Dispatch::Service {
         service: SERVICE,
@@ -158,6 +181,7 @@ const fn framed(method: &'static str) -> Dispatch {
 }
 
 /// One credentialed target row.
+#[cfg(test)]
 const fn target(path: &'static str, method: &'static str) -> Dispatch {
     Dispatch::Target {
         path,
@@ -167,6 +191,7 @@ const fn target(path: &'static str, method: &'static str) -> Dispatch {
 }
 
 /// One deliberately open target row.
+#[cfg(test)]
 const fn open(path: &'static str, method: &'static str) -> Dispatch {
     Dispatch::Target {
         path,
@@ -176,6 +201,7 @@ const fn open(path: &'static str, method: &'static str) -> Dispatch {
 }
 
 /// Send one message and wait for the whole answer.
+#[cfg(test)]
 const D_MESSAGE_SEND: &[Dispatch] = &[
     target(T_MESSAGE_SEND, POST),
     document("message/send", "SendMessage")[0],
@@ -184,6 +210,7 @@ const D_MESSAGE_SEND: &[Dispatch] = &[
 ];
 
 /// Send one message and receive the answer as a run of events.
+#[cfg(test)]
 const D_MESSAGE_STREAM: &[Dispatch] = &[
     target(T_MESSAGE_STREAM, POST),
     document("message/stream", "SendStreamingMessage")[0],
@@ -192,6 +219,7 @@ const D_MESSAGE_STREAM: &[Dispatch] = &[
 ];
 
 /// Read one task back.
+#[cfg(test)]
 const D_TASK_GET: &[Dispatch] = &[
     target(T_TASK, GET),
     document("tasks/get", "GetTask")[0],
@@ -200,6 +228,7 @@ const D_TASK_GET: &[Dispatch] = &[
 ];
 
 /// List the tasks this caller may see.
+#[cfg(test)]
 const D_TASK_LIST: &[Dispatch] = &[
     target(T_TASKS, GET),
     document("tasks/list", "ListTasks")[0],
@@ -212,6 +241,7 @@ const D_TASK_LIST: &[Dispatch] = &[
 /// The target row is a POST to the task itself: the collection binding spells a verb on a resource
 /// as a post to that resource with the verb as a suffix (`/tasks/{id}:cancel`), which is why this
 /// path and [`D_TASK_GET`]'s are one template.
+#[cfg(test)]
 const D_TASK_CANCEL: &[Dispatch] = &[
     target(T_TASK, POST),
     document("tasks/cancel", "CancelTask")[0],
@@ -224,6 +254,7 @@ const D_TASK_CANCEL: &[Dispatch] = &[
 /// No target row of its own. The collection binding spells it `GET /tasks/{id}:subscribe`, a verb
 /// suffix inside the `{id}` segment, so it arrives on [`D_TASK_GET`]'s template and the HTTP+JSON
 /// line's composer (`rest.rs`) tells the two apart by that suffix.
+#[cfg(test)]
 const D_TASK_SUBSCRIBE: &[Dispatch] = &[
     document("tasks/resubscribe", "SubscribeToTask")[0],
     document("tasks/resubscribe", "SubscribeToTask")[1],
@@ -231,6 +262,7 @@ const D_TASK_SUBSCRIBE: &[Dispatch] = &[
 ];
 
 /// Create a push-notification configuration for a task.
+#[cfg(test)]
 const D_PUSH_CONFIG_CREATE: &[Dispatch] = &[
     target(T_PUSH_CONFIGS, POST),
     document(
@@ -245,6 +277,7 @@ const D_PUSH_CONFIG_CREATE: &[Dispatch] = &[
 ];
 
 /// Read one push-notification configuration back.
+#[cfg(test)]
 const D_PUSH_CONFIG_GET: &[Dispatch] = &[
     target(T_PUSH_CONFIG, GET),
     document(
@@ -259,6 +292,7 @@ const D_PUSH_CONFIG_GET: &[Dispatch] = &[
 ];
 
 /// List a task's push-notification configurations.
+#[cfg(test)]
 const D_PUSH_CONFIG_LIST: &[Dispatch] = &[
     target(T_PUSH_CONFIGS, GET),
     document(
@@ -273,6 +307,7 @@ const D_PUSH_CONFIG_LIST: &[Dispatch] = &[
 ];
 
 /// Delete a push-notification configuration.
+#[cfg(test)]
 const D_PUSH_CONFIG_DELETE: &[Dispatch] = &[
     target(T_PUSH_CONFIG, DELETE),
     document(
@@ -292,6 +327,7 @@ const D_PUSH_CONFIG_DELETE: &[Dispatch] = &[
 /// extended card are the SAME work — a document this node publishes about itself, handed back — so
 /// they are one operation and one price; what differs is who may ask, which is the bar on each row
 /// and not a class of its own.
+#[cfg(test)]
 const D_AGENT_CARD: &[Dispatch] = &[
     open(T_METADATA, GET),
     open(T_CARD, GET),
@@ -306,9 +342,11 @@ const D_AGENT_CARD: &[Dispatch] = &[
 /// One address, and it is open. No client sends this: it is what a frame arriving on a connection
 /// this node dialled MEANS, and the caller is a fronted agent that holds no credential of this
 /// node's.
+#[cfg(test)]
 const D_PUSH_EVENT: &[Dispatch] = &[open(T_PUSH, POST)];
 
 /// One unary operation over JSON.
+#[cfg(test)]
 const fn unary(op: &'static str, dispatch: &'static [Dispatch]) -> Operation {
     Operation {
         op,
@@ -320,6 +358,7 @@ const fn unary(op: &'static str, dispatch: &'static [Dispatch]) -> Operation {
 }
 
 /// One streamed operation: a JSON request, an event stream back.
+#[cfg(test)]
 const fn streamed(op: &'static str, dispatch: &'static [Dispatch]) -> Operation {
     Operation {
         op,
@@ -337,6 +376,7 @@ const fn streamed(op: &'static str, dispatch: &'static [Dispatch]) -> Operation 
 /// deeper configuration template comes before the shallower one it would otherwise be shadowed by;
 /// the plane's own mount is loosest. A mount that sorted this list would be deciding a precedence
 /// the protocol has already decided.
+#[cfg(test)]
 pub const SURFACE: WireSurface = WireSurface {
     bindings: &[
         BindingDecl {

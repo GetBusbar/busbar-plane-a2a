@@ -145,6 +145,7 @@ const MOUNT_PATH: &str = "/a2a";
 /// [`MOUNT_PATH`]. Written as a constant beside the mount it is not under, because "the A2A plane
 /// answers here too" is a fact the mount table has to be told or this binding's tokens go unchecked
 /// for audience.
+#[cfg(test)]
 const GRPC_MOUNT_PATH: &str = "/lf.a2a.v1.A2AService";
 
 // ══ THE ROUTES THIS PLANE SERVES, SPELLED EXACTLY ONCE ══════════════════════════════════════════
@@ -179,6 +180,7 @@ const ROUTE_AGENT: &str = "/agents/{agent_id}";
 
 /// EVERY SUFFIX ABOVE, as one list. The plane asserts its claim for each is [`MOUNT_PATH`] joined to
 /// it, so a route added on the server side with no claim behind it is a red test.
+#[cfg(test)]
 const MOUNTED_ROUTE_SUFFIXES: &[&str] = &[
     ROUTE_MESSAGE_SEND,
     ROUTE_MESSAGE_STREAM,
@@ -242,6 +244,7 @@ const ERRORS: &[(i64, &str)] = &[
 /// half answers and the plane does not carry arrives as an unsupported operation. The rig scraped this
 /// out of the server half's source text before, which needed a crate that cannot depend on it to read
 /// its file.
+#[cfg(test)]
 const LOCAL_VERB_METHODS: &[&str] = &[
     "ListTasks",
     "tasks/list",
@@ -265,7 +268,9 @@ const ERROR_INFO_TYPE: &str = "type.googleapis.com/google.rpc.ErrorInfo";
 /// reason tokens above are the specification's vocabulary and the domain says so.
 const ERROR_INFO_DOMAIN: &str = "a2a-protocol.org";
 
+#[cfg(test)]
 use busbar_contract::ids::LaneId;
+#[cfg(test)]
 use busbar_contract::plugin::{AbiVersion, Kind, Plugin};
 
 /// One configured agent this plane may name.
@@ -276,6 +281,7 @@ use busbar_contract::plugin::{AbiVersion, Kind, Plugin};
 /// config-derived key through it exactly once, and hands over names that outlive it — so nothing
 /// after registration can vary them, and the memory the names occupy is a fixed term rather than
 /// one that grows with traffic.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Agent {
     /// The name the operator gave this agent, and the resource the scope unit judges.
@@ -292,11 +298,13 @@ struct Agent {
 ///
 /// The one field is a borrowed, immutable list. There is no cell here, no lock and no atomic: the
 /// purity test asserts that by walking the type, not by trusting this sentence.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct A2aPlane {
     agents: &'static [Agent],
 }
 
+#[cfg(test)]
 impl A2aPlane {
     /// A plane with a configured agent set.
     #[must_use]
@@ -318,12 +326,14 @@ impl A2aPlane {
     }
 }
 
+#[cfg(test)]
 impl Default for A2aPlane {
     fn default() -> Self {
         Self::EMPTY
     }
 }
 
+#[cfg(test)]
 impl Plugin for A2aPlane {
     fn key(&self) -> &'static str {
         <Self as busbar_contract::plane::PlaneMeta>::KEY

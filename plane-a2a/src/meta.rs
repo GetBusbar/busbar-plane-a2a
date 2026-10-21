@@ -4,17 +4,24 @@
 //! into policy. A plane that could vary its own declarations at run time would make the claims a
 //! boot proved non-overlapping stop being the claims in force.
 
+use busbar_contract::ids::MeterClassId;
+// The plane's whole declaration (`PlaneMeta`) is held by its tests: the door states its facts in its
+// Statement, and the crate's only public item is the door.
+#[cfg(test)]
 use busbar_contract::ids::{
-    AdminVerbId, ClassDirection, MeterClassDecl, MeterClassId, OpClassId, RecordSchemaId,
+    AdminVerbId, ClassDirection, MeterClassDecl, OpClassId, RecordSchemaId,
 };
+#[cfg(test)]
 use busbar_contract::plane::PlaneMeta;
 
+#[cfg(test)]
 use crate::{claims, facts, ops, records, A2aPlane};
 
 /// The family the byte-shaped class rolls up into.
 ///
 /// A rate card may price the class and may change its divisor; it may never move it to another
 /// family, because a cap written over the family would then be counting something else.
+#[cfg(test)]
 const BYTE_FAMILY: &str = "byte";
 
 /// The class this plane meters.
@@ -33,6 +40,7 @@ const BYTE_FAMILY: &str = "byte";
 /// once the agent has answered, never from an estimate made before the socket. A single byte class
 /// cannot separate what a caller sent from what an agent returned, so a deployment cannot price the
 /// two differently — the owner's ruling makes that the product: one class, both ways.
+#[cfg(test)]
 const METER_CLASSES: &[MeterClassDecl] = &[MeterClassDecl {
     key: MeterClassId::new("bytes"),
     family: BYTE_FAMILY,
@@ -45,9 +53,11 @@ const METER_CLASSES: &[MeterClassDecl] = &[MeterClassDecl {
 pub const CLASS_BYTES: MeterClassId = MeterClassId::new("bytes");
 
 /// The read-only verb that lists the agents this node fronts.
+#[cfg(test)]
 pub const VERB_AGENTS: AdminVerbId = AdminVerbId::new("agents");
 
 /// The read-only verb that answers for the ONE agent the subject names.
+#[cfg(test)]
 pub const VERB_AGENT: AdminVerbId = AdminVerbId::new("agent");
 
 /// The verbs this plane answers.
@@ -62,6 +72,7 @@ pub const VERB_AGENT: AdminVerbId = AdminVerbId::new("agent");
 /// the one that records an operator's approval — CHANGE something, so they are not verbs of this
 /// plane either: a mutating plane admin operation is the kernel's own record-write verb, reached
 /// with the plane's record schemas, and the plane contributes the shape rather than the action.
+#[cfg(test)]
 const INTROSPECTION_VERBS: &[AdminVerbId] = &[VERB_AGENTS, VERB_AGENT];
 
 /// The schema of this plane's own configuration block.
@@ -70,6 +81,7 @@ const INTROSPECTION_VERBS: &[AdminVerbId] = &[VERB_AGENTS, VERB_AGENT];
 /// agent's definition, plus the two reserved members that apply to every agent. Nothing here is a
 /// credential — the credential members name a REFERENCE that the secret plugin resolves, and this
 /// plane never sees what is behind one — and nothing here is a price.
+#[cfg(test)]
 const CONFIG_SCHEMA: &str = r#"{
   "type": "object",
   "additionalProperties": {
@@ -96,6 +108,7 @@ const CONFIG_SCHEMA: &str = r#"{
   }
 }"#;
 
+#[cfg(test)]
 impl PlaneMeta for A2aPlane {
     const KEY: &'static str = "a2a";
     const CLAIMS: &'static [busbar_contract::grammar::Claim] = claims::CLAIMS;

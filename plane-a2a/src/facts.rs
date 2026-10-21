@@ -4,40 +4,52 @@
 //! here is something the plane READ off the bytes, reported under a key it declared up front so the
 //! kernel's fact maps can be sized before the first frame arrives.
 
+#[cfg(test)]
 use busbar_contract::bounded::PlaneAlloc;
+#[cfg(test)]
 use busbar_contract::ids::{CorrelationRef, CorrelationValue};
 
 /// The method name the request carried, exactly as it was spelled.
+#[cfg(test)]
 pub const FACT_METHOD: &str = "method";
 
 /// Which of the two vocabularies the method name came from.
+#[cfg(test)]
 pub const FACT_WORDING: &str = "wording";
 
 /// The request identifier, as the raw bytes it arrived as.
 ///
 /// This is also the correlation's declared key. The bytes are kept as well as the reference because
 /// the reference cannot carry them: see [`correlation_for`].
+#[cfg(test)]
 pub const FACT_RPC_ID: &str = "rpc_id";
 
 /// Which revision of the protocol the caller asked to be answered under.
+#[cfg(test)]
 pub const FACT_VERSION: &str = "a2a_version";
 
 /// Which agent of the catalogue the unit is for.
+#[cfg(test)]
 pub const FACT_AGENT_ID: &str = "agent_id";
 
 /// Whether the answer is a stream of events rather than one reply.
+#[cfg(test)]
 pub const FACT_MULTI_FRAME: &str = "streaming";
 
 /// The task the answer is about.
+#[cfg(test)]
 pub const FACT_TASK_ID: &str = "task_id";
 
 /// The conversation the task belongs to.
+#[cfg(test)]
 pub const FACT_CONTEXT_ID: &str = "context_id";
 
 /// The state the answer says the task is in.
+#[cfg(test)]
 pub const FACT_TASK_STATE: &str = "task_state";
 
 /// The error code the answer carried, where it carried one.
+#[cfg(test)]
 pub const FACT_ERROR_CODE: &str = "error_code";
 
 /// The session fact keys this plane writes.
@@ -45,12 +57,14 @@ pub const FACT_ERROR_CODE: &str = "error_code";
 /// The protocol revision and the agent are session facts because a session that changed either
 /// mid-flight would be a different priced thing, and the kernel needs to see that from the outside
 /// rather than infer it.
+#[cfg(test)]
 pub const SESSION_FACTS: &[&str] = &[FACT_VERSION, FACT_AGENT_ID];
 
 /// The content fact keys this plane produces.
 ///
 /// This is what the record and the export path receive: what the answer was ABOUT and how it ended.
 /// Never the message content itself, and never a credential.
+#[cfg(test)]
 pub const CONTENT_FACTS: &[&str] = &[
     FACT_TASK_ID,
     FACT_CONTEXT_ID,
@@ -75,6 +89,7 @@ pub const CONTENT_FACTS: &[&str] = &[
 /// Answers nothing when the arena is full or the identifier is not text: a correlation that cannot
 /// be carried honestly is better absent than approximated.
 #[must_use]
+#[cfg(test)]
 pub fn correlation_for<'u>(raw_id: &[u8], arena: &'u dyn PlaneAlloc) -> Option<CorrelationRef<'u>> {
     Some(CorrelationRef {
         fact_key: FACT_RPC_ID,
@@ -89,6 +104,7 @@ pub fn correlation_for<'u>(raw_id: &[u8], arena: &'u dyn PlaneAlloc) -> Option<C
 /// requests of one principal on one session answer to each other — the collision the digest was
 /// removed for, arriving by a different road. The canonical spelling is the number; every other
 /// spelling of it is carried as the text it is, and text never equals a number.
+#[cfg(test)]
 fn is_canonical_number(raw: &[u8]) -> bool {
     match raw.first() {
         // A single zero is the only number that may begin with one.
@@ -99,6 +115,7 @@ fn is_canonical_number(raw: &[u8]) -> bool {
 }
 
 /// The value one raw request identifier stands for.
+#[cfg(test)]
 fn correlation_value<'u>(raw_id: &[u8], arena: &'u dyn PlaneAlloc) -> Option<CorrelationValue<'u>> {
     if is_canonical_number(raw_id) {
         let mut n: u64 = 0;

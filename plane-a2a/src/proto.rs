@@ -39,6 +39,7 @@ pub mod pb {
 }
 
 /// The full service name the generated descriptor names (`package.Service`).
+#[cfg(test)]
 pub const SERVICE_NAME: &str = "lf.a2a.v1.A2AService";
 
 /// The interface binding whose URL the model writes without an `http://` scheme.

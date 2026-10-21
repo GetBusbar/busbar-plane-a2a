@@ -5,6 +5,10 @@
 //! half): the door's `project`, entered as the dispatcher enters it and checked as the loader checks
 //! every answer, writes the caller's `contextId` into the hook view's opaque session.
 
+// The door's `project` is entered as the dispatcher enters it, through the SDK's `unsafe` entry
+// (it was an integration test, outside the crate's `forbid`); the test build allows it here alone.
+#![allow(unsafe_code)]
+
 use crate::agent_door::Project;
 use crate::door_statement;
 use busbar_contract::abi::mechanism::call::Outcome;

@@ -94,6 +94,7 @@ pub enum Wording {
 impl Wording {
     /// The name this wording is reported under, as a fact.
     #[must_use]
+    #[cfg(test)]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Slashed => "slashed",

@@ -924,6 +924,7 @@ impl HopRelay {
 
     /// `true` once the caller's answer has been given.
     #[must_use]
+    #[cfg(test)]
     pub const fn answered(&self) -> bool {
         self.answered
     }
