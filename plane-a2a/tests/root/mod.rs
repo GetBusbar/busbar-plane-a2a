@@ -1053,6 +1053,7 @@ fn served_core(
         crate::root::loader::dispatch::ConnTable::Host(
             Arc::clone(&connector) as Arc<dyn DeclaredConns>
         ),
+        busbar_kernel::diagnostics::Catalogue::NEUTRAL,
     );
     // The walk reaches the far ends through the cell's connector, every open it makes recorded.
     let riding = Arc::new(Riding {
