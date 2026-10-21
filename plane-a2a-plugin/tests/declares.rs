@@ -7,10 +7,20 @@
 
 #[test]
 fn the_statement_states_the_whole_declares_document() {
-    let row = busbar_plugin_loader::dispatch::LinkedRow::of(busbar_plane_a2a::door).unwrap();
+    let row = busbar_plugin_loader::dispatch::LinkedRow::of_loaded(loaded_door()).unwrap();
     let read = busbar_contract::abi::mechanism::rendering::read(&row.statement).unwrap();
     assert_eq!(
         busbar_contract::abi::mechanism::extensions::declares(&read.extensions.bytes),
         Some(&include_bytes!("../../plane-a2a/declares.json")[..]),
     );
+}
+
+/// This plugin's own door, named for the loader.
+fn loaded_door() -> busbar_plugin_loader::dispatch::LoadedDoor {
+    // SAFETY: `busbar_plane_a2a::door` is this crate's own door: it answers the `'static` door of
+    // this plugin.
+    #[allow(unused_unsafe)]
+    let loaded =
+        unsafe { busbar_plugin_loader::dispatch::LoadedDoor::from_raw(busbar_plane_a2a::door) };
+    loaded
 }
