@@ -132,7 +132,7 @@ fn signature(
     let services = plane.services.as_ref()?;
     let absent = Span {
         offset: SPAN_ABSENT,
-        ..Span::ZERO
+        len: 0,
     };
     let mut buf = vec![0u8; 1024];
     let mut spans = [ItemSpan {
@@ -142,7 +142,7 @@ fn signature(
     let handle = CompletionHandle {
         ticket,
         seq,
-        ..CompletionHandle::ZERO
+        _reserved: 0,
     };
     let sig = services
         .sign(

@@ -171,7 +171,7 @@ impl Calls<'_> {
         CompletionHandle {
             ticket: self.ticket,
             seq,
-            ..CompletionHandle::ZERO
+            _reserved: 0,
         }
     }
 
@@ -220,7 +220,7 @@ impl Line for Calls<'_> {
     fn judge(&mut self, url: &str) -> Poll<Option<Judgement>> {
         let absent = Span {
             offset: SPAN_ABSENT,
-            ..Span::ZERO
+            len: 0,
         };
         let mut bytes = [0u8; JUDGED_BYTES];
         let mut spans = [ItemSpan {

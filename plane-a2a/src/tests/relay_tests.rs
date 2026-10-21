@@ -782,6 +782,66 @@ fn events_are_answered_as_they_come_and_settled_as_they_pass() {
     assert_eq!(r.moved(), (STREAM.len() + first.len() + rest.len()) as u64);
 }
 
+/// AN ERROR FRAME MID-STREAM PASSES THROUGH AND THE STREAM ENDS WHERE THE FAR END CLOSES IT
+/// (coordinator ruling, parity principle: "do exactly what v1.5.5 did"). v1.5.5 had no A2A stream
+/// to relay one on: its tree holds no a2a crate or module (`git ls-tree -r --name-only v1.5.5`
+/// names no path matching `a2a`), no JSON-RPC reader (`git grep -il jsonrpc v1.5.5` matches no
+/// file), and names A2A only as work to come (v1.5.5 `qa/segments.toml:61` "a2a -> 1.5.6" and
+/// `:169-172`, the `a2a` segment `status = "reserved"`; `crates/busbar/src/config/named_map.rs:16`,
+/// "`agents:` (1.5.6 A2A)"). So the relay keeps what it does, pinned here: a JSON-RPC error event
+/// after the answer has started goes to the caller as one more event, under the caller's id; it
+/// settles nothing about the task and does not end the answer; the events after it pass too, and
+/// the answer ends once, on the far end's last piece.
+#[test]
+fn an_error_frame_mid_stream_passes_through_and_the_stream_ends_where_the_far_end_closes() {
+    let (mut r, _) = events_sent();
+    let working = event(json!({ "kind": "status-update", "taskId": "far-1",
+        "status": { "state": "working" }, "final": false }));
+    let first = part(r.on_piece(far(Some(200), &working, false)));
+    assert!(first.head && !first.last, "the answer starts");
+    let _ = r.take_settled();
+
+    let error = format!(
+        "data: {}\n\n",
+        json!({ "jsonrpc": "2.0", "id": 7,
+            "error": { "code": -32603, "message": "far end broke" } })
+    )
+    .into_bytes();
+    let middle = part(r.on_piece(far(None, &error, false)));
+    assert!(
+        !middle.head && !middle.last,
+        "the error frame neither starts nor ends the answer"
+    );
+    let got = datas(&middle.body);
+    assert_eq!(got.len(), 1, "the error frame goes out as one event");
+    assert_eq!(got[0]["id"], 7, "under the caller's id");
+    assert_eq!(got[0]["error"]["code"], -32603);
+    assert_eq!(got[0]["error"]["message"], "far end broke");
+    assert!(got[0].get("result").is_none());
+    assert!(!r.answered(), "the stream goes on after the error frame");
+    assert_eq!(
+        r.take_settled(),
+        Vec::new(),
+        "the error frame settles nothing about the task"
+    );
+
+    let after = event(json!({ "kind": "status-update", "taskId": "far-1",
+        "status": { "state": "completed" }, "final": true }));
+    let end = part(r.on_piece(far(None, &after, true)));
+    assert!(end.last, "the answer ends on the far end's last piece");
+    assert_eq!(
+        datas(&end.body).len(),
+        1,
+        "the frame after the error passes too"
+    );
+    assert!(r.answered());
+    assert_eq!(
+        r.on_piece(far(None, &after, true)),
+        PieceAnswer::Nothing,
+        "and it ends once"
+    );
+}
+
 /// A far end that answers one document to an events hop is answered as the unary hop answers it.
 #[test]
 fn one_document_to_an_events_hop_is_the_unary_answer() {

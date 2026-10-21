@@ -44,10 +44,13 @@ use busbar_contract::abi::mechanism::ticket::{HostCtx, HostTables, Ticket};
 use busbar_contract::abi::plane::{
     slot, ArriveIn, ArriveOut, OnPieceIn, OnPieceOut, Ops, OutField, PlaneCancelIn, PlaneCancelOut,
     PlaneOpenIn, PlaneOpenOut, RecordWrite, RefusalCode, RefusalIn, RefusalOut, ServeIn, ServeOut,
-    UnitCount, EMIT_DONE, FROM_CALLER, FROM_KERNEL, PIECE_LAST, PIECE_REFUSED, REFUSAL_KERNEL,
+    UnitCount, EMIT_DONE, FROM_CALLER, FROM_FAR_END, FROM_KERNEL, PIECE_HAS_STATUS, PIECE_LAST,
+    PIECE_REFUSED, REFUSAL_KERNEL,
 };
 use busbar_plane_a2a::agent_door::{self, MAX_UNITS};
-use busbar_plane_a2a::door_statement::{self, CLASS_FEE_INDEX, DIALECT_DOCUMENT};
+use busbar_plane_a2a::door_statement::{
+    self, CLASS_BYTES_INDEX, CLASS_FEE_INDEX, DIALECT_DOCUMENT,
+};
 
 // ── the allocation count ────────────────────────────────────────────────────────────────────────
 
@@ -96,7 +99,14 @@ fn answer(out: *mut ServiceOut, outcome: Outcome, value: u64, len: u64) -> RawOu
             outcome: RawOutcome::of(outcome),
             value,
             len,
-            ..ServiceOut::ZERO
+            _reserved: [0; 3],
+            items: 0,
+            needed_bytes: 0,
+            needed_items: 0,
+            error: AbiStr {
+                ptr: std::ptr::null(),
+                len: 0,
+            },
         });
     }
     RawOutcome::of(outcome)
@@ -202,7 +212,14 @@ extern "C" fn records_list(_: HostCtx, input: *const c_void, out: *mut ServiceOu
             outcome: RawOutcome::of(Outcome::Ready),
             len: at as u64,
             items: rows.len() as u64,
-            ..ServiceOut::ZERO
+            _reserved: [0; 3],
+            value: 0,
+            needed_bytes: 0,
+            needed_items: 0,
+            error: AbiStr {
+                ptr: std::ptr::null(),
+                len: 0,
+            },
         });
     }
     RawOutcome::of(Outcome::Ready)
@@ -240,9 +257,6 @@ static HOST_SLOTS: HostSlots = HostSlots {
     trust_decide: Some(decided),
     trust_state: None,
     session_emit: None,
-    auth_call: None,
-    unit_hand_in: None,
-    unit_refuse: None,
 };
 
 // ── the agent behind the connector: it serves its card to every exchange ───────────────────────
@@ -463,6 +477,7 @@ struct Given<'a> {
     attempt: u32,
     member: &'a [u8],
     reason: u32,
+    status: u32,
     bytes: &'a [u8],
 }
 
@@ -475,6 +490,7 @@ impl Given<'_> {
             attempt: 0,
             member: b"",
             reason: 0,
+            status: 0,
             bytes,
         }
     }
@@ -487,6 +503,7 @@ impl Given<'_> {
             attempt: 0,
             member: b"",
             reason: 0,
+            status: 0,
             bytes: b"",
         }
     }
@@ -499,6 +516,7 @@ impl Given<'_> {
             attempt: 1,
             member,
             reason: 0,
+            status: 0,
             bytes: b"",
         }
     }
@@ -511,7 +529,21 @@ impl Given<'_> {
             attempt: 0,
             member: b"",
             reason: reason.code(),
+            status: 0,
             bytes: b"",
+        }
+    }
+
+    /// The far end's whole answer, `bytes` at HTTP `status`, in one last piece.
+    fn far_end(status: u32, bytes: &[u8]) -> Given<'_> {
+        Given {
+            from: FROM_FAR_END,
+            flags: PIECE_HAS_STATUS | PIECE_LAST,
+            attempt: 0,
+            member: b"",
+            reason: 0,
+            status,
+            bytes,
         }
     }
 }
@@ -610,6 +642,7 @@ impl Door {
         i.member = str_of(given.member);
         i.caller_ref = str_of(ALICE);
         i.reason = given.reason;
+        i.status_code = given.status;
         (i.reply_buf, i.reply_cap) = (reply.as_mut_ptr(), reply.len());
         (i.fields_buf, i.fields_cap) = (fields.as_mut_ptr(), fields.len());
         (i.arena_buf, i.arena_cap) = (arena.as_mut_ptr(), arena.len());
@@ -923,6 +956,62 @@ fn a_hop_refused_for_its_credential_before_the_dial_reports_its_fee_and_bytes_at
     assert!(
         refused.emitted.is_empty(),
         "the refused piece answers nothing"
+    );
+}
+
+/// AN EMPTY ENVELOPE FROM A REACHED AGENT IS CHARGED AS THE HOP THAT REACHED IT (coordinator
+/// ruling, parity principle: "charge exactly what v1.5.5 charged for it"). v1.5.5 had no A2A path
+/// to charge one: its tree holds no a2a crate or module (`git ls-tree -r --name-only v1.5.5`
+/// names no path matching `a2a`), no JSON-RPC reader (`git grep -il jsonrpc v1.5.5` matches no
+/// file), and names A2A only as work to come (v1.5.5 `qa/segments.toml:61` "a2a -> 1.5.6" and
+/// `:169-172`, the `a2a` segment `status = "reserved"`; `crates/busbar/src/config/named_map.rs:16`,
+/// "`agents:` (1.5.6 A2A)"). So the charge stands as this plane makes it, pinned here: the far
+/// end answered a JSON-RPC envelope with neither `result` nor `error`, the caller is answered the
+/// hop's refusal (`a2a.hop.reply_not_json`), and the unit reports the fee unit at `1` (the hop
+/// left the plane for its agent) and the bytes the hop moved both ways (the caller's request and
+/// the far end's envelope).
+#[test]
+fn an_empty_envelope_from_a_reached_agent_reports_the_hops_fee_and_bytes() {
+    let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    let door = open();
+    let (outcome, status, body) = door.connect("vendor");
+    assert_eq!(
+        (outcome, status),
+        (Outcome::Ready, 200),
+        "`connect` holds the agent's card: {body}"
+    );
+    let unit = 9;
+    let route = ("POST", "/a2a/agents/{agent_id}");
+    let (arrived, refused) = door.arrive(unit, route, "/a2a/agents/vendor", CARD_READ);
+    assert_eq!(
+        (arrived, refused),
+        (Outcome::Ready, 0),
+        "the card read is admitted"
+    );
+    let attempt = door.piece(unit, Given::attempt(b"vendor"), 1 << 16);
+    assert_eq!(attempt.outcome, Some(Outcome::Ready), "{attempt:?}");
+    let sent = door.piece(unit, Given::caller(CARD_READ), 1 << 16);
+    assert_eq!(
+        sent.emitted, CARD_READ,
+        "the caller's body goes to the agent: {sent:?}"
+    );
+
+    let empty: &[u8] = br#"{"jsonrpc":"2.0","id":1}"#;
+    let answered = door.piece(unit, Given::far_end(200, empty), 1 << 16);
+    assert_eq!(answered.outcome, Some(Outcome::Ready), "{answered:?}");
+    assert!(
+        String::from_utf8_lossy(&answered.emitted).contains("a2a.hop.reply_not_json"),
+        "the caller is answered the hop's refusal, never the empty envelope: {answered:?}"
+    );
+    assert!(
+        answered.units.contains(&(CLASS_FEE_INDEX, 1)),
+        "the hop reached its agent: its fee unit stands: {answered:?}"
+    );
+    assert!(
+        answered
+            .units
+            .contains(&(CLASS_BYTES_INDEX, (CARD_READ.len() + empty.len()) as u64)),
+        "the bytes the hop moved both ways are counted: {answered:?}"
     );
 }
 
