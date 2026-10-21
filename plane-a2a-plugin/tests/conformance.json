@@ -179,7 +179,49 @@
         {
           "target": "agent:vendor"
         }
-      ]
+      ],
+      "trusted": [
+        [
+          "vendor",
+          null,
+          "none"
+        ]
+      ],
+      "records": [
+        {
+          "kind": "card",
+          "key": "vendor",
+          "value": {
+            "name": "Vendor",
+            "description": "the conformance agent",
+            "url": "https://vendor.example/agent",
+            "version": "1.0.0",
+            "protocolVersion": "0.3.0",
+            "capabilities": {},
+            "defaultInputModes": [
+              "text/plain"
+            ],
+            "defaultOutputModes": [
+              "text/plain"
+            ],
+            "skills": [
+              {
+                "id": "reply",
+                "name": "reply",
+                "description": "replies",
+                "tags": [
+                  "reply"
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "resolve": {
+        "vendor.example": [
+          "93.184.216.34"
+        ]
+      }
     },
     "arrive_each": true,
     "claimed": {
@@ -206,7 +248,7 @@
         ]
       ],
       "answer": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"message\":{\"role\":\"ROLE_AGENT\",\"messageId\":\"a1\",\"parts\":[{\"text\":\"the agent's reply, long enough that a buffer that holds the whole request takes the answer in several writes. the agent's reply, long enough that a buffer that holds the whole request takes the answer in several writes. the agent's reply, long enough that a buffer that holds the whole request takes the answer in several writes. \"}]}}}",
-      "answer_out": "{\"id\":1,\"jsonrpc\":\"2.0\",\"result\":{\"message\":{\"contextId\":\"ctx-7\",\"messageId\":\"a1\",\"parts\":[{\"text\":\"the agent's reply, long enough that a buffer that holds the whole request takes the answer in several writes. the agent's reply, long enough that a buffer that holds the whole request takes the answer in several writes. the agent's reply, long enough that a buffer that holds the whole request takes the answer in several writes. \"}],\"role\":\"ROLE_AGENT\"}}}",
+      "answer_out": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"message\":{\"role\":\"ROLE_AGENT\",\"messageId\":\"a1\",\"parts\":[{\"text\":\"the agent's reply, long enough that a buffer that holds the whole request takes the answer in several writes. the agent's reply, long enough that a buffer that holds the whole request takes the answer in several writes. the agent's reply, long enough that a buffer that holds the whole request takes the answer in several writes. \"}],\"contextId\":\"ctx-7\"}}}",
       "units": [
         [
           0,
@@ -230,6 +272,35 @@
       "status": 403,
       "text": "denied",
       "reply": "{\"error\":{\"code\":-32004,\"data\":[{\"@type\":\"type.googleapis.com/google.rpc.ErrorInfo\",\"domain\":\"a2a-protocol.org\",\"reason\":\"UNSUPPORTED_OPERATION\"}],\"message\":\"denied\"},\"id\":null,\"jsonrpc\":\"2.0\"}"
+    },
+    "caller_ref": "c0ffee01"
+  },
+  "unreached_schemes": [
+    {
+      "scheme": "grpc",
+      "why": "the agent hop's gRPC binding rides the grpc transport, which the plane suite does not frame; this suite's agent card names only JSON-RPC, so no hop here speaks gRPC, and the relay-level cells below drive the hop's gRPC framing against the generated messages",
+      "covered_by": [
+        "plane-a2a/src/tests/relay_grpc_tests.rs::grpc_client_issues_send_message",
+        "plane-a2a/src/tests/relay_grpc_tests.rs::grpc_client_issues_get_task",
+        "plane-a2a/src/tests/relay_grpc_tests.rs::grpc_client_issues_cancel_task",
+        "plane-a2a/src/tests/relay_grpc_tests.rs::grpc_client_issues_send_stream_message",
+        "plane-a2a/src/tests/relay_grpc_tests.rs::grpc_client_issues_subscribe_to_task",
+        "plane-a2a/src/tests/relay_grpc_tests.rs::a_grpc_attempt_rides_the_doors_grpc_need"
+      ]
     }
-  }
+  ],
+  "far_ends": [
+    {
+      "url": "https://vendor.example/.well-known/agent-card.json",
+      "cert_pem": null,
+      "status": 200,
+      "body": "{\"name\": \"Vendor\", \"description\": \"the conformance agent\", \"url\": \"https://vendor.example/agent\", \"version\": \"1.0.0\", \"protocolVersion\": \"0.3.0\", \"capabilities\": {}, \"defaultInputModes\": [\"text/plain\"], \"defaultOutputModes\": [\"text/plain\"], \"skills\": [{\"id\": \"reply\", \"name\": \"reply\", \"description\": \"replies\", \"tags\": [\"reply\"]}]}"
+    },
+    {
+      "url": "https://vendor.example/.well-known/agent.json",
+      "cert_pem": null,
+      "status": 200,
+      "body": "{\"name\": \"Vendor\", \"description\": \"the conformance agent\", \"url\": \"https://vendor.example/agent\", \"version\": \"1.0.0\", \"protocolVersion\": \"0.3.0\", \"capabilities\": {}, \"defaultInputModes\": [\"text/plain\"], \"defaultOutputModes\": [\"text/plain\"], \"skills\": [{\"id\": \"reply\", \"name\": \"reply\", \"description\": \"replies\", \"tags\": [\"reply\"]}]}"
+    }
+  ]
 }

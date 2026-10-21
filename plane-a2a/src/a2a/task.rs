@@ -252,6 +252,9 @@ pub struct Task {
     /// when it was registered (see the plane's push-notification guard); it is re-validated before
     /// delivery, because the row can outlive the DNS answer that was checked when it was written.
     pub push_callback: Option<String>,
+    /// The A2A version `push_callback` was registered under (`0.3` or `1.0`; empty reads as
+    /// `1.0`): the shape every notification to it takes.
+    pub push_version: String,
     /// When the task was submitted, in whole seconds since the Unix epoch.
     pub created_at: u64,
     /// When the task last changed, in whole seconds since the Unix epoch.
@@ -277,6 +280,7 @@ impl Task {
             agent_id: String::new(),
             artifact_cursor: 0,
             push_callback: None,
+            push_version: String::new(),
             created_at: now,
             updated_at: now,
         };
@@ -322,6 +326,7 @@ impl Task {
             agent_id: self.agent_id.clone(),
             artifact_cursor: self.artifact_cursor,
             push_callback: self.push_callback.clone().unwrap_or_default(),
+            push_version: self.push_version.clone(),
             created_at: self.created_at,
             updated_at: self.updated_at,
         }
@@ -345,6 +350,7 @@ impl Task {
             } else {
                 Some(row.push_callback.clone())
             },
+            push_version: row.push_version.clone(),
             created_at: row.created_at,
             updated_at: row.updated_at,
         };

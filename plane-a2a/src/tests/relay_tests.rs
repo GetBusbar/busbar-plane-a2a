@@ -167,13 +167,12 @@ fn a_correlated_result_is_relayed_whole_under_the_callers_id() {
     };
     assert_eq!(reply.status, 200);
     assert_eq!(reply.content_type, "application/json");
-    let expected = serde_json::to_vec(&json!({
-        "jsonrpc": "2.0",
-        "id": 7,
-        "result": {"name": "Vendor", "skills": []},
-    }))
-    .expect("json");
-    assert_eq!(reply.body, expected);
+    // The far end's own bytes, its member order kept (Q128 M8): the caller's id is the far end's,
+    // so nothing is rewritten.
+    assert_eq!(
+        reply.body,
+        br#"{"jsonrpc":"2.0","id":7,"result":{"name":"Vendor","skills":[]}}"#.to_vec()
+    );
     assert!(r.answered());
     assert_eq!(r.on_piece(far(None, b"late", true)), PieceAnswer::Nothing);
 }
@@ -283,6 +282,123 @@ fn a_new_attempt_forgets_the_previous_far_end() {
 fn a_last_far_end_piece_with_no_status_is_refused() {
     let mut r = sent();
     assert_eq!(r.on_piece(far(None, b"{}", true)), PieceAnswer::Refused);
+}
+
+/// P-ITEM: UNARY/EMPTY TERMINALITY (spec DONE item 2, "All P-item behaviours match 1.5.5"; the
+/// drive log's P3, commit 470351a480). A unary answer closes its unit exactly once, an empty
+/// envelope is never an answer, and a streamed answer ends only at its last frame.
+///
+/// The old `!has("/result/kind")` predicate had this money boundary backwards: a real Task or
+/// Message answer carries a `kind`, so it never ended its unit, while an empty envelope carried none
+/// and closed as `Complete` for nothing. Here the unary hop ends on its far end's one answer, a
+/// `result` (relayed, the task's report settled, the destination read healthy) or an `error` (the
+/// destination answering, refused to the caller), exactly once; an envelope carrying neither is
+/// never relayed, never settled as the task's answer and never read as the agent answering. A
+/// streamed answer's events, a whole initial Task among them, are frames, not endings: the answer
+/// ends once, on its last frame. The 1.5.5 behaviour this plane matches is its one surface's (the
+/// llm surface; owner correction 2026-09-28): a delivered answer is billed once, at its end, and a
+/// response the caller cannot use is not billed as a delivered one (v1.5.5
+/// `crates/busbar/src/proxy/response_body.rs:415-440`, the token-billing gate on an aborted
+/// stream; `crates/busbar/src/proxy/usage.rs:57-103`, the one accrual site per delivered response).
+#[test]
+fn p_item_unary_empty_terminality_an_answer_closes_once_an_empty_envelope_never_and_a_stream_at_its_last_frame(
+) {
+    // A unary Task answer: relayed, its report settled, read healthy; once.
+    let task_answer = br#"{"jsonrpc":"2.0","id":7,"result":{"kind":"task","id":"far-1","status":{"state":"completed"}}}"#;
+    let mut r = task_sent(false);
+    let reply = answered(&mut r, 200, task_answer);
+    assert_eq!(reply.status, 200);
+    assert_eq!(body(&reply)["result"]["kind"], "task");
+    assert!(r.answered(), "a unary Task answer closes its unit");
+    assert_eq!(r.take_reading(), Some(Reading::Healthy));
+    assert_eq!(
+        r.take_settled(),
+        vec![TaskSettled::Reported {
+            state: TaskState::Completed,
+            backend_id: Some("far-1".into()),
+        }]
+    );
+    assert_eq!(
+        r.on_piece(far(None, task_answer, true)),
+        PieceAnswer::Nothing,
+        "and closes it exactly once"
+    );
+    assert_eq!(r.take_settled(), Vec::new(), "nothing settles twice");
+
+    // A unary Message answer, likewise.
+    let message = br#"{"jsonrpc":"2.0","id":7,"result":{"kind":"message","messageId":"m-1"}}"#;
+    let mut r = sent();
+    let reply = answered(&mut r, 200, message);
+    assert_eq!(body(&reply)["result"]["kind"], "message");
+    assert!(r.answered(), "a unary Message answer closes its unit");
+    assert_eq!(r.take_reading(), Some(Reading::Healthy));
+    assert_eq!(r.on_piece(far(None, message, true)), PieceAnswer::Nothing);
+
+    // An error answer is the destination answering: it closes the unit too, once.
+    let error = br#"{"jsonrpc":"2.0","id":7,"error":{"code":-32001,"message":"no"}}"#;
+    let mut r = sent();
+    let reply = answered(&mut r, 200, error);
+    assert!(body(&reply).get("result").is_none());
+    assert!(body(&reply).get("error").is_some());
+    assert!(r.answered(), "an error answer is terminal");
+    assert_eq!(r.take_reading(), Some(Reading::Healthy));
+    assert_eq!(r.on_piece(far(None, error, true)), PieceAnswer::Nothing);
+
+    // An envelope with neither result nor error is NOT an answer: never relayed as one, never
+    // settled as the task's report, never read as the agent answering.
+    let empty = br#"{"jsonrpc":"2.0","id":7}"#;
+    let mut r = sent();
+    let reply = answered(&mut r, 200, empty);
+    assert_eq!(
+        reply.body,
+        refused(
+            "a2a.hop.reply_not_json",
+            "this agent's backend replied with something that is not a JSON-RPC answer"
+        )
+    );
+    assert_eq!(r.take_reading(), Some(Reading::Transient));
+    let mut r = task_sent(false);
+    let reply = answered(&mut r, 200, empty);
+    assert_eq!(reply.status, 502);
+    assert!(body(&reply).get("result").is_none());
+    assert!(
+        !r.take_settled()
+            .iter()
+            .any(|s| matches!(s, TaskSettled::Reported { .. })),
+        "an empty envelope is never the task's answer"
+    );
+    assert_eq!(r.take_reading(), Some(Reading::Transient));
+
+    // A streamed answer: its first event is a whole Task, and it is not the end; an intermediate
+    // status update is not the end; the answer ends once, on its last frame (the `final:true`
+    // update the far end closes on), and nothing follows it.
+    let (mut r, _) = events_sent();
+    let initial = event(json!({ "kind": "task", "id": "far-1", "contextId": "far-c",
+        "status": { "state": "submitted" } }));
+    let first = part(r.on_piece(far(Some(200), &initial, false)));
+    assert!(
+        first.head && !first.last,
+        "a streamed initial Task is not the end"
+    );
+    assert!(!r.answered());
+    let update = event(json!({ "kind": "status-update", "taskId": "far-1",
+        "status": { "state": "working" }, "final": false }));
+    let middle = part(r.on_piece(far(None, &update, false)));
+    assert!(
+        !middle.head && !middle.last,
+        "an intermediate update is not the end"
+    );
+    assert!(!r.answered());
+    let last = event(json!({ "kind": "status-update", "taskId": "far-1",
+        "status": { "state": "completed" }, "final": true }));
+    let end = part(r.on_piece(far(None, &last, true)));
+    assert!(end.last, "the final frame ends the stream");
+    assert!(r.answered());
+    assert_eq!(
+        r.on_piece(far(None, &last, true)),
+        PieceAnswer::Nothing,
+        "and it ends once"
+    );
 }
 
 // ── a hop about a task (ARCHITECT ruling B1) ─────────────────────────────────────────────────────
@@ -664,6 +780,66 @@ fn events_are_answered_as_they_come_and_settled_as_they_pass() {
     );
     assert!(r.answered());
     assert_eq!(r.moved(), (STREAM.len() + first.len() + rest.len()) as u64);
+}
+
+/// AN ERROR FRAME MID-STREAM PASSES THROUGH AND THE STREAM ENDS WHERE THE FAR END CLOSES IT
+/// (coordinator ruling, parity principle: "do exactly what v1.5.5 did"). v1.5.5 had no A2A stream
+/// to relay one on: its tree holds no a2a crate or module (`git ls-tree -r --name-only v1.5.5`
+/// names no path matching `a2a`), no JSON-RPC reader (`git grep -il jsonrpc v1.5.5` matches no
+/// file), and names A2A only as work to come (v1.5.5 `qa/segments.toml:61` "a2a -> 1.5.6" and
+/// `:169-172`, the `a2a` segment `status = "reserved"`; `crates/busbar/src/config/named_map.rs:16`,
+/// "`agents:` (1.5.6 A2A)"). So the relay keeps what it does, pinned here: a JSON-RPC error event
+/// after the answer has started goes to the caller as one more event, under the caller's id; it
+/// settles nothing about the task and does not end the answer; the events after it pass too, and
+/// the answer ends once, on the far end's last piece.
+#[test]
+fn an_error_frame_mid_stream_passes_through_and_the_stream_ends_where_the_far_end_closes() {
+    let (mut r, _) = events_sent();
+    let working = event(json!({ "kind": "status-update", "taskId": "far-1",
+        "status": { "state": "working" }, "final": false }));
+    let first = part(r.on_piece(far(Some(200), &working, false)));
+    assert!(first.head && !first.last, "the answer starts");
+    let _ = r.take_settled();
+
+    let error = format!(
+        "data: {}\n\n",
+        json!({ "jsonrpc": "2.0", "id": 7,
+            "error": { "code": -32603, "message": "far end broke" } })
+    )
+    .into_bytes();
+    let middle = part(r.on_piece(far(None, &error, false)));
+    assert!(
+        !middle.head && !middle.last,
+        "the error frame neither starts nor ends the answer"
+    );
+    let got = datas(&middle.body);
+    assert_eq!(got.len(), 1, "the error frame goes out as one event");
+    assert_eq!(got[0]["id"], 7, "under the caller's id");
+    assert_eq!(got[0]["error"]["code"], -32603);
+    assert_eq!(got[0]["error"]["message"], "far end broke");
+    assert!(got[0].get("result").is_none());
+    assert!(!r.answered(), "the stream goes on after the error frame");
+    assert_eq!(
+        r.take_settled(),
+        Vec::new(),
+        "the error frame settles nothing about the task"
+    );
+
+    let after = event(json!({ "kind": "status-update", "taskId": "far-1",
+        "status": { "state": "completed" }, "final": true }));
+    let end = part(r.on_piece(far(None, &after, true)));
+    assert!(end.last, "the answer ends on the far end's last piece");
+    assert_eq!(
+        datas(&end.body).len(),
+        1,
+        "the frame after the error passes too"
+    );
+    assert!(r.answered());
+    assert_eq!(
+        r.on_piece(far(None, &after, true)),
+        PieceAnswer::Nothing,
+        "and it ends once"
+    );
 }
 
 /// A far end that answers one document to an events hop is answered as the unary hop answers it.
@@ -1092,4 +1268,91 @@ fn a_refused_hops_journal_line_names_the_backend_and_the_callers_answer_does_not
             "{what}: the caller's answer names no backend"
         );
     }
+}
+
+/// A MESSAGE-ONLY ANSWER SETTLES THE TASK THE HOP OPENED `completed`: a server message names a
+/// task only if one was created (A2A v1.0 `Message`, a2a.proto:254-259), so a standalone message is
+/// the whole interaction, and busbar's task for it is terminal (and so swept by retention), never
+/// left `working`. In both vocabularies, unary and streamed. A message in a task, or one answering
+/// a hop addressed to a held task, reads as before.
+#[test]
+fn a_message_only_answer_settles_the_opened_task_completed() {
+    for far in [
+        br#"{"jsonrpc":"2.0","id":7,"result":{"message":{"messageId":"m","role":"ROLE_AGENT","parts":[]}}}"#.as_slice(),
+        br#"{"jsonrpc":"2.0","id":7,"result":{"kind":"message","messageId":"m","role":"agent","parts":[]}}"#.as_slice(),
+    ] {
+        let mut r = task_sent(false);
+        let reply = answered(&mut r, 200, far);
+        assert_eq!(reply.status, 200);
+        assert_eq!(
+            r.take_settled(),
+            vec![TaskSettled::Reported {
+                state: TaskState::Completed,
+                backend_id: None,
+            }],
+            "{}",
+            String::from_utf8_lossy(far)
+        );
+    }
+    let in_a_task = br#"{"jsonrpc":"2.0","id":7,"result":{"message":{"messageId":"m","taskId":"far-1","parts":[]}}}"#;
+    let mut r = task_sent(false);
+    let _ = answered(&mut r, 200, in_a_task);
+    assert_eq!(
+        r.take_settled(),
+        vec![TaskSettled::Reported {
+            state: TaskState::Working,
+            backend_id: Some("far-1".into()),
+        }]
+    );
+    let alone = br#"{"jsonrpc":"2.0","id":7,"result":{"message":{"messageId":"m","parts":[]}}}"#;
+    let mut r = task_sent(true);
+    let _ = answered(&mut r, 200, alone);
+    assert_eq!(
+        r.take_settled(),
+        vec![TaskSettled::Reported {
+            state: TaskState::Working,
+            backend_id: None,
+        }],
+        "a held task is not closed by a message"
+    );
+
+    let (mut r, _) = events_sent();
+    let only = event(json!({ "message": { "messageId": "m", "role": "ROLE_AGENT", "parts": [] } }));
+    let _ = r.on_piece(far(Some(200), &only, true));
+    assert_eq!(
+        r.take_settled(),
+        vec![TaskSettled::Event {
+            state: Some(TaskState::Completed),
+            artifact: false,
+            backend_id: None,
+        }]
+    );
+}
+
+/// THE FAR END'S RESULT LEAVES AS ITS OWN BYTES, BUSBAR'S IDENTITY SPLICED IN (Law 5: a relay sends
+/// the bytes with governed byte-level splices; Q128 a2a M8). Member order, an integer past 64 bits
+/// and a number past `f64`'s range reach the caller as the far end wrote them; only the task's id
+/// and context are busbar's. RED before the fix: the result was re-serialised through a JSON value
+/// (members re-ordered, the long integer rounded) and the out-of-range number refused it whole.
+#[test]
+fn a_relayed_result_is_the_far_ends_bytes_with_busbars_identity_spliced_in() {
+    let mut r = task_sent(false);
+    let far = br#"{"jsonrpc":"2.0","id":7,"result":{"status":{"state":"completed"},"id":"far-1","n":123456789012345678901234567890,"big":1e400,"contextId":"far-c","kind":"task"}}"#;
+    let reply = answered(&mut r, 200, far);
+    assert_eq!(reply.status, 200);
+    assert_eq!(
+        String::from_utf8(reply.body).unwrap(),
+        r#"{"jsonrpc":"2.0","id":7,"result":{"status":{"state":"completed"},"id":"a2a-p-0102030405060708","n":123456789012345678901234567890,"big":1e400,"contextId":"ctx-1","kind":"task"}}"#
+    );
+    // No task: the result is relayed verbatim, in the far end's member order.
+    let mut r = sent();
+    let reply = answered(
+        &mut r,
+        200,
+        br#"{"jsonrpc":"2.0","id":7,"result":{"z":1,"a":12345678901234567890123}}"#,
+    );
+    assert_eq!(
+        String::from_utf8(reply.body).unwrap(),
+        r#"{"jsonrpc":"2.0","id":7,"result":{"z":1,"a":12345678901234567890123}}"#
+    );
 }

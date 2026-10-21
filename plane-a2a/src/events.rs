@@ -41,6 +41,8 @@ pub struct Event {
     pub artifact: bool,
     /// The far end's own task id, before the substitution.
     pub backend_task_id: Option<String>,
+    /// It was a message naming no task ([`task_identity::names_no_task`]).
+    pub names_no_task: bool,
 }
 
 /// One JSON value as a complete event.
@@ -66,12 +68,15 @@ pub fn read_event(
             state: None,
             artifact: false,
             backend_task_id: None,
+            names_no_task: false,
         })
     };
     let Some(data) = sse_data(frame_text) else {
         return verbatim();
     };
-    let Ok(mut envelope) = serde_json::from_str::<Value>(&data) else {
+    let Ok(mut envelope) =
+        serde_json::from_slice::<Value>(&crate::answer_bytes::readable(data.as_bytes()))
+    else {
         return verbatim();
     };
     let is_response = envelope.get("result").is_some()
@@ -89,6 +94,7 @@ pub fn read_event(
             state: None,
             artifact: false,
             backend_task_id: None,
+            names_no_task: false,
         });
     };
     let Some(result) = envelope.get_mut("result") else {
@@ -103,12 +109,36 @@ pub fn read_event(
         .and_then(Value::as_str)
         .and_then(task_identity::wire_state);
     let backend_task_id = task_identity::backend_task_id(result);
-    task_identity::rewrite_identity(result, task_id, context_id, skill);
+    let names_no_task = task_identity::names_no_task(result);
+    // The far end's own `result` bytes with busbar's identity spliced in (Law 5; Q128 a2a M8); the
+    // value path only for a result that is no object.
+    let spliced = crate::answer_bytes::result_span(data.as_bytes()).and_then(|r| {
+        crate::answer_bytes::rewrite_identity(
+            &data.as_bytes()[r],
+            &task_identity::WRAPPERS,
+            task_id,
+            context_id,
+            skill.map(|s| (task_identity::SKILL_METADATA_KEY, s)),
+        )
+    });
+    let sse = match spliced {
+        Some(bytes) => {
+            let mut sse = b"data: ".to_vec();
+            sse.extend_from_slice(&crate::answer_bytes::result_reply(rpc_id, &bytes));
+            sse.extend_from_slice(b"\n\n");
+            sse
+        }
+        None => {
+            task_identity::rewrite_identity(result, task_id, context_id, skill);
+            json_event(&envelope)
+        }
+    };
     Ok(Event {
-        sse: json_event(&envelope),
+        sse,
         state,
         artifact,
         backend_task_id,
+        names_no_task,
     })
 }
 

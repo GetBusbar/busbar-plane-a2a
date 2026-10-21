@@ -34,7 +34,7 @@
 use busbar_contract::abi::mechanism::call::{InHead, OutHead, Outcome};
 use busbar_contract::abi::mechanism::door::{KindTailHead, Statement};
 use busbar_contract::abi::mechanism::lifecycle::{
-    GenIn, RefreshIn, ReleaseIn, TickIn, TickOut, ValidateIn,
+    GenIn, ReadyIn, RefreshIn, ReleaseIn, TickIn, TickOut, ValidateIn,
 };
 use busbar_contract::abi::plane::{
     ArriveIn, ArriveOut, OnPieceIn, OnPieceOut, OutField, PlaneCancelIn, PlaneCancelOut,
@@ -42,8 +42,8 @@ use busbar_contract::abi::plane::{
     ProjectIn, ProjectOut, RecordWrite, RefusalIn, RefusalOut, ServeIn, ServeOut, UnitCount,
     CANCEL_ABORTED, EMIT_DONE, EMIT_TO_FAR_END, FROM_CALLER, FROM_FAR_END, FROM_KERNEL,
     PIECE_HAS_STATUS, PIECE_LAST, PIECE_REFUSED, PRINCIPAL_NONE, PRINCIPAL_REQUIRED, RECORD_PUT,
-    REFUSAL_ARRIVE, ROUTE_DIRECT, ROUTE_POOL, ROUTE_SCOPE, ROUTE_SCOPE_LOCAL, UNITS_REPORTED,
-    VERDICT_RETRY,
+    REFUSAL_ARRIVE, REFUSAL_KERNEL, ROUTE_DIRECT, ROUTE_POOL, ROUTE_SCOPE, ROUTE_SCOPE_LOCAL,
+    UNITS_REPORTED, VERDICT_RETRY,
 };
 use busbar_contract::abi::sdk::conn::Host;
 // THE ONE SHARED FAULT READING (ARCHITECT row 68): the breaker's vocabulary, stated on `OnPieceOut`.
@@ -89,7 +89,8 @@ pub const STATEMENT: Statement = Statement {
     ..statement(crate::PLANE_KEY, VERSION, MAX_INFLIGHT)
 };
 
-/// The most units the instance keeps state for at once; past it, the oldest is dropped first.
+/// The most units the instance keeps state for at once; past it, the oldest unit the door is done
+/// with makes room first, and only when none is held the oldest unit ([`AgentUnit::over`]).
 pub const MAX_UNITS: usize = 4096;
 
 /// One unit the instance keeps, from its arrival: what the arrival was, the agent the caller
@@ -124,6 +125,12 @@ pub struct AgentUnit {
     /// The failover pool the unit routes over (`ROUTE_POOL`): the pool its addressed agent is a
     /// member of. `None` for every other unit.
     pub pool: Option<String>,
+    /// The unit's own ticket, as its pieces carry it: what the kernel's `cancel` names it by.
+    pub ticket: Ticket,
+    /// THE DOOR IS DONE WITH IT: its answer is written whole, or the kernel cancelled it. Only a
+    /// `refusal` may still read it (the kernel judges the plane's last answer after it returns), and
+    /// that refusal forgets it; until then it is the first to make room (`keep_unit`).
+    pub over: bool,
 }
 
 /// One unit's unary hop, and the answer it is part way through writing.
@@ -163,6 +170,8 @@ pub struct Hop {
     /// The hop has LEFT the plane for its agent (its request answered at an ATTEMPT, every gate
     /// of the plane's passed): the unit is served and its fee unit is reported from then on.
     left: bool,
+    /// A piece of the far end's answer has come: the agent was reached.
+    heard: bool,
     /// THE ENVELOPE A REQUEST-STAGE REWRITE LEFT (`project`'s `rewrite`): what the hop relays
     /// (its task ids translated over it, its binding composed from it). Everything else the hop
     /// reads (the task it opens, the callback it carries, the admission) reads the caller's own
@@ -214,6 +223,7 @@ impl Hop {
             held_writes: Vec::new(),
             endpoint_judged: false,
             left: false,
+            heard: false,
             rewritten: None,
             mint_message_id: false,
             member: String::new(),
@@ -531,9 +541,17 @@ pub struct A2aDoor {
     pub(crate) swept: Keyed<(), u64>,
     /// `<caller>/<busbar task id>` to the far end's own id for the task: plane memory, so a
     /// restart forgets it (the engine's `idmap`, its bound included).
-    backends: Keyed<String, String>,
+    backends: BackendIds,
     /// The agents' verified cards, held in plugin memory to their refresh generation.
     pub(crate) cards: crate::cards::Cards,
+    /// The held cards were warmed from the `card` host records after `open` ([`warm_cards`]).
+    cards_warmed: Keyed<(), bool>,
+    /// The part records ([`crate::split_record`]) the store may hold under each `(kind, key)` of a
+    /// card or an approval, as far as this instance knows ([`HeldParts`]).
+    record_parts: Keyed<(&'static str, String), HeldParts>,
+    /// A `tick`'s warm of the held cards pended on the driver ticket: the `drive` its wake runs
+    /// carries it on, on the same handles, before anything else the drive does.
+    warm_driving: Keyed<(), bool>,
     /// The push notifications waiting for delivery, and the webhook credentials they present.
     pub(crate) deliveries: crate::push::Deliveries,
     /// The delivery attempt in flight across a PENDING `tick`, which `drive` carries on.
@@ -548,8 +566,10 @@ pub struct A2aDoor {
     pub(crate) grown: crate::task_door::Grown,
     /// Each agent's verify-on-call flight: one look at a time.
     pub(crate) flights: Flights,
-    /// Each registered agent's trust: the identity an operator approved (`approve`), the last
-    /// sighting of its card and verify-on-call's ledger: plane memory, so a restart forgets it.
+    /// Each registered agent's trust: the skills of the card an operator approved (`approve`), the
+    /// last sighting of its card and verify-on-call's ledger. The approved skills are also its
+    /// `card_approval` host record, warmed back after `open` ([`warm_cards`]); the sighting and the
+    /// ledger are plane memory, so a restart looks again (a ledger that never looked is due).
     pub(crate) trust: Keyed<String, crate::card_trust::TrustStanding>,
     /// The error-once latches of the record writes the store refused ([`crate::task_hop::Latches`]).
     pub(crate) latches: crate::task_hop::Latches,
@@ -576,23 +596,307 @@ impl A2aDoor {
     }
 }
 
+/// THE HELD CARDS, WARMED FROM THE `card` HOST RECORDS (ARCHITECT ruling B2, as amended: the
+/// `connect` and `approve` answers write them, `BUSBAR-1.6.0.md` l.290 "record writes ride
+/// `on_piece`'s answer" keeping every write on an answer): every agent's recorded card held under
+/// the newest generation, so an instance opened again serves the agents its operator approved
+/// before. READY once the listing has landed (a host that answers none, or no host, has nothing
+/// to load); PENDING while it is in flight.
+///
+/// THE APPROVED SKILLS come back with them, from the `card_approval` host records `approve` wrote
+/// (`BUSBAR-1.6.0.md` l.345-346: "what must survive a restart goes to its records through the
+/// store kind"), so the trust view's drift lists are judged against what the operator approved,
+/// never against nothing. A standing this instance already approved is left as it is.
+///
+/// ITS HANDLES COUNT ON `ticket`'s OWN SEQUENCE from `issued` (`abi::mechanism::ticket`: a
+/// handle's `seq` counts the services one ticket issued), and the count it reached is returned
+/// beside the answer, READY or PENDING: the host keeps each `(ticket, seq)`'s first answer and
+/// hands it back to any later call on that handle, so a warm on a unit's ticket that the unit's
+/// own pieces then counted over from the same `seq` would read the listing's answer as theirs
+/// (its `entitlement.check` a `records.list` answer, never `ENTITLED`).
+fn warm_cards(plane: &A2aDoor, ticket: Ticket, issued: u32) -> (Poll<()>, u32) {
+    use crate::tasks::Records;
+    let Some(host) = plane.host.as_ref() else {
+        return (Poll::Ready(()), issued);
+    };
+    let mut via = Via::new(host, plane.services, ticket, issued, &plane.grown);
+    let cards = match via.list(crate::records::KIND_CARD, "") {
+        Err(Halt::Pending) => return (Poll::Pending, via.issued()),
+        Err(Halt::Failed(_)) => return (Poll::Ready(()), via.issued()),
+        Ok(rows) => rows,
+    };
+    let approvals = match via.list(crate::records::KIND_CARD_APPROVAL, "") {
+        Err(Halt::Pending) => return (Poll::Pending, via.issued()),
+        Err(Halt::Failed(_)) => Vec::new(),
+        Ok(rows) => rows,
+    };
+    let issued = via.issued();
+    let generation = plane.newest();
+    let cards = joined(plane, crate::records::KIND_CARD, cards);
+    let approvals = joined(plane, crate::records::KIND_CARD_APPROVAL, approvals);
+    for (agent, value) in cards {
+        if let Ok(card) = serde_json::from_slice::<serde_json::Value>(&value) {
+            plane.cards.hold(&agent, generation, card);
+        }
+    }
+    for (agent, value) in approvals {
+        let Ok(approved) =
+            serde_json::from_slice::<std::collections::BTreeMap<String, String>>(&value)
+        else {
+            continue;
+        };
+        let mut standing = plane.trust.get(&agent).unwrap_or_default();
+        if standing.approved.is_none() {
+            standing.approved = Some(approved);
+            plane.trust.insert(agent, standing);
+        }
+    }
+    (Poll::Ready(()), issued)
+}
+
+/// One held kind's listed `rows` read back whole ([`crate::split_record::rejoin`]): a card or an
+/// approval past the host's record ceiling is reassembled from its parts and verified. A head whose
+/// parts are missing or do not verify is not read (that agent is looked at afresh) and is reported,
+/// as is a part no whole value names; every part listed is remembered under its key, so the next
+/// write of the key tombstones the ones it no longer names.
+fn joined(
+    plane: &A2aDoor,
+    kind: &'static str,
+    rows: Vec<(String, Vec<u8>)>,
+) -> Vec<(String, Vec<u8>)> {
+    use crate::split_record::{is_part, owner};
+    let listed: Vec<String> = rows
+        .iter()
+        .filter(|(key, _)| is_part(key))
+        .map(|(key, _)| key.clone())
+        .collect();
+    let joined = crate::split_record::rejoin(rows);
+    plane.record_parts.with_all(|known| {
+        known.retain(|(k, _), _| *k != kind);
+        for part in listed {
+            known
+                .entry((kind, owner(&part).to_string()))
+                .or_default()
+                .retired
+                .push(part);
+        }
+    });
+    for (agent, why) in &joined.refused {
+        tracing::warn!(
+            kind,
+            agent = %agent,
+            why,
+            "an A2A {kind} record split across host records was not read back whole: {why}; the \
+             agent is looked at afresh and the record is written again on its next connect or approve"
+        );
+    }
+    if !joined.stray.is_empty() {
+        tracing::warn!(
+            kind,
+            parts = joined.stray.len(),
+            "A2A {kind} part records that no whole record names were found; each is tombstoned on \
+             its agent's next connect or approve"
+        );
+    }
+    joined.whole
+}
+
+/// The `card` host records of `agent`'s verified `card`: keyed by the agent's id under the
+/// operator's scope (no caller prefix), split across records under the host's ceiling
+/// ([`kept_records`]).
+fn card_records(plane: &A2aDoor, agent: &str, card: &serde_json::Value) -> Vec<Write> {
+    serde_json::to_vec(card)
+        .map(|value| kept_records(plane, crate::records::KIND_CARD, agent, &value))
+        .unwrap_or_default()
+}
+
+/// The `card_approval` host records of the skills (`id -> digest`) of the card the operator
+/// approved for `agent`: keyed like its `card` records ([`kept_records`]).
+fn approval_records(
+    plane: &A2aDoor,
+    agent: &str,
+    approved: &std::collections::BTreeMap<String, String>,
+) -> Vec<Write> {
+    serde_json::to_vec(approved)
+        .map(|value| kept_records(plane, crate::records::KIND_CARD_APPROVAL, agent, &value))
+        .unwrap_or_default()
+}
+
+/// THE PART RECORDS A KEY MAY HOLD in the store: those its last written value names (`current`),
+/// and every other one this instance knows of (`retired`: a value's it replaced, and what the warm
+/// listed), which each write of the key tombstones. A write of the value `current` already names
+/// (an unchanged card, or the kernel's re-call of a short answer) tombstones `retired` again, so an
+/// answer that was never written still tombstones what it should.
+#[derive(Debug, Clone, Default)]
+struct HeldParts {
+    current: Vec<String>,
+    retired: Vec<String>,
+}
+
+/// The host records that keep `value` under `agent` of `kind`, whatever its length: a record is at
+/// most [`busbar_contract::bounded::MAX_RECORD_BYTES`] (busbar dev's store refuses a longer one,
+/// and the kernel answers the whole verb `500` for a write it cannot make), so a longer value is
+/// its parts, then its head ([`crate::split_record::split_value`]); then a tombstone of every
+/// part the store may hold under the key that the new value does not name ([`HeldParts`]), written
+/// after the head, so no head is ever left naming a part that is gone.
+fn kept_records(plane: &A2aDoor, kind: &'static str, agent: &str, value: &[u8]) -> Vec<Write> {
+    let mut writes = crate::split_record::split_value(kind, agent, value);
+    let named: Vec<String> = writes
+        .iter()
+        .filter(|w| crate::split_record::is_part(&w.key))
+        .map(|w| w.key.clone())
+        .collect();
+    let retired = plane.record_parts.with_all(|known| {
+        let held = known.entry((kind, agent.to_string())).or_default();
+        if held.current != named {
+            let mut retired = std::mem::take(&mut held.current);
+            retired.append(&mut held.retired);
+            retired.retain(|part| !named.contains(part));
+            retired.sort();
+            retired.dedup();
+            *held = HeldParts {
+                current: named.clone(),
+                retired,
+            };
+        }
+        held.retired.clone()
+    });
+    writes.extend(retired.into_iter().map(|key| Write {
+        kind,
+        key,
+        value: Vec::new(),
+    }));
+    writes
+}
+
+/// A trust verb's whole answer: `status`, the head `fields`, `body`, the `AUDIT_*` row, and the
+/// record `writes` it carries, every span in the one arena; a short buffer answers FAILED with
+/// what each needs.
+fn verb_answer(
+    input: &Lent<'_, ServeIn>,
+    out: &mut Out<'_, ServeOut>,
+    (status, head, body): (u32, &[(&str, &str)], &[u8]),
+    audit: u32,
+    writes: &[Write],
+) -> Outcome {
+    let (mut reply, mut fields, mut arena, mut records) = (
+        input.reply_buf(),
+        input.fields_buf(),
+        input.arena_buf(),
+        input.records_buf(),
+    );
+    reply.extend(body);
+    for (name, value) in head {
+        fields.push(OutField {
+            name: arena.span(name.as_bytes()),
+            value: arena.span(value.as_bytes()),
+        });
+    }
+    for w in writes {
+        records.push(RecordWrite {
+            kind: kind_index(w.kind),
+            op: RECORD_PUT,
+            key: arena.span(w.key.as_bytes()),
+            value: arena.span(&w.value),
+        });
+    }
+    let short = !(reply.fits() && fields.fits() && arena.fits() && records.fits());
+    let (rw, rnd) = reply.settle(short);
+    let (fw, fnd) = fields.settle(short);
+    let (cw, cnd) = records.settle(short);
+    let (aw, and) = arena.settle(short);
+    out.set(|o| &o.reply_written, rw as u64);
+    out.set(|o| &o.reply_needed, rnd as u64);
+    out.set(|o| &o.fields_written, fw as u32);
+    out.set(|o| &o.fields_needed, fnd as u32);
+    out.set(|o| &o.records_written, cw as u32);
+    out.set(|o| &o.records_needed, cnd as u32);
+    out.set(|o| &o.arena_written, aw as u64);
+    out.set(|o| &o.arena_needed, and as u64);
+    if short {
+        return Outcome::Failed;
+    }
+    out.set(|o| &o.status, status);
+    out.set(|o| &o.audit, audit);
+    Outcome::Ready
+}
+
 /// The most far-end task ids the instance remembers (the engine's `idmap::CAPACITY`).
 pub const MAX_BACKEND_IDS: usize = 100_000;
+
+/// THE FAR END'S OWN TASK IDS, by `<caller>/<busbar task id>`, bounded: past the bound the id
+/// recorded longest ago is forgotten first, whichever caller it is for, so one caller's volume
+/// never pushes out another caller's newer ids because of how their references sort.
+#[derive(Debug, Default)]
+pub(crate) struct BackendIds(Keyed<(), Recorded>);
+
+/// The ids, each with when it was first recorded, and that order.
+#[derive(Debug, Default)]
+struct Recorded {
+    ids: std::collections::BTreeMap<String, (u64, String)>,
+    order: std::collections::BTreeMap<u64, String>,
+    next: u64,
+}
+
+impl BackendIds {
+    /// The far end's id held under `key`.
+    pub(crate) fn get(&self, key: &str) -> Option<String> {
+        self.0.with(&(), |r| {
+            r.and_then(|r| r.ids.get(key).map(|(_, id)| id.clone()))
+        })
+    }
+
+    /// How many ids are held.
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.0.with(&(), |r| r.map_or(0, |r| r.ids.len()))
+    }
+
+    /// Hold `id` under `key`; past `cap`, the id recorded longest ago is forgotten. A key held
+    /// already keeps its place and forgets nothing (the engine's `idmap`: insertion order, its
+    /// bound included).
+    pub(crate) fn record(&self, cap: usize, key: String, id: String) {
+        self.0.with_all(|m| {
+            let r = m.entry(()).or_default();
+            if let Some((_, held)) = r.ids.get_mut(&key) {
+                *held = id;
+                return;
+            }
+            while r.ids.len() >= cap {
+                let Some((_, oldest)) = r.order.pop_first() else {
+                    break;
+                };
+                r.ids.remove(&oldest);
+            }
+            let at = r.next;
+            r.next += 1;
+            r.order.insert(at, key.clone());
+            r.ids.insert(key, (at, id));
+        });
+    }
+}
 
 /// The settings blob read as the `agents:` section, or the refusal in the grammar's words.
 fn agents_section(bytes: &[u8]) -> Result<AgentsCfg, Refusal> {
     door_statement::read_agents_section(bytes).map_err(Refusal::refused)
 }
 
-/// Keep `value` under `key` in `map`, dropping the smallest keys first past `cap`.
-fn keep<K: Ord, V>(map: &Keyed<K, V>, cap: usize, key: K, value: V) {
-    map.with_all(|m| {
-        while m.len() >= cap && !m.contains_key(&key) {
-            if m.pop_first().is_none() {
+/// Keep `unit` under `key`. Past [`MAX_UNITS`] room is made first by the oldest unit the door is
+/// done with ([`AgentUnit::over`]), and only when none is held by the oldest unit (unit keys are
+/// minted in arrival order).
+fn keep_unit(units: &Keyed<u64, AgentUnit>, key: u64, unit: AgentUnit) {
+    units.with_all(|m| {
+        while m.len() >= MAX_UNITS && !m.contains_key(&key) {
+            let over = m.iter().find(|(_, u)| u.over).map(|(k, _)| *k);
+            let gone = match over {
+                Some(k) => m.remove(&k),
+                None => m.pop_first().map(|(_, u)| u),
+            };
+            if gone.is_none() {
                 break;
             }
         }
-        m.insert(key, value);
+        m.insert(key, unit);
     });
 }
 
@@ -699,8 +1003,11 @@ slot!(
             units: Keyed::new(),
             swept: Keyed::new(),
             latches: crate::task_hop::Latches::new(),
-            backends: Keyed::new(),
+            backends: BackendIds::default(),
             cards: crate::cards::Cards::new(),
+            cards_warmed: Keyed::new(),
+            record_parts: Keyed::new(),
+            warm_driving: Keyed::new(),
             deliveries: crate::push::Deliveries::new(),
             attempting: crate::push_door::Attempting::default(),
             tokens: crate::push::Tokens::new(),
@@ -784,6 +1091,29 @@ slot!(
 );
 
 slot!(
+    /// `ready` (after `open`, before any unit arrives; boot awaits it): the held CARDS are warmed
+    /// from the `card` host records ([`warm_cards`]), on the op's real ticket, so the agents the
+    /// operator approved before are served from the first unit, their arrival admitted against the
+    /// card they fit. PENDING while the listing is in flight; a listing the host refuses leaves the
+    /// cards to the first tick, as before, and the instance serves.
+    ReadyOp, ReadyIn, OutHead, |instance, _, _| {
+        let Some(plane) = instance.get() else {
+            return Outcome::Ready;
+        };
+        if plane.cards_warmed.get(&()).unwrap_or(false) {
+            return Outcome::Ready;
+        }
+        match warm_cards(plane, instance.ticket(), 0).0 {
+            Poll::Ready(()) => {
+                plane.cards_warmed.insert((), true);
+                Outcome::Ready
+            }
+            Poll::Pending => Outcome::Pending,
+        }
+    }
+);
+
+slot!(
     /// `retire`: the generation's snapshot is dropped.
     Retire, GenIn, OutHead, |instance, input, _| {
         if let Some(plane) = instance.get() {
@@ -802,6 +1132,28 @@ slot!(
             out.set(|o| &o.next_tick_ns, 0);
             return Outcome::Ready;
         };
+        // THE DRIVER TICKET'S WAKE IS ARMED ON EVERY TICK, the first included: a notification
+        // queued while the cards are still warming wakes the driver ticket, never waits for a
+        // scheduled tick.
+        crate::push_door::arm(plane, &instance);
+        // THE FIRST TICK AFTER `open` warms the held cards from the `card` host records, on a
+        // tick of its own (its host calls are this op's only ones). A listing in flight ends the
+        // tick PENDING and goes on through `drive` (`abi::mechanism::lifecycle`: a tick's PENDING
+        // answer ends it, and what pended inside it goes on through `drive`; the next tick's start
+        // forgets the cycle's answers, so a warm left in flight behind a READY tick could never
+        // land, and its listing's every completion would tick again). A warm that landed asks for
+        // the next tick at once, for the deliveries.
+        if !plane.cards_warmed.get(&()).unwrap_or(false) {
+            if warm_cards(plane, instance.ticket(), 0).0.is_pending() {
+                plane.warm_driving.insert((), true);
+                out.set(|o| &o.next_tick_ns, 0);
+                return Outcome::Pending;
+            }
+            plane.cards_warmed.insert((), true);
+            plane.warm_driving.insert((), false);
+            out.set(|o| &o.next_tick_ns, input.get().now_ns.max(1));
+            return Outcome::Ready;
+        }
         let outcome = crate::push_door::tick_deliveries(plane, &instance, input.get().now_ns);
         out.set(
             |o| &o.next_tick_ns,
@@ -815,10 +1167,23 @@ slot!(
     /// `drive`: no session has unsolicited output; a push delivery the last `tick` left PENDING
     /// goes on ([`crate::push_door::drive`]).
     Drive, PlaneDriveIn, PlaneDriveOut, |instance, _, _| {
-        match instance.get() {
-            Some(plane) => crate::push_door::drive(plane, &instance),
-            None => Outcome::Ready,
+        let Some(plane) = instance.get() else {
+            return Outcome::Ready;
+        };
+        // THE WARM A TICK LEFT PENDING goes on here, on the tick's handles, until it lands (or a
+        // unit's own warm landed it first); the drive then answers READY, and the tick that
+        // follows attempts the deliveries.
+        if plane.warm_driving.get(&()).unwrap_or(false) {
+            if !plane.cards_warmed.get(&()).unwrap_or(false) {
+                if warm_cards(plane, instance.ticket(), 0).0.is_pending() {
+                    return Outcome::Pending;
+                }
+                plane.cards_warmed.insert((), true);
+            }
+            plane.warm_driving.insert((), false);
+            return Outcome::Ready;
         }
+        crate::push_door::drive(plane, &instance)
     }
 );
 
@@ -830,6 +1195,16 @@ slot!(
     /// task keeps the last state it reached.
     Cancel, PlaneCancelIn, PlaneCancelOut, |instance, input, mut out| {
         if let Some(plane) = instance.get() {
+            // The cancelled unit is over: a refusal may still render it, so it is kept until then,
+            // the first to make room.
+            let ticket = input.cancel.ticket;
+            if ticket != Ticket::NONE {
+                plane.units.with_all(|m| {
+                    for u in m.values_mut().filter(|u| u.ticket == ticket) {
+                        u.over = true;
+                    }
+                });
+            }
             let woken = plane.flights.abandon(input.cancel.ticket);
             if let Some(host) = plane.host.as_ref() {
                 for waiter in woken {
@@ -854,10 +1229,11 @@ slot!(
 
 // ── the request path ──────────────────────────────────────────────────────────────────────────
 //
-// Nothing routes to these before the flip: the engine still serves every request, and no
-// production path loads this door (`tests/door_unrouted.rs` holds that). `arrive`, `on_piece`,
-// `refusal` and `project` serve the JSON-RPC and HTTP+JSON lines, their one-reply hops and their
-// hops answering in events; `serve`, `hydrate` and `start` are REFUSED.
+// The kernel's plane driver serves every A2A request through these: the door is exported by the
+// plugin crate and linked by the root. `arrive`, `on_piece`, `refusal` and `project` serve the
+// JSON-RPC, HTTP+JSON and gRPC lines and the open card reads, their one-reply hops and their hops
+// answering in events; `serve` answers the trust verbs and busbar's push callback; `hydrate` and
+// `start` have nothing to do.
 
 slot!(
     /// `arrive`: an arrival on the JSON-RPC line, or on the HTTP+JSON line as the envelope its
@@ -915,7 +1291,10 @@ slot!(
             // names none.
             Some(_) => agent_arrival::decide_arrival(envelope.as_deref().unwrap_or(body), |name| {
                 if name.eq_ignore_ascii_case(agent_arrival::H_VERSION) {
-                    field(name).or(Some(crate::framed::DEFAULT_VERSION))
+                    // An EMPTY `a2a-version` names none either: the line's own version.
+                    field(name)
+                        .filter(|v| !v.is_empty())
+                        .or(Some(crate::framed::DEFAULT_VERSION))
                 } else if name.eq_ignore_ascii_case(agent_arrival::H_CONTENT_TYPE)
                     || name.eq_ignore_ascii_case(agent_arrival::H_ORIGIN)
                 {
@@ -971,9 +1350,8 @@ slot!(
             if matches!(disposition, AgentDisposition::Request { .. }) {
                 out.counted();
             }
-            keep(
+            keep_unit(
                 &plane.units,
-                MAX_UNITS,
                 given.unit,
                 AgentUnit {
                     disposition,
@@ -986,6 +1364,8 @@ slot!(
                     generation,
                     unreadable_rewrite: false,
                     pool: None,
+                    ticket: Ticket::NONE,
+                    over: false,
                 },
             );
             return Outcome::Ready;
@@ -1090,8 +1470,10 @@ slot!(
             generation,
             unreadable_rewrite: false,
             pool,
+            ticket: Ticket::NONE,
+            over: false,
         };
-        keep(&plane.units, MAX_UNITS, given.unit, unit);
+        keep_unit(&plane.units, given.unit, unit);
         Outcome::Ready
     }
 );
@@ -1154,9 +1536,8 @@ fn arrive_card(
             }
         }
     }
-    keep(
+    keep_unit(
         &plane.units,
-        MAX_UNITS,
         unit,
         AgentUnit {
             disposition: AgentDisposition::Card(ask),
@@ -1169,6 +1550,8 @@ fn arrive_card(
             generation,
             unreadable_rewrite: false,
             pool: None,
+            ticket: Ticket::NONE,
+            over: false,
         },
     );
     Outcome::Ready
@@ -1439,6 +1822,7 @@ fn settle_task(
         };
         if i >= hop.queued {
             crate::push_door::queue(&reach.plane.deliveries, row, config.as_ref());
+            crate::push_door::ended(&reach.plane.tokens, row);
             hop.queued = i + 1;
         }
     }
@@ -1469,12 +1853,10 @@ fn settle_task(
         };
         // A far end that issued the SAME id busbar did needs no translation and holds no slot.
         if let Some(backend) = backend.filter(|b| *b != task.task_id) {
-            keep(
-                &reach.plane.backends,
-                MAX_BACKEND_IDS,
-                task_key(caller, &task.task_id),
-                backend,
-            );
+            reach
+                .plane
+                .backends
+                .record(MAX_BACKEND_IDS, task_key(caller, &task.task_id), backend);
         }
     }
     hop.outbox.writes.extend(writes.split_off(seeded));
@@ -1956,6 +2338,9 @@ fn hop_piece(
     if let Some(url) = &url {
         hop.relay.name_backend(member, url);
     }
+    if given.from == FROM_FAR_END {
+        hop.heard = true;
+    }
     // THE REFUSED PIECE (`TAIL_REFUSED_PIECE`): the kernel refused the unit before it dialled, and
     // hands the refusal here first, on the unit's own ticket; every other kernel piece is an
     // ATTEMPT.
@@ -2234,6 +2619,17 @@ fn hop_piece(
     if matches!(hop.outbox.head, Some(AnswerHead::Attempt(_))) {
         hop.left = true;
     }
+    // A HOP THE KERNEL NEVER DIALLED (BUSBAR-1.6.0.md l.1126: "a hop refused before the socket
+    // ledgers nothing"): its ATTEMPT left the plane, then the kernel's send found the agent's
+    // credential unavailable and dialled nothing, and the far end said nothing. It never left: its
+    // refused piece reports every class at `0`, the unit's last counts, so its end ledgers no bytes
+    // and refunds the fee.
+    let undialled = refused
+        && given.reason == busbar_contract::abi::plane::RefusalCode::CredentialUnavailable.code()
+        && !hop.heard;
+    if undialled {
+        hop.left = false;
+    }
     let left = hop.left;
     let admitted = hop.admitted;
     let need = attempt_need(hop.relay.binding());
@@ -2252,7 +2648,8 @@ fn hop_piece(
         input.arena_buf(),
         input.units_buf(),
     );
-    // The refused piece reports no units: what the unit counted stands as its ATTEMPT left it.
+    // The refused piece reports no units: what the unit counted stands as its ATTEMPT left it,
+    // unless the hop was never dialled (below).
     let moved = if refused { 0 } else { hop.relay.moved() };
     if moved != 0 {
         units.push(UnitCount {
@@ -2267,6 +2664,18 @@ fn hop_piece(
             source: UNITS_REPORTED,
             amount: 1,
         });
+    }
+    if undialled {
+        for class in [
+            door_statement::CLASS_BYTES_INDEX,
+            door_statement::CLASS_FEE_INDEX,
+        ] {
+            units.push(UnitCount {
+                class,
+                source: UNITS_REPORTED,
+                amount: 0,
+            });
+        }
     }
     let mut head_fields = |list: &[(&'static str, std::borrow::Cow<'static, str>)]| {
         for (name, value) in list {
@@ -2482,6 +2891,42 @@ slot!(
             return Outcome::Failed;
         };
         let unit = input.get().unit;
+        // THE HELD CARDS ARE WARM BEFORE ANY PIECE IS SERVED: a unit's admission reads the card it
+        // fits, so a unit whose first piece came before the instance's first tick warms them here,
+        // on its own ticket ([`warm_cards`]), rather than being refused for want of a card its
+        // operator approved (`NoCachedCard`). The warm's handles are the unit's: they count on
+        // from its pass, and its pass counts on from after them, so no piece of the unit issues a
+        // handle the warm's listing was answered on (busbar keeps each handle's first answer). A
+        // unit whose warm pended replays it on its next entry, on the same handles, even when
+        // another unit's warm landed meanwhile.
+        let warm = plane.units.with(&unit, |u| {
+            u.map(|u| (u.pass.warming, u.pass.issued))
+        });
+        if let Some((warming, issued)) = warm {
+            if warming || !plane.cards_warmed.get(&()).unwrap_or(false) {
+                let (warmed, counted) = warm_cards(plane, instance.ticket(), issued);
+                let landed = warmed.is_ready();
+                plane.units.with(&unit, |u| {
+                    if let Some(u) = u {
+                        u.pass.warming = !landed;
+                        if landed {
+                            u.pass.issued = counted;
+                        }
+                    }
+                });
+                if !landed {
+                    return Outcome::Pending;
+                }
+                plane.cards_warmed.insert((), true);
+            }
+        }
+        // The unit's ticket, which the kernel's `cancel` names it by.
+        let ticket = instance.ticket();
+        plane.units.with(&unit, |u| {
+            if let Some(u) = u {
+                u.ticket = ticket;
+            }
+        });
         // A REFUSED PIECE (`TAIL_REFUSED_PIECE`) ends only a relayed hop's task: a unit with no hop
         // has nothing to end, and `refusal` answers it.
         let refused = input.get().from == FROM_KERNEL && input.get().flags & PIECE_REFUSED != 0;
@@ -2719,7 +3164,21 @@ slot!(
             })
         })
         .flatten();
-        let rendered = if let Some(refusal) = &unreadable {
+        // A KERNEL REFUSAL WITH NO UNIT (no credential, a body over the cap: refused before any
+        // unit was made) answers the bytes v1.5.5 answered on the route, a JSON-RPC error with no
+        // id, at the kernel's own status, on every line. The bytes live once, in the contract's
+        // JSON-RPC module, beside the envelope they are an instance of.
+        let unitless = (given.unit == 0 && given.cause == REFUSAL_KERNEL)
+            .then(|| busbar_contract::jsonrpc::unitless_kernel_body(given.reason))
+            .flatten();
+        let rendered = if let Some(body) = unitless {
+            // `0`: the kernel's status stands.
+            agent_arrival::Rendered {
+                status: 0,
+                body: body.to_vec(),
+                content_type: "application/json",
+            }
+        } else if let Some(refusal) = &unreadable {
             agent_arrival::render(dialect, refusal, true)
         } else if let Some(refusal) = &unrecorded {
             agent_arrival::render(dialect, refusal, true)
@@ -2785,14 +3244,17 @@ slot!(
                 .flatten()
                 .map(|agent| agent_arrival::not_granted_sentence(&door_statement::agent_resource(&agent)));
             let text = ungranted.as_deref().unwrap_or(text);
-            agent_arrival::render(dialect, &agent_arrival::kernel_refusal(given.status, text), false)
+            // The code is the reason's CLASS's (`class_code`): a node fault reads as the internal
+            // error, every other class as the engine's admission refusal.
+            let refusal = agent_arrival::kernel_refusal_of(given.reason, given.status, text);
+            agent_arrival::render(dialect, &refusal, false)
         };
         // ON THE gRPC LINE the rendered envelope is the status the call ends with, as the engine's
         // bridge read its ingress's envelope: the status in the line's own numbering, its message
         // and its details, stated as the closing block the stream's framer sends as the whole
         // answer, at the refusal's neutral status (SEAM-4l: a block stating `grpc-status` is the
         // close; the neutral status is what a framer maps when the block states none).
-        let (body, head, status) = if dialect == Dialect::Framed {
+        let (body, head, status) = if dialect == Dialect::Framed && unitless.is_none() {
             let neutral = if rendered.status == 0 {
                 given.status
             } else {
@@ -2876,6 +3338,10 @@ slot!(
             return Outcome::Failed;
         }
         out.set(|o| &o.status, status);
+        // THE UNIT'S LAST CALL: its refusal is rendered, and the door forgets it.
+        if let Some(plane) = instance.get() {
+            plane.units.remove(&given.unit);
+        }
         Outcome::Ready
     }
 );
@@ -3660,6 +4126,14 @@ slot!(
         };
         let mut standing = plane.trust.get(&name).unwrap_or_default();
         let state_now = |plane: &A2aDoor| crate::card_trust::verdict_state(verdict(plane, &name));
+        // THE CARD RECORD (ruling B2, as amended): a card this look verified rides the verb's
+        // answer as the agent's `card` host records (split under the host's record ceiling),
+        // which a later `open` warms the held cards from.
+        let writes: Vec<Write> = looked
+            .card
+            .as_ref()
+            .map(|card| card_records(plane, &name, card))
+            .unwrap_or_default();
         let Some(claimed) = claimed else {
             // A PREVIEW DECIDES NOTHING: the key stands where the book has it.
             if let Some(card) = looked.card {
@@ -3673,7 +4147,8 @@ slot!(
             );
             standing.sighting = looked.sighting;
             plane.trust.insert(name, standing);
-            return out.answer(&input, 200, VIEW_FIELDS, view.as_bytes(), AUDIT_APPLIED);
+            let answer = (200, VIEW_FIELDS, view.as_bytes());
+            return verb_answer(&input, &mut out, answer, AUDIT_APPLIED, &writes);
         };
         if let Err(refusal) = crate::card_trust::agrees(&looked.sighting, claimed.trim()) {
             let condition = Some(INVALID_CONFIG);
@@ -3697,6 +4172,15 @@ slot!(
         // THE SKILLS APPROVED, held for the trust view's drift lists (ruling Q2): the card this
         // approval adopted, which `agrees` matched to the fingerprint the operator named.
         standing.approved = looked.sighting.seen().map(|seen| seen.skills.clone());
+        // ... and written as the agent's `card_approval` host record, so a restart keeps them.
+        let mut writes = writes;
+        writes.extend(
+            standing
+                .approved
+                .as_ref()
+                .map(|approved| approval_records(plane, &name, approved))
+                .unwrap_or_default(),
+        );
         let view = crate::card_trust::registration_view(
             &name,
             state_now(plane),
@@ -3705,7 +4189,8 @@ slot!(
         );
         standing.sighting = looked.sighting;
         plane.trust.insert(name, standing);
-        out.answer(&input, 200, VIEW_FIELDS, view.as_bytes(), AUDIT_APPLIED)
+        let answer = (200, VIEW_FIELDS, view.as_bytes());
+        verb_answer(&input, &mut out, answer, AUDIT_APPLIED, &writes)
     }
 );
 
@@ -3746,9 +4231,10 @@ const TRUST_DECIDE_SEQ: u32 = u32::MAX - 1;
 
 slot!(
     /// `hydrate`: nothing to load. The door's durable state is host records (its tasks, their push
-    /// configs and chains), read on demand through `records.get`/`records.list`; what it holds in
-    /// memory (cards, the far-end id map, owed push outcomes) is plane memory a restart forgets, as
-    /// the engine's was.
+    /// configs and chains), read on demand through `records.get`/`records.list`, and the agents'
+    /// cards and approved skills, warmed after `open` ([`warm_cards`]); what else it holds in
+    /// memory (the far-end id map, owed push outcomes, the last sightings) is plane memory a
+    /// restart forgets, as the engine's was.
     Hydrate, GenIn, OutHead, |_, _, _| { Outcome::Ready }
 );
 
@@ -4091,6 +4577,7 @@ busbar_contract::plugin_door! {
         tick: Safe<Tick>, drive: Safe<Drive>, cancel: Safe<Cancel>, release: Safe<Release>,
         close: Safe<Close>,
     },
+    ready: Safe<ReadyOp>,
     kind_ops: {
         arrive: Safe<Arrive>, on_piece: Safe<OnPiece>, refusal: Safe<RefusalSlot>,
         serve: Safe<Serve>, hydrate: Safe<Hydrate>, start: Safe<Start>, project: Safe<Project>,
