@@ -647,23 +647,41 @@ fn warm_cards(plane: &A2aDoor, ticket: Ticket, issued: u32) -> (Poll<()>, u32) {
 }
 
 /// The `card` host record of `agent`'s verified `card`: keyed by the agent's id under the
-/// operator's scope (no caller prefix).
-fn card_record(agent: &str, card: &serde_json::Value) -> Write {
-    Write {
-        kind: crate::records::KIND_CARD,
-        key: agent.to_string(),
-        value: serde_json::to_vec(card).unwrap_or_default(),
-    }
+/// operator's scope (no caller prefix). `None` when the card is longer than a host record holds
+/// ([`kept_record`]).
+fn card_record(agent: &str, card: &serde_json::Value) -> Option<Write> {
+    kept_record(
+        crate::records::KIND_CARD,
+        agent,
+        serde_json::to_vec(card).ok()?,
+    )
 }
 
 /// The `card_approval` host record of the skills (`id -> digest`) of the card the operator approved
-/// for `agent`: keyed like its `card` record.
-fn approval_record(agent: &str, approved: &std::collections::BTreeMap<String, String>) -> Write {
-    Write {
-        kind: crate::records::KIND_CARD_APPROVAL,
+/// for `agent`: keyed like its `card` record. `None` when the list is longer than a host record
+/// holds ([`kept_record`]).
+fn approval_record(
+    agent: &str,
+    approved: &std::collections::BTreeMap<String, String>,
+) -> Option<Write> {
+    kept_record(
+        crate::records::KIND_CARD_APPROVAL,
+        agent,
+        serde_json::to_vec(approved).ok()?,
+    )
+}
+
+/// A host record of `kind` under `agent` holding `value`, when the host's store can keep it: a
+/// record is at most [`busbar_contract::bounded::MAX_RECORD_BYTES`] (busbar dev's store refuses a
+/// longer one, and the kernel answers the whole verb `500` for a write it cannot make). A card or
+/// an approval past that is held in plane memory only, as it was before these records existed: an
+/// instance opened again looks at that agent afresh.
+fn kept_record(kind: &'static str, agent: &str, value: Vec<u8>) -> Option<Write> {
+    (value.len() <= busbar_contract::bounded::MAX_RECORD_BYTES).then(|| Write {
+        kind,
         key: agent.to_string(),
-        value: serde_json::to_vec(approved).unwrap_or_default(),
-    }
+        value,
+    })
 }
 
 /// A trust verb's whole answer: `status`, the head `fields`, `body`, the `AUDIT_*` row, and the
@@ -4006,7 +4024,7 @@ slot!(
         let writes: Vec<Write> = looked
             .card
             .as_ref()
-            .map(|card| card_record(&name, card))
+            .and_then(|card| card_record(&name, card))
             .into_iter()
             .collect();
         let Some(claimed) = claimed else {
@@ -4053,7 +4071,7 @@ slot!(
             standing
                 .approved
                 .as_ref()
-                .map(|approved| approval_record(&name, approved)),
+                .and_then(|approved| approval_record(&name, approved)),
         );
         let view = crate::card_trust::registration_view(
             &name,
