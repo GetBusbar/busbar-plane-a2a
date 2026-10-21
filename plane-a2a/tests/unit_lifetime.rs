@@ -104,10 +104,7 @@ fn answer(out: *mut ServiceOut, outcome: Outcome, value: u64, len: u64) -> RawOu
             items: 0,
             needed_bytes: 0,
             needed_items: 0,
-            error: AbiStr {
-                ptr: std::ptr::null(),
-                len: 0,
-            },
+            error: AbiStr::ABSENT,
         });
     }
     RawOutcome::of(outcome)
@@ -208,10 +205,10 @@ extern "C" fn records_list(_: HostCtx, input: *const c_void, out: *mut ServiceOu
     let i = unsafe { input.cast::<RecordsListIn>().read() };
     // SAFETY: as above.
     let text = |s: AbiStr| unsafe {
-        if s.ptr.is_null() {
+        if s.is_absent() {
             Vec::new()
         } else {
-            std::slice::from_raw_parts(s.ptr, s.len).to_vec()
+            std::slice::from_raw_parts(s.ptr(), s.len()).to_vec()
         }
     };
     let (kind, after) = (text(i.kind), text(i.after));
@@ -256,10 +253,7 @@ extern "C" fn records_list(_: HostCtx, input: *const c_void, out: *mut ServiceOu
             value: 0,
             needed_bytes: 0,
             needed_items: 0,
-            error: AbiStr {
-                ptr: std::ptr::null(),
-                len: 0,
-            },
+            error: AbiStr::ABSENT,
         });
     }
     RawOutcome::of(Outcome::Ready)
@@ -464,19 +458,13 @@ fn z<T>() -> T {
 }
 
 fn str_of(s: &[u8]) -> AbiStr {
-    AbiStr {
-        ptr: s.as_ptr(),
-        len: s.len(),
-    }
+    // SAFETY: `s` is a fixture or a buffer that outlives the call its `in` is lent to.
+    unsafe { AbiStr::from_raw_parts(s.as_ptr(), s.len()) }
 }
 
 fn octets(b: &[u8]) -> Blob {
-    Blob {
-        ptr: b.as_ptr(),
-        len: b.len(),
-        fmt: BLOB_OCTETS,
-        flags: 0,
-    }
+    // SAFETY: as `str_of`.
+    unsafe { Blob::from_raw_parts(b.as_ptr(), b.len(), BLOB_OCTETS, 0) }
 }
 
 fn head<T>(op: u32, ticket: Ticket) -> InHead {
@@ -653,11 +641,16 @@ fn open_with(section: &'static [u8]) -> Door {
         ..z()
     };
     let f = lifecycle().open.expect("the door opens");
-    let ret = f(
-        std::ptr::null_mut(),
-        std::ptr::from_ref(&i).cast(),
-        std::ptr::from_mut(&mut o).cast(),
-    );
+    // SAFETY: `f` is the door's own slot, called over an `in` and an `out` laid out as its ABI
+    // states and live for the call.
+    #[allow(unused_unsafe)]
+    let ret = unsafe {
+        f(
+            std::ptr::null_mut(),
+            std::ptr::from_ref(&i).cast(),
+            std::ptr::from_mut(&mut o).cast(),
+        )
+    };
     assert_eq!(ret.outcome(), Outcome::Ready, "the door opens");
     Door {
         instance: o.open.instance,
@@ -685,11 +678,16 @@ impl Door {
         let mut o: ArriveOut = z();
         o.head = out_head::<ArriveOut>();
         let f = ops().arrive.expect("arrive");
-        let ret = f(
-            self.instance,
-            std::ptr::from_ref(&i).cast(),
-            std::ptr::from_mut(&mut o).cast(),
-        );
+        // SAFETY: `f` is the door's own slot, called over an `in` and an `out` laid out as its ABI
+        // states and live for the call.
+        #[allow(unused_unsafe)]
+        let ret = unsafe {
+            f(
+                self.instance,
+                std::ptr::from_ref(&i).cast(),
+                std::ptr::from_mut(&mut o).cast(),
+            )
+        };
         (ret.outcome(), o.refusal_status)
     }
 
@@ -726,11 +724,16 @@ impl Door {
         let mut o: OnPieceOut = z();
         o.head = out_head::<OnPieceOut>();
         let f = ops().on_piece.expect("on_piece");
-        let ret = f(
-            self.instance,
-            std::ptr::from_ref(&i).cast(),
-            std::ptr::from_mut(&mut o).cast(),
-        );
+        // SAFETY: `f` is the door's own slot, called over an `in` and an `out` laid out as its ABI
+        // states and live for the call.
+        #[allow(unused_unsafe)]
+        let ret = unsafe {
+            f(
+                self.instance,
+                std::ptr::from_ref(&i).cast(),
+                std::ptr::from_mut(&mut o).cast(),
+            )
+        };
         let at = |s: busbar_contract::abi::mechanism::call::Span| {
             let from = s.offset as usize;
             String::from_utf8_lossy(&arena[from..from + s.len as usize]).into_owned()
@@ -772,11 +775,16 @@ impl Door {
         let mut o: RefusalOut = z();
         o.head = out_head::<RefusalOut>();
         let f = ops().refusal.expect("refusal");
-        let ret = f(
-            self.instance,
-            std::ptr::from_ref(&i).cast(),
-            std::ptr::from_mut(&mut o).cast(),
-        );
+        // SAFETY: `f` is the door's own slot, called over an `in` and an `out` laid out as its ABI
+        // states and live for the call.
+        #[allow(unused_unsafe)]
+        let ret = unsafe {
+            f(
+                self.instance,
+                std::ptr::from_ref(&i).cast(),
+                std::ptr::from_mut(&mut o).cast(),
+            )
+        };
         let body = String::from_utf8_lossy(&reply[..o.reply_written as usize]).into_owned();
         (ret.outcome(), o.status, body)
     }
@@ -831,11 +839,16 @@ impl Door {
         let mut o: ServeOut = z();
         o.head = out_head::<ServeOut>();
         let f = ops().serve.expect("serve");
-        let ret = f(
-            self.instance,
-            std::ptr::from_ref(&i).cast(),
-            std::ptr::from_mut(&mut o).cast(),
-        );
+        // SAFETY: `f` is the door's own slot, called over an `in` and an `out` laid out as its ABI
+        // states and live for the call.
+        #[allow(unused_unsafe)]
+        let ret = unsafe {
+            f(
+                self.instance,
+                std::ptr::from_ref(&i).cast(),
+                std::ptr::from_mut(&mut o).cast(),
+            )
+        };
         // The kernel writes the answer's record writes to the store, in order.
         let held = busbar_plane_a2a::records::HELD_KINDS;
         let mut status = o.status;
@@ -869,11 +882,16 @@ impl Door {
         let mut o: TickOut = z();
         o.head = out_head::<TickOut>();
         let f = lifecycle().tick.expect("tick");
-        let ret = f(
-            self.instance,
-            std::ptr::from_ref(&i).cast(),
-            std::ptr::from_mut(&mut o).cast(),
-        );
+        // SAFETY: `f` is the door's own slot, called over an `in` and an `out` laid out as its ABI
+        // states and live for the call.
+        #[allow(unused_unsafe)]
+        let ret = unsafe {
+            f(
+                self.instance,
+                std::ptr::from_ref(&i).cast(),
+                std::ptr::from_mut(&mut o).cast(),
+            )
+        };
         (ret.outcome(), o.next_tick_ns)
     }
 
@@ -891,11 +909,16 @@ impl Door {
         let mut o: PlaneDriveOut = z();
         o.head = out_head::<PlaneDriveOut>();
         let f = lifecycle().drive.expect("drive");
-        let ret = f(
-            self.instance,
-            std::ptr::from_ref(&i).cast(),
-            std::ptr::from_mut(&mut o).cast(),
-        );
+        // SAFETY: `f` is the door's own slot, called over an `in` and an `out` laid out as its ABI
+        // states and live for the call.
+        #[allow(unused_unsafe)]
+        let ret = unsafe {
+            f(
+                self.instance,
+                std::ptr::from_ref(&i).cast(),
+                std::ptr::from_mut(&mut o).cast(),
+            )
+        };
         ret.outcome()
     }
 
@@ -909,11 +932,16 @@ impl Door {
         let mut o: PlaneCancelOut = z();
         o.cancel.head = out_head::<PlaneCancelOut>();
         let f = lifecycle().cancel.expect("cancel");
-        let ret = f(
-            self.instance,
-            std::ptr::from_ref(&i).cast(),
-            std::ptr::from_mut(&mut o).cast(),
-        );
+        // SAFETY: `f` is the door's own slot, called over an `in` and an `out` laid out as its ABI
+        // states and live for the call.
+        #[allow(unused_unsafe)]
+        let ret = unsafe {
+            f(
+                self.instance,
+                std::ptr::from_ref(&i).cast(),
+                std::ptr::from_mut(&mut o).cast(),
+            )
+        };
         ret.outcome()
     }
 

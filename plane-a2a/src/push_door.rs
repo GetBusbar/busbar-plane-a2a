@@ -34,10 +34,10 @@ use busbar_contract::abi::host::service::{
 use busbar_contract::abi::mechanism::call::{Outcome, Span};
 use busbar_contract::abi::mechanism::check::SPAN_ABSENT;
 use busbar_contract::abi::mechanism::ticket::{CompletionHandle, Ticket};
-use busbar_contract::abi::sdk::conn::Host;
+use busbar_contract::abi::sdk::conn::StaticHost;
 use busbar_contract::abi::sdk::exchange::{exchange, Exchange};
 use busbar_contract::abi::sdk::publish::Keyed;
-use busbar_contract::abi::sdk::{Instance, Services};
+use busbar_contract::abi::sdk::{Instance, StaticServices};
 
 use crate::a2a::task::Task;
 use crate::agent_door::A2aDoor;
@@ -161,8 +161,8 @@ struct Flight {
 /// The host calls one attempt makes, in their one order: the random byte (handle `0`), the judge
 /// (handle `1`), the exchange (from handle `2`).
 struct Calls<'h> {
-    host: &'h Host,
-    services: Services,
+    host: &'h StaticHost,
+    services: StaticServices,
     ticket: Ticket,
 }
 

@@ -364,16 +364,20 @@ fn the_statement_declares_its_open_web_need_and_its_agent_member_need() {
     };
     use busbar_contract::abi::mechanism::check::check_needs;
     let st = &crate::agent_door::STATEMENT;
-    assert!(!st.needs.is_null());
+    assert!(!st.needs_ptr().is_null());
     // The open web, the agents over http, the agents over grpc.
-    assert_eq!((st.needs_len, NEEDS.len()), (3, 3));
+    assert_eq!((st.needs_len(), NEEDS.len()), (3, 3));
     // The relayed calls' need: each registered agent reached at its own `url`, as an upstream.
     let agent = NEEDS[NEED_AGENT as usize];
     assert_eq!(
         (agent.direction, agent.egress_class),
         (DIRECTION_OUTBOUND, EGRESS_PROVIDER)
     );
-    assert_eq!(agent.target_from.len, MEMBER_TARGET.len(), "settings.*.url");
+    assert_eq!(
+        agent.target_from.len(),
+        MEMBER_TARGET.len(),
+        "settings.*.url"
+    );
     assert!(check_needs(NEEDS).is_ok());
     let need = NEEDS[NEED_OPEN_WEB as usize];
     assert_eq!(
@@ -381,17 +385,17 @@ fn the_statement_declares_its_open_web_need_and_its_agent_member_need() {
         (DIRECTION_OUTBOUND, EGRESS_OPEN_WEB)
     );
     assert_eq!(
-        need.transport.len,
+        need.transport.len(),
         crate::claims::DOCUMENT_TRANSPORT.len(),
         "the http claim"
     );
     assert_eq!(
-        (need.auth.len, need.target_from.len),
+        (need.auth.len(), need.target_from.len()),
         (0, 0),
         "no auth style, no configured target: the plane names each dial's target"
     );
     assert_eq!(
-        need.trust_from.len,
+        need.trust_from.len(),
         crate::door_statement::PUSH_TRUST_FROM.len(),
         "its trust anchor is the operator's optional `agent_push.ca` (the text is pinned by the \
          conformance read of the rendered Statement)"
@@ -415,7 +419,7 @@ fn the_push_trust_path_names_the_owned_agent_push_section() {
     );
     assert_eq!(SECTIONS.len(), 2, "`agents:`, and `agent_push:` beside it");
     assert_eq!(
-        (SECTIONS[1].name.len, SECTIONS[1].flags),
+        (SECTIONS[1].name.len(), SECTIONS[1].flags),
         (PUSH_SECTION.len(), 0),
         "owned, as written: neither declaring nor consumed"
     );

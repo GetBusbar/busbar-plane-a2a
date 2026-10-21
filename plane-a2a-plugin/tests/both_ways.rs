@@ -38,7 +38,7 @@ mod both_ways {
     use busbar_plane_a2a::{agent_door, MOUNT_PATH};
     use busbar_plugin_loader::dispatch::kinds::plane::{OwnedSnapshot, Plane};
     use busbar_plugin_loader::dispatch::{
-        in_head, load_dropped, load_linked, out_head, rendering_of, Bind, DispatchConfig,
+        in_head, load_dropped, load_linked, out_head, rendering_of_macro, Bind, DispatchConfig,
         Dispatcher, Frame, LinkedRow, NoSink, Plugin,
     };
     use serde_json::{json, Value};
@@ -59,19 +59,14 @@ mod both_ways {
     }
 
     fn octets(b: &[u8]) -> Blob {
-        Blob {
-            ptr: b.as_ptr(),
-            len: b.len(),
-            fmt: BLOB_OCTETS,
-            flags: 0,
-        }
+        // SAFETY: `b` outlives the call the blob is lent to (each caller passes a fixture that
+        // lives to the end of the test).
+        unsafe { Blob::from_raw_parts(b.as_ptr(), b.len(), BLOB_OCTETS, 0) }
     }
 
     fn text(b: &[u8]) -> AbiStr {
-        AbiStr {
-            ptr: b.as_ptr(),
-            len: b.len(),
-        }
+        // SAFETY: as `octets`.
+        unsafe { AbiStr::from_raw_parts(b.as_ptr(), b.len()) }
     }
 
     fn at(buf: &[u8], s: Span) -> String {
@@ -80,11 +75,11 @@ mod both_ways {
 
     /// A string the door wrote into `arena`, read back by its offset.
     fn in_arena(arena: &[u8], s: AbiStr) -> String {
-        if s.ptr.is_null() || s.len == 0 {
+        if s.is_absent() || s.len() == 0 {
             return String::new();
         }
-        let start = s.ptr as usize - arena.as_ptr() as usize;
-        String::from_utf8_lossy(&arena[start..start + s.len]).into_owned()
+        let start = s.ptr() as usize - arena.as_ptr() as usize;
+        String::from_utf8_lossy(&arena[start..start + s.len()]).into_owned()
     }
 
     // ── the fixtures ─────────────────────────────────────────────────────────────────────────────
@@ -264,15 +259,13 @@ mod both_ways {
             return format!("project {unit} {:?}", c.outcome);
         }
         let v = j.out.view;
-        let session = if v.session.ptr.is_null() {
+        let session = if v.session.is_absent() {
             "-".to_string()
         } else {
             in_arena(
                 &arena,
-                AbiStr {
-                    ptr: v.session.ptr,
-                    len: v.session.len,
-                },
+                // SAFETY: the session names bytes the door wrote into `arena`, alive for the read.
+                unsafe { AbiStr::from_raw_parts(v.session.ptr(), v.session.len()) },
             )
         };
         let turns: Vec<String> = turns
@@ -504,7 +497,8 @@ mod both_ways {
     // ── the doors ────────────────────────────────────────────────────────────────────────────────
 
     fn linked(d: &Dispatcher) -> Plugin<Plane> {
-        let row = LinkedRow::of(agent_door::door).expect("the linked door states its Statement");
+        let row = LinkedRow::of_macro(agent_door::MACRO_DOOR)
+            .expect("the linked door states its Statement");
         load_linked(&row, bind(d)).expect("the linked door loads")
     }
 
@@ -520,7 +514,8 @@ mod both_ways {
             .into_iter()
             .find(|p| p.exists())
             .unwrap_or_else(|| panic!("this crate's cdylib ({file}) is not built"));
-        let stated = rendering_of(agent_door::door).expect("the door renders its Statement");
+        let stated =
+            rendering_of_macro(agent_door::MACRO_DOOR).expect("the door renders its Statement");
         load_dropped(&path, &stated, bind(d)).expect("the dropped door loads")
     }
 
@@ -552,7 +547,8 @@ mod both_ways {
     /// door's own rendered Statement. RED: the door stated two needs and no grpc transport.
     #[test]
     fn the_door_states_its_agents_over_http_and_over_grpc_alike() {
-        let rendered = rendering_of(agent_door::door).expect("the door renders its Statement");
+        let rendered =
+            rendering_of_macro(agent_door::MACRO_DOOR).expect("the door renders its Statement");
         let read =
             busbar_contract::abi::mechanism::rendering::read(&rendered).expect("it reads back");
         let needs = read.needs;
@@ -579,7 +575,8 @@ mod both_ways {
     /// owned namespace, never from `agents:`; read off the door's own rendered Statement.
     #[test]
     fn the_door_states_its_push_need_trusting_the_owned_agent_push_ca() {
-        let rendered = rendering_of(agent_door::door).expect("the door renders its Statement");
+        let rendered =
+            rendering_of_macro(agent_door::MACRO_DOOR).expect("the door renders its Statement");
         let read =
             busbar_contract::abi::mechanism::rendering::read(&rendered).expect("it reads back");
         let push = &read.needs[door_statement::NEED_OPEN_WEB as usize];
