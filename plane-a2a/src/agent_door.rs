@@ -560,8 +560,10 @@ pub struct A2aDoor {
     pub(crate) grown: crate::task_door::Grown,
     /// Each agent's verify-on-call flight: one look at a time.
     pub(crate) flights: Flights,
-    /// Each registered agent's trust: the identity an operator approved (`approve`), the last
-    /// sighting of its card and verify-on-call's ledger: plane memory, so a restart forgets it.
+    /// Each registered agent's trust: the skills of the card an operator approved (`approve`), the
+    /// last sighting of its card and verify-on-call's ledger. The approved skills are also its
+    /// `card_approval` host record, warmed back after `open` ([`warm_cards`]); the sighting and the
+    /// ledger are plane memory, so a restart looks again (a ledger that never looked is due).
     pub(crate) trust: Keyed<String, crate::card_trust::TrustStanding>,
     /// The error-once latches of the record writes the store refused ([`crate::task_hop::Latches`]).
     pub(crate) latches: crate::task_hop::Latches,
@@ -594,25 +596,46 @@ impl A2aDoor {
 /// the newest generation, so an instance opened again serves the agents its operator approved
 /// before. READY once the listing has landed (a host that answers none, or no host, has nothing
 /// to load); PENDING while it is in flight.
+///
+/// THE APPROVED SKILLS come back with them, from the `card_approval` host records `approve` wrote
+/// (`BUSBAR-1.6.0.md` l.345-346: "what must survive a restart goes to its records through the
+/// store kind"), so the trust view's drift lists are judged against what the operator approved,
+/// never against nothing. A standing this instance already approved is left as it is.
 fn warm_cards(plane: &A2aDoor, ticket: Ticket) -> Poll<()> {
     use crate::tasks::Records;
     let Some(host) = plane.host.as_ref() else {
         return Poll::Ready(());
     };
     let mut via = Via::new(host, plane.services, ticket, 0, &plane.grown);
-    match via.list(crate::records::KIND_CARD, "") {
-        Err(Halt::Pending) => Poll::Pending,
-        Err(Halt::Failed(_)) => Poll::Ready(()),
-        Ok(rows) => {
-            let generation = plane.newest();
-            for (agent, value) in rows {
-                if let Ok(card) = serde_json::from_slice::<serde_json::Value>(&value) {
-                    plane.cards.hold(&agent, generation, card);
-                }
-            }
-            Poll::Ready(())
+    let cards = match via.list(crate::records::KIND_CARD, "") {
+        Err(Halt::Pending) => return Poll::Pending,
+        Err(Halt::Failed(_)) => return Poll::Ready(()),
+        Ok(rows) => rows,
+    };
+    let approvals = match via.list(crate::records::KIND_CARD_APPROVAL, "") {
+        Err(Halt::Pending) => return Poll::Pending,
+        Err(Halt::Failed(_)) => Vec::new(),
+        Ok(rows) => rows,
+    };
+    let generation = plane.newest();
+    for (agent, value) in cards {
+        if let Ok(card) = serde_json::from_slice::<serde_json::Value>(&value) {
+            plane.cards.hold(&agent, generation, card);
         }
     }
+    for (agent, value) in approvals {
+        let Ok(approved) =
+            serde_json::from_slice::<std::collections::BTreeMap<String, String>>(&value)
+        else {
+            continue;
+        };
+        let mut standing = plane.trust.get(&agent).unwrap_or_default();
+        if standing.approved.is_none() {
+            standing.approved = Some(approved);
+            plane.trust.insert(agent, standing);
+        }
+    }
+    Poll::Ready(())
 }
 
 /// The `card` host record of `agent`'s verified `card`: keyed by the agent's id under the
@@ -622,6 +645,16 @@ fn card_record(agent: &str, card: &serde_json::Value) -> Write {
         kind: crate::records::KIND_CARD,
         key: agent.to_string(),
         value: serde_json::to_vec(card).unwrap_or_default(),
+    }
+}
+
+/// The `card_approval` host record of the skills (`id -> digest`) of the card the operator approved
+/// for `agent`: keyed like its `card` record.
+fn approval_record(agent: &str, approved: &std::collections::BTreeMap<String, String>) -> Write {
+    Write {
+        kind: crate::records::KIND_CARD_APPROVAL,
+        key: agent.to_string(),
+        value: serde_json::to_vec(approved).unwrap_or_default(),
     }
 }
 
@@ -3985,6 +4018,14 @@ slot!(
         // THE SKILLS APPROVED, held for the trust view's drift lists (ruling Q2): the card this
         // approval adopted, which `agrees` matched to the fingerprint the operator named.
         standing.approved = looked.sighting.seen().map(|seen| seen.skills.clone());
+        // ... and written as the agent's `card_approval` host record, so a restart keeps them.
+        let mut writes = writes;
+        writes.extend(
+            standing
+                .approved
+                .as_ref()
+                .map(|approved| approval_record(&name, approved)),
+        );
         let view = crate::card_trust::registration_view(
             &name,
             state_now(plane),
@@ -4035,9 +4076,10 @@ const TRUST_DECIDE_SEQ: u32 = u32::MAX - 1;
 
 slot!(
     /// `hydrate`: nothing to load. The door's durable state is host records (its tasks, their push
-    /// configs and chains), read on demand through `records.get`/`records.list`; what it holds in
-    /// memory (cards, the far-end id map, owed push outcomes) is plane memory a restart forgets, as
-    /// the engine's was.
+    /// configs and chains), read on demand through `records.get`/`records.list`, and the agents'
+    /// cards and approved skills, warmed after `open` ([`warm_cards`]); what else it holds in
+    /// memory (the far-end id map, owed push outcomes, the last sightings) is plane memory a
+    /// restart forgets, as the engine's was.
     Hydrate, GenIn, OutHead, |_, _, _| { Outcome::Ready }
 );
 

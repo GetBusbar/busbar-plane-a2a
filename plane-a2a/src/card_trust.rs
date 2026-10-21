@@ -118,7 +118,8 @@ fn sighted_skills(sighting: &Sighting) -> usize {
 pub use busbar_contract::abi::sdk::trust::State;
 
 /// ONE REGISTRATION'S TRUST, as the plane holds it in memory: the last sighting, the
-/// re-verification ledger verify-on-call keeps, and the skills of the card `approve` held.
+/// re-verification ledger verify-on-call keeps, and the skills of the card `approve` held (also
+/// its `card_approval` host record, so a restart keeps them).
 /// What the registration is trusted to SERVE is not here: it is the kernel's trust book.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct TrustStanding {
