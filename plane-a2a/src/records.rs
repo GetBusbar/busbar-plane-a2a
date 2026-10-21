@@ -66,11 +66,6 @@ pub const KIND_CARD: &str = "card";
 /// so a restart keeps what the drift lists are judged against.
 pub const KIND_CARD_APPROVAL: &str = "card_approval";
 
-/// The plane-record kinds this plane keeps on the store's plane-record seam — its declaration's
-/// `record_kinds`, so the administrative `plane_record_write` verb writes only these under it.
-#[cfg(test)]
-pub const RECORD_KINDS: &[&str] = &[KIND_TASK, KIND_TASK_EVENT];
-
 /// The host-record kinds the door's tail states (`PlaneTail::record_kinds`), in order: a record
 /// write names its kind by its index here.
 pub const HELD_KINDS: &[&str] = &[

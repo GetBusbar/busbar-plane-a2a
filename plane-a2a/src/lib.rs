@@ -318,12 +318,6 @@ impl A2aPlane {
     /// destination the trust unit refuses. That is the honest answer for a plane with no agent — not
     /// a panic, and not a fabricated host.
     pub const EMPTY: Self = Self::new(&[]);
-
-    /// The configured agents, in declaration order.
-    #[must_use]
-    pub const fn agents(&self) -> &'static [Agent] {
-        self.agents
-    }
 }
 
 #[cfg(test)]
