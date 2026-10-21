@@ -32,10 +32,10 @@ use busbar_contract::abi::host::conn::connector::{
 };
 use busbar_contract::abi::host::service::{
     ClockNowIn, HostSlots, ItemSpan, RecordsListIn, ServiceOut, DEST_ALLOWED, DISTRUST_NONE,
-    ENTITLED, SERVICES as HOST_SERVICES,
+    ENTITLED, SERVICES as HOST_SERVICES, SIGNED_VERIFIED, TRUST_DECIDED_SERVING, TRUST_NEW,
 };
 use busbar_contract::abi::mechanism::call::{
-    AbiStr, Blob, InHead, OutHead, Outcome, RawOutcome, BLOB_OCTETS,
+    AbiStr, Blob, Field, InHead, OutHead, Outcome, RawOutcome, BLOB_OCTETS,
 };
 use busbar_contract::abi::mechanism::lifecycle::{
     slot as life, CancelIn, OpenIn, OpenOut, OpsHead, TickIn, TickOut,
@@ -125,6 +125,21 @@ extern "C" fn serves(_: HostCtx, _: *const c_void, out: *mut ServiceOut) -> RawO
     answer(out, Outcome::Ready, DISTRUST_NONE, 0)
 }
 
+/// `trust.verify`: every card's signatures verify against the issuer key the kernel holds.
+extern "C" fn verified(_: HostCtx, _: *const c_void, out: *mut ServiceOut) -> RawOutcome {
+    answer(out, Outcome::Ready, SIGNED_VERIFIED, 0)
+}
+
+/// `trust.sight`: the kernel records the sighting.
+extern "C" fn sighted(_: HostCtx, _: *const c_void, out: *mut ServiceOut) -> RawOutcome {
+    answer(out, Outcome::Ready, TRUST_NEW, 0)
+}
+
+/// `trust.decide`: the operator's approval is the kernel's, and the key serves.
+extern "C" fn decided(_: HostCtx, _: *const c_void, out: *mut ServiceOut) -> RawOutcome {
+    answer(out, Outcome::Ready, TRUST_DECIDED_SERVING, 0)
+}
+
 extern "C" fn judged(_: HostCtx, _: *const c_void, out: *mut ServiceOut) -> RawOutcome {
     answer(out, Outcome::Ready, DEST_ALLOWED, 0)
 }
@@ -207,7 +222,7 @@ static HOST_SLOTS: HostSlots = HostSlots {
     work_find: None,
     work_settle: None,
     work_resume: None,
-    trust_sight: None,
+    trust_sight: Some(sighted),
     trust_due: None,
     verify_lookup: None,
     verify_store: None,
@@ -216,13 +231,13 @@ static HOST_SLOTS: HostSlots = HostSlots {
     hook_call: None,
     random_fill: None,
     need_admit: None,
-    trust_verify: None,
+    trust_verify: Some(verified),
     records_secret: None,
     disk_append: None,
     snapshot_read: None,
     trust_sight_item: None,
     trust_serves: Some(serves),
-    trust_decide: None,
+    trust_decide: Some(decided),
     trust_state: None,
     session_emit: None,
     auth_call: None,
@@ -412,6 +427,11 @@ fn ticket(unit: u64) -> Ticket {
 const SECTION: &[u8] =
     br#"{"vendor": {"url": "https://vendor.example/agent", "pin": {"mechanism": "unpinned"}}}"#;
 
+/// The same agent, its card verified against an out-of-band issuer key (the kernel's
+/// `trust.verify` here verifies every card), so `connect` sights a fingerprint `approve` can name.
+const SIGNED_SECTION: &[u8] =
+    br#"{"vendor": {"url": "https://vendor.example/agent", "pin": {"mechanism": "jws_issuer_key", "key": "issuer"}}}"#;
+
 /// The caller's opaque reference, as the kernel lends it.
 const ALICE: &[u8] = b"a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1";
 
@@ -506,11 +526,16 @@ fn claim(verb: &str, target: &str) -> u32 {
 }
 
 fn open() -> Door {
+    open_with(SECTION)
+}
+
+/// The door opened over `section`.
+fn open_with(section: &'static [u8]) -> Door {
     let mut i: PlaneOpenIn = z();
     i.open = OpenIn {
         head: head::<PlaneOpenIn>(life::OPEN, Ticket::NONE),
         host: &TABLES.0,
-        settings: octets(SECTION),
+        settings: octets(section),
         generation: 1,
         ..z()
     };
@@ -650,18 +675,46 @@ impl Door {
 
     /// `serve` of the trust verb `connect` for `agent`: its outcome, status and body.
     fn connect(&self, agent: &str) -> (Outcome, u32, String) {
-        let target = format!("/agents/{agent}/connect");
+        self.verb(0, &format!("/agents/{agent}/connect"), &[], b"")
+    }
+
+    /// `serve` of the trust verb `approve` for `agent`, naming `fingerprint`: its outcome, status
+    /// and body.
+    fn approve(&self, agent: &str, fingerprint: &str) -> (Outcome, u32, String) {
+        let body = format!(r#"{{"fingerprint": "{fingerprint}"}}"#);
+        let fields = [Field {
+            name: str_of(b"content-type"),
+            value: str_of(b"application/json"),
+        }];
+        self.verb(
+            1,
+            &format!("/agents/{agent}/approve"),
+            &fields,
+            body.as_bytes(),
+        )
+    }
+
+    /// `serve` of the admin verb at `route` on `target`, with the head `fields` and `body`: its
+    /// outcome, status and body; the answer's record writes are written to the store.
+    fn verb(
+        &self,
+        route: u32,
+        target: &str,
+        fields: &[Field],
+        body: &[u8],
+    ) -> (Outcome, u32, String) {
         let mut reply = vec![0_u8; 1 << 14];
-        let mut fields = [z::<OutField>(); 8];
+        let mut out_fields = [z::<OutField>(); 8];
         let mut arena = vec![0_u8; 4096];
         let mut records = [z::<RecordWrite>(); 8];
         let mut i: ServeIn = z();
         i.head = head::<ServeIn>(slot::SERVE, ticket(1 << 30));
-        i.route = 0;
+        i.route = route;
         i.target = str_of(target.as_bytes());
-        i.body = octets(b"");
+        (i.fields, i.fields_len) = (fields.as_ptr(), fields.len());
+        i.body = octets(body);
         (i.reply_buf, i.reply_cap) = (reply.as_mut_ptr(), reply.len());
-        (i.fields_buf, i.fields_cap) = (fields.as_mut_ptr(), fields.len());
+        (i.fields_buf, i.fields_cap) = (out_fields.as_mut_ptr(), out_fields.len());
         (i.arena_buf, i.arena_cap) = (arena.as_mut_ptr(), arena.len());
         (i.records_buf, i.records_cap) = (records.as_mut_ptr(), records.len());
         let mut o: ServeOut = z();
@@ -907,6 +960,58 @@ fn a_restarted_instance_serves_an_agent_from_its_recorded_card() {
         after.arrive(8, route, "/a2a/agents/vendor", CARD_READ),
         (Outcome::Ready, 0),
         "the instance opened again serves the agent from its recorded card"
+    );
+}
+
+/// A RESTART KEEPS THE SKILLS THE OPERATOR APPROVED (`BUSBAR-1.6.0.md` l.345-346: "what must
+/// survive a restart goes to its records through the store kind", F15 l.4633). The approval is
+/// the kernel's trust book's, which outlives the instance; the skills of the card it adopted are
+/// the plane's, held for the trust view's drift lists (coordinator ruling Q2). An operator
+/// connects, approves the fingerprint seen, and the view shows no drift; the instance is opened
+/// again over the same store and ticked once, and a `connect` to the unchanged card still shows
+/// none. RED before the fix: the approved skills lived only in the first instance's memory, so the
+/// instance opened again reported every skill of the approved, unchanged card as `added`.
+#[test]
+fn a_restarted_instance_keeps_the_skills_its_operator_approved() {
+    let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    store().clear();
+    let view = |answered: (Outcome, u32, String)| {
+        let (outcome, status, body) = answered;
+        assert_eq!((outcome, status), (Outcome::Ready, 200), "{body}");
+        serde_json::from_str::<serde_json::Value>(&body).expect("a trust view")
+    };
+    let before = open_with(SIGNED_SECTION);
+    let preview = view(before.connect("vendor"));
+    assert_eq!(
+        preview["added"],
+        serde_json::json!(["quote"]),
+        "nothing approved yet, so the card's skill is added: {preview}"
+    );
+    let fingerprint = preview["fingerprint"]
+        .as_str()
+        .unwrap_or_else(|| panic!("connect reported no fingerprint: {preview}"))
+        .to_string();
+    let approved = view(before.approve("vendor", &fingerprint));
+    assert_eq!(approved["state"], "approved", "{approved}");
+    assert_eq!(
+        approved["added"],
+        serde_json::json!([]),
+        "the approved card shows no drift: {approved}"
+    );
+
+    let after = open_with(SIGNED_SECTION);
+    let (ticked, _) = after.tick();
+    assert_eq!(ticked, Outcome::Ready, "the first tick after `open`");
+    let again = view(after.connect("vendor"));
+    assert_eq!(
+        (&again["added"], &again["changed"], &again["removed"]),
+        (
+            &serde_json::json!([]),
+            &serde_json::json!([]),
+            &serde_json::json!([])
+        ),
+        "the instance opened again still holds the skills the operator approved, so the \
+         unchanged card shows no drift: {again}"
     );
 }
 
