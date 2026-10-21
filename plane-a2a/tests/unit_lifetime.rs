@@ -31,8 +31,9 @@ use busbar_contract::abi::host::conn::connector::{
     REPLY_HEAD, SERVICES as CONN_SERVICES,
 };
 use busbar_contract::abi::host::service::{
-    ClockNowIn, HostSlots, ItemSpan, RecordsListIn, ServiceOut, DEST_ALLOWED, DISTRUST_NONE,
-    ENTITLED, SERVICES as HOST_SERVICES, SIGNED_VERIFIED, TRUST_DECIDED_SERVING, TRUST_NEW,
+    op as service_op, ClockNowIn, HostSlots, ItemSpan, RecordsListIn, ServiceHead, ServiceOut,
+    DEST_ALLOWED, DISTRUST_NONE, ENTITLED, SERVICES as HOST_SERVICES, SIGNED_VERIFIED,
+    TRUST_DECIDED_SERVING, TRUST_NEW,
 };
 use busbar_contract::abi::mechanism::call::{
     AbiStr, Blob, Field, InHead, OutHead, Outcome, RawOutcome, BLOB_OCTETS,
@@ -127,7 +128,29 @@ extern "C" fn clock_now(_: HostCtx, input: *const c_void, out: *mut ServiceOut) 
     answer(out, Outcome::Ready, 0, 0)
 }
 
-extern "C" fn entitled(_: HostCtx, _: *const c_void, out: *mut ServiceOut) -> RawOutcome {
+/// EVERY HANDLE THE HOST WAS HANDED, `(ticket slot, ticket generation, seq)`, with the service it
+/// was handed to. busbar's host keeps each handle's first answer and hands it back to any later
+/// call on that handle, whatever service that call names; a handle handed to two services is one
+/// whose second call reads the first's answer.
+static HANDLES: Mutex<Vec<Handed>> = Mutex::new(Vec::new());
+
+/// One handle the host was handed, `(ticket slot, ticket generation, seq)`, and its service.
+type Handed = ((u32, u32, u32), u32);
+
+fn handles() -> MutexGuard<'static, Vec<Handed>> {
+    HANDLES.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Note the handle a service's `in` leads with.
+fn handed(input: *const c_void) {
+    // SAFETY: every service's `in` leads with its head.
+    let head = unsafe { input.cast::<ServiceHead>().read() };
+    let h = head.handle;
+    handles().push(((h.ticket.slot, h.ticket.generation, h.seq), head.op));
+}
+
+extern "C" fn entitled(_: HostCtx, input: *const c_void, out: *mut ServiceOut) -> RawOutcome {
+    handed(input);
     answer(out, Outcome::Ready, ENTITLED, 0)
 }
 
@@ -164,6 +187,7 @@ fn store() -> MutexGuard<'static, Vec<(String, String, Vec<u8>)>> {
 
 /// `records.list`: every stored record of the kind asked, in key order, one page.
 extern "C" fn records_list(_: HostCtx, input: *const c_void, out: *mut ServiceOut) -> RawOutcome {
+    handed(input);
     // SAFETY: the SDK hands a `RecordsListIn` over its own text and buffers.
     let i = unsafe { input.cast::<RecordsListIn>().read() };
     // SAFETY: as above.
@@ -1016,6 +1040,68 @@ fn an_empty_envelope_from_a_reached_agent_reports_the_hops_fee_and_bytes() {
 }
 
 // ── (B2) an approved agent's card outlives the instance ─────────────────────────────────────────
+
+/// THE CARD WARM ON A UNIT'S TICKET NEVER SHARES A HANDLE WITH THE UNIT'S OWN CALLS
+/// (`abi::mechanism::ticket`: a handle's `seq` counts the services one ticket issued). An instance
+/// busbar never readied or ticked (busbar dev drives no plane `ready`) warms its held cards on the
+/// first unit's first piece, on that unit's ticket; the unit's admission then asks
+/// `entitlement.check` of its caller. busbar's host answers a handle once and hands that answer to
+/// every later call on it, so the check on a handle the warm's `records.list` was answered on reads
+/// a listing, never `ENTITLED`, and the caller is refused `401` `this key is not live`. RED before
+/// the fix: the warm counted from `seq` 0 and the unit's pieces counted from 0 again, so the
+/// listing of the `card` kind and the admission's check shared `seq` 0 (the busbar root cells
+/// `root::serve::plane_a2a_door::*`, at busbar-plane-a2a 7eeb7d8220 against busbar dev: every
+/// first served hop of an instance refused `401` `this key is not live`).
+#[test]
+fn the_card_warm_on_a_units_ticket_never_shares_a_handle_with_the_units_own_calls() {
+    let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    store().clear();
+    let door = open();
+    let (outcome, status, body) = door.connect("vendor");
+    assert_eq!(
+        (outcome, status),
+        (Outcome::Ready, 200),
+        "`connect` holds the agent's card: {body}"
+    );
+    handles().clear();
+    let unit = 11;
+    let route = ("POST", "/a2a/agents/{agent_id}");
+    assert_eq!(
+        door.arrive(unit, route, "/a2a/agents/vendor", CARD_READ),
+        (Outcome::Ready, 0),
+        "the card read is admitted"
+    );
+    let attempt = door.piece(unit, Given::attempt(b"vendor"), 1 << 16);
+    assert_eq!(attempt.outcome, Some(Outcome::Ready), "{attempt:?}");
+    assert!(
+        attempt.units.contains(&(CLASS_FEE_INDEX, 1)),
+        "the caller stands and the hop left the plane: {attempt:?}"
+    );
+
+    let own = ticket(unit);
+    let handed: Vec<Handed> = handles()
+        .iter()
+        .copied()
+        .filter(|((slot, generation, _), _)| (*slot, *generation) == (own.slot, own.generation))
+        .collect();
+    assert!(
+        handed.iter().any(|(_, op)| *op == service_op::RECORDS_LIST),
+        "the unit's first piece warmed the held cards on its own ticket: {handed:?}"
+    );
+    assert!(
+        handed
+            .iter()
+            .any(|(_, op)| *op == service_op::ENTITLEMENT_CHECK),
+        "the unit's admission asked the caller's entitlement: {handed:?}"
+    );
+    for (handle, op) in &handed {
+        assert!(
+            handed.iter().all(|(h, o)| h != handle || o == op),
+            "handle {handle:?} was handed to two services, so the second reads the first's \
+             answer: {handed:?}"
+        );
+    }
+}
 
 /// A RESTART SERVES THE AGENTS APPROVED BEFORE IT (ARCHITECT ruling B2, as amended: the `connect`
 /// and `approve` answers write the agent's `card` host record, `BUSBAR-1.6.0.md` l.290 "record
