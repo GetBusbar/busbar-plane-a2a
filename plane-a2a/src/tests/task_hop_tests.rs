@@ -95,7 +95,7 @@ fn opened_with(
 
 fn hop(opened: Opened) -> (TaskHop, Option<Vec<u8>>) {
     match opened {
-        Opened::Hop { task, instead, .. } => (task, instead),
+        Opened::Hop { task, instead, .. } => (*task, instead),
         Opened::Refused(reply) => panic!("refused: {reply:?}"),
     }
 }
