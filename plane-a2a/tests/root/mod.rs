@@ -24,7 +24,10 @@ use busbar_contract::conn::DeclaredConns;
 use busbar_kernel::cost::CostModel;
 use busbar_kernel::governance::signing::{TokenSigner, DEFAULT_KID};
 use busbar_kernel::governance::{GovState, NewKeySpec};
-use busbar_kernel::plane_driver::{EndPost, PlaneMoney};
+use busbar_kernel::{
+    plane_driver::{EndPost, PlaneMoney},
+    plane_routes::ListenerScheme,
+};
 
 use super::planes_tests::{Published, PUBLISHING};
 use super::{compose_planes, door_routes};
@@ -762,12 +765,12 @@ fn priced_cost(
 ) -> CostModel {
     let folded = {
         use crate::root::loader::dispatch::kinds::plane::{linked_probe, registration};
-        busbar_kernel::plane_driver::door::fold(
+        busbar_kernel::plane::door::fold(
             registration(linked_probe(door(), "serve-agent-priced")).expect("the door binds"),
         )
         .expect("the door folds")
     };
-    busbar_kernel::plane_driver::doors::register_test_plane(folded);
+    busbar_kernel::plane::registry::register_test_plane(folded);
     let (section, kind, class) = (
         surface("section"),
         surface("resource_kind"),
@@ -1073,7 +1076,7 @@ fn served_core(
                 host: {
                     let live = Arc::clone(&live);
                     Arc::new(move || {
-                        busbar_kernel::test_support::engine_host(
+                        busbar_kernel::plane_host::engine_host(
                             live.get().expect("the App is built before a unit runs"),
                         )
                     })
@@ -1095,34 +1098,32 @@ fn served_core(
     }
     // THE DOOR'S FACING, as boot's `build_dispatch` reads it off the door: each claim mounted
     // at its literal prefix, and the audience and metadata document its snapshot states.
-    let facing_of: Vec<(
-        Vec<String>,
-        busbar_kernel::plane_driver::claims::PlaneAdmission,
-    )> = if facing == Facing::Admitted {
-        composed
-            .planes
-            .iter()
-            .filter_map(|p| {
-                let admission = busbar_kernel::plane_driver::claims::PlaneAdmission {
-                    audience: p.snapshot.audience.clone()?,
-                    resource_metadata: p.snapshot.resource_metadata.clone()?,
-                };
-                let paths = p
-                    .snapshot
-                    .claims
-                    .iter()
-                    .map(|c| {
-                        let literal = c.target.split("/{").next().unwrap_or(&c.target);
-                        literal.trim_end_matches('/').to_string()
-                    })
-                    .filter(|path| !path.is_empty())
-                    .collect();
-                Some((paths, admission))
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
+    let facing_of: Vec<(Vec<String>, busbar_kernel::plane::PlaneAdmission)> =
+        if facing == Facing::Admitted {
+            composed
+                .planes
+                .iter()
+                .filter_map(|p| {
+                    let admission = busbar_kernel::plane::PlaneAdmission {
+                        audience: p.snapshot.audience.clone()?,
+                        resource_metadata: p.snapshot.resource_metadata.clone()?,
+                    };
+                    let paths = p
+                        .snapshot
+                        .claims
+                        .iter()
+                        .map(|c| {
+                            let literal = c.target.split("/{").next().unwrap_or(&c.target);
+                            literal.trim_end_matches('/').to_string()
+                        })
+                        .filter(|path| !path.is_empty())
+                        .collect();
+                    Some((paths, admission))
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
     // THE ADMIN SURFACE, as boot mounts it: the admin mount, and the operator credential's row
     // on the auth axis the admin chain authenticates `x-admin-token` with.
     busbar_core_admin::install();
@@ -1130,16 +1131,17 @@ fn served_core(
     // installs it (DECL-FOLD): the admin router mounts the door's stated admin routes off it.
     let folded = {
         use crate::root::loader::dispatch::kinds::plane::{linked_probe, registration};
-        busbar_kernel::plane_driver::door::fold(
+        busbar_kernel::plane::door::fold(
             registration(linked_probe(door(), "serve-agent-row")).expect("the door binds"),
         )
         .expect("the door folds")
     };
-    busbar_kernel::plane_driver::doors::register_test_plane(folded);
+    busbar_kernel::plane::registry::register_test_plane(folded);
     busbar_kernel::preflight::install_linked_auth(
         crate::LINKED.auths,
         crate::root::auth_bindings::operator_words(),
-    );
+    )
+    .expect("the root's one table and words");
     busbar_kernel::preflight::install_auth_axis(crate::root::dispatch::auth_axis);
     let mut builder = busbar_kernel::test_support::TestApp::new()
         .keys_chain()
@@ -1169,7 +1171,7 @@ fn served_core(
             builder.mount_plane(
                 surface("plane_key"),
                 path,
-                busbar_kernel::plane_driver::claims::WIRE_JSONRPC,
+                busbar_kernel::plane::WIRE_JSONRPC,
             );
         }
         builder.admit_plane(surface("plane_key"), admission);
@@ -1181,6 +1183,13 @@ fn served_core(
     let routes = doors.iter().map(|r| r.path.clone()).collect();
     let (router, admin, handle) =
         busbar_kernel::build_split_routers_serving(Arc::clone(&app), doors, 1 << 20, 0, false);
+    // THE LISTENER'S SCHEME, stated on every request the data router serves, as busbar's plain
+    // listener states it (`listener_scheme(false)`): a framed claim's stream begins with it, and a
+    // begin that declares none is refused (BeginIn.scheme). The rig drives the router with no
+    // listener, so it states the plain one's.
+    let router = router.layer(axum::Extension(ListenerScheme(
+        busbar_contract::abi::host::service::SCHEME_PLAIN,
+    )));
     // THE NODE'S ADMIN SURFACE OVER IT, as boot mounts it (`units_admin::mount_node`, the one
     // function both call): the generic trust verbs over the kernel's trust book among it
     // (ruling (d), coordinator 2026-10-07).
@@ -2057,6 +2066,12 @@ async fn an_agent_sections_per_request_fee_validates_and_per_session_is_refused(
     let agent = Agent::start(200, ANSWER).await;
     // Composing the door registers its folded declaration, as boot installs it.
     let _s = served(instance, &agent.entry("planner", "1h"), false, None);
+    // The config fixture's provider names the registry's residual-default dialect; in a test
+    // binary the protocol set is installed by whichever test installs it first, so the cell
+    // installs the linked declarations itself, as the root's other config-fixture cells do.
+    for decls in crate::LINKED.protocols {
+        busbar_kernel::proto::register_test_protocols(decls);
+    }
     let with_fees = |per_request: i64, per_session: i64| {
         let mut cfg = busbar_kernel::test_support::cfg_with_provider_api_key(
             busbar_kernel::config::SecretRef::none(),
@@ -2479,12 +2494,12 @@ async fn a_hop_refused_before_the_socket_keeps_no_fee() {
 fn a_present_agents_card_silent_about_an_agent_refuses_the_config() {
     let folded = {
         use crate::root::loader::dispatch::kinds::plane::{linked_probe, registration};
-        busbar_kernel::plane_driver::door::fold(
+        busbar_kernel::plane::door::fold(
             registration(linked_probe(door(), "serve-agent-card-row")).expect("the door binds"),
         )
         .expect("the door folds")
     };
-    let _registry = busbar_kernel::plane_driver::doors::TestRegistryIsolation::seeded(&[
+    let _registry = busbar_kernel::plane::registry::TestRegistryIsolation::seeded(&[
         busbar_kernel::test_support::neutral_fallback_plane(),
         folded,
     ]);
@@ -3569,7 +3584,7 @@ async fn a_config_apply_keeps_the_operators_approval() {
     // test registered process-wide would read a runtime slot this composition never seeded, so
     // the swap sees exactly this composition's planes (the door serves none of them).
     {
-        let _registry = busbar_kernel::plane_driver::doors::TestRegistryIsolation::empty();
+        let _registry = busbar_kernel::plane::registry::TestRegistryIsolation::empty();
         s.handle.swap(Arc::clone(&s.app));
     }
     let (status, body) = answered(&s.router, send()).await;
@@ -7141,8 +7156,8 @@ async fn an_apply_carrying_a_malformed_agent_push_ca_is_refused_and_deliveries_k
     // apply builds it, under the root's check.
     {
         use crate::root::loader::dispatch::kinds::plane::{linked_probe, registration};
-        busbar_kernel::plane_driver::doors::register_test_plane(
-            busbar_kernel::plane_driver::door::fold(
+        busbar_kernel::plane::registry::register_test_plane(
+            busbar_kernel::plane::door::fold(
                 registration(linked_probe(door(), instance)).expect("the door binds"),
             )
             .expect("the door folds"),
@@ -8014,7 +8029,7 @@ async fn a_backend_that_cannot_be_reached_is_counted_as_a_transient_upstream_fai
     assert!(
         lines.iter().any(|l| l.contains(&format!(
             "disposition=\"{}\"",
-            busbar_contract::upstream::Disposition::TransientUpstream.label()
+            busbar_kernel::proxy::DISPOSITION_TRANSIENT
         ))),
         "the failure carries the model plane's own disposition word: {lines:?}"
     );
@@ -9124,8 +9139,8 @@ async fn a_config_apply_keeps_the_pool_walking() {
     if let Some(map) = written.as_mapping_mut() {
         map.remove(busbar_contract::section::RESERVED_POOLS_KEY);
     }
-    let slot = busbar_kernel::plane_driver::door::DoorSlot {
-        section: busbar_kernel::plane_driver::door::DoorSection::new(surface("section"), written),
+    let slot = busbar_kernel::plane::door::DoorSlot {
+        section: busbar_kernel::plane::door::DoorSection::new(surface("section"), written),
         facing: busbar_contract::plane_calls::DoorFacing {
             claims: Vec::new(),
             admission: None,
@@ -9142,7 +9157,7 @@ async fn a_config_apply_keeps_the_pool_walking() {
     next.install_plane_runtime(surface("plane_key"), Arc::new(slot));
     let next = next.build();
     {
-        let _registry = busbar_kernel::plane_driver::doors::TestRegistryIsolation::empty();
+        let _registry = busbar_kernel::plane::registry::TestRegistryIsolation::empty();
         s.handle.swap(next);
     }
     let mut log = Vec::new();
