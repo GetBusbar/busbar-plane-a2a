@@ -199,7 +199,8 @@ pub fn landed(
 }
 
 /// Whether a read's answer leaves busbar's registration drifted (gone at the agent): an answer that
-/// is not a JSON-RPC `result` naming [`config_id`] (a refusal, an error, nothing) has drifted.
+/// is not a JSON-RPC `result` holding a config whose `id` is exactly [`config_id`] (a refusal, an
+/// error, nothing, or only other configs) has drifted.
 #[must_use]
 pub fn drifted(binding: Binding, answered: Option<(u16, &[u8])>, config_id: &str) -> bool {
     let Some((status, body)) = answered else {
@@ -217,7 +218,23 @@ pub fn drifted(binding: Binding, answered: Option<(u16, &[u8])>, config_id: &str
     let result = envelope
         .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
         .and_then(|v| v.get("result").cloned());
-    !result.is_some_and(|r| r.to_string().contains(config_id))
+    !result.is_some_and(|r| holds_config(&r, config_id))
+}
+
+/// Whether `found` holds the config `config_id`, compared whole on its `id` member: a config itself
+/// (v1.0's `TaskPushNotificationConfig`), one nested as v0.3 nests it (`pushNotificationConfig`),
+/// or one of a listing (v1.0's `configs`, v0.3's bare array).
+fn holds_config(found: &Value, config_id: &str) -> bool {
+    match found {
+        Value::Array(items) => items.iter().any(|i| holds_config(i, config_id)),
+        Value::Object(member) => {
+            member.get("id").and_then(Value::as_str) == Some(config_id)
+                || ["pushNotificationConfig", "configs"]
+                    .iter()
+                    .any(|m| member.get(*m).is_some_and(|v| holds_config(v, config_id)))
+        }
+        _ => false,
+    }
 }
 
 /// Where a mirror stands.

@@ -734,12 +734,71 @@ fn a_v03_cards_additional_interfaces_and_preferred_transport_name_only_what_busb
     assert_eq!(served["preferredTransport"], "JSONRPC");
     assert_eq!(
         served["additionalInterfaces"],
-        json!([
-            { "url": endpoint, "transport": "JSONRPC" },
-            { "url": endpoint, "transport": "JSONRPC" },
-        ])
+        json!([{ "url": endpoint, "transport": "JSONRPC" }]),
+        "two entries pointed at busbar's one address are one interface"
     );
     let text = served.to_string();
     assert!(!text.contains("example.net"), "{text}");
     assert!(!text.contains("a.example.com"), "{text}");
+}
+
+/// ONE SERVABLE-BINDING RULE IN BOTH VERSIONS: a v0.3 card that prefers gRPC and offers no
+/// JSON-RPC entry is refused exactly as a v1.0 card offering only gRPC is, never served as a
+/// JSON-RPC card its agent does not speak.
+#[test]
+fn a_v03_card_offering_no_binding_busbar_serves_is_refused_like_a_v10_one() {
+    let grpc_only = json!({
+        "name": "Planner",
+        "url": "https://a.example.com/a2a",
+        "preferredTransport": "GRPC",
+        "additionalInterfaces": [
+            { "url": "https://a.example.com/rest", "transport": "HTTP+JSON" },
+        ],
+    });
+    assert_eq!(
+        rewrite_card(&grpc_only, "https://a.example.com/a2a", PUBLIC, "planner"),
+        Err(ServeError::NoServableBinding)
+    );
+    let preferred_only = json!({
+        "name": "Planner",
+        "url": "https://a.example.com/a2a",
+        "preferredTransport": "GRPC",
+    });
+    assert_eq!(
+        rewrite_card(
+            &preferred_only,
+            "https://a.example.com/a2a",
+            PUBLIC,
+            "planner"
+        ),
+        Err(ServeError::NoServableBinding)
+    );
+    let unstated = json!({ "name": "Planner", "url": "https://a.example.com/a2a" });
+    assert!(
+        rewrite_card(&unstated, "https://a.example.com/a2a", PUBLIC, "planner").is_ok(),
+        "a v0.3 card's url speaks JSON-RPC when its preferredTransport is unstated"
+    );
+}
+
+/// A v1.0 card's interfaces the rewrite points at the same address on the same binding are
+/// published once.
+#[test]
+fn a_v10_cards_duplicate_interfaces_are_published_once() {
+    let mut card = backend_card();
+    card["supportedInterfaces"] = json!([
+        { "url": "https://internal.corp.example/a2a", "protocolBinding": "JSONRPC" },
+        { "url": "https://internal.corp.example/a2a/v2", "protocolBinding": "JSONRPC" },
+    ]);
+    let served = rewrite_card(
+        &card,
+        "https://internal.corp.example/a2a",
+        PUBLIC,
+        "planner",
+    )
+    .expect("served");
+    assert_eq!(
+        served["supportedInterfaces"].as_array().map(Vec::len),
+        Some(1),
+        "{served}"
+    );
 }

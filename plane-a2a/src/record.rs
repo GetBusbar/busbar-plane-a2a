@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! THE A2A PLANE'S OWN DURABLE RECORD TYPES — relocated here from `busbar-api` (1.7.0 plane
-//! extraction). The neutral `busbar_contract::records::RecordStore` contract speaks ONLY the opaque
-//! `busbar_contract::records::PlaneRecord` envelope; a plane owns its concrete row schema and serializes it into
-//! (and back out of) that envelope's opaque `body` with `serde_json` — byte-for-byte the same the
-//! store plugins persist it with. The neutral crates name none of these types.
+//! THE A2A PLANE'S OWN DURABLE RECORD TYPES: the task row and the task-event row, each the JSON
+//! value of one host record of its kind ([`crate::records`]). The host stores the bytes the plane
+//! writes and names none of these types; the plane owns the schema and reads it back with
+//! `serde_json`.
 
 use busbar_contract::records::{
     PlaneDisposition, PlaneRecord, PlaneSelector, RecordStoreError, RecordStoreResult,
@@ -42,19 +41,21 @@ fn default_digest_version() -> u8 {
 /// Kept beside the row so the `disposition` a record carries and the purge that reads it agree.
 const TERMINAL_TASK_STATES: [&str; 4] = ["completed", "failed", "canceled", "rejected"];
 
-/// ONE A2A TASK, as it crosses the store seam for DURABLE persistence. The engine's canonical
-/// `a2a::task::Task` mirrors this field-for-field; this side of the seam is plain data with the
-/// enums flattened to their stable wire tokens, so a store plugin compiled against an older engine
-/// does not fail to deserialize a row because a new task state was added to a Rust enum.
+/// ONE A2A TASK, as a `task` host record's value. [`crate::a2a::task::Task`] is read from it
+/// ([`crate::a2a::task::Task::from_row`]); this side is plain data with the enums flattened to
+/// their stable wire tokens, so a row written before a task state was added still reads.
 ///
-/// Carries no secret. `principal` is a busbar key id; `agent_id` is a busbar-local registration id.
+/// Carries no secret. `principal` is the caller reference the kernel lends on every piece (the
+/// per-principal reference the task's records are keyed under, [`crate::tasks::task_key`]);
+/// `agent_id` is a busbar-local registration id.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TaskRow {
-    /// Protocol task id — unique, and the row's primary key.
+    /// Protocol task id — busbar's own, unique within its caller; the record's key is
+    /// `<principal>/<task_id>`.
     pub task_id: String,
     /// The A2A `contextId` grouping related tasks into a session — the resume key.
     pub context_id: String,
-    /// The busbar key id this task is attributed to and billed against.
+    /// The caller reference this task is attributed to and scoped under.
     pub principal: String,
     /// `inbound` (busbar is the server) or `outbound` (busbar is the client).
     pub direction: String,
@@ -121,7 +122,7 @@ pub struct TaskEventRow {
     pub kind: String,
     /// The session id (see [`TaskRow::context_id`]).
     pub context_id: String,
-    /// The attributed busbar key id.
+    /// The attributed caller reference (see [`TaskRow::principal`]).
     pub principal: String,
     /// The agent this event concerns, or empty.
     pub agent_id: String,

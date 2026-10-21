@@ -394,19 +394,26 @@ pub fn compose_from(
 }
 
 /// RE-FRAME A JSON-RPC ANSWER for the HTTP+JSON line, by what it is (the engine's `rest::reframe`):
-/// a `result` becomes the body VERBATIM; an `error` becomes the AIP-193 document at `status`
-/// ([`crate::agent_arrival::aip193`]); anything else (not JSON, or neither member) passes untouched.
+/// a `result` becomes the body, the answer's own `result` bytes cut out of it
+/// ([`crate::answer_bytes::result_span`]: member order and number spellings as the far end wrote
+/// them, busbar's identity already spliced in by the relay); an `error` becomes the AIP-193
+/// document at `status` ([`crate::agent_arrival::aip193`]); anything else (not JSON, or neither
+/// member) passes untouched.
 #[must_use]
 pub fn reframe(status: u32, body: &[u8]) -> Vec<u8> {
-    let Ok(envelope) = serde_json::from_slice::<Value>(body) else {
+    let Ok(envelope) = serde_json::from_slice::<Value>(&crate::answer_bytes::readable(body)) else {
         return body.to_vec();
     };
-    let reframed = match (envelope.get("result"), envelope.get("error")) {
-        (Some(result), _) => result.clone(),
-        (None, Some(error)) if !error.is_null() => crate::agent_arrival::aip193(status, error),
-        _ => return body.to_vec(),
-    };
-    serde_json::to_vec(&reframed).unwrap_or_default()
+    match (envelope.get("result"), envelope.get("error")) {
+        (Some(result), _) => crate::answer_bytes::result_span(body).map_or_else(
+            || serde_json::to_vec(result).unwrap_or_default(),
+            |span| body[span].to_vec(),
+        ),
+        (None, Some(error)) if !error.is_null() => {
+            serde_json::to_vec(&crate::agent_arrival::aip193(status, error)).unwrap_or_default()
+        }
+        _ => body.to_vec(),
+    }
 }
 
 #[cfg(test)]

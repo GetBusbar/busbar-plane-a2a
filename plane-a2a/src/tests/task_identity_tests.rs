@@ -7,6 +7,11 @@
 use super::*;
 use serde_json::json;
 
+/// [`translate_request`] over `envelope`'s bytes.
+fn translated(envelope: &Value, back: &dyn Fn(&str) -> Option<String>) -> Option<Vec<u8>> {
+    translate_request(&serde_json::to_vec(envelope).expect("json"), back)
+}
+
 #[test]
 fn a_minted_id_is_the_engines_shape_over_the_random_bytes() {
     let id = mint("planner", [0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef]);
@@ -20,7 +25,7 @@ fn a_bare_task_result_takes_busbars_id_and_context_and_keeps_everything_else() {
         "kind": "task", "id": "backend-7", "contextId": "backend-ctx",
         "status": { "state": "completed" }, "artifacts": [{ "parts": [] }],
     });
-    rewrite_identity(&mut result, "a2a-p-1", "ctx-1", None);
+    assert!(rewrite_identity(&mut result, "a2a-p-1", "ctx-1", None, &[]));
     assert_eq!(
         result,
         json!({
@@ -33,12 +38,12 @@ fn a_bare_task_result_takes_busbars_id_and_context_and_keeps_everything_else() {
 #[test]
 fn a_wrapped_result_is_rewritten_inside_its_wrapper_by_its_own_identity_member() {
     let mut task = json!({ "task": { "id": "b", "contextId": "bc" } });
-    rewrite_identity(&mut task, "t", "c", None);
+    assert!(rewrite_identity(&mut task, "t", "c", None, &[]));
     assert_eq!(task, json!({ "task": { "id": "t", "contextId": "c" } }));
 
     let mut update = json!({ "statusUpdate": { "taskId": "b", "contextId": "bc",
         "status": { "message": { "taskId": "b", "contextId": "bc", "messageId": "m" } } } });
-    rewrite_identity(&mut update, "t", "c", None);
+    assert!(rewrite_identity(&mut update, "t", "c", None, &[]));
     assert_eq!(
         update,
         json!({ "statusUpdate": { "taskId": "t", "contextId": "c",
@@ -49,13 +54,13 @@ fn a_wrapped_result_is_rewritten_inside_its_wrapper_by_its_own_identity_member()
 #[test]
 fn a_standalone_message_is_given_no_task_and_one_in_a_task_is_given_busbars() {
     let mut alone = json!({ "message": { "messageId": "m", "contextId": "bc" } });
-    rewrite_identity(&mut alone, "t", "c", None);
+    assert!(rewrite_identity(&mut alone, "t", "c", None, &[]));
     assert_eq!(
         alone,
         json!({ "message": { "messageId": "m", "contextId": "c" } })
     );
     let mut owned = json!({ "message": { "messageId": "m", "taskId": "b" } });
-    rewrite_identity(&mut owned, "t", "c", None);
+    assert!(rewrite_identity(&mut owned, "t", "c", None, &[]));
     assert_eq!(
         owned,
         json!({ "message": { "messageId": "m", "taskId": "t", "contextId": "c" } })
@@ -63,20 +68,27 @@ fn a_standalone_message_is_given_no_task_and_one_in_a_task_is_given_busbars() {
 }
 
 #[test]
-fn the_matched_skill_is_namespaced_metadata_and_a_non_object_result_becomes_a_task() {
+fn the_matched_skill_is_namespaced_metadata_and_a_non_object_result_is_refused() {
     let mut result = json!({ "id": "b", "metadata": { "theirs": 1 } });
-    rewrite_identity(&mut result, "t", "c", Some("summarize"));
+    assert!(rewrite_identity(
+        &mut result,
+        "t",
+        "c",
+        Some("summarize"),
+        &[]
+    ));
     assert_eq!(
         result,
         json!({ "id": "t", "contextId": "c",
             "metadata": { "theirs": 1, "busbar/skill": "summarize" } })
     );
-    let mut scalar = json!("done");
-    rewrite_identity(&mut scalar, "t", "c", None);
-    assert_eq!(
-        scalar,
-        json!({ "kind": "task", "id": "t", "contextId": "c" })
-    );
+    // A far end's string, array or number is no task: the plane cannot read it, and invents none
+    // (Law 11). RED: it was replaced with `{"kind":"task"}` under busbar's identity.
+    for far in [json!("done"), json!([1]), json!(7), json!(null)] {
+        let mut result = far.clone();
+        assert!(!rewrite_identity(&mut result, "t", "c", None, &[]), "{far}");
+        assert_eq!(result, far, "left as the far end sent it");
+    }
 }
 
 #[test]
@@ -92,16 +104,21 @@ fn the_far_ends_id_and_state_are_read_in_both_vocabularies() {
     assert_eq!(backend_task_id(&json!({ "id": "" })), None);
     assert_eq!(
         reported_task_state(&json!({ "status": { "state": "input-required" } })),
-        TaskState::InputRequired
+        Some(TaskState::InputRequired)
     );
     assert_eq!(
         reported_task_state(&json!({ "task": { "status": { "state": "TASK_STATE_COMPLETED" } } })),
-        TaskState::Completed
+        Some(TaskState::Completed)
     );
-    assert_eq!(
-        reported_task_state(&json!({ "status": { "state": "pondering" } })),
-        TaskState::Working
-    );
+    // No state this build can read is no state: never a guessed `working`.
+    for none in [
+        json!({ "status": { "state": "pondering" } }),
+        json!({ "artifactUpdate": { "taskId": "b", "artifact": {} } }),
+        json!({ "kind": "message", "messageId": "m" }),
+        json!({}),
+    ] {
+        assert_eq!(reported_task_state(&none), None, "{none}");
+    }
 }
 
 #[test]
@@ -109,18 +126,18 @@ fn a_held_id_is_translated_at_the_top_and_in_the_message_and_nothing_else_is() {
     let back = |id: &str| (id == "a2a-p-1").then(|| "b-1".to_string());
     let get =
         json!({ "jsonrpc": "2.0", "id": 1, "method": "GetTask", "params": { "id": "a2a-p-1" } });
-    let sent: Value = serde_json::from_slice(&translate_request(&get, &back).unwrap()).unwrap();
+    let sent: Value = serde_json::from_slice(&translated(&get, &back).unwrap()).unwrap();
     assert_eq!(sent["params"]["id"], "b-1");
 
     let turn = json!({ "jsonrpc": "2.0", "id": 2, "method": "SendMessage",
         "params": { "message": { "messageId": "a2a-p-1", "taskId": "a2a-p-1" } } });
-    let sent: Value = serde_json::from_slice(&translate_request(&turn, &back).unwrap()).unwrap();
+    let sent: Value = serde_json::from_slice(&translated(&turn, &back).unwrap()).unwrap();
     assert_eq!(sent["params"]["message"]["taskId"], "b-1");
     assert_eq!(sent["params"]["message"]["messageId"], "a2a-p-1");
 
     let foreign =
         json!({ "jsonrpc": "2.0", "id": 3, "method": "GetTask", "params": { "id": "x" } });
-    assert_eq!(translate_request(&foreign, &back), None);
+    assert_eq!(translated(&foreign, &back), None);
 }
 
 #[test]
@@ -176,7 +193,7 @@ fn the_codes_a_far_end_may_answer_keep_section_5_4s_statuses() {
 fn every_spelling_of_the_task_member_is_translated() {
     let back = |id: &str| (id == "busbar-t").then(|| "backend-t".to_string());
     for member in ["id", "taskId", "task_id"] {
-        let out = translate_request(
+        let out = translated(
             &json!({
                 "method": "GetTask",
                 "params": { member: "busbar-t", "keep": 3 }
@@ -223,7 +240,7 @@ fn a_messages_own_id_member_is_left_alone() {
         "a message's `id` is not a task id and none is offered for translation"
     );
     assert_eq!(
-        translate_request(&envelope, &back),
+        translated(&envelope, &back),
         None,
         "nothing may be translated from a message's `id`"
     );
@@ -295,7 +312,7 @@ fn a_tasks_history_messages_take_busbars_identity() {
             { "messageId": "m2", "role": "ROLE_AGENT", "taskId": "far-1" },
             { "messageId": "m3", "role": "ROLE_AGENT" },
         ] } });
-    rewrite_identity(&mut task, "t", "c", None);
+    assert!(rewrite_identity(&mut task, "t", "c", None, &[]));
     assert_eq!(
         task["task"]["history"],
         json!([
@@ -306,7 +323,7 @@ fn a_tasks_history_messages_take_busbars_identity() {
     );
     let mut bare = json!({ "kind": "task", "id": "far-1", "contextId": "far-c",
         "history": [{ "kind": "message", "messageId": "m1", "taskId": "far-1", "contextId": "far-c" }] });
-    rewrite_identity(&mut bare, "t", "c", None);
+    assert!(rewrite_identity(&mut bare, "t", "c", None, &[]));
     assert_eq!(
         bare["history"],
         json!([{ "kind": "message", "messageId": "m1", "taskId": "t", "contextId": "c" }])
@@ -326,7 +343,7 @@ fn a_push_config_verbs_config_id_is_not_a_task() {
         assert_eq!(named_tasks(&env), vec!["t1"], "{method}");
         let same = json!({ "method": method, "params": { "taskId": "t1", "id": "t1" } });
         let sent: Value = serde_json::from_slice(
-            &translate_request(&same, &|id| (id == "t1").then(|| "far-t1".to_string()))
+            &translated(&same, &|id| (id == "t1").then(|| "far-t1".to_string()))
                 .expect("the task is translated"),
         )
         .unwrap();
@@ -339,4 +356,93 @@ fn a_push_config_verbs_config_id_is_not_a_task() {
     let v03 = json!({ "method": "tasks/pushNotificationConfig/get",
         "params": { "id": "t1", "pushNotificationConfigId": "c1" } });
     assert_eq!(named_tasks(&v03), vec!["t1"]);
+}
+
+/// A TRANSLATED REQUEST IS THE CALLER'S OWN BYTES with only the translated ids spliced (Law 5):
+/// member order, an integer past 64 bits and a number past `f64`'s range go on as the caller wrote
+/// them. RED: the whole envelope was re-serialised through a JSON value (members re-sorted, the
+/// long integer rounded), and a number past `f64`'s range dropped the translation.
+#[test]
+fn a_translated_request_keeps_the_callers_bytes_but_the_ids() {
+    let back = |id: &str| (id == "a2a-p-1").then(|| "b-1".to_string());
+    let caller = br#"{"params": {"z":1,"message":{"taskId":"a2a-p-1","n":123456789012345678901234567890,"big":1e400,"referenceTaskIds":["a2a-p-1","x"]},"a":2.50},"method":"SendMessage","id":1,"jsonrpc":"2.0"}"#;
+    let sent = translate_request(caller, &back).expect("translated");
+    assert_eq!(
+        String::from_utf8(sent).unwrap(),
+        r#"{"params": {"z":1,"message":{"taskId":"b-1","n":123456789012345678901234567890,"big":1e400,"referenceTaskIds":["b-1","x"]},"a":2.50},"method":"SendMessage","id":1,"jsonrpc":"2.0"}"#
+    );
+    let get = br#"{ "id" : 9, "params" : { "id" : "a2a-p-1" }, "method" : "GetTask" }"#;
+    assert_eq!(
+        translate_request(get, &back).as_deref(),
+        Some(br#"{ "id" : 9, "params" : { "id" : "b-1" }, "method" : "GetTask" }"#.as_slice())
+    );
+}
+
+/// AN UNWRAPPED v0.3 RESULT NAMES ITS TASK BY THE MEMBER ITS `kind` SAYS: a task its `id`; a
+/// message, a status update and an artifact update their `taskId`. busbar's id replaces the far
+/// end's there, no stray `id` is added, and the far end's own id is read from there. RED: an
+/// unwrapped update kept the far end's `taskId`, gained an `id`, and its far-end id was never read.
+#[test]
+fn an_unwrapped_v0_3_result_names_its_task_by_the_member_its_kind_says() {
+    for kind in ["status-update", "artifact-update"] {
+        let mut update = json!({ "kind": kind, "taskId": "far-1", "contextId": "far-c",
+            "status": { "state": "working" }, "final": false });
+        assert_eq!(backend_task_id(&update).as_deref(), Some("far-1"), "{kind}");
+        assert!(rewrite_identity(&mut update, "t", "c", None, &[]));
+        assert_eq!(
+            update,
+            json!({ "kind": kind, "taskId": "t", "contextId": "c",
+                "status": { "state": "working" }, "final": false }),
+            "{kind}"
+        );
+    }
+    let mut message = json!({ "kind": "message", "messageId": "m", "taskId": "far-1" });
+    assert_eq!(backend_task_id(&message).as_deref(), Some("far-1"));
+    assert!(rewrite_identity(&mut message, "t", "c", None, &[]));
+    assert_eq!(
+        message,
+        json!({ "kind": "message", "messageId": "m", "taskId": "t", "contextId": "c" })
+    );
+    let mut alone = json!({ "kind": "message", "messageId": "m" });
+    assert_eq!(backend_task_id(&alone), None);
+    assert!(rewrite_identity(&mut alone, "t", "c", None, &[]));
+    assert_eq!(
+        alone,
+        json!({ "kind": "message", "messageId": "m", "contextId": "c" })
+    );
+    let mut task = json!({ "kind": "task", "id": "far-1" });
+    assert!(rewrite_identity(&mut task, "t", "c", None, &[]));
+    assert_eq!(task, json!({ "kind": "task", "id": "t", "contextId": "c" }));
+}
+
+/// A MESSAGE'S REFERENCED TASKS ARE TRANSLATED BOTH WAYS (`Message.reference_task_ids`,
+/// a2a.proto:276): on the way out busbar's ids the caller holds become the far end's; on the way
+/// back the far end's id for this task, or for a task the request referred to, becomes busbar's,
+/// and an id busbar does not know is left as it is. RED: no code read `referenceTaskIds`.
+#[test]
+fn a_messages_referenced_tasks_are_translated_both_ways() {
+    let back = |id: &str| (id == "a2a-p-1").then(|| "b-1".to_string());
+    let turn = json!({ "jsonrpc": "2.0", "id": 2, "method": "message/send",
+        "params": { "message": { "messageId": "m", "referenceTaskIds": ["a2a-p-1", "x"] } } });
+    let sent: Value = serde_json::from_slice(&translated(&turn, &back).unwrap()).unwrap();
+    assert_eq!(
+        sent["params"]["message"]["referenceTaskIds"],
+        json!(["b-1", "x"])
+    );
+
+    let references = [("b-1".to_string(), "a2a-p-1".to_string())];
+    let mut answer = json!({ "kind": "message", "messageId": "r", "taskId": "far-7",
+        "referenceTaskIds": ["far-7", "b-1", "unknown"] });
+    assert!(rewrite_identity(&mut answer, "t", "c", None, &references));
+    assert_eq!(
+        answer["referenceTaskIds"],
+        json!(["t", "a2a-p-1", "unknown"])
+    );
+    let mut task = json!({ "task": { "id": "far-7", "history": [
+        { "messageId": "h", "reference_task_ids": ["b-1", "far-7"] } ] } });
+    assert!(rewrite_identity(&mut task, "t", "c", None, &references));
+    assert_eq!(
+        task["task"]["history"][0]["reference_task_ids"],
+        json!(["a2a-p-1", "t"])
+    );
 }

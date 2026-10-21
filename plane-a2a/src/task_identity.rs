@@ -11,8 +11,8 @@
 //! * A request naming a task the caller holds, in its `params` or its message, reuses that task's
 //!   identity ([`translatable`]).
 //! * The far end's answer leaves under busbar's identity ([`rewrite_identity`]); the far end's own
-//!   id is read first ([`backend_task_id`]) so a following request naming busbar's id is sent on under
-//!   the far end's ([`translate_request`]).
+//!   id is read first ([`backend_task_id`]) so a following request naming busbar's id (or referring
+//!   to it) is sent on under the far end's ([`translate_request`], a splice of the caller's bytes).
 //! * A refused hop that opened or names a task answers with that task as a `ResourceInfo`
 //!   ([`about_task`]).
 
@@ -107,52 +107,41 @@ pub fn translatable(envelope: &Value) -> Vec<&str> {
     ids
 }
 
-/// TRANSLATE every busbar task id in a request's `params` (and its message's) to the far end's,
-/// through `backend_of`, which answers only for a task the caller holds. `None` when nothing was
-/// translated: the caller's bytes then go on UNCHANGED, never re-serialized.
+/// Every task a request's message REFERS to (`referenceTaskIds`, either spelling): translated with
+/// the task ids, never read as the task the request addresses.
 #[must_use]
-pub fn translate_request(
-    envelope: &Value,
-    backend_of: &dyn Fn(&str) -> Option<String>,
-) -> Option<Vec<u8>> {
-    let params = envelope.get("params")?.as_object()?;
-    let mut rewritten = params.clone();
-    let mut any = translate_members(&mut rewritten, task_members(envelope), backend_of);
-    if let Some(message) = rewritten.get("message").and_then(Value::as_object) {
-        let mut msg = message.clone();
-        if translate_members(&mut msg, &TASK_ID_MEMBERS[1..], backend_of) {
-            rewritten.insert("message".to_string(), Value::Object(msg));
-            any = true;
-        }
-    }
-    if !any {
-        return None;
-    }
-    let mut out = envelope.clone();
-    out.as_object_mut()?
-        .insert("params".to_string(), Value::Object(rewritten));
-    serde_json::to_vec(&out).ok()
+pub fn referenced_tasks(envelope: &Value) -> Vec<&str> {
+    let Some(message) = envelope
+        .pointer("/params/message")
+        .and_then(Value::as_object)
+    else {
+        return Vec::new();
+    };
+    crate::answer_bytes::REFERENCE_MEMBERS
+        .iter()
+        .filter_map(|m| message.get(*m).and_then(Value::as_array))
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect()
 }
 
-/// Translate `members` of `obj` in place; `true` when any was.
-fn translate_members(
-    obj: &mut Map<String, Value>,
-    members: &[&str],
+/// TRANSLATE every busbar task id in a request's `params` (and its message's, the tasks its message
+/// refers to included) to the far end's, through `backend_of`, which answers only for a task the
+/// caller holds. `envelope` is the request's own bytes: only each translated id's string is
+/// spliced, every other byte goes on as the caller wrote it (Law 5). `None` when nothing was
+/// translated: the caller's bytes then go on UNCHANGED.
+#[must_use]
+pub fn translate_request(
+    envelope: &[u8],
     backend_of: &dyn Fn(&str) -> Option<String>,
-) -> bool {
-    let mut any = false;
-    for member in members {
-        let Some(backend) = obj
-            .get(*member)
-            .and_then(Value::as_str)
-            .and_then(backend_of)
-        else {
-            continue;
-        };
-        obj.insert((*member).to_string(), Value::String(backend));
-        any = true;
-    }
-    any
+) -> Option<Vec<u8>> {
+    let reading: Value = serde_json::from_slice(&crate::answer_bytes::readable(envelope)).ok()?;
+    crate::answer_bytes::translate_ids(
+        envelope,
+        task_members(&reading),
+        &TASK_ID_MEMBERS[1..],
+        backend_of,
+    )
 }
 
 /// The wrapper members an A2A v1.0 `result` puts its payload under, each with the member that
@@ -164,10 +153,34 @@ pub(crate) const WRAPPERS: [(&str, &str); 4] = [
     ("artifactUpdate", "taskId"),
 ];
 
+/// The `kind` an A2A v0.3 `result` names itself by when it is not wrapped, each with the member
+/// that identifies the task in it: a task is its own `id`; a message, a status update and an
+/// artifact update name theirs `taskId` (a message's `messageId` is its own).
+pub(crate) const KINDS: [(&str, &str); 4] = [
+    ("task", "id"),
+    ("message", "taskId"),
+    ("status-update", "taskId"),
+    ("artifact-update", "taskId"),
+];
+
 fn wrapper_of(result: &Value) -> Option<(&'static str, &'static str)> {
     WRAPPERS
         .into_iter()
         .find(|(member, _)| result.get(member).is_some_and(Value::is_object))
+}
+
+/// The wrapper a `result` puts its payload under (`None`: unwrapped) and the member naming the
+/// task in that payload: the wrapper's, else the one its `kind` names, else `id`.
+fn identity_of(result: &Value) -> (Option<&'static str>, &'static str) {
+    if let Some((wrapper, member)) = wrapper_of(result) {
+        return (Some(wrapper), member);
+    }
+    let kind = result.get("kind").and_then(Value::as_str);
+    let member = KINDS
+        .into_iter()
+        .find(|(k, _)| Some(*k) == kind)
+        .map_or("id", |(_, member)| member);
+    (None, member)
 }
 
 pub(crate) fn payload_of(result: &Value) -> &Value {
@@ -179,7 +192,7 @@ pub(crate) fn payload_of(result: &Value) -> &Value {
 /// THE FAR END'S OWN TASK ID, read off a `result` before [`rewrite_identity`] replaces it.
 #[must_use]
 pub fn backend_task_id(result: &Value) -> Option<String> {
-    let id_member = wrapper_of(result).map_or("id", |(_, m)| m);
+    let (_, id_member) = identity_of(result);
     payload_of(result)
         .get(id_member)
         .and_then(Value::as_str)
@@ -203,15 +216,15 @@ pub fn wire_state(token: &str) -> Option<TaskState> {
     .ok()
 }
 
-/// The task state a `result` reports, `Working` when it reports none this build can read: a relay
-/// that guessed `completed` from an unread token would close a running task.
+/// The task state a `result` reports; `None` when it reports none this build can read (an artifact
+/// update, a message, an unknown token): a reader that guessed a state from nothing would move a
+/// task no one moved.
 #[must_use]
-pub fn reported_task_state(result: &Value) -> TaskState {
+pub fn reported_task_state(result: &Value) -> Option<TaskState> {
     payload_of(result)
         .pointer("/status/state")
         .and_then(Value::as_str)
         .and_then(wire_state)
-        .unwrap_or(TaskState::Working)
 }
 
 /// Whether a `result` is a MESSAGE THAT NAMES NO TASK (A2A v1.0 `SendMessageResponse.message`, or
@@ -232,52 +245,70 @@ pub fn names_no_task(result: &Value) -> bool {
 pub const SKILL_METADATA_KEY: &str = "busbar/skill";
 
 /// SUBSTITUTE BUSBAR'S TASK IDENTITY onto a far end's `result`, leaving everything else alone: the
-/// payload's own identity member (inside its wrapper), its `contextId`, the ids a status message
-/// and every `history` message nest, and the matched skill as `metadata["busbar/skill"]`.
+/// payload's own identity member (inside its wrapper, or the one its `kind` names), its
+/// `contextId`, the ids a status message and every `history` message nest, the tasks a message
+/// refers to that busbar knows (this task's own far-end id, or one of `references`, each the far
+/// end's id then busbar's), and the matched skill as `metadata["busbar/skill"]`. `false` when
+/// `result` is not an object: no task identity can be laid on it, and the plane cannot read it as
+/// an answer about a task.
+#[must_use]
 pub fn rewrite_identity(
     result: &mut Value,
     task_id: &str,
     context_id: &str,
     matched_skill: Option<&str>,
-) {
+    references: &[(String, String)],
+) -> bool {
     if !result.is_object() {
-        *result = json!({ "kind": "task" });
+        return false;
     }
-    let (wrapper, id_member) = match wrapper_of(result) {
-        Some((member, id_member)) => (Some(member), id_member),
-        None => (None, "id"),
+    let (wrapper, id_member) = identity_of(result);
+    let message = match wrapper {
+        Some(member) => member == "message",
+        None => result.get("kind").and_then(Value::as_str) == Some("message"),
+    };
+    let own = backend_task_id(result);
+    let refer = |far: &str| {
+        if own.as_deref() == Some(far) {
+            return Some(task_id.to_string());
+        }
+        references
+            .iter()
+            .find(|(theirs, _)| theirs == far)
+            .map(|(_, ours)| ours.clone())
     };
     let payload = match wrapper {
         Some(member) => match result.get_mut(member) {
             Some(inner) => inner,
-            None => return,
+            None => return true,
         },
         None => result,
     };
     let Some(obj) = payload.as_object_mut() else {
-        return;
+        return true;
     };
     // A standalone message names no task: `taskId` is added only to one that belongs to a task.
-    if id_member != "taskId" || wrapper != Some("message") || obj.contains_key("taskId") {
+    if !message || obj.contains_key("taskId") {
         obj.insert(id_member.to_string(), Value::String(task_id.to_string()));
     }
     obj.insert(
         "contextId".to_string(),
         Value::String(context_id.to_string()),
     );
+    refer_to_busbar(obj, &refer);
     if let Some(msg) = obj
         .get_mut("status")
         .and_then(Value::as_object_mut)
         .and_then(|s| s.get_mut("message"))
         .and_then(Value::as_object_mut)
     {
-        rewrite_message_identity(msg, task_id, context_id);
+        rewrite_message_identity(msg, task_id, context_id, &refer);
     }
     // A task's history is its messages (a2a.proto:179-180): each that names the far end's task or
     // context names busbar's.
     if let Some(history) = obj.get_mut("history").and_then(Value::as_array_mut) {
         for msg in history.iter_mut().filter_map(Value::as_object_mut) {
-            rewrite_message_identity(msg, task_id, context_id);
+            rewrite_message_identity(msg, task_id, context_id, &refer);
         }
     }
     if let Some(skill) = matched_skill {
@@ -294,11 +325,32 @@ pub fn rewrite_identity(
             );
         }
     }
+    true
 }
 
-/// The task and context ids a message nested in a result names, replaced by busbar's; a member the
-/// message does not carry is not added.
-fn rewrite_message_identity(msg: &mut Map<String, Value>, task_id: &str, context_id: &str) {
+/// Every task a message refers to (`referenceTaskIds`, either spelling) that `refer` knows, named
+/// by busbar's id.
+fn refer_to_busbar(msg: &mut Map<String, Value>, refer: &dyn Fn(&str) -> Option<String>) {
+    for member in crate::answer_bytes::REFERENCE_MEMBERS {
+        let Some(ids) = msg.get_mut(member).and_then(Value::as_array_mut) else {
+            continue;
+        };
+        for id in ids.iter_mut() {
+            if let Some(ours) = id.as_str().and_then(refer) {
+                *id = Value::String(ours);
+            }
+        }
+    }
+}
+
+/// The task and context ids a message nested in a result names, replaced by busbar's, and the tasks
+/// it refers to that `refer` knows; a member the message does not carry is not added.
+fn rewrite_message_identity(
+    msg: &mut Map<String, Value>,
+    task_id: &str,
+    context_id: &str,
+    refer: &dyn Fn(&str) -> Option<String>,
+) {
     if msg.contains_key("taskId") {
         msg.insert("taskId".to_string(), Value::String(task_id.to_string()));
     }
@@ -308,6 +360,7 @@ fn rewrite_message_identity(msg: &mut Map<String, Value>, task_id: &str, context
             Value::String(context_id.to_string()),
         );
     }
+    refer_to_busbar(msg, refer);
 }
 
 /// The ProtoJSON type URL of `google.rpc.ResourceInfo`, which is how the task a refusal is about
