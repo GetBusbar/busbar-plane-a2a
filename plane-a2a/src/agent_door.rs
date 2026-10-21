@@ -4277,8 +4277,8 @@ pub fn context_session(envelope: &[u8]) -> Option<String> {
 }
 
 /// A REQUEST-STAGE HOOK'S REWRITE, read as the served engine read a `prompt: rw` reply to an A2A
-/// submission (`plane_host::apply_rewrite_to_invoke_args`, the invoke rewrite contract, in rule):
-/// the hook stage hands the plane the reply as `{"messages": [...], "tools": ...}`; an A2A request
+/// submission (the invoke rewrite contract, in rule; busbar's kernel copy of it left with its plane
+/// hosting, status row 82, so this function is the contract's one home): the hook stage hands the plane the reply as `{"messages": [...], "tools": ...}`; an A2A request
 /// has one untrusted content member, its `params` object, and the rewrite REPLACES it: a
 /// `messages` entry's `content` (an object verbatim, or a JSON string that parses to an object) or,
 /// for an entry with no `role`, the entry itself; the LAST entry that yields an object wins.
