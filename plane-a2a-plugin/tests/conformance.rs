@@ -10,8 +10,18 @@
 //! `plugin-ci.yml` runs it under `--release`. The op-by-op script the crate carried in busbar is
 //! `tests/both_ways.rs`.
 
+/// This plugin's own door, named for the loader.
+fn loaded_door() -> busbar_plugin_loader::dispatch::LoadedDoor {
+    // SAFETY: `busbar_plane_a2a::door` is this crate's own door: it answers the `'static` door of
+    // this plugin.
+    #[allow(unused_unsafe)]
+    let loaded =
+        unsafe { busbar_plugin_loader::dispatch::LoadedDoor::from_raw(busbar_plane_a2a::door) };
+    loaded
+}
+
 busbar_plugin_loader::conformance_suite! {
-    door: busbar_plane_a2a::door,
+    loaded: loaded_door(),
     cdylib: "busbar_plane_a2a_plugin",
     inputs: include_str!("conformance.json"),
 }

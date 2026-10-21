@@ -756,7 +756,7 @@ fn the_rewrite_apply_site_never_falls_back_to_the_caller_s_original_params() {
 
     let src = include_str!("../agent_door.rs");
     let site = src
-        .split_once("let rewrite = input.field(|i| &i.rewrite).bytes();")
+        .split_once("let rewrite = input.rewrite().bytes();")
         .map(|(_, rest)| rest)
         .expect("`project` reads the stage's rewrite");
     let site = &site[..site
