@@ -1073,7 +1073,7 @@ fn served_core(
                 host: {
                     let live = Arc::clone(&live);
                     Arc::new(move || {
-                        busbar_kernel::plane_host::engine_host(
+                        busbar_kernel::test_support::engine_host(
                             live.get().expect("the App is built before a unit runs"),
                         )
                     })
@@ -8018,7 +8018,7 @@ async fn a_backend_that_cannot_be_reached_is_counted_as_a_transient_upstream_fai
     assert!(
         lines.iter().any(|l| l.contains(&format!(
             "disposition=\"{}\"",
-            busbar_kernel::proxy::DISPOSITION_TRANSIENT
+            busbar_contract::upstream::Disposition::TransientUpstream.label()
         ))),
         "the failure carries the model plane's own disposition word: {lines:?}"
     );
