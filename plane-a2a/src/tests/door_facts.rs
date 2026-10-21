@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! THE DOOR-DRIVEN TESTS' FACTS ARE THE DOOR'S. `tests/unit_lifetime.rs` and
-//! `tests/project_session.rs` reach the plane only through `door` (the crate's one public item, and
+//! THE DOOR-DRIVEN TESTS' FACTS ARE THE DOOR'S. `tests/unit_lifetime.rs`,
+//! `tests/project_session.rs` and the plugin crate's `plane-a2a-plugin/tests/both_ways.rs` reach the plane only through `door` (the crate's one public item, and
 //! its root keeps the literal `#![forbid(unsafe_code)]`, so the raw door table they drive is read in
 //! those test crates, not here). The private constants they need are restated in
 //! `tests/support/door_facts.rs`; this test includes that same file and holds each value to the item
@@ -28,6 +28,32 @@ fn the_door_driven_tests_restate_the_doors_own_constants() {
         crate::door_statement::CLASS_FEE_INDEX
     );
     assert_eq!(stated::WELL_KNOWN_CARD_PATH, crate::WELL_KNOWN_CARD_PATH);
+    assert_eq!(
+        stated::DIALECT_TARGET,
+        crate::door_statement::DIALECT_TARGET
+    );
+    assert_eq!(
+        stated::DIALECT_FRAMED,
+        crate::door_statement::DIALECT_FRAMED
+    );
+    assert_eq!(stated::MOUNT_PATH, crate::MOUNT_PATH);
+    assert_eq!(stated::ROUTE_MESSAGE_SEND, crate::ROUTE_MESSAGE_SEND);
+    assert_eq!(stated::ROUTE_TASKS, crate::ROUTE_TASKS);
+    assert_eq!(stated::ROUTE_TASK, crate::ROUTE_TASK);
+    assert_eq!(stated::SERVICE_PATH, crate::framed::SERVICE_PATH);
+    assert_eq!(stated::NEED_OPEN_WEB, crate::door_statement::NEED_OPEN_WEB);
+    assert_eq!(stated::NEED_AGENT, crate::door_statement::NEED_AGENT);
+    assert_eq!(stated::NEED_GRPC, crate::door_statement::NEED_GRPC);
+    assert_eq!(stated::FRAMED_TRANSPORT, crate::claims::FRAMED_TRANSPORT);
+    assert_eq!(stated::MEMBER_TARGET, crate::door_statement::MEMBER_TARGET);
+    assert_eq!(
+        stated::CLIENT_IDENTITY_FROM,
+        crate::door_statement::CLIENT_IDENTITY_FROM
+    );
+    assert_eq!(
+        stated::PUSH_TRUST_FROM,
+        crate::door_statement::PUSH_TRUST_FROM
+    );
     assert_eq!(stated::HELD_KINDS, crate::records::HELD_KINDS);
     let routes: Vec<(&str, &str)> = crate::door_statement::ROUTES
         .iter()

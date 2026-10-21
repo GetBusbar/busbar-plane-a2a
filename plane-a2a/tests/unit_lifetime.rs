@@ -25,6 +25,7 @@
 // crate's own items by the crate's unit test `door_facts`.
 
 #[path = "support/door_facts.rs"]
+#[allow(dead_code)] // the both-ways script's line and need facts are read there, not here
 mod door_facts;
 
 use std::collections::HashMap;

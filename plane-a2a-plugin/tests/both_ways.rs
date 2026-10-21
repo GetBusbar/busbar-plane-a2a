@@ -28,6 +28,12 @@ fn loaded_door() -> busbar_plugin_loader::dispatch::LoadedDoor {
     loaded
 }
 
+/// The door's private facts this script names, restated as data in the logic crate's
+/// `tests/support/door_facts.rs` and held there, item by item, by the crate's unit test `door_facts`.
+#[path = "../../plane-a2a/tests/support/door_facts.rs"]
+#[allow(dead_code)] // the unit-lifetime tests' constants are read there, not here
+mod door_facts;
+
 mod both_ways {
     use std::mem::zeroed;
     use std::sync::Arc;
@@ -51,59 +57,14 @@ mod both_ways {
     use serde_json::{json, Value};
 
     // THE PLANE'S WORDS THIS SCRIPT SPEAKS. The logic crate's only public item is its door
-    // (BUSBAR-1.6.0.md l.3567), so the values the script drives it with are spelled here, each the
-    // value of the plane's own constant it names; a drift is a red transcript, not a silent pass.
-
-    /// The plane's mount (`MOUNT_PATH`).
-    const MOUNT_PATH: &str = "/a2a";
-    /// `ROUTE_MESSAGE_SEND`, under the mount.
-    const ROUTE_MESSAGE_SEND: &str = "/message:send";
-    /// `ROUTE_TASKS`, under the mount.
-    const ROUTE_TASKS: &str = "/tasks";
-    /// `ROUTE_TASK`, under the mount.
-    const ROUTE_TASK: &str = "/tasks/{id}";
-    /// The gRPC service every rpc of the framed line is a method of (`framed::SERVICE_PATH`).
-    const SERVICE_PATH: &str = "/lf.a2a.v1.A2AService";
-    /// The Statement tail's dialect indices (`door_statement::DIALECT_*`).
-    const DIALECT_DOCUMENT: u32 = 0;
-    const DIALECT_TARGET: u32 = 1;
-    const DIALECT_FRAMED: u32 = 2;
-    /// The Statement's need indices (`door_statement::NEED_*`).
-    const NEED_OPEN_WEB: usize = 0;
-    const NEED_AGENT: usize = 1;
-    const NEED_GRPC: usize = 2;
-    /// The framed line's transport (`claims::FRAMED_TRANSPORT`).
-    const FRAMED_TRANSPORT: &str = "grpc";
-    /// `door_statement::MEMBER_TARGET`.
-    const MEMBER_TARGET: &str = "settings.*.url";
-    /// `door_statement::CLIENT_IDENTITY_FROM`.
-    const CLIENT_IDENTITY_FROM: &str = "settings.*.client_identity";
-    /// `door_statement::PUSH_TRUST_FROM`.
-    const PUSH_TRUST_FROM: &str = "owned.agent_push.ca";
-    /// The door's route table (`door_statement::ROUTES`), `(verb, target)` in its order: an
-    /// arrival's claim is its index here.
-    const ROUTES: &[(&str, &str)] = &[
-        ("POST", "/a2a/message:send"),
-        ("POST", "/a2a/message:stream"),
-        ("GET", "/a2a/tasks"),
-        ("GET", "/a2a/tasks/{id}"),
-        ("POST", "/a2a/tasks/{id}"),
-        ("POST", "/a2a/tasks/{id}/pushNotificationConfigs"),
-        ("GET", "/a2a/tasks/{id}/pushNotificationConfigs"),
-        ("GET", "/a2a/tasks/{id}/pushNotificationConfigs/{config_id}"),
-        (
-            "DELETE",
-            "/a2a/tasks/{id}/pushNotificationConfigs/{config_id}",
-        ),
-        ("GET", "/a2a/extendedAgentCard"),
-        ("GET", "/.well-known/oauth-protected-resource/a2a"),
-        ("GET", "/.well-known/agent-card.json"),
-        ("GET", "/a2a/agents/{agent_id}"),
-        ("POST", "/a2a/agents/{agent_id}"),
-        ("POST", "/a2a"),
-        ("POST", "/a2a/"),
-        ("POST", "/lf.a2a.v1.A2AService/{method}"),
-    ];
+    // (BUSBAR-1.6.0.md l.3567), so the values the script drives it with are the logic crate's
+    // `tests/support/door_facts.rs`, which the crate's own unit test `door_facts` holds, value by
+    // value, to the private item each restates: a drift is red in the crate, not a silent pass here.
+    use super::door_facts::{
+        claim, CLIENT_IDENTITY_FROM, DIALECT_DOCUMENT, DIALECT_FRAMED, DIALECT_TARGET,
+        FRAMED_TRANSPORT, MEMBER_TARGET, MOUNT_PATH, NEED_AGENT, NEED_GRPC, NEED_OPEN_WEB,
+        PUSH_TRUST_FROM, ROUTE_MESSAGE_SEND, ROUTE_TASK, ROUTE_TASKS, SERVICE_PATH,
+    };
 
     fn z<T>() -> T {
         // SAFETY: every `in`/`out` here is plain C data; all-zero is a valid value of each.
@@ -174,15 +135,6 @@ mod both_ways {
     /// A rewrite with no usable params object: not applied.
     const UNUSABLE: &[u8] =
         br#"{"messages":[{"role":"user","content":"plain words"}],"tools":null}"#;
-
-    /// The route index of `(verb, target)` in the door's table, the claim an arrival carries.
-    fn claim(verb: &str, target: &str) -> u32 {
-        let i = ROUTES
-            .iter()
-            .position(|&(v, t)| v == verb && t == target)
-            .unwrap_or_else(|| panic!("the door routes {verb} {target}"));
-        u32::try_from(i).expect("a small table")
-    }
 
     fn mounted(path: &str) -> String {
         format!("{MOUNT_PATH}{path}")
@@ -612,7 +564,7 @@ mod both_ways {
             busbar_contract::abi::mechanism::rendering::read(&rendered).expect("it reads back");
         let needs = read.needs;
         assert_eq!(needs.len(), 3);
-        let (http, grpc) = (&needs[NEED_AGENT], &needs[NEED_GRPC]);
+        let (http, grpc) = (&needs[NEED_AGENT as usize], &needs[NEED_GRPC as usize]);
         assert_eq!(http.transport, "http");
         assert_eq!(grpc.transport, FRAMED_TRANSPORT);
         assert_eq!(grpc.transport, "grpc");
@@ -636,7 +588,7 @@ mod both_ways {
             .statement;
         let read =
             busbar_contract::abi::mechanism::rendering::read(&rendered).expect("it reads back");
-        let push = &read.needs[NEED_OPEN_WEB];
+        let push = &read.needs[NEED_OPEN_WEB as usize];
         assert_eq!(push.trust_from, PUSH_TRUST_FROM);
         assert_eq!(push.trust_from, "owned.agent_push.ca");
         assert!(
