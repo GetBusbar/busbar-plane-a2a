@@ -671,6 +671,12 @@ fn a_failed_card_hop_is_named_as_the_engines_client_named_it() {
     );
 }
 
+/// A SHA-256 SubjectPublicKeyInfo digest in plain base64, as an operator may write it.
+const PLAIN: &str = "DoEzhVby6hzA9bUKaPWrywM7zx+PZntDqVap7i99DN8=";
+
+/// Another key's digest, as the connector reports it (canonical).
+const OTHER: &str = "sha256/KqULR8kjQt3aHcy3dOUOSX11ljLbLDqLhrManXN/gVE=";
+
 /// A key pin seen on the hop.
 fn hop(peer_key_pin: Option<&str>, client_identity_offered: bool) -> Handshake {
     Handshake {
@@ -687,7 +693,7 @@ fn hop(peer_key_pin: Option<&str>, client_identity_offered: bool) -> Handshake {
 #[test]
 fn a_transport_pin_is_observed_approvable_and_enforced_as_the_engine_judged_it() {
     let c = card("plans");
-    let key = "R2V0IHRoZSBrZXkgcmlnaHQ=";
+    let key = "sha256/DoEzhVby6hzA9bUKaPWrywM7zx+PZntDqVap7i99DN8=";
     let spki = pin(PinMechanism::CertKeyPin, Some(&format!(" {key} ")));
     let seen = verify_card(&spki, &c, &hop(Some(key), false), || unreachable!()).unwrap();
     assert_eq!(
@@ -711,11 +717,11 @@ fn a_transport_pin_is_observed_approvable_and_enforced_as_the_engine_judged_it()
          succeeded is not a transport binding that was checked."
     );
     assert_eq!(
-        verify_card(&spki, &c, &hop(Some("b3RoZXI="), false), || Ok(())).unwrap_err(),
+        verify_card(&spki, &c, &hop(Some(OTHER), false), || Ok(())).unwrap_err(),
         format!(
             "`pin.mechanism: cert_spki`: the card endpoint served a certificate whose \
-             subject-public-key-info is `b3RoZXI=`, and the operator pinned `{key}`. The endpoint \
-             answered and it is not the endpoint the operator supplied a root for."
+             subject-public-key-info is `{OTHER}`, and the operator pinned `{key}`. The \
+             endpoint answered and it is not the endpoint the operator supplied a root for."
         )
     );
     // Base64 is case-significant: a key in another case is another key.
@@ -733,7 +739,7 @@ fn a_transport_pin_is_observed_approvable_and_enforced_as_the_engine_judged_it()
         .starts_with("`pin.mechanism: mtls` requires busbar to present a client certificate"));
     // The peer half first: a mismatched endpoint is a mismatch, not a missing identity.
     assert!(
-        verify_card(&mutual, &c, &hop(Some("b3RoZXI="), false), || Ok(()))
+        verify_card(&mutual, &c, &hop(Some(OTHER), false), || Ok(()))
             .unwrap_err()
             .starts_with("`pin.mechanism: mtls`: the card endpoint served a certificate")
     );
@@ -744,12 +750,12 @@ fn a_transport_pin_is_observed_approvable_and_enforced_as_the_engine_judged_it()
 /// any other fetch failure, and any other mechanism, keeps the fetch's own words.
 #[test]
 fn a_refused_hop_of_a_transport_pinned_registration_reads_as_the_pin_s_refusal() {
-    let key = "R2V0IHRoZSBrZXkgcmlnaHQ=";
+    let key = "sha256/DoEzhVby6hzA9bUKaPWrywM7zx+PZntDqVap7i99DN8=";
     let spki = pin(PinMechanism::CertKeyPin, Some(key));
     let https = "https://agent.example/a";
-    assert!(hop_refusal(&spki, &hop(Some("b3RoZXI="), false), https)
+    assert!(hop_refusal(&spki, &hop(Some(OTHER), false), https)
         .unwrap()
-        .contains("subject-public-key-info is `b3RoZXI=`"));
+        .contains(&format!("subject-public-key-info is `{OTHER}`")));
     assert_eq!(hop_refusal(&spki, &hop(None, false), https), None);
     assert!(
         hop_refusal(&spki, &hop(None, false), "http://127.0.0.1:9/a")
@@ -758,7 +764,7 @@ fn a_refused_hop_of_a_transport_pinned_registration_reads_as_the_pin_s_refusal()
     );
     assert_eq!(hop_refusal(&spki, &hop(Some(key), false), https), None);
     assert_eq!(
-        hop_refusal(&signed_root(), &hop(Some("b3RoZXI="), false), https),
+        hop_refusal(&signed_root(), &hop(Some(OTHER), false), https),
         None
     );
 }
@@ -908,4 +914,73 @@ fn the_mechanism_is_part_of_the_identity_not_a_label_beside_it() {
     assert_ne!(jws, CardPin::Unpinned);
     assert_ne!(CardPin::Unpinned, key_pin);
     assert_eq!(rooted(PinMechanism::CertKeyPin), key_pin);
+}
+
+/// THE OPERATOR'S PIN IS READ IN EITHER SPELLING, THE CONNECTOR'S FACT IN THE CANONICAL ONE: a
+/// `cert_spki` (and an `mtls`) pin written as plain base64 or as `sha256/<base64>` passes the card
+/// check against the connector's canonical `sha256/` fact, the canonical key recorded; a wrong key
+/// in either spelling is a mismatch; a pin that names no SHA-256 digest is refused without being
+/// repeated.
+#[test]
+fn a_key_pin_in_either_spelling_matches_the_connectors_canonical_fact() {
+    let c = card("plans");
+    let canonical = format!("sha256/{PLAIN}");
+    for (mechanism, offered) in [
+        (PinMechanism::CertKeyPin, false),
+        (PinMechanism::MutualTls, true),
+    ] {
+        for written in [PLAIN.to_string(), canonical.clone(), format!(" {PLAIN} ")] {
+            let seen = verify_card(
+                &pin(mechanism, Some(&written)),
+                &c,
+                &hop(Some(&canonical), offered),
+                || unreachable!(),
+            )
+            .unwrap_or_else(|e| panic!("`{written}` refused: {e}"));
+            assert_eq!(
+                seen.pin,
+                CardPin::Rooted {
+                    mechanism,
+                    key: canonical.clone(),
+                    fingerprint: card::fingerprint(&c).unwrap(),
+                },
+                "`{written}`"
+            );
+            assert_eq!(
+                hop_refusal(
+                    &pin(mechanism, Some(&written)),
+                    &hop(Some(&canonical), offered),
+                    "https://agent.example/a"
+                ),
+                None,
+                "`{written}`"
+            );
+        }
+        let other_plain = OTHER.strip_prefix("sha256/").unwrap();
+        for wrong in [other_plain.to_string(), OTHER.to_string()] {
+            assert!(
+                verify_card(
+                    &pin(mechanism, Some(&wrong)),
+                    &c,
+                    &hop(Some(&canonical), offered),
+                    || Ok(())
+                )
+                .unwrap_err()
+                .contains("the operator pinned"),
+                "`{wrong}`"
+            );
+        }
+    }
+    let refused = verify_card(
+        &pin(PinMechanism::CertKeyPin, Some("sha256/c2hvcnQ=")),
+        &c,
+        &hop(Some(&canonical), false),
+        || Ok(()),
+    )
+    .unwrap_err();
+    assert!(refused.contains("`pin.key:`"), "{refused}");
+    assert!(
+        !refused.contains("c2hvcnQ="),
+        "the bad pin is repeated: {refused}"
+    );
 }

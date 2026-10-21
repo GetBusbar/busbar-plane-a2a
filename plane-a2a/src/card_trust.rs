@@ -476,17 +476,25 @@ pub struct Handshake {
 }
 
 /// THE TRANSPORT-LAYER ROOT, checked (the served engine's `transport_pin`). Returns the OBSERVED
-/// value, never the configured one: the pin recorded is a fact about the connection. The compare is
-/// on the trimmed strings and CASE-SENSITIVE (base64 is case-significant).
+/// value, never the configured one: the pin recorded is a fact about the connection. Both sides are
+/// read by the one reader of a written key pin
+/// ([`busbar_contract::transport::trust::canonical_key_pin`]): the operator may write the canonical
+/// `sha256/<base64>` or its plain `<base64>` alias, the connector reports the canonical spelling,
+/// and the compare is canonical to canonical, CASE-SENSITIVE (base64 is case-significant). A pin
+/// that names no SHA-256 digest is refused in the reader's words, never repeated.
 fn transport_pin(
     mechanism: &str,
     expected: &str,
     observed: Option<&str>,
 ) -> Result<String, String> {
+    use busbar_contract::transport::trust::canonical_key_pin;
     let observed = observed
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .ok_or_else(|| not_observed(mechanism))?;
+    let expected = canonical_key_pin(expected)
+        .map_err(|bad| format!("`pin.mechanism: {mechanism}`: `pin.key:`: {bad}"))?;
+    let observed = canonical_key_pin(observed).unwrap_or_else(|_| observed.to_string());
     if observed != expected {
         return Err(format!(
             "`pin.mechanism: {mechanism}`: the card endpoint served a certificate whose \
@@ -494,7 +502,7 @@ fn transport_pin(
              endpoint answered and it is not the endpoint the operator supplied a root for."
         ));
     }
-    Ok(observed.to_string())
+    Ok(observed)
 }
 
 /// A transport-pinned fetch that observed no certificate, in the served engine's words.
