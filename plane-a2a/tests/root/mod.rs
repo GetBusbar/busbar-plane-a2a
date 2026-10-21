@@ -944,7 +944,7 @@ fn served_core(
             &[],
             dispatcher.conn_waker(),
             crate::root::connector::pool_posture(&settings),
-            busbar_kernel::config::secret::resolve_linked_string_at_config,
+            crate::root::connector::spawn_secret_resolver(),
         )
         .expect("the connector builds"),
         Some(root) => {
