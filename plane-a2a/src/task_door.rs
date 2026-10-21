@@ -23,7 +23,7 @@ use busbar_contract::abi::plane::{
     OnPieceIn, OnPieceOut, OutField, RecordWrite, UnitCount, EMIT_DONE, FROM_CALLER, RECORD_PUT,
     UNITS_REPORTED,
 };
-use busbar_contract::abi::sdk::conn::{Connector, Host};
+use busbar_contract::abi::sdk::conn::{Connector, StaticHost};
 use busbar_contract::abi::sdk::{
     Instance, Keyed, Lent, Out, ServiceError, Services, StaticServices,
 };
@@ -109,24 +109,22 @@ struct Entry {
 /// THE HOST RECORDS AND THE DESTINATION JUDGE, for one piece: its connector, and the host services
 /// the door was opened with. Every call counts on the piece's one handle sequence.
 ///
-/// The handles are the TYPE PARAMETERS `H` (the host) and `S` (its services), always `Host` and
-/// `Services`: the door's own install handles ('static) in the kernel, a test's borrowed ones
-/// under a fake host. A struct field cannot spell a handle's lifetime on every contract, so the
-/// parameters carry it and nothing here is made 'static that is not.
-pub struct Via<'h, H, S> {
-    host: &'h H,
-    services: Option<S>,
+/// Both handles are the door's own install handles ('static by construction); a test passes the
+/// handles of a host it leaked, which is 'static too.
+pub struct Via<'h> {
+    host: &'h StaticHost,
+    services: Option<StaticServices>,
     ticket: Ticket,
     conn: Connector<'h>,
     grown: &'h Grown,
 }
 
-impl<'h> Via<'h, Host, Services> {
+impl<'h> Via<'h> {
     /// The piece's calls, counting on from the `issued` its unit's finished pieces made; `grown` is
     /// the instance's book of the sizes short records answers named.
     pub fn new(
-        host: &'h Host,
-        services: Option<Services>,
+        host: &'h StaticHost,
+        services: Option<StaticServices>,
         ticket: Ticket,
         issued: u32,
         grown: &'h Grown,
@@ -141,7 +139,7 @@ impl<'h> Via<'h, Host, Services> {
     }
 
     /// The services the door was opened with.
-    fn services(&self) -> Result<Services, Halt> {
+    fn services(&self) -> Result<StaticServices, Halt> {
         self.services
             .ok_or_else(|| Halt::Failed(format!("{:?}", ServiceError::Unserved)))
     }
@@ -252,7 +250,7 @@ impl<T> Issued<T> {
     }
 }
 
-impl Via<'_, Host, Services> {
+impl Via<'_> {
     /// One records call under this piece's next handle, issued at `(bytes, items)` (or the size a
     /// short answer on the handle already named) and, answered short, re-issued ONCE on the same
     /// handle at the size it names. `call` makes the crossing into the buffers it is handed and
@@ -306,7 +304,7 @@ impl Via<'_, Host, Services> {
     }
 }
 
-impl Records for Via<'_, Host, Services> {
+impl Records for Via<'_> {
     fn get(&mut self, kind: &str, key: &str) -> Result<Option<Vec<u8>>, Halt> {
         self.issue((RECORD_BYTES, 1), |services, handle, buf, _| {
             services
@@ -359,7 +357,7 @@ impl Records for Via<'_, Host, Services> {
     }
 }
 
-impl crate::task_hop::Mint for Via<'_, Host, Services> {
+impl crate::task_hop::Mint for Via<'_> {
     fn random(&mut self, buf: &mut [u8]) -> Result<(), Halt> {
         Via::random(self, buf)
     }
@@ -370,7 +368,7 @@ const JUDGED_BYTES: usize = 512;
 /// One span per judged address.
 const JUDGED_ADDRESSES: usize = 16;
 
-impl Reach for Via<'_, Host, Services> {
+impl Reach for Via<'_> {
     fn judge(&mut self, dest: &str) -> Result<u64, Halt> {
         let services = self.services()?;
         let handle = self.next_handle();
@@ -765,7 +763,7 @@ fn refresh_listed<'h>(
     plane: &'h A2aDoor,
     instance: &Instance<'_, A2aDoor>,
     unit: u64,
-    via: &mut Via<'h, Host, Services>,
+    via: &mut Via<'h>,
     (caller, member): (&str, &str),
     (section, generation, now, version): (
         Option<&crate::a2a::config::AgentsCfg>,
@@ -898,7 +896,7 @@ fn refresh_listed<'h>(
 fn mirror_flight(
     plane: &A2aDoor,
     instance: &Instance<'_, A2aDoor>,
-    via: &mut Via<'_, Host, Services>,
+    via: &mut Via<'_>,
     (method, version): (&'static str, &'static str),
     envelope: &Value,
     (caller, member): (&str, &str),

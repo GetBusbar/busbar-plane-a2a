@@ -75,7 +75,7 @@ mod both_ways {
 
     /// A string the door wrote into `arena`, read back by its offset.
     fn in_arena(arena: &[u8], s: AbiStr) -> String {
-        if s.is_absent() || s.len() == 0 {
+        if s.is_absent() || s.is_empty() {
             return String::new();
         }
         let start = s.ptr() as usize - arena.as_ptr() as usize;
