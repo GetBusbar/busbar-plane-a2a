@@ -978,7 +978,13 @@ fn a_key_pin_in_either_spelling_matches_the_connectors_canonical_fact() {
         || Ok(()),
     )
     .unwrap_err();
-    assert!(refused.contains("`pin.key:`"), "{refused}");
+    assert!(
+        refused.starts_with(
+            "`pin.mechanism: cert_spki`: `pin.key:`: the key pin is not `sha256/<base64>` of a \
+             32-byte SHA-256 SubjectPublicKeyInfo digest (nor its plain base64 alias)"
+        ),
+        "{refused}"
+    );
     assert!(
         !refused.contains("c2hvcnQ="),
         "the bad pin is repeated: {refused}"
