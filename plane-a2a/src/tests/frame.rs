@@ -6,8 +6,8 @@
 //!
 //! WHY THIS SITS IN A TEST MODULE THE PURITY WALK SKIPS. The tap fixture below records what it
 //! saw, which needs a `RefCell`, and this crate's purity oracle
-//! (`src/tests/purity.rs::the_plane_holds_no_interior_state`) walks `src/` and refuses one — rightly,
-//! because a plane that holds a cell can answer differently the second time for a reason no caller
+//! (`src/tests/purity.rs::the_plane_spells_no_interior_mutability_of_its_own`) walks `src/` and
+//! refuses one — rightly, because a plane that holds a cell can answer differently the second time for a reason no caller
 //! can see. A HARNESS holding a cell to record what it observed is not the plane holding state, so
 //! the battery moved out of the walk rather than the rule being weakened around it.
 

@@ -169,6 +169,12 @@ fn a_full_queue_drops_its_oldest_waiting_notification_and_counts_it() {
     assert!(d.enqueue(delivery("t1"), 0));
     assert_eq!(d.dropped(), 2);
     assert_eq!(
+        d.take_counted(),
+        (2, 0),
+        "the drops are reported as a counter's increment"
+    );
+    assert_eq!(d.take_counted(), (0, 0), "and each drop once");
+    assert_eq!(
         d.settle("t1", Attempted::Delivered, 0, 0),
         DeliverySettled::Done(vocab::EV_PUSH_DELIVERED)
     );
@@ -584,6 +590,12 @@ fn the_owed_book_is_bounded_and_counts_what_it_drops() {
         d.owe(&delivery(&format!("t{i}")), Attempted::Delivered);
     }
     assert_eq!(d.unfiled(), 1);
+    assert_eq!(
+        d.take_counted(),
+        (0, 1),
+        "reported as a counter's increment, once"
+    );
+    assert_eq!(d.take_counted(), (0, 0));
     let first = d.take_owed("principal", None);
     assert_eq!(first.len(), MAX_OWED);
     assert_eq!(first[0].task_id, "t1", "t0 was the one dropped");
@@ -681,4 +693,39 @@ fn the_pump_serves_each_tasks_queue_in_turn() {
     );
     d.settle("b", Attempted::Delivered, 0, 0);
     assert_eq!(d.next_due(0).map(|x| x.task_id).as_deref(), Some("a"));
+}
+
+/// AN AGENT'S PUSH MOVES ITS TASK ONLY TO A STATE IT REPORTS, AND ONLY WHEN THE TASK IS NOT ALREADY
+/// IN IT (`POST /a2a/push`, step 6): an artifact update, a message or any document with no
+/// readable `status.state` moves nothing (`202`, nothing recorded, no notification), and a retried
+/// push of the state already held queues no second notification. RED: a push with no readable state
+/// read as `working`, moving a submitted or input-required task, and a re-reported state queued a
+/// notification each time.
+#[test]
+fn a_push_moves_its_task_only_to_a_new_state_it_reports() {
+    use crate::push_serve::push_move;
+    use serde_json::json;
+    for no_state in [
+        json!({ "artifactUpdate": { "taskId": "t", "artifact": { "parts": [] } } }),
+        json!({ "kind": "message", "messageId": "m", "parts": [] }),
+        json!({ "task": { "id": "t" } }),
+        json!({ "status": { "state": "pondering" } }),
+    ] {
+        for held in [TaskState::Submitted, TaskState::InputRequired] {
+            assert_eq!(push_move(held, &no_state), None, "{no_state} on {held:?}");
+        }
+    }
+    let working = json!({ "statusUpdate": { "status": { "state": "TASK_STATE_WORKING" } } });
+    assert_eq!(push_move(TaskState::Working, &working), None, "a retry");
+    assert_eq!(
+        push_move(TaskState::Submitted, &working),
+        Some(TaskState::Working)
+    );
+    assert_eq!(
+        push_move(
+            TaskState::Working,
+            &json!({ "task": { "status": { "state": "completed" } } })
+        ),
+        Some(TaskState::Completed)
+    );
 }

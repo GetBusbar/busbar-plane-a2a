@@ -5,8 +5,9 @@
 //! `ListValue`, `NullValue`, `Timestamp`), with their protobuf JSON mapping.
 //!
 //! Ported from `pbjson-types` 0.9.0 (MIT OR Apache-2.0), whose mapping the engine's messages were
-//! written and read in, so the bytes are its bytes. The one thing not taken is `chrono`: the
-//! timestamp's RFC 3339 form is written and read here exactly as `chrono` 0.4 wrote
+//! written and read in, so the bytes are its bytes, but one: a timestamp is written Z-normalised,
+//! as the protobuf JSON mapping states, where `pbjson-types` wrote `+00:00`. The one thing not
+//! taken is `chrono`: the timestamp's RFC 3339 form is written and read here as `chrono` 0.4 wrote
 //! (`DateTime<Utc>::to_rfc3339`) and read (`DateTime::parse_from_rfc3339`) it for `pbjson-types`,
 //! because the calendar crate's clock half reaches the OS, and a plane's closure reaches nothing
 //! (the dependency wall; ARCHITECT ruling Q1 (C), 2026-10-04).
@@ -383,8 +384,9 @@ pub fn representable(seconds: i64, nanos: i32) -> bool {
 }
 
 impl Timestamp {
-    /// Its RFC 3339 form, as `chrono`'s `to_rfc3339` wrote a UTC time: four-digit years (signed
-    /// past `0..=9999`), the fraction in 0, 3, 6 or 9 digits, and `+00:00`.
+    /// Its RFC 3339 form, as `chrono`'s `to_rfc3339` wrote a UTC time (four-digit years, signed
+    /// past `0..=9999`; the fraction in 0, 3, 6 or 9 digits), Z-normalised as the protobuf JSON
+    /// mapping writes a `Timestamp` ("generated output will always be Z-normalized").
     fn rfc3339(self) -> Result<String, &'static str> {
         if self.nanos < 0 {
             return Err(OUT_OF_RANGE_INTEGRAL);
@@ -416,7 +418,7 @@ impl Timestamp {
         } else {
             let _ = write!(out, ".{nano:09}");
         }
-        out.push_str("+00:00");
+        out.push('Z');
         Ok(out)
     }
 }

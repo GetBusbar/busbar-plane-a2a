@@ -1,46 +1,33 @@
-//! The A2A plane: what bytes mean, for one protocol spelled two ways.
+//! The A2A plane: the agent-to-agent protocol, spelled two ways (v0.3 and v1.0) over three
+//! bindings (JSON-RPC, HTTP+JSON and gRPC), as one plugin door ([`door`]).
 //!
 //! ## What this crate is
 //!
-//! An ADAPTER. Every method of the plane kind here is a few lines over a codec that already exists:
-//! the envelope shape, the method vocabulary, the error code table and the record kinds. No wire
-//! format is written twice, because a wire format written twice is two wire formats that will
-//! disagree, and the one that disagrees quietly is the one that reaches a customer.
+//! The whole plane. Its wire reading and writing (the JSON-RPC envelope, the HTTP+JSON request
+//! line, the gRPC line's generated messages), its task vocabulary, its error table and its record
+//! kinds live here; no other crate holds an A2A codec it adapts.
 //!
 //! ## What this crate is not
 //!
 //! It holds no governance, no breaker, no hook seat, no signing key and no arithmetic over a metered
-//! quantity. Those are units, and a unit is on the far side of the kernel from a plane. The metering
-//! method here returns LOCATORS — the class, where the number is, and the number the codec already
-//! read — and never a price, never a hold and never a decision. The routing method returns a plan
-//! and never a connection. Nothing in this crate opens a socket, reads a file or reads a clock other
-//! than the one the context hands it.
+//! quantity. Those are the kernel's. The plane reports UNITS (where the numbers are, and the number
+//! it read) and never a price, a hold or a decision; it opens no socket, reads no file and reads no
+//! clock but the one the kernel hands it. Every connection it needs is the host's, on a need its
+//! Statement declares.
 //!
 //! ## What it holds across calls
 //!
-//! Nothing. The plane is a value with no interior mutability, asserted by a test rather than by a
-//! comment. What state a streamed answer needs lives in the kernel-held per-connection codec state,
-//! which the kernel hands in and takes back.
-//!
-//! ## Where this adapter had to write something down twice, and why
-//!
-//! The codec crate holds the envelope reader, the error table and the method vocabulary, and it
-//! holds all three where only its own crate can see them. This crate may not widen that visibility.
-//! So three things are written once more here — the method table, the error code table, and the
-//! envelope's member shape — and each of them is PINNED by a test that reads the codec's own source
-//! or the conformance rig's own tables. A copy that is checked is not a second opinion. A copy that
-//! is not checked is, and there are none of those here.
-//!
-//! The full list of places the contract did not fit this protocol is in the notes each module
-//! carries: the correlation type that cannot hold a named identifier, the arena that cannot hold a
-//! span table, the introspection verb that takes no argument, and the single byte class that cannot
-//! separate what was sent from what came back.
+//! State, and all of it in the SDK's `Keyed` maps on the door's instance: the units in flight, the
+//! held agent cards and their trust, the agents' own task ids, the push deliveries and the mirror
+//! flights. What must survive a restart is a host record, never a map entry: the maps are what the
+//! instance holds between two calls, rebuilt from the records when it opens. No cell, lock, atomic
+//! or global of the plane's own sits beside them (a source scan holds that).
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-/// The wire dialect's own modules, keeping the `a2a::` parent they carried in the codec crate so
-/// their in-crate paths are the ones every caller already spells.
+/// The wire dialect's own modules (the card, the config grammar, the credentials, the public URL
+/// and the task), under their own `a2a::` parent.
 mod a2a {
     pub mod agent_card;
     pub mod canonical;
@@ -106,34 +93,24 @@ use record::{TaskEventRow, TaskRow};
 // path, the push suffix, the A2A error band with its `ErrorInfo.reason` tokens, and the local verb
 // method names in both dialect spellings.
 //
-// They lived in a third crate because the PLANE could not name the engine and the engine could
-// not link a pure kind. The codec crate is gone (#39) and these came here rather than to the engine
-// for one reason: the plane is the thing being named. A key or a route spelled engine-side is a
-// string the plane could only copy, and two answers to "what path does this plane serve" is a route
-// the server serves and the plane does not claim. The engine reads these; it does not restate them.
+// Each is spelled once, here, and every place the plane states or answers it reads this spelling.
 
 /// THE REGISTRY KEY A2A IS KNOWN BY, in the plane registry and in the plugin contract alike.
 ///
-/// Named ONCE, here, on the pure side of the split, because two declarations read it and both must
-/// agree: the engine's `PLANE_DECLARATION.key` and this crate's own plane `KEY`. A plane is a pure kind
-/// and cannot name the engine at all, so a key spelled on the server
-/// side would be a key the plane could only copy — which is how two answers to "what is this plane
-/// called" start to differ.
+/// Named ONCE, here: the door's Statement and every test that reads the plane's key read this one.
 const PLANE_KEY: &str = "a2a";
 
-/// THE CONFIGURATION SECTION THIS PLANE OWNS, named here for the same reason [`PLANE_KEY`] is: the
-/// plane declaration states it and the contract plane's configuration schema is asserted against it,
-/// and those two are on opposite sides of the purity seam.
+/// THE CONFIGURATION SECTION THIS PLANE OWNS, named once for the same reason [`PLANE_KEY`] is: the
+/// Statement declares it and the section's grammar reads under it.
 const CONFIG_SECTION: &str = "agents";
 
 /// THE PLANE'S MOUNT, the path prefix the A2A plane's HTTP bindings are served under. Every route
 /// this plane serves over HTTP is under it, and the host's plane dispatch matches on it at a segment
 /// boundary, so `/a2ax` is somebody else's path.
 ///
-/// It sits on the CODEC side of the split because it is a claim about the wire, and the claim is
-/// read from BOTH sides: the engine's serve module composes agent endpoints and the protected-resource
-/// metadata path from it, and `busbar-plane-a2a` declares its path claims against it. Two spellings
-/// of a mount is a plane claiming a path nothing is served at.
+/// One constant, read everywhere the mount is spelled: the plane's path claims, the agent
+/// endpoints its served cards publish and the protected-resource metadata path are all composed
+/// from it, so the claimed mount and the published one cannot be two strings.
 const MOUNT_PATH: &str = "/a2a";
 
 /// THE PATH PREFIX THE gRPC BINDING IS SERVED AT, and busbar did not choose it.
@@ -149,13 +126,10 @@ const GRPC_MOUNT_PATH: &str = "/lf.a2a.v1.A2AService";
 
 // ══ THE ROUTES THIS PLANE SERVES, SPELLED EXACTLY ONCE ══════════════════════════════════════════
 //
-// Every path below is read from BOTH sides of the purity seam: the ENGINE mounts it, and this
-// crate CLAIMS it. A plane may not name the engine at all, so a path it could only
-// copy is a path the two halves can come to disagree about — a route the server serves and the
-// plane does not claim arrives and finds no plane, and a claim with no route behind it takes bytes
-// nothing can answer. The suffixes are relative to [`MOUNT_PATH`] and carry their capture names
-// verbatim (`{id}`, `{config_id}`), because the router's `path_params` hand the handlers those
-// names and a template that renamed a capture is a different route.
+// Every path below is spelled once and read twice: the door's Statement CLAIMS it, and the
+// plane's own arrival reader ANSWERS it, so a route the plane answers is a route it claims and a
+// claim is never a path nothing answers. The suffixes are relative to [`MOUNT_PATH`] and carry
+// their capture names verbatim (`{id}`, `{config_id}`), the A2A HTTP+JSON binding's own.
 
 /// `POST` — the message-send operation.
 const ROUTE_MESSAGE_SEND: &str = "/message:send";
@@ -199,9 +173,9 @@ const WELL_KNOWN_CARD_PATH: &str = "/.well-known/agent-card.json";
 /// plane's mount appended, exactly as the sibling plane composes its own.
 const METADATA_PATH: &str = "/.well-known/oauth-protected-resource/a2a";
 
-/// THE SUFFIX A PUSH-NOTIFICATION DELIVERY IS POSTED TO on the caller's own callback base. Not a
-/// route busbar serves — it is a route busbar CALLS — but it is spelled here beside the others
-/// because the plane claims the mounted `/a2a/push` endpoint that pairs with it.
+/// THE SUFFIX OF BUSBAR'S OWN PUSH CALLBACK under [`MOUNT_PATH`]: `/a2a/push`, the URL a mirrored
+/// push config names at the agent. It is served as busbar's own PUBLIC route
+/// ([`door_statement::PUSH_ROUTE`]), never as one of the plane's claims.
 const PUSH_PATH_SUFFIX: &str = "/push";
 
 /// [`MOUNT_PATH`] joined to one of the [`MOUNTED_ROUTE_SUFFIXES`]. One join, called from both sides,
@@ -217,11 +191,8 @@ fn mounted_route(suffix: &str) -> String {
 /// the specification's own table leaves their reason UNSET and inventing one would put a word on
 /// the wire the specification does not define.
 ///
-/// One table, read from both sides of the purity seam: the engine's `A2aError` is pinned against
-/// it (that enum keeps the `code()`/`reason()` matches, and a test asserts the two agree row for
-/// row), and this crate publishes it as the set it may write. It was COPIED across the seam
-/// before, with the copy checked by searching the other crate's source text — a check that could
-/// only be run from a crate that could read a sibling it does not depend on.
+/// One table: every A2A-defined code the plane writes is read from it, with its reason, on the
+/// JSON-RPC line, the HTTP+JSON line and the gRPC line's status details.
 const ERRORS: &[(i64, &str)] = &[
     (-32001, "TASK_NOT_FOUND"),
     (-32002, "TASK_NOT_CANCELABLE"),
@@ -237,12 +208,8 @@ const ERRORS: &[(i64, &str)] = &[
 /// EVERY METHOD NAME THE LOCAL-VERB TABLE ANSWERS, in both dialects.
 ///
 /// A2A v1.0 spells these in `PascalCase` and v0.3 spelled the same operations as slash-separated
-/// paths; both are still answered, so both are named here. One list, read from both sides: the engine
-/// pins its `verb_of` match against it (a name on this list that the match does not answer is red
-/// there), and this crate's conformance rig asserts it CARRIES each one — a method the server
-/// half answers and the plane does not carry arrives as an unsupported operation. The rig scraped this
-/// out of the server half's source text before, which needed a crate that cannot depend on it to read
-/// its file.
+/// paths; both are still answered, so both are named here. A test holds `local::verb_of` to it: a
+/// name on this list the local-verb table does not answer is red.
 #[cfg(test)]
 const LOCAL_VERB_METHODS: &[&str] = &[
     "ListTasks",

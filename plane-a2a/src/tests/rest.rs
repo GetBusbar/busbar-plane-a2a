@@ -247,6 +247,19 @@ fn an_answer_is_reframed_by_what_it_is() {
     assert_eq!(reframe(502, b"not json"), b"not json".to_vec());
 }
 
+/// THE RESULT IS THE ANSWER'S OWN BYTES (Law 5): member order, an integer past 64 bits and a
+/// number past `f64`'s range reach the HTTP+JSON caller as the far end wrote them. RED: the result
+/// was re-serialised through a JSON value (members re-sorted, the long integer rounded), and a
+/// number past `f64`'s range failed the reading, so the caller got the whole JSON-RPC envelope.
+#[test]
+fn a_result_is_the_answers_own_bytes() {
+    let answer = br#"{"jsonrpc":"2.0","id":"a2a-http-json","result":{"z":1, "id":"a2a-p-1","n":123456789012345678901234567890,"big":1e400}}"#;
+    assert_eq!(
+        String::from_utf8(reframe(200, answer)).unwrap(),
+        r#"{"z":1, "id":"a2a-p-1","n":123456789012345678901234567890,"big":1e400}"#
+    );
+}
+
 /// Ported from busbar-a2a a2a/tests/rest_tests.rs::a_string_coded_refusal_re_frames_from_its_http_status.
 /// A refusal whose `code` is not a JSON-RPC integer (a deployment with no governance answers a
 /// plain document with a string one) still re-frames: the status name falls back to the HTTP
