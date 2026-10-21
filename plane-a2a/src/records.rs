@@ -58,13 +58,25 @@ pub const KIND_PUSH_CONFIG: &str = "push_config";
 /// warms the plane's mirror of it in memory ([`crate::cards::Cards`]).
 pub const KIND_CARD: &str = "card";
 
+/// The `card_approval` kind — the skills (`id -> digest`) of the card the operator approved for an
+/// agent, keyed like its `card` record: the `approve` answer writes it, and the warm after `open`
+/// reads it back into the trust view's standing ([`crate::card_trust::TrustStanding::approved`]),
+/// so a restart keeps what the drift lists are judged against.
+pub const KIND_CARD_APPROVAL: &str = "card_approval";
+
 /// The plane-record kinds this plane keeps on the store's plane-record seam — its declaration's
 /// `record_kinds`, so the administrative `plane_record_write` verb writes only these under it.
 pub const RECORD_KINDS: &[&str] = &[KIND_TASK, KIND_TASK_EVENT];
 
 /// The host-record kinds the door's tail states (`PlaneTail::record_kinds`), in order: a record
 /// write names its kind by its index here.
-pub const HELD_KINDS: &[&str] = &[KIND_TASK, KIND_TASK_EVENT, KIND_PUSH_CONFIG, KIND_CARD];
+pub const HELD_KINDS: &[&str] = &[
+    KIND_TASK,
+    KIND_TASK_EVENT,
+    KIND_PUSH_CONFIG,
+    KIND_CARD,
+    KIND_CARD_APPROVAL,
+];
 
 /// The task-event kind's index in [`HELD_KINDS`]: the kind the door declares chained.
 pub const TASK_EVENT_INDEX: u32 = 1;
