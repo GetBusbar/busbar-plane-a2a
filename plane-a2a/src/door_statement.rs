@@ -207,6 +207,7 @@ const RECORD_KINDS: &[AbiStr] = &[
     abi_str(crate::records::HELD_KINDS[1]),
     abi_str(crate::records::HELD_KINDS[2]),
     abi_str(crate::records::HELD_KINDS[3]),
+    abi_str(crate::records::HELD_KINDS[4]),
 ];
 
 /// THE TASK CHAIN (ARCHITECT ruling B1, 2026-10-07; `BUSBAR-1.6.0.md` Part 3, the chain section, and THE

@@ -21,6 +21,11 @@ fn walk(dir: &Path, f: &mut impl FnMut(&Path, &str)) {
         .flatten()
     {
         let path = entry.path();
+        // The crate's test modules (`src/tests`, `src/a2a/tests`) are not the plane: they read
+        // fixtures and the environment, as tests do.
+        if path.is_dir() && path.file_name().is_some_and(|n| n == "tests") {
+            continue;
+        }
         if path.is_dir() {
             walk(&path, f);
         } else if path.extension().is_some_and(|e| e == "rs") {
@@ -33,7 +38,7 @@ fn walk(dir: &Path, f: &mut impl FnMut(&Path, &str)) {
 /// THE GENERATED MESSAGES (`build.rs`, the gRPC line's `lf.a2a.v1` package): the plane's source
 /// includes them from the build's output directory, so the scans read them as the plane's own
 /// source and read the include line itself as what it is, a compile-time inclusion.
-const GENERATED: &[&str] = &["lf.a2a.v1.rs", "lf.a2a.v1.serde.rs"];
+const GENERATED: &[&str] = &["lf.a2a.v1.rs", "lf.a2a.v1.serde.rs", "method_inventory.rs"];
 
 /// Every source file of the plane: its own, then the generated messages it includes.
 fn each_source(f: &mut impl FnMut(&Path, &str)) {
