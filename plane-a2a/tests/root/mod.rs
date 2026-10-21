@@ -1140,7 +1140,8 @@ fn served_core(
     busbar_kernel::preflight::install_linked_auth(
         crate::LINKED.auths,
         crate::root::auth_bindings::operator_words(),
-    );
+    )
+    .expect("the root's one table and words");
     busbar_kernel::preflight::install_auth_axis(crate::root::dispatch::auth_axis);
     let mut builder = busbar_kernel::test_support::TestApp::new()
         .keys_chain()
