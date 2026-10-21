@@ -1049,10 +1049,10 @@ fn an_instance_full_of_live_units_refuses_the_next_arrival_and_evicts_none() {
     for unit in 2..=(MAX_UNITS as u64) {
         door.arrive_own_card(unit);
     }
-    let route = ("GET", door_facts::WELL_KNOWN_CARD_PATH);
+    let route = ("GET", busbar_plane_a2a::WELL_KNOWN_CARD_PATH);
     let next = MAX_UNITS as u64 + 1;
     assert_eq!(
-        door.arrive(next, route, door_facts::WELL_KNOWN_CARD_PATH, b""),
+        door.arrive(next, route, busbar_plane_a2a::WELL_KNOWN_CARD_PATH, b""),
         (Outcome::Refused, 429),
         "the arrival past {MAX_UNITS} live units is refused"
     );
