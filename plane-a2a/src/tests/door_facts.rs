@@ -35,3 +35,77 @@ fn the_door_driven_tests_restate_the_doors_own_constants() {
         .collect();
     assert_eq!(stated::ROUTES, &routes[..]);
 }
+
+#[path = "../../tests/support/root_facts.rs"]
+#[allow(dead_code)] // the root leg's reader, each item held by a check below
+mod root_stated;
+
+/// THE ROOT LEG'S RESTATED FACTS ARE THE DOOR'S OWN: each constant `tests/root/mod.rs` names is
+/// equal to the private item it restates.
+#[test]
+fn the_root_leg_restates_the_doors_own_constants() {
+    use crate::door_statement as ds;
+    assert_eq!(root_stated::PUSH_SECTION, ds::PUSH_SECTION);
+    assert_eq!(root_stated::PUSH_CA_KEY, ds::PUSH_CA_KEY);
+    assert_eq!(root_stated::PUSH_TRUST_FROM, ds::PUSH_TRUST_FROM);
+    assert_eq!(root_stated::NEED_AGENT, ds::NEED_AGENT);
+    assert_eq!(root_stated::NEED_GRPC, ds::NEED_GRPC);
+    assert_eq!(root_stated::SERVICE_NAME, crate::proto::SERVICE_NAME);
+    assert_eq!(
+        root_stated::FRAMED_TRANSPORT,
+        crate::claims::FRAMED_TRANSPORT
+    );
+    assert_eq!(root_stated::ROLE_USER, crate::proto::pb::Role::User as u64);
+    assert_eq!(
+        root_stated::TASK_STATE_WORKING,
+        crate::proto::pb::TaskState::Working as u64
+    );
+}
+
+/// THE ROOT LEG'S PROTOBUF WORDS ARE THE GENERATED MESSAGES': the requests it writes decode, as the
+/// generated messages, to what the plane's own encoder writes for the same params, and the readers
+/// it holds the far end's bytes to read what the plane's encoder wrote and what the generated
+/// response encodes.
+#[test]
+fn the_root_leg_writes_and_reads_the_generated_messages() {
+    use crate::framed::{request_message, Rpc};
+    use crate::proto::pb;
+    use prost::Message as _;
+
+    let params = serde_json::json!({ "message": {
+        "messageId": "m-1", "role": "ROLE_USER", "parts": [{ "text": "PLAN THE MIGRATION" }] } });
+    let planes = request_message(Rpc::SendMessage, &params).expect("a SendMessageRequest");
+    let stated = root_stated::send_message_request("m-1", "PLAN THE MIGRATION");
+    assert_eq!(
+        pb::SendMessageRequest::decode(&stated[..]).expect("the stated bytes decode"),
+        pb::SendMessageRequest::decode(&planes[..]).expect("the plane's bytes decode"),
+    );
+    for bytes in [&stated, &planes] {
+        assert_eq!(
+            root_stated::read_send_message_request(bytes).expect("the stated reader reads it"),
+            root_stated::SentMessage {
+                message_id: "m-1".into(),
+                role: root_stated::ROLE_USER,
+                texts: vec!["PLAN THE MIGRATION".into()],
+            }
+        );
+    }
+
+    let params = serde_json::json!({ "id": "no-such-task" });
+    let planes = request_message(Rpc::GetTask, &params).expect("a GetTaskRequest");
+    let stated = root_stated::get_task_request("no-such-task");
+    assert_eq!(
+        pb::GetTaskRequest::decode(&stated[..]).expect("the stated bytes decode"),
+        pb::GetTaskRequest::decode(&planes[..]).expect("the plane's bytes decode"),
+    );
+
+    let response: pb::SendMessageResponse = serde_json::from_value(serde_json::json!({
+        "task": { "id": "far-task", "status": { "state": "TASK_STATE_WORKING" } }
+    }))
+    .expect("a SendMessageResponse");
+    assert_eq!(
+        root_stated::send_message_response_task_state(&response.encode_to_vec())
+            .expect("the stated reader reads it"),
+        root_stated::TASK_STATE_WORKING
+    );
+}
