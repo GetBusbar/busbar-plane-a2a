@@ -4042,8 +4042,8 @@ async fn the_legacy_well_known_path_is_tried_only_when_the_canonical_one_served_
 /// port answers it in process through the frame the kernel built.
 fn hook_env() -> busbar_kernel::hooks::HookEnv {
     use busbar_contract::plugin_rows::NeedLevel;
-    use busbar_kernel::test_support::HookNeeds;
-    busbar_kernel::test_support::test_hook_env(
+    use busbar_kernel::test_support::{test_hook_env, HookNeeds};
+    test_hook_env(
         &["test-hook"],
         HookNeeds {
             prompt: NeedLevel::Rw,
