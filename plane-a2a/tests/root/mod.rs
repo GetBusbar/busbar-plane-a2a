@@ -104,6 +104,24 @@ fn door() -> DoorFn {
     linked_door().expect("a linked plane door owns the agents section")
 }
 
+/// THE DOOR TABLE A CELL IS LENT, as the composition root folds and lends its own: the neutral
+/// fallback row and the agent door's row, folded from its Statement under the probe `probe`. The
+/// cell hands it to the config parse it runs and to the generation it builds; no other cell's
+/// rows are in it.
+fn door_table(probe: &str) -> busbar_kernel::plane_driver::doors::Doors {
+    let folded = {
+        use crate::root::loader::dispatch::kinds::plane::{linked_probe, registration};
+        busbar_kernel::plane_driver::door::fold(
+            registration(linked_probe(door(), probe)).expect("the door binds"),
+        )
+        .expect("the door folds")
+    };
+    busbar_kernel::plane_driver::doors::Doors::for_test(&[
+        busbar_kernel::test_support::neutral_fallback_plane(),
+        folded,
+    ])
+}
+
 /// THIS PLANE'S CAPABILITY-EQUALITY COLUMNS (`qa/capability-equality.json`): the cells its root leg
 /// answers for.
 pub(crate) const COLUMNS: &[&str] = &["a2a-client", "a2a-server"];
@@ -760,14 +778,8 @@ fn priced_cost(
     priced: &Priced,
     groups: &BTreeMap<String, busbar_kernel::config::GroupCfg>,
 ) -> CostModel {
-    let folded = {
-        use crate::root::loader::dispatch::kinds::plane::{linked_probe, registration};
-        busbar_kernel::plane_driver::door::fold(
-            registration(linked_probe(door(), "serve-agent-priced")).expect("the door binds"),
-        )
-        .expect("the door folds")
-    };
-    busbar_kernel::plane_driver::doors::register_test_plane(folded);
+    // The parse is lent the table holding the door's row, which owns the section it reads.
+    let doors = door_table("serve-agent-priced");
     let (section, kind, class) = (
         surface("section"),
         surface("resource_kind"),
@@ -780,7 +792,8 @@ fn priced_cost(
         "store: {{module: memory}}\nproviders: {{}}\nmodels: {{}}\n{section}:\n  \
          planner: {{ url: https://planner.example/rpc, pin: {{ mechanism: unpinned }} }}\n{card}"
     );
-    let deploy = busbar_kernel::config::deploy_from_yaml_str(&text).expect("the config parses");
+    let deploy =
+        busbar_kernel::config::deploy_from_yaml_str(&text, doors).expect("the config parses");
     let cfg = busbar_kernel::config::resolve(&deploy, &Default::default()).expect("resolves");
     let fees: busbar_kernel::config::PlaneFeesMap = [(
         surface("plane_key").to_string(),
@@ -1126,22 +1139,17 @@ fn served_core(
     // THE ADMIN SURFACE, as boot mounts it: the admin mount, and the operator credential's row
     // on the auth axis the admin chain authenticates `x-admin-token` with.
     busbar_core_admin::install();
-    // THE DOOR'S REGISTRY ROW, folded from its Statement and installed as the composition root
-    // installs it (DECL-FOLD): the admin router mounts the door's stated admin routes off it.
-    let folded = {
-        use crate::root::loader::dispatch::kinds::plane::{linked_probe, registration};
-        busbar_kernel::plane_driver::door::fold(
-            registration(linked_probe(door(), "serve-agent-row")).expect("the door binds"),
-        )
-        .expect("the door folds")
-    };
-    busbar_kernel::plane_driver::doors::register_test_plane(folded);
+    // THE DOOR'S ROW, folded from its Statement and lent to the generation in the table the
+    // composition root lends (DECL-FOLD): the admin router mounts the door's stated admin routes
+    // off it. Lent before the claims are mounted and the admission bound, which read it.
+    let doors = door_table("serve-agent-row");
     busbar_kernel::preflight::install_linked_auth(
         crate::LINKED.auths,
         crate::root::auth_bindings::operator_words(),
     );
     busbar_kernel::preflight::install_auth_axis(crate::root::dispatch::auth_axis);
     let mut builder = busbar_kernel::test_support::TestApp::new()
+        .doors(doors)
         .keys_chain()
         .admin_chain(vec![busbar_kernel::config::operator_provider().to_string()])
         .governance(Arc::clone(&gov));
@@ -2477,17 +2485,8 @@ async fn a_hop_refused_before_the_socket_keeps_no_fee() {
 /// (`DoorSection::ledger_lanes`). A card pricing every agent boots.
 #[test]
 fn a_present_agents_card_silent_about_an_agent_refuses_the_config() {
-    let folded = {
-        use crate::root::loader::dispatch::kinds::plane::{linked_probe, registration};
-        busbar_kernel::plane_driver::door::fold(
-            registration(linked_probe(door(), "serve-agent-card-row")).expect("the door binds"),
-        )
-        .expect("the door folds")
-    };
-    let _registry = busbar_kernel::plane_driver::doors::TestRegistryIsolation::seeded(&[
-        busbar_kernel::test_support::neutral_fallback_plane(),
-        folded,
-    ]);
+    // The parse is lent exactly the neutral fallback row and the door's row.
+    let doors = door_table("serve-agent-card-row");
     let (section, kind) = (surface("section"), surface("resource_kind"));
     let resolved = |card: &str| {
         let text = format!(
@@ -2496,7 +2495,8 @@ fn a_present_agents_card_silent_about_an_agent_refuses_the_config() {
              payments: {{ url: https://payments.example/rpc, pin: {{ mechanism: unpinned }} }}\n  \
              rate_card:\n{card}"
         );
-        let deploy = busbar_kernel::config::deploy_from_yaml_str(&text).expect("the config parses");
+        let deploy =
+            busbar_kernel::config::deploy_from_yaml_str(&text, doors).expect("the config parses");
         busbar_kernel::config::resolve(&deploy, &Default::default()).expect("resolves")
     };
     let silent = resolved(&format!(
@@ -3565,13 +3565,9 @@ async fn a_config_apply_keeps_the_operators_approval() {
     assert_eq!(status, StatusCode::OK, "approved, served: {body}");
     assert!(agent.relayed());
 
-    // The swap runs every registered plane declaration's `on_swap`; a legacy plane another
-    // test registered process-wide would read a runtime slot this composition never seeded, so
-    // the swap sees exactly this composition's planes (the door serves none of them).
-    {
-        let _registry = busbar_kernel::plane_driver::doors::TestRegistryIsolation::empty();
-        s.handle.swap(Arc::clone(&s.app));
-    }
+    // The swap runs the `on_swap` of every row in the table the incoming generation was lent:
+    // this composition's own (the door's row states none), never another cell's.
+    s.handle.swap(Arc::clone(&s.app));
     let (status, body) = answered(&s.router, send()).await;
     assert_eq!(
         status,
@@ -7139,22 +7135,16 @@ async fn an_apply_carrying_a_malformed_agent_push_ca_is_refused_and_deliveries_k
 
     // THE APPLY: a document writing the same agent and a malformed `agent_push.ca`, built as an
     // apply builds it, under the root's check.
-    {
-        use crate::root::loader::dispatch::kinds::plane::{linked_probe, registration};
-        busbar_kernel::plane_driver::doors::register_test_plane(
-            busbar_kernel::plane_driver::door::fold(
-                registration(linked_probe(door(), instance)).expect("the door binds"),
-            )
-            .expect("the door folds"),
-        );
-    }
+    // The parse is lent the table holding the door's row, which owns both sections it reads.
+    let doors = door_table(instance);
     let text = format!(
         "store: {{module: memory}}\nproviders: {{}}\nmodels: {{}}\n{}:\n  planner: {{ url: \
          https://planner.example/rpc, pin: {{ mechanism: unpinned }} }}\nagent_push:\n  ca: \
          not a certificate\n",
         surface("section")
     );
-    let deploy = busbar_kernel::config::deploy_from_yaml_str(&text).expect("the config parses");
+    let deploy =
+        busbar_kernel::config::deploy_from_yaml_str(&text, doors).expect("the config parses");
     let cfg = busbar_kernel::config::resolve(&deploy, &Default::default()).expect("resolves");
     let rules = Arc::new(crate::root::door_steps::Rules::default());
     rules.hold_owned_anchors(&[busbar_plane_a2a::door_statement::PUSH_TRUST_FROM]);
@@ -9133,7 +9123,10 @@ async fn a_config_apply_keeps_the_pool_walking() {
         },
         opened: true,
     };
+    // It is lent the table the running generation was lent, as the root lends its one table to
+    // every generation it builds: the swap runs only that table's rows' `on_swap`.
     let mut next = busbar_kernel::test_support::TestApp::new()
+        .doors(s.app.doors)
         .keys_chain()
         .admin_chain(vec![busbar_kernel::config::operator_provider().to_string()])
         .governance(Arc::clone(&s.gov))
@@ -9141,10 +9134,7 @@ async fn a_config_apply_keeps_the_pool_walking() {
         .agent_pool("planner", &["planner-a", "planner-b"]);
     next.install_plane_runtime(surface("plane_key"), Arc::new(slot));
     let next = next.build();
-    {
-        let _registry = busbar_kernel::plane_driver::doors::TestRegistryIsolation::empty();
-        s.handle.swap(next);
-    }
+    s.handle.swap(next);
     let mut log = Vec::new();
     let mut heard = || {
         hear(&mut agent, &mut log);
