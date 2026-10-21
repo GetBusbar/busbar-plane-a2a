@@ -11,7 +11,7 @@
 //! `tests/both_ways.rs`.
 
 busbar_plugin_loader::conformance_suite! {
-    door: busbar_plane_a2a::agent_door::door,
+    door: busbar_plane_a2a::agent_door::MACRO_DOOR,
     cdylib: "busbar_plane_a2a_plugin",
     inputs: include_str!("conformance.json"),
 }

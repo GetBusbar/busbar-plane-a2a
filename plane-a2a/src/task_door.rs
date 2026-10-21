@@ -24,7 +24,9 @@ use busbar_contract::abi::plane::{
     UNITS_REPORTED,
 };
 use busbar_contract::abi::sdk::conn::{Connector, Host};
-use busbar_contract::abi::sdk::{Instance, Keyed, Lent, Out, ServiceError, Services};
+use busbar_contract::abi::sdk::{
+    Instance, Keyed, Lent, Out, ServiceError, Services, StaticServices,
+};
 use serde_json::Value;
 
 use crate::agent_arrival::{AgentDisposition, JSON_MEDIA_TYPE};
@@ -106,15 +108,20 @@ struct Entry {
 
 /// THE HOST RECORDS AND THE DESTINATION JUDGE, for one piece: its connector, and the host services
 /// the door was opened with. Every call counts on the piece's one handle sequence.
-pub struct Via<'h> {
-    host: &'h Host,
-    services: Option<Services>,
+///
+/// The handles are the TYPE PARAMETERS `H` (the host) and `S` (its services), always `Host` and
+/// `Services`: the door's own install handles ('static) in the kernel, a test's borrowed ones
+/// under a fake host. A struct field cannot spell a handle's lifetime on every contract, so the
+/// parameters carry it and nothing here is made 'static that is not.
+pub struct Via<'h, H, S> {
+    host: &'h H,
+    services: Option<S>,
     ticket: Ticket,
     conn: Connector<'h>,
     grown: &'h Grown,
 }
 
-impl<'h> Via<'h> {
+impl<'h> Via<'h, Host, Services> {
     /// The piece's calls, counting on from the `issued` its unit's finished pieces made; `grown` is
     /// the instance's book of the sizes short records answers named.
     pub fn new(
@@ -245,7 +252,7 @@ impl<T> Issued<T> {
     }
 }
 
-impl Via<'_> {
+impl Via<'_, Host, Services> {
     /// One records call under this piece's next handle, issued at `(bytes, items)` (or the size a
     /// short answer on the handle already named) and, answered short, re-issued ONCE on the same
     /// handle at the size it names. `call` makes the crossing into the buffers it is handed and
@@ -299,7 +306,7 @@ impl Via<'_> {
     }
 }
 
-impl Records for Via<'_> {
+impl Records for Via<'_, Host, Services> {
     fn get(&mut self, kind: &str, key: &str) -> Result<Option<Vec<u8>>, Halt> {
         self.issue((RECORD_BYTES, 1), |services, handle, buf, _| {
             services
@@ -352,7 +359,7 @@ impl Records for Via<'_> {
     }
 }
 
-impl crate::task_hop::Mint for Via<'_> {
+impl crate::task_hop::Mint for Via<'_, Host, Services> {
     fn random(&mut self, buf: &mut [u8]) -> Result<(), Halt> {
         Via::random(self, buf)
     }
@@ -363,7 +370,7 @@ const JUDGED_BYTES: usize = 512;
 /// One span per judged address.
 const JUDGED_ADDRESSES: usize = 16;
 
-impl Reach for Via<'_> {
+impl Reach for Via<'_, Host, Services> {
     fn judge(&mut self, dest: &str) -> Result<u64, Halt> {
         let services = self.services()?;
         let handle = self.next_handle();
@@ -474,13 +481,13 @@ pub fn on_piece(
     input: Lent<'_, OnPieceIn>,
     mut out: Out<'_, OnPieceOut>,
 ) -> Option<Outcome> {
-    let unit = input.get().unit;
+    let unit = input.unit();
     // A NOTIFICATION, acknowledged on the caller's piece: `202` and no body, nothing moved, no
     // fee kept and no audit row (the engine answered it before anything was admitted).
     if plane.units.with(&unit, |u| {
         u.is_some_and(|u| matches!(u.disposition, AgentDisposition::Notice { .. }))
     }) {
-        if input.get().from != FROM_CALLER {
+        if input.from() != FROM_CALLER {
             return Some(Outcome::Ready);
         }
         let (status, body) = notice_answer();
@@ -551,9 +558,9 @@ pub fn on_piece(
         ));
     }
     // The ATTEMPT piece: the caller's body follows, and the answer comes on it.
-    if input.get().from != FROM_CALLER {
+    if input.from() != FROM_CALLER {
         // The agent the ATTEMPT reached, kept for the caller's piece.
-        let given = input.field(|i| &i.member).as_str().unwrap_or_default();
+        let given = input.member().as_str().unwrap_or_default();
         if !given.is_empty() {
             plane.units.with(&unit, |u| {
                 if let Some(u) = u {
@@ -582,11 +589,9 @@ pub fn on_piece(
     })?;
     let mut via = Via::new(host, plane.services, instance.ticket(), base, &plane.grown);
     // An HTTP+JSON unit answers the envelope its request spelled, not the caller's body.
-    let raw = composed
-        .as_deref()
-        .unwrap_or_else(|| input.field(|i| &i.bytes).bytes());
+    let raw = composed.as_deref().unwrap_or_else(|| input.bytes().bytes());
     let envelope: Value = serde_json::from_slice(raw).unwrap_or(Value::Null);
-    let caller = input.field(|i| &i.caller_ref).as_str().unwrap_or_default();
+    let caller = input.caller_ref().as_str().unwrap_or_default();
     let mut writes = Vec::new();
     if entry.restore {
         // The instance's restore, ahead of its first sweep: it writes nothing, and one that fails
@@ -608,7 +613,7 @@ pub fn on_piece(
     // THE ADMISSION AND THE CATALOGUE (the engine's `receive::admit`, ahead of its local verbs): a
     // verb routed to an agent that is not `approved`, holds no card, or whose card the request does
     // not fit, is refused in the engine's words.
-    let given_member = input.field(|i| &i.member).as_str().unwrap_or_default();
+    let given_member = input.member().as_str().unwrap_or_default();
     let held_member = plane
         .units
         .with(&unit, |u| u.map(|u| u.pass.member.clone()))
@@ -760,7 +765,7 @@ fn refresh_listed<'h>(
     plane: &'h A2aDoor,
     instance: &Instance<'_, A2aDoor>,
     unit: u64,
-    via: &mut Via<'h>,
+    via: &mut Via<'h, Host, Services>,
     (caller, member): (&str, &str),
     (section, generation, now, version): (
         Option<&crate::a2a::config::AgentsCfg>,
@@ -893,7 +898,7 @@ fn refresh_listed<'h>(
 fn mirror_flight(
     plane: &A2aDoor,
     instance: &Instance<'_, A2aDoor>,
-    via: &mut Via<'_>,
+    via: &mut Via<'_, Host, Services>,
     (method, version): (&'static str, &'static str),
     envelope: &Value,
     (caller, member): (&str, &str),
@@ -1249,7 +1254,7 @@ fn window_core(
 /// first signature (the host names it beside every signature), then the signature, each on its own
 /// handle of the piece's ticket.
 struct HostSigner<'a> {
-    services: Option<&'a Services>,
+    services: Option<&'a StaticServices>,
     ticket: Ticket,
     seq: u32,
 }
@@ -1390,7 +1395,7 @@ pub fn card_piece(
     ask: crate::agent_arrival::CardAsk,
 ) -> Outcome {
     use crate::served_card::{self as served, OWN_CARD_CACHE_CONTROL, OWN_CARD_MEDIA_TYPE};
-    let unit = input.get().unit;
+    let unit = input.unit();
     let Some((rest, answered, agent, section, generation, issued, rpc, composed, framed)) =
         plane.units.with(&unit, |u| {
             u.map(|u| {

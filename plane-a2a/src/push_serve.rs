@@ -167,11 +167,11 @@ pub(crate) fn serve(
     let authorization = fields
         .iter()
         .find(|f| {
-            f.field(|f| &f.name)
+            f.name()
                 .as_str()
                 .is_ok_and(|n| n.eq_ignore_ascii_case("authorization"))
         })
-        .and_then(|f| f.field(|f| &f.value).as_str().ok())
+        .and_then(|f| f.value().as_str().ok())
         .unwrap_or_default();
     // 1. THE CAPABILITY: a token this instance minted, signed again by the host and compared in
     //    constant time.
@@ -204,7 +204,7 @@ pub(crate) fn serve(
         );
     }
     // 3. THE BODY'S CEILING.
-    let body = input.field(|i| &i.body).bytes();
+    let body = input.body().bytes();
     if body.len() > MAX_PUSH_BODY {
         return refused(
             &input,

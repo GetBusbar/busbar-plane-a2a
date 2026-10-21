@@ -26,21 +26,15 @@ fn project_session(claim: usize, target: &str, body: &[u8]) -> (Outcome, Option<
     }; 4];
     let mut arena = vec![0u8; 4096];
     let mut messages = [busbar_contract::abi::hook::MessageView {
-        role: AbiStr::over(b""),
-        text: AbiStr::over(b""),
+        role: AbiStr::of_bytes(b""),
+        text: AbiStr::of_bytes(b""),
     }; 4];
     let input = ProjectIn {
         claim: u32::try_from(claim).unwrap(),
-        target: AbiStr {
-            ptr: target.as_ptr(),
-            len: target.len(),
-        },
-        body: Blob {
-            ptr: body.as_ptr(),
-            len: body.len(),
-            fmt: BLOB_OCTETS,
-            flags: 0,
-        },
+        // SAFETY: `target` and `body` outlive `input`, which is read only inside this function.
+        target: unsafe { AbiStr::from_raw_parts(target.as_ptr(), target.len()) },
+        // SAFETY: as `target`.
+        body: unsafe { Blob::from_raw_parts(body.as_ptr(), body.len(), BLOB_OCTETS, 0) },
         signals_buf: signals.as_mut_ptr(),
         signals_cap: signals.len(),
         arena_buf: arena.as_mut_ptr(),
@@ -74,10 +68,10 @@ fn project_session(claim: usize, target: &str, body: &[u8]) -> (Outcome, Option<
     )
     .expect("the answer passes the loader's check");
     let s = out.view.session;
-    let session = (!s.ptr.is_null()).then(|| {
+    let session = (!s.is_absent()).then(|| {
         assert_eq!(s.fmt, BLOB_OCTETS);
-        let at = s.ptr as usize - arena.as_ptr() as usize;
-        String::from_utf8(arena[at..at + s.len].to_vec()).unwrap()
+        let at = s.ptr() as usize - arena.as_ptr() as usize;
+        String::from_utf8(arena[at..at + s.len()].to_vec()).unwrap()
     });
     (outcome, session)
 }
