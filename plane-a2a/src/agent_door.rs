@@ -601,22 +601,30 @@ impl A2aDoor {
 /// (`BUSBAR-1.6.0.md` l.345-346: "what must survive a restart goes to its records through the
 /// store kind"), so the trust view's drift lists are judged against what the operator approved,
 /// never against nothing. A standing this instance already approved is left as it is.
-fn warm_cards(plane: &A2aDoor, ticket: Ticket) -> Poll<()> {
+///
+/// ITS HANDLES COUNT ON `ticket`'s OWN SEQUENCE from `issued` (`abi::mechanism::ticket`: a
+/// handle's `seq` counts the services one ticket issued), and the count it reached is returned
+/// beside the answer, READY or PENDING: the host keeps each `(ticket, seq)`'s first answer and
+/// hands it back to any later call on that handle, so a warm on a unit's ticket that the unit's
+/// own pieces then counted over from the same `seq` would read the listing's answer as theirs
+/// (its `entitlement.check` a `records.list` answer, never `ENTITLED`).
+fn warm_cards(plane: &A2aDoor, ticket: Ticket, issued: u32) -> (Poll<()>, u32) {
     use crate::tasks::Records;
     let Some(host) = plane.host.as_ref() else {
-        return Poll::Ready(());
+        return (Poll::Ready(()), issued);
     };
-    let mut via = Via::new(host, plane.services, ticket, 0, &plane.grown);
+    let mut via = Via::new(host, plane.services, ticket, issued, &plane.grown);
     let cards = match via.list(crate::records::KIND_CARD, "") {
-        Err(Halt::Pending) => return Poll::Pending,
-        Err(Halt::Failed(_)) => return Poll::Ready(()),
+        Err(Halt::Pending) => return (Poll::Pending, via.issued()),
+        Err(Halt::Failed(_)) => return (Poll::Ready(()), via.issued()),
         Ok(rows) => rows,
     };
     let approvals = match via.list(crate::records::KIND_CARD_APPROVAL, "") {
-        Err(Halt::Pending) => return Poll::Pending,
+        Err(Halt::Pending) => return (Poll::Pending, via.issued()),
         Err(Halt::Failed(_)) => Vec::new(),
         Ok(rows) => rows,
     };
+    let issued = via.issued();
     let generation = plane.newest();
     for (agent, value) in cards {
         if let Ok(card) = serde_json::from_slice::<serde_json::Value>(&value) {
@@ -635,7 +643,7 @@ fn warm_cards(plane: &A2aDoor, ticket: Ticket) -> Poll<()> {
             plane.trust.insert(agent, standing);
         }
     }
-    Poll::Ready(())
+    (Poll::Ready(()), issued)
 }
 
 /// The `card` host record of `agent`'s verified `card`: keyed by the agent's id under the
@@ -990,7 +998,7 @@ slot!(
         if plane.cards_warmed.get(&()).unwrap_or(false) {
             return Outcome::Ready;
         }
-        match warm_cards(plane, instance.ticket()) {
+        match warm_cards(plane, instance.ticket(), 0).0 {
             Poll::Ready(()) => {
                 plane.cards_warmed.insert((), true);
                 Outcome::Ready
@@ -1024,7 +1032,7 @@ slot!(
         // tried again a second later.
         if !plane.cards_warmed.get(&()).unwrap_or(false) {
             let now = input.get().now_ns;
-            let next = match warm_cards(plane, instance.ticket()) {
+            let next = match warm_cards(plane, instance.ticket(), 0).0 {
                 Poll::Ready(()) => {
                     plane.cards_warmed.insert((), true);
                     now
@@ -2757,19 +2765,36 @@ slot!(
         let Some(plane) = instance.get() else {
             return Outcome::Failed;
         };
+        let unit = input.get().unit;
         // THE HELD CARDS ARE WARM BEFORE ANY PIECE IS SERVED: a unit's admission reads the card it
         // fits, so a unit whose first piece came before the instance's first tick warms them here,
         // on its own ticket ([`warm_cards`]), rather than being refused for want of a card its
-        // operator approved (`NoCachedCard`).
-        if !plane.cards_warmed.get(&()).unwrap_or(false) {
-            match warm_cards(plane, instance.ticket()) {
-                Poll::Ready(()) => {
-                    plane.cards_warmed.insert((), true);
+        // operator approved (`NoCachedCard`). The warm's handles are the unit's: they count on
+        // from its pass, and its pass counts on from after them, so no piece of the unit issues a
+        // handle the warm's listing was answered on (busbar keeps each handle's first answer). A
+        // unit whose warm pended replays it on its next entry, on the same handles, even when
+        // another unit's warm landed meanwhile.
+        let warm = plane.units.with(&unit, |u| {
+            u.map(|u| (u.pass.warming, u.pass.issued))
+        });
+        if let Some((warming, issued)) = warm {
+            if warming || !plane.cards_warmed.get(&()).unwrap_or(false) {
+                let (warmed, counted) = warm_cards(plane, instance.ticket(), issued);
+                let landed = warmed.is_ready();
+                plane.units.with(&unit, |u| {
+                    if let Some(u) = u {
+                        u.pass.warming = !landed;
+                        if landed {
+                            u.pass.issued = counted;
+                        }
+                    }
+                });
+                if !landed {
+                    return Outcome::Pending;
                 }
-                Poll::Pending => return Outcome::Pending,
+                plane.cards_warmed.insert((), true);
             }
         }
-        let unit = input.get().unit;
         // The unit's ticket, which the kernel's `cancel` names it by.
         let ticket = instance.ticket();
         plane.units.with(&unit, |u| {
