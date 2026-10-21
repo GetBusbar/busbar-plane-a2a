@@ -994,11 +994,11 @@ slot!(
         let generation = input.get().open.generation;
         let plane = A2aDoor {
             public_url: input.field(|i| &i.public_url).stated(),
-            host: input.field(|i| &i.open).host().map(|h| Host::of(h.get())),
+            host: input.field(|i| &i.open).host().map(|h| Host::of(&h)),
             services: input
                 .field(|i| &i.open)
                 .host()
-                .and_then(|h| Services::of(h.get())),
+                .and_then(|h| Services::of(&h)),
             generations: Generations::new(),
             units: Keyed::new(),
             swept: Keyed::new(),
