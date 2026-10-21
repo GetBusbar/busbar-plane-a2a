@@ -309,11 +309,23 @@ static LONG_CARD: AtomicBool = AtomicBool::new(false);
 
 /// [`CARD`] with a description long enough that the card is past the host's record ceiling
 /// ([`busbar_contract::bounded::MAX_RECORD_BYTES`]), as an ordinary card with a few interfaces, a
-/// provider and signatures is.
+/// provider and signatures is, and a dozen skills, so the skills an operator approves of it
+/// (`id -> digest`) are past the ceiling too.
 fn long_card() -> Vec<u8> {
     let description = "a vendor agent ".repeat(48);
+    let skills: Vec<String> = (0..12)
+        .map(|n| {
+            format!(
+                r#"{{"id":"quote-{n}","name":"quote {n}","description":"quotes, way {n}","tags":["quote"]}}"#
+            )
+        })
+        .collect();
     String::from_utf8_lossy(CARD)
         .replace("a vendor agent", description.trim_end())
+        .replace(
+            r#"{"id":"quote","name":"quote","description":"quotes","tags":["quote"]}"#,
+            &skills.join(","),
+        )
         .into_bytes()
 }
 
@@ -791,7 +803,10 @@ impl Door {
     }
 
     /// `serve` of the admin verb at `route` on `target`, with the head `fields` and `body`: its
-    /// outcome, status and body; the answer's record writes are written to the store.
+    /// outcome, status and body; the answer's record writes are written to the store as busbar
+    /// dev's kernel writes them (`plane_driver/serve.rs` `write_served_records`): in the plane's
+    /// order, and a record past [`busbar_contract::bounded::MAX_RECORD_BYTES`] is a write the
+    /// store refuses, so the verb answers `500` and no later write of the answer is made.
     fn verb(
         &self,
         route: u32,
@@ -801,8 +816,8 @@ impl Door {
     ) -> (Outcome, u32, String) {
         let mut reply = vec![0_u8; 1 << 14];
         let mut out_fields = [z::<OutField>(); 8];
-        let mut arena = vec![0_u8; 4096];
-        let mut records = [z::<RecordWrite>(); 8];
+        let mut arena = vec![0_u8; 1 << 14];
+        let mut records = [z::<RecordWrite>(); 64];
         let mut i: ServeIn = z();
         i.head = head::<ServeIn>(slot::SERVE, ticket(1 << 30));
         i.route = route;
@@ -821,20 +836,28 @@ impl Door {
             std::ptr::from_ref(&i).cast(),
             std::ptr::from_mut(&mut o).cast(),
         );
-        // The kernel writes the answer's record writes to the store.
+        // The kernel writes the answer's record writes to the store, in order.
         let held = busbar_plane_a2a::records::HELD_KINDS;
+        let mut status = o.status;
         for w in &records[..(o.records_written as usize).min(records.len())] {
             let at = |s: busbar_contract::abi::mechanism::call::Span| {
                 arena[s.offset as usize..(s.offset + s.len) as usize].to_vec()
             };
+            let value = at(w.value);
+            if value.len() > busbar_contract::bounded::MAX_RECORD_BYTES {
+                status = 500;
+                break;
+            }
             let kind = held[w.kind as usize].to_string();
             let key = String::from_utf8(at(w.key)).unwrap();
             let mut stored = store();
             stored.retain(|(k, id, _)| !(*k == kind && *id == key));
-            stored.push((kind, key, at(w.value)));
+            if !value.is_empty() {
+                stored.push((kind, key, value));
+            }
         }
         let body = String::from_utf8_lossy(&reply[..o.reply_written as usize]).into_owned();
-        (ret.outcome(), o.status, body)
+        (ret.outcome(), status, body)
     }
 
     /// The kernel's `tick` of the instance, on its driver ticket: when it wants the next.
@@ -1106,7 +1129,8 @@ fn an_empty_envelope_from_a_reached_agent_reports_the_hops_fee_and_bytes() {
 /// (`busbar_contract::bounded::MAX_RECORD_BYTES`, 512 bytes: busbar dev's store refuses a longer
 /// record, and the kernel answers the whole `serve` `500` for a record write it cannot make). An
 /// operator's `connect` to an agent whose card is longer answers its view, holds the card for the
-/// relay, and carries no `card` record. RED before the fix: the answer carried the whole card as
+/// relay, and carries no record past the ceiling (since the split records, its `card` records are
+/// the card's parts and their head, each within the ceiling). RED before the fix: the answer carried the whole card as
 /// its `card` record (the busbar root cells `root::serve::plane_a2a_door::*` over the gRPC agent,
 /// whose signed card with its interface is past 512 bytes, at busbar-plane-a2a bcc9cff241 against
 /// busbar dev: every `connect` answered `500` `internal error`).
@@ -1337,6 +1361,84 @@ fn a_restarted_instance_keeps_the_skills_its_operator_approved() {
     let after = open_with(SIGNED_SECTION);
     let (ticked, _) = after.tick();
     assert_eq!(ticked, Outcome::Ready, "the first tick after `open`");
+    let again = view(after.connect("vendor"));
+    assert_eq!(
+        (&again["added"], &again["changed"], &again["removed"]),
+        (
+            &serde_json::json!([]),
+            &serde_json::json!([]),
+            &serde_json::json!([])
+        ),
+        "the instance opened again still holds the skills the operator approved, so the \
+         unchanged card shows no drift: {again}"
+    );
+}
+
+/// A RESTART SERVES A CARD PAST THE HOST'S RECORD CEILING AND KEEPS ITS APPROVED SKILLS
+/// (ARCHITECT ruling B2, as amended; `BUSBAR-1.6.0.md` l.345-346: "what must survive a restart goes
+/// to its records through the store kind"): a host record is at most
+/// [`busbar_contract::bounded::MAX_RECORD_BYTES`] by design, and a card, or the skills approved of
+/// it, of any size outlives the instance all the same. An operator connects to an agent whose card
+/// is several records long and whose approved skills are past the ceiling too, and approves it;
+/// the instance is opened again over the same store and ticked once: a card read addressed to the
+/// agent is admitted from the recorded card, and a `connect` to the unchanged card shows no drift.
+/// RED before the fix (busbar-plane-a2a 1bba8a8): a card or an approval past the ceiling was held
+/// in plane memory only, so the instance opened again refused the agent for a card it does not
+/// hold, and judged its approved card against nothing.
+#[test]
+fn a_restarted_instance_serves_a_card_past_the_record_ceiling_and_keeps_its_approved_skills() {
+    let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    store().clear();
+    struct Plain;
+    impl Drop for Plain {
+        fn drop(&mut self) {
+            LONG_CARD.store(false, Ordering::SeqCst);
+        }
+    }
+    let _plain = Plain;
+    LONG_CARD.store(true, Ordering::SeqCst);
+    let ceiling = busbar_contract::bounded::MAX_RECORD_BYTES;
+    assert!(
+        long_card().len() > 2 * ceiling,
+        "the card is several records long"
+    );
+    let view = |answered: (Outcome, u32, String)| {
+        let (outcome, status, body) = answered;
+        assert_eq!((outcome, status), (Outcome::Ready, 200), "{body}");
+        serde_json::from_str::<serde_json::Value>(&body).expect("a trust view")
+    };
+    let before = open_with(SIGNED_SECTION);
+    let preview = view(before.connect("vendor"));
+    let fingerprint = preview["fingerprint"]
+        .as_str()
+        .unwrap_or_else(|| panic!("connect reported no fingerprint: {preview}"))
+        .to_string();
+    let approved = view(before.approve("vendor", &fingerprint));
+    assert_eq!(approved["state"], "approved", "{approved}");
+    assert_eq!(
+        approved["added"],
+        serde_json::json!([]),
+        "the approved card shows no drift: {approved}"
+    );
+    assert_eq!(
+        preview["added"].as_array().map(Vec::len),
+        Some(12),
+        "every skill of the card was added before the approval: {preview}"
+    );
+    assert!(
+        store().iter().all(|(_, _, value)| value.len() <= ceiling),
+        "no record past the host's ceiling was written"
+    );
+
+    let after = open_with(SIGNED_SECTION);
+    let (ticked, _) = after.tick();
+    assert_eq!(ticked, Outcome::Ready, "the first tick after `open`");
+    let route = ("POST", "/a2a/agents/{agent_id}");
+    assert_eq!(
+        after.arrive(14, route, "/a2a/agents/vendor", CARD_READ),
+        (Outcome::Ready, 0),
+        "the instance opened again serves the agent from its recorded card"
+    );
     let again = view(after.connect("vendor"));
     assert_eq!(
         (&again["added"], &again["changed"], &again["removed"]),

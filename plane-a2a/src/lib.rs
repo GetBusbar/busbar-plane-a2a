@@ -85,6 +85,7 @@ pub mod relay;
 pub mod rest;
 pub mod served_card;
 pub mod skill;
+pub mod split_record;
 pub mod sse;
 pub mod surface;
 pub mod task_door;

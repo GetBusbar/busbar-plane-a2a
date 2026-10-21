@@ -546,6 +546,9 @@ pub struct A2aDoor {
     pub(crate) cards: crate::cards::Cards,
     /// The held cards were warmed from the `card` host records after `open` ([`warm_cards`]).
     cards_warmed: Keyed<(), bool>,
+    /// The part records ([`crate::split_record`]) the store may hold under each `(kind, key)` of a
+    /// card or an approval, as far as this instance knows ([`HeldParts`]).
+    record_parts: Keyed<(&'static str, String), HeldParts>,
     /// A `tick`'s warm of the held cards pended on the driver ticket: the `drive` its wake runs
     /// carries it on, on the same handles, before anything else the drive does.
     warm_driving: Keyed<(), bool>,
@@ -629,6 +632,8 @@ fn warm_cards(plane: &A2aDoor, ticket: Ticket, issued: u32) -> (Poll<()>, u32) {
     };
     let issued = via.issued();
     let generation = plane.newest();
+    let cards = joined(plane, crate::records::KIND_CARD, cards);
+    let approvals = joined(plane, crate::records::KIND_CARD_APPROVAL, approvals);
     for (agent, value) in cards {
         if let Ok(card) = serde_json::from_slice::<serde_json::Value>(&value) {
             plane.cards.hold(&agent, generation, card);
@@ -649,42 +654,119 @@ fn warm_cards(plane: &A2aDoor, ticket: Ticket, issued: u32) -> (Poll<()>, u32) {
     (Poll::Ready(()), issued)
 }
 
-/// The `card` host record of `agent`'s verified `card`: keyed by the agent's id under the
-/// operator's scope (no caller prefix). `None` when the card is longer than a host record holds
-/// ([`kept_record`]).
-fn card_record(agent: &str, card: &serde_json::Value) -> Option<Write> {
-    kept_record(
-        crate::records::KIND_CARD,
-        agent,
-        serde_json::to_vec(card).ok()?,
-    )
+/// One held kind's listed `rows` read back whole ([`crate::split_record::rejoin`]): a card or an
+/// approval past the host's record ceiling is reassembled from its parts and verified. A head whose
+/// parts are missing or do not verify is not read (that agent is looked at afresh) and is reported,
+/// as is a part no whole value names; every part listed is remembered under its key, so the next
+/// write of the key tombstones the ones it no longer names.
+fn joined(
+    plane: &A2aDoor,
+    kind: &'static str,
+    rows: Vec<(String, Vec<u8>)>,
+) -> Vec<(String, Vec<u8>)> {
+    use crate::split_record::{is_part, owner};
+    let listed: Vec<String> = rows
+        .iter()
+        .filter(|(key, _)| is_part(key))
+        .map(|(key, _)| key.clone())
+        .collect();
+    let joined = crate::split_record::rejoin(rows);
+    plane.record_parts.with_all(|known| {
+        known.retain(|(k, _), _| *k != kind);
+        for part in listed {
+            known
+                .entry((kind, owner(&part).to_string()))
+                .or_default()
+                .retired
+                .push(part);
+        }
+    });
+    for (agent, why) in &joined.refused {
+        tracing::warn!(
+            kind,
+            agent = %agent,
+            why,
+            "an A2A {kind} record split across host records was not read back whole: {why}; the \
+             agent is looked at afresh and the record is written again on its next connect or approve"
+        );
+    }
+    if !joined.stray.is_empty() {
+        tracing::warn!(
+            kind,
+            parts = joined.stray.len(),
+            "A2A {kind} part records that no whole record names were found; each is tombstoned on \
+             its agent's next connect or approve"
+        );
+    }
+    joined.whole
 }
 
-/// The `card_approval` host record of the skills (`id -> digest`) of the card the operator approved
-/// for `agent`: keyed like its `card` record. `None` when the list is longer than a host record
-/// holds ([`kept_record`]).
-fn approval_record(
+/// The `card` host records of `agent`'s verified `card`: keyed by the agent's id under the
+/// operator's scope (no caller prefix), split across records under the host's ceiling
+/// ([`kept_records`]).
+fn card_records(plane: &A2aDoor, agent: &str, card: &serde_json::Value) -> Vec<Write> {
+    serde_json::to_vec(card)
+        .map(|value| kept_records(plane, crate::records::KIND_CARD, agent, &value))
+        .unwrap_or_default()
+}
+
+/// The `card_approval` host records of the skills (`id -> digest`) of the card the operator
+/// approved for `agent`: keyed like its `card` records ([`kept_records`]).
+fn approval_records(
+    plane: &A2aDoor,
     agent: &str,
     approved: &std::collections::BTreeMap<String, String>,
-) -> Option<Write> {
-    kept_record(
-        crate::records::KIND_CARD_APPROVAL,
-        agent,
-        serde_json::to_vec(approved).ok()?,
-    )
+) -> Vec<Write> {
+    serde_json::to_vec(approved)
+        .map(|value| kept_records(plane, crate::records::KIND_CARD_APPROVAL, agent, &value))
+        .unwrap_or_default()
 }
 
-/// A host record of `kind` under `agent` holding `value`, when the host's store can keep it: a
-/// record is at most [`busbar_contract::bounded::MAX_RECORD_BYTES`] (busbar dev's store refuses a
-/// longer one, and the kernel answers the whole verb `500` for a write it cannot make). A card or
-/// an approval past that is held in plane memory only, as it was before these records existed: an
-/// instance opened again looks at that agent afresh.
-fn kept_record(kind: &'static str, agent: &str, value: Vec<u8>) -> Option<Write> {
-    (value.len() <= busbar_contract::bounded::MAX_RECORD_BYTES).then(|| Write {
+/// THE PART RECORDS A KEY MAY HOLD in the store: those its last written value names (`current`),
+/// and every other one this instance knows of (`retired`: a value's it replaced, and what the warm
+/// listed), which each write of the key tombstones. A write of the value `current` already names
+/// (an unchanged card, or the kernel's re-call of a short answer) tombstones `retired` again, so an
+/// answer that was never written still tombstones what it should.
+#[derive(Debug, Clone, Default)]
+struct HeldParts {
+    current: Vec<String>,
+    retired: Vec<String>,
+}
+
+/// The host records that keep `value` under `agent` of `kind`, whatever its length: a record is at
+/// most [`busbar_contract::bounded::MAX_RECORD_BYTES`] (busbar dev's store refuses a longer one,
+/// and the kernel answers the whole verb `500` for a write it cannot make), so a longer value is
+/// its parts, then its head ([`crate::split_record::split_value`]); then a tombstone of every
+/// part the store may hold under the key that the new value does not name ([`HeldParts`]), written
+/// after the head, so no head is ever left naming a part that is gone.
+fn kept_records(plane: &A2aDoor, kind: &'static str, agent: &str, value: &[u8]) -> Vec<Write> {
+    let mut writes = crate::split_record::split_value(kind, agent, value);
+    let named: Vec<String> = writes
+        .iter()
+        .filter(|w| crate::split_record::is_part(&w.key))
+        .map(|w| w.key.clone())
+        .collect();
+    let retired = plane.record_parts.with_all(|known| {
+        let held = known.entry((kind, agent.to_string())).or_default();
+        if held.current != named {
+            let mut retired = std::mem::take(&mut held.current);
+            retired.append(&mut held.retired);
+            retired.retain(|part| !named.contains(part));
+            retired.sort();
+            retired.dedup();
+            *held = HeldParts {
+                current: named.clone(),
+                retired,
+            };
+        }
+        held.retired.clone()
+    });
+    writes.extend(retired.into_iter().map(|key| Write {
         kind,
-        key: agent.to_string(),
-        value,
-    })
+        key,
+        value: Vec::new(),
+    }));
+    writes
 }
 
 /// A trust verb's whole answer: `status`, the head `fields`, `body`, the `AUDIT_*` row, and the
@@ -924,6 +1006,7 @@ slot!(
             backends: BackendIds::default(),
             cards: crate::cards::Cards::new(),
             cards_warmed: Keyed::new(),
+            record_parts: Keyed::new(),
             warm_driving: Keyed::new(),
             deliveries: crate::push::Deliveries::new(),
             attempting: crate::push_door::Attempting::default(),
@@ -4044,13 +4127,13 @@ slot!(
         let mut standing = plane.trust.get(&name).unwrap_or_default();
         let state_now = |plane: &A2aDoor| crate::card_trust::verdict_state(verdict(plane, &name));
         // THE CARD RECORD (ruling B2, as amended): a card this look verified rides the verb's
-        // answer as the agent's `card` host record, which a later `open` warms the held cards from.
+        // answer as the agent's `card` host records (split under the host's record ceiling),
+        // which a later `open` warms the held cards from.
         let writes: Vec<Write> = looked
             .card
             .as_ref()
-            .and_then(|card| card_record(&name, card))
-            .into_iter()
-            .collect();
+            .map(|card| card_records(plane, &name, card))
+            .unwrap_or_default();
         let Some(claimed) = claimed else {
             // A PREVIEW DECIDES NOTHING: the key stands where the book has it.
             if let Some(card) = looked.card {
@@ -4095,7 +4178,8 @@ slot!(
             standing
                 .approved
                 .as_ref()
-                .and_then(|approved| approval_record(&name, approved)),
+                .map(|approved| approval_records(plane, &name, approved))
+                .unwrap_or_default(),
         );
         let view = crate::card_trust::registration_view(
             &name,
