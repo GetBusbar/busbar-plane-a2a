@@ -55,7 +55,9 @@ use busbar_contract::abi::plane::{
     RefusalOut, ServeIn, ServeOut, UnitCount, EMIT_DONE, FROM_CALLER, FROM_FAR_END, FROM_KERNEL,
     PIECE_HAS_STATUS, PIECE_LAST, PIECE_REFUSED, REFUSAL_KERNEL,
 };
-use door_facts::{CLASS_BYTES_INDEX, CLASS_FEE_INDEX, DIALECT_DOCUMENT, MAX_UNITS};
+use door_facts::{
+    CLASS_BYTES_INDEX, CLASS_FEE_INDEX, DIALECT_DOCUMENT, MAX_UNITS, UNIT_DEADLINE_NS,
+};
 
 // ── the allocation count: busbar-contract's test-only counter, this test binary's allocator ──────
 
@@ -85,13 +87,37 @@ fn answer(out: *mut ServiceOut, outcome: Outcome, value: u64, len: u64) -> RawOu
     RawOutcome::of(outcome)
 }
 
-/// The host's clock: it moves a second on every reading.
+/// The host's clock: it moves [`STEP`] on every reading.
 static MONO: AtomicU64 = AtomicU64::new(1_000_000_000);
+
+/// How far the host's clock moves on each reading, nanoseconds: a second, unless a test paces it
+/// ([`Paced`]).
+static STEP: AtomicU64 = AtomicU64::new(SECOND);
+
+/// One second, nanoseconds.
+const SECOND: u64 = 1_000_000_000;
+
+/// The host's clock paced to a step of its own while held; a second a reading again once dropped.
+struct Paced;
+
+impl Paced {
+    /// The host's clock moves `step_ns` a reading until the guard drops.
+    fn at(step_ns: u64) -> Paced {
+        STEP.store(step_ns, Ordering::SeqCst);
+        Paced
+    }
+}
+
+impl Drop for Paced {
+    fn drop(&mut self) {
+        STEP.store(SECOND, Ordering::SeqCst);
+    }
+}
 
 extern "C" fn clock_now(_: HostCtx, input: *const c_void, out: *mut ServiceOut) -> RawOutcome {
     // SAFETY: the SDK hands a `ClockNowIn` whose reading slot it owns.
     let i = unsafe { input.cast::<ClockNowIn>().read() };
-    let mono = MONO.fetch_add(1_000_000_000, Ordering::SeqCst);
+    let mono = MONO.fetch_add(STEP.load(Ordering::SeqCst), Ordering::SeqCst);
     // SAFETY: as above.
     unsafe {
         (*i.reading).wall_ns = 1_800_000_000_000_000_000 + mono;
@@ -1042,6 +1068,14 @@ fn cancelled_units_make_room_before_a_live_unit_does() {
 #[test]
 fn an_instance_full_of_live_units_refuses_the_next_arrival_and_evicts_none() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    // Live: every arrival lands inside the unit deadline (a millisecond a clock reading).
+    let _paced = Paced::at(SECOND / 1_000);
+    const {
+        assert!(
+            MAX_UNITS as u64 * 100 * (SECOND / 1_000) < UNIT_DEADLINE_NS,
+            "the units' arrivals, a hundred readings each, span less than the unit deadline"
+        );
+    }
     let door = open();
     door.begin_own_card(1);
     for unit in 2..=(MAX_UNITS as u64) {
@@ -1057,6 +1091,40 @@ fn an_instance_full_of_live_units_refuses_the_next_arrival_and_evicts_none() {
     assert!(
         door.still_answers(1),
         "a live unit was evicted to make room for an arrival"
+    );
+}
+
+/// UNITS THE KERNEL ENDED UNSEEN MAKE ROOM: the kernel ends a unit whose caller left during the
+/// gated-hook screen with no `cancel`, before its first piece, so nothing marks it over. Once
+/// [`MAX_UNITS`] such units have been held past the unit deadline (the host's clock moves a second
+/// a reading, and each arrival reads it), the next arrival is admitted, and the routed unit (its
+/// first piece seen) still answers. RED before the fix: only an over unit made room, so the leaked
+/// units filled the instance and every arrival from then on was refused `429`.
+#[test]
+fn units_the_kernel_ended_unseen_make_room_past_the_deadline() {
+    let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    const {
+        assert!(
+            (MAX_UNITS as u64 - 1) * SECOND > UNIT_DEADLINE_NS,
+            "the units' arrivals, a reading each, span more than the unit deadline"
+        );
+    }
+    let door = open();
+    door.begin_own_card(1);
+    for unit in 2..=(MAX_UNITS as u64) {
+        door.arrive_own_card(unit);
+    }
+    let route = ("GET", door_facts::WELL_KNOWN_CARD_PATH);
+    let next = MAX_UNITS as u64 + 1;
+    assert_eq!(
+        door.arrive(next, route, door_facts::WELL_KNOWN_CARD_PATH, b"")
+            .0,
+        Outcome::Ready,
+        "the arrival past {MAX_UNITS} units gone unseen past the deadline is admitted"
+    );
+    assert!(
+        door.still_answers(1),
+        "a routed unit was dropped as gone unseen"
     );
 }
 

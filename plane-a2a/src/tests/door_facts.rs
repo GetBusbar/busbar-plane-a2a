@@ -16,6 +16,10 @@ mod stated;
 fn the_door_driven_tests_restate_the_doors_own_constants() {
     assert_eq!(stated::MAX_UNITS, crate::agent_door::MAX_UNITS);
     assert_eq!(
+        stated::UNIT_DEADLINE_NS,
+        crate::agent_door::UNIT_DEADLINE_NS
+    );
+    assert_eq!(
         stated::DIALECT_DOCUMENT,
         crate::door_statement::DIALECT_DOCUMENT
     );
