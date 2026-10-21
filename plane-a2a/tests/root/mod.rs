@@ -938,7 +938,7 @@ fn served_core(
     // Its connection reads through a ticket (a trust verb's card fetch) wake on the dispatcher.
     let settings = busbar_contract::transport::TransportSettings::default();
     let connector = match root {
-        None => busbar_core_connector::process::build(
+        None => busbar_core_connector::process::build_with_secrets(
             || crate::root::connector::entries(crate::LINKED_TRANSPORT_DOORS, &settings),
             judge,
             &[],
