@@ -342,14 +342,21 @@ pub(crate) fn tick_deliveries(
     instance: &Instance<'_, A2aDoor>,
     now_ns: u64,
 ) -> Outcome {
-    let Some((ticket, mut calls)) = calls_of(plane, instance) else {
+    let Some((_, mut calls)) = calls_of(plane, instance) else {
         return Outcome::Ready;
     };
-    // This op runs on the instance's driver ticket: the one a queued delivery wakes.
-    if let Some(host) = plane.host {
+    arm(plane, instance);
+    tick_over(&mut calls, &plane.deliveries, &plane.attempting, now_ns)
+}
+
+/// ARM the wake of the instance's driver ticket, the one a `tick` runs on, once: a queued
+/// delivery wakes it ([`Deliveries::wake`]). Every tick arms it, so the first tick after `open`
+/// does whatever else it does first.
+pub(crate) fn arm(plane: &A2aDoor, instance: &Instance<'_, A2aDoor>) {
+    let ticket = instance.ticket();
+    if let (Some(host), false) = (plane.host, ticket.is_none()) {
         plane.deliveries.arm(|| Box::new(move || host.wake(ticket)));
     }
-    tick_over(&mut calls, &plane.deliveries, &plane.attempting, now_ns)
 }
 
 /// `drive`: the attempt a `tick` left PENDING goes on, the wake on the driver ticket being its
