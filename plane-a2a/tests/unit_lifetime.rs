@@ -132,9 +132,12 @@ extern "C" fn clock_now(_: HostCtx, input: *const c_void, out: *mut ServiceOut) 
 /// was handed to. busbar's host keeps each handle's first answer and hands it back to any later
 /// call on that handle, whatever service that call names; a handle handed to two services is one
 /// whose second call reads the first's answer.
-static HANDLES: Mutex<Vec<((u32, u32, u32), u32)>> = Mutex::new(Vec::new());
+static HANDLES: Mutex<Vec<Handed>> = Mutex::new(Vec::new());
 
-fn handles() -> MutexGuard<'static, Vec<((u32, u32, u32), u32)>> {
+/// One handle the host was handed, `(ticket slot, ticket generation, seq)`, and its service.
+type Handed = ((u32, u32, u32), u32);
+
+fn handles() -> MutexGuard<'static, Vec<Handed>> {
     HANDLES.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
@@ -1076,7 +1079,7 @@ fn the_card_warm_on_a_units_ticket_never_shares_a_handle_with_the_units_own_call
     );
 
     let own = ticket(unit);
-    let handed: Vec<((u32, u32, u32), u32)> = handles()
+    let handed: Vec<Handed> = handles()
         .iter()
         .copied()
         .filter(|((slot, generation, _), _)| (*slot, *generation) == (own.slot, own.generation))
