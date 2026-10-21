@@ -546,6 +546,9 @@ pub struct A2aDoor {
     pub(crate) cards: crate::cards::Cards,
     /// The held cards were warmed from the `card` host records after `open` ([`warm_cards`]).
     cards_warmed: Keyed<(), bool>,
+    /// A `tick`'s warm of the held cards pended on the driver ticket: the `drive` its wake runs
+    /// carries it on, on the same handles, before anything else the drive does.
+    warm_driving: Keyed<(), bool>,
     /// The push notifications waiting for delivery, and the webhook credentials they present.
     pub(crate) deliveries: crate::push::Deliveries,
     /// The delivery attempt in flight across a PENDING `tick`, which `drive` carries on.
@@ -921,6 +924,7 @@ slot!(
             backends: BackendIds::default(),
             cards: crate::cards::Cards::new(),
             cards_warmed: Keyed::new(),
+            warm_driving: Keyed::new(),
             deliveries: crate::push::Deliveries::new(),
             attempting: crate::push_door::Attempting::default(),
             tokens: crate::push::Tokens::new(),
@@ -1045,19 +1049,26 @@ slot!(
             out.set(|o| &o.next_tick_ns, 0);
             return Outcome::Ready;
         };
+        // THE DRIVER TICKET'S WAKE IS ARMED ON EVERY TICK, the first included: a notification
+        // queued while the cards are still warming wakes the driver ticket, never waits for a
+        // scheduled tick.
+        crate::push_door::arm(plane, &instance);
         // THE FIRST TICK AFTER `open` warms the held cards from the `card` host records, on a
-        // tick of its own (its host calls are this op's only ones); a listing still in flight is
-        // tried again a second later.
+        // tick of its own (its host calls are this op's only ones). A listing in flight ends the
+        // tick PENDING and goes on through `drive` (`abi::mechanism::lifecycle`: a tick's PENDING
+        // answer ends it, and what pended inside it goes on through `drive`; the next tick's start
+        // forgets the cycle's answers, so a warm left in flight behind a READY tick could never
+        // land, and its listing's every completion would tick again). A warm that landed asks for
+        // the next tick at once, for the deliveries.
         if !plane.cards_warmed.get(&()).unwrap_or(false) {
-            let now = input.get().now_ns;
-            let next = match warm_cards(plane, instance.ticket(), 0).0 {
-                Poll::Ready(()) => {
-                    plane.cards_warmed.insert((), true);
-                    now
-                }
-                Poll::Pending => now.saturating_add(1_000_000_000),
-            };
-            out.set(|o| &o.next_tick_ns, next.max(1));
+            if warm_cards(plane, instance.ticket(), 0).0.is_pending() {
+                plane.warm_driving.insert((), true);
+                out.set(|o| &o.next_tick_ns, 0);
+                return Outcome::Pending;
+            }
+            plane.cards_warmed.insert((), true);
+            plane.warm_driving.insert((), false);
+            out.set(|o| &o.next_tick_ns, input.get().now_ns.max(1));
             return Outcome::Ready;
         }
         let outcome = crate::push_door::tick_deliveries(plane, &instance, input.get().now_ns);
@@ -1073,10 +1084,23 @@ slot!(
     /// `drive`: no session has unsolicited output; a push delivery the last `tick` left PENDING
     /// goes on ([`crate::push_door::drive`]).
     Drive, PlaneDriveIn, PlaneDriveOut, |instance, _, _| {
-        match instance.get() {
-            Some(plane) => crate::push_door::drive(plane, &instance),
-            None => Outcome::Ready,
+        let Some(plane) = instance.get() else {
+            return Outcome::Ready;
+        };
+        // THE WARM A TICK LEFT PENDING goes on here, on the tick's handles, until it lands (or a
+        // unit's own warm landed it first); the drive then answers READY, and the tick that
+        // follows attempts the deliveries.
+        if plane.warm_driving.get(&()).unwrap_or(false) {
+            if !plane.cards_warmed.get(&()).unwrap_or(false) {
+                if warm_cards(plane, instance.ticket(), 0).0.is_pending() {
+                    return Outcome::Pending;
+                }
+                plane.cards_warmed.insert((), true);
+            }
+            plane.warm_driving.insert((), false);
+            return Outcome::Ready;
         }
+        crate::push_door::drive(plane, &instance)
     }
 );
 
