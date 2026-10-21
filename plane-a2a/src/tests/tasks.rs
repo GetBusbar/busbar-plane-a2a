@@ -1077,3 +1077,73 @@ fn the_chain_scope_is_the_callers_opaque_reference_and_the_task() {
         );
     }
 }
+
+/// THE TASK KIND IS TERMINAL-ONLY, and the plane's records layer is what keeps it so. At f608d7d5
+/// the tail declared it (`PlaneTail::record_retentions`, `record_retention(0, TerminalOnly)`): a
+/// purge of the `task` kind drops only TERMINAL rows older than its cutoff and keeps an ACTIVE row
+/// however old, while every other held kind goes by age. busbar dev's tail states no retentions,
+/// so the rule is the plane's own: of the held kinds exactly `task` is
+/// [`crate::records::Retention::TerminalOnly`], the sweep purges through that rule, and a restart
+/// (the same records read afresh) restores the same retained set.
+#[test]
+fn the_records_layer_declares_the_task_kind_as_terminal_only() {
+    use crate::records::{retention_of, Retention, HELD_KINDS};
+    let rules: Vec<(&str, Retention)> = HELD_KINDS.iter().map(|k| (*k, retention_of(k))).collect();
+    assert_eq!(
+        rules,
+        [
+            (KIND_TASK, Retention::TerminalOnly),
+            (KIND_TASK_EVENT, Retention::Age),
+            (KIND_PUSH_CONFIG, Retention::Age),
+            (crate::records::KIND_CARD, Retention::Age),
+            (crate::records::KIND_CARD_APPROVAL, Retention::Age),
+        ]
+    );
+    // The rule as the contract stated it: a row at or after the cutoff always stays; before it, a
+    // terminal row goes under either rule and an active row only by age.
+    assert!(Retention::TerminalOnly.drops(10, 11, true));
+    assert!(!Retention::TerminalOnly.drops(10, 11, false));
+    assert!(!Retention::TerminalOnly.drops(11, 11, true));
+    assert!(Retention::Age.drops(10, 11, false));
+    assert!(!Retention::Age.drops(11, 11, false));
+
+    // Through the records: an interrupted task waiting on a human for a year is exactly the old
+    // row that must survive; a completed one of the same age goes with its chain.
+    let mut book = Book::default();
+    submitted(&mut book, ALICE, "waiting", 100);
+    moved_to(&mut book, "waiting", TaskState::Working, 100);
+    moved_to(&mut book, "waiting", TaskState::InputRequired, 100);
+    submitted(&mut book, ALICE, "done", 100);
+    moved_to(&mut book, "done", TaskState::Completed, 100);
+    let now = 100 + 86_400 * 365;
+    let mut out = Vec::new();
+    retention_sweep(&mut book, now, 64, &mut out).unwrap();
+    book.apply(&out);
+    assert!(book.value(KIND_TASK, &task_key(ALICE, "done")).is_none());
+    assert!(book
+        .value(KIND_TASK_EVENT, &event_key(ALICE, "done", 1))
+        .is_none());
+    let held = get(&mut book, ALICE, "waiting", now).unwrap().unwrap();
+    assert_eq!(held.row.state, "input-required", "the active row stays");
+    assert!(
+        book.value(KIND_TASK_EVENT, &event_key(ALICE, "waiting", 1))
+            .is_some(),
+        "and its chain with it"
+    );
+
+    // THE RESTART: nothing but the records survive, and they restore the same retained set.
+    let before = restore(&mut book).unwrap();
+    let mut restarted = book.clone();
+    assert_eq!(restore(&mut restarted).unwrap(), before);
+    assert_eq!((before.active, before.terminal), (1, 0));
+    assert_eq!(
+        list(&mut restarted, ALICE, now).unwrap(),
+        list(&mut book, ALICE, now).unwrap()
+    );
+    let mut out = Vec::new();
+    retention_sweep(&mut restarted, now, 64, &mut out).unwrap();
+    assert!(
+        out.is_empty(),
+        "a restarted sweep finds nothing more to drop"
+    );
+}
