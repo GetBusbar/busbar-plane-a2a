@@ -1,18 +1,12 @@
 //! The operation vocabulary: which method name is which priced operation.
 //!
-//! This protocol spells the same ten operations two ways. The older wording is slash-separated and
-//! lower-case; the newer one is a verb in title case. They are the SAME operations — a request
+//! This protocol spells the same eleven operations two ways. The older wording is slash-separated
+//! and lower-case; the newer one is a verb in title case. They are the SAME operations — a request
 //! carrying either name asks for the same thing and is priced the same — so the table below maps
-//! both spellings onto one operation class each, and the class is what the draft declares.
+//! both spellings onto one operation class each, and the class is what the Statement declares.
 //!
-//! ## Why the table is written here rather than read from the codec
-//!
-//! The codec crate holds this vocabulary too, in the function that turns a method name into the
-//! verb it answers itself. That function is not reachable from outside its crate: it is visible to
-//! its own crate only, and this crate may not widen it. So the table is written once more here and
-//! then PINNED — the tests read the codec's own source and the conformance rig's own vocabulary
-//! table and assert that neither of them names a method this table does not. A second copy that is
-//! checked against the first is not a second opinion; a second copy that is not checked is.
+//! The table is the plane's one statement of the vocabulary; a test holds it to busbar's method
+//! inventory, under both of each operation's JSON-RPC names.
 //!
 //! ## Two spellings, one class, and why not two classes
 //!
@@ -118,8 +112,8 @@ pub struct MethodRow {
 
 /// Every method name this plane reads, in the order the vocabulary tables list them.
 ///
-/// Both spellings of every operation appear. A name absent from here is a method this plane does not
-/// claim, and the decode step answers that it does not carry that shape rather than guessing.
+/// Both spellings of every operation appear. A name absent from here is not refused: it is relayed
+/// to the agent verbatim, under the class [`relay_class`] gives it.
 pub const METHODS: &[MethodRow] = &[
     MethodRow {
         method: "message/send",

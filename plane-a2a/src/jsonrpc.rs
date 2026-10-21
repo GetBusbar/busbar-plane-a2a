@@ -16,10 +16,9 @@
 //! which order that is so a change to the serializer's configuration is a red here rather than a
 //! silent reshaping of every answer this node gives.
 //!
-//! An answer's result arrives here as the bytes the agent sent, and it is parsed and written again
-//! rather than copied through. That is what the codec does today — it reads the agent's answer into
-//! a document and serializes the envelope around it — so copying the bytes through verbatim would
-//! be the change, not the fidelity.
+//! An agent's answer is not written here. The relay copies the agent's bytes through and splices
+//! only busbar's own identity into them ([`crate::answer_bytes`]); this module writes the envelopes
+//! busbar answers itself.
 
 #[cfg(test)]
 use busbar_contract::bounded::Span;
@@ -48,11 +47,8 @@ pub const PTR_PARAMS: &str = "/params";
 
 // THE ERROR BAND AND ITS DETAIL TAGS ARE THE DIALECT'S, AND THERE IS ONE OF EACH.
 //
-// Until the codec fold these lived in a crate this one could only READ, so they were restated here
-// and pinned to the originals by construction. The dialect came home (#39), and a value restated
-// inside the crate that defines it is a second name for one value — the shape a divergence hides
-// in, and one a re-export cannot grow. The engine's own `A2aError` is still pinned against the
-// table row for row, in the crate that owns that enum.
+// They are the crate root's ([`crate::ERRORS`]), read here and never restated: a value restated
+// inside the crate that defines it is a second name for one value, the shape a divergence hides in.
 #[cfg(test)]
 use crate::{ERRORS, ERROR_INFO_DOMAIN, ERROR_INFO_TYPE};
 

@@ -7,7 +7,8 @@
 //!
 //! * a unit the door has finished with (its answer's last window written, its refusal rendered) no
 //!   longer holds a place among the [`MAX_UNITS`] the instance keeps, so it never pushes a live
-//!   unit out; a cancelled unit is the first to go when the instance is full;
+//!   unit out; a cancelled unit is the first to go when the instance is full, and an instance full
+//!   of live units refuses the next arrival, never evicting one;
 //! * a hop the kernel refused for the agent's credential before it dialled reports its fee unit at
 //!   `0` and no bytes on its refused piece, so the kernel's checkpoint refunds it
 //!   (`BUSBAR-1.6.0.md` l.1126: "a hop refused before the socket ledgers nothing");
@@ -163,8 +164,14 @@ fn store() -> MutexGuard<'static, Vec<(String, String, Vec<u8>)>> {
 /// when that handle is issued again (a store read on the host's pool, completed before the replay).
 static LIST_PENDS: AtomicBool = AtomicBool::new(false);
 
+/// While set, `records.list` is refused (the store is unavailable): FAILED, nothing listed.
+static LIST_REFUSES: AtomicBool = AtomicBool::new(false);
+
 extern "C" fn records_list(_: HostCtx, input: *const c_void, out: *mut ServiceOut) -> RawOutcome {
     handed(input);
+    if LIST_REFUSES.load(Ordering::SeqCst) {
+        return answer(out, Outcome::Failed, 0, 0);
+    }
     if LIST_PENDS.load(Ordering::SeqCst) {
         // SAFETY: every service's `in` leads with its head.
         let h = unsafe { input.cast::<ServiceHead>().read() }.handle;
@@ -723,6 +730,17 @@ impl Door {
 
     /// `refusal` of `unit` for `reason` at `status`: its outcome, status and body.
     fn refusal(&self, unit: u64, reason: RefusalCode, status: u32) -> (Outcome, u32, String) {
+        let (outcome, answered, body, _) = self.refusal_writing(unit, reason, status);
+        (outcome, answered, body)
+    }
+
+    /// [`Self::refusal`], and how many record writes (its audit row among them) it answered.
+    fn refusal_writing(
+        &self,
+        unit: u64,
+        reason: RefusalCode,
+        status: u32,
+    ) -> (Outcome, u32, String, u32) {
         let text = b"refused";
         let mut reply = vec![0_u8; 4096];
         let mut fields = [z::<OutField>(); 8];
@@ -747,7 +765,7 @@ impl Door {
             std::ptr::from_mut(&mut o).cast(),
         );
         let body = String::from_utf8_lossy(&reply[..o.reply_written as usize]).into_owned();
-        (ret.outcome(), o.status, body)
+        (ret.outcome(), o.status, body, o.records_written)
     }
 
     /// `serve` of the trust verb `connect` for `agent`: its outcome, status and body.
@@ -886,6 +904,27 @@ impl Door {
         ret.outcome()
     }
 
+    /// The host's own cancel of `unit`, naming it by the key `arrive` kept it under as well as by
+    /// its ticket (`PlaneCancelIn::unit`): a unit cancelled before any piece of it carried its
+    /// ticket.
+    fn cancel_unit(&self, unit: u64) -> Outcome {
+        let mut i: PlaneCancelIn = z();
+        i.cancel = CancelIn {
+            head: head::<PlaneCancelIn>(life::CANCEL, Ticket::NONE),
+            ticket: ticket(unit),
+        };
+        i.unit = unit;
+        let mut o: PlaneCancelOut = z();
+        o.cancel.head = out_head::<PlaneCancelOut>();
+        let f = lifecycle().cancel.expect("cancel");
+        let ret = f(
+            self.instance,
+            std::ptr::from_ref(&i).cast(),
+            std::ptr::from_mut(&mut o).cast(),
+        );
+        ret.outcome()
+    }
+
     /// Busbar's own card read on `unit`, its first window written into a reply buffer too small
     /// for the card: the unit is LIVE, part way through its answer.
     fn begin_own_card(&self, unit: u64) {
@@ -948,8 +987,8 @@ fn units_whose_refusal_is_rendered_never_push_a_live_unit_out() {
     );
 }
 
-/// A CANCELLED UNIT GOES FIRST: when the instance is full, the oldest cancelled unit makes room,
-/// never a live one. RED before the fix: `cancel` left the unit as it was and the instance evicted
+/// A CANCELLED UNIT GOES FIRST: when the instance is full, the cancelled units make room, never a
+/// live one. RED before the fix: `cancel` left the unit as it was and the instance evicted
 /// the oldest unit whatever it was.
 #[test]
 fn cancelled_units_make_room_before_a_live_unit_does() {
@@ -963,6 +1002,100 @@ fn cancelled_units_make_room_before_a_live_unit_does() {
     assert!(
         door.still_answers(1),
         "a live unit was evicted while {MAX_UNITS} cancelled units were held"
+    );
+}
+
+/// AN INSTANCE FULL OF LIVE UNITS REFUSES THE NEXT ARRIVAL, AND EVICTS NONE (THE DESIGN section
+/// 1: admission bounds live work, nothing evicts it; a refusal is a fact the caller can act on, an
+/// eviction is not). [`MAX_UNITS`] units arrive and none ends; the next arrival is refused `429`,
+/// and the oldest live unit still answers its next window. RED before the fix: the arrival was
+/// admitted and the oldest live unit evicted, its next window refused.
+#[test]
+fn an_instance_full_of_live_units_refuses_the_next_arrival_and_evicts_none() {
+    let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    let door = open();
+    door.begin_own_card(1);
+    for unit in 2..=(MAX_UNITS as u64) {
+        door.arrive_own_card(unit);
+    }
+    let route = ("GET", door_facts::WELL_KNOWN_CARD_PATH);
+    let next = MAX_UNITS as u64 + 1;
+    assert_eq!(
+        door.arrive(next, route, door_facts::WELL_KNOWN_CARD_PATH, b""),
+        (Outcome::Refused, 429),
+        "the arrival past {MAX_UNITS} live units is refused"
+    );
+    assert!(
+        door.still_answers(1),
+        "a live unit was evicted to make room for an arrival"
+    );
+}
+
+/// A UNIT CANCELLED BEFORE ITS FIRST PIECE IS OVER: the host's cancel names it by the key `arrive`
+/// kept it under (no piece of it ever carried its ticket), so it makes room when the instance is
+/// full. RED before the fix: the cancel looked for the unit by its ticket alone, which the unit
+/// had not recorded, so the unit stayed live and the next arrival evicted the oldest live unit.
+#[test]
+fn a_unit_cancelled_before_its_first_piece_makes_room() {
+    let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    let door = open();
+    door.begin_own_card(1);
+    for unit in 2..=(MAX_UNITS as u64) {
+        door.arrive_own_card(unit);
+        assert_eq!(
+            door.cancel_unit(unit),
+            Outcome::Ready,
+            "unit {unit}'s cancel"
+        );
+    }
+    door.arrive_own_card(MAX_UNITS as u64 + 1);
+    assert!(
+        door.still_answers(1),
+        "a live unit was evicted while {MAX_UNITS} units cancelled before their first piece were \
+         held"
+    );
+}
+
+/// A FINISHED HOP'S UNIT IS STILL READ BY A REFUSAL OF ITS ANSWER: the hop's last piece wrote the
+/// caller's whole answer, and the kernel then refused that answer (a response hook's veto); the
+/// refusal still finds the unit, so its audit row names the agent the hop reached. RED before the
+/// fix: the finished hop's unit was dropped at once, so the refusal found nothing and wrote no
+/// row.
+#[test]
+fn a_refusal_after_a_finished_hop_still_reads_its_unit() {
+    let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    let door = open();
+    let (outcome, status, body) = door.connect("vendor");
+    assert_eq!(
+        (outcome, status),
+        (Outcome::Ready, 200),
+        "`connect` holds the agent's card: {body}"
+    );
+    let unit = 10;
+    let route = ("POST", "/a2a/agents/{agent_id}");
+    assert_eq!(
+        door.arrive(unit, route, "/a2a/agents/vendor", CARD_READ),
+        (Outcome::Ready, 0),
+        "the card read is admitted"
+    );
+    let attempt = door.piece(unit, Given::attempt(b"vendor"), 1 << 16);
+    assert_eq!(attempt.outcome, Some(Outcome::Ready), "{attempt:?}");
+    let sent = door.piece(unit, Given::caller(CARD_READ), 1 << 16);
+    assert_eq!(sent.outcome, Some(Outcome::Ready), "{sent:?}");
+    let empty: &[u8] = br#"{"jsonrpc":"2.0","id":1}"#;
+    let answered = door.piece(unit, Given::far_end(200, empty), 1 << 16);
+    assert_eq!(answered.outcome, Some(Outcome::Ready), "{answered:?}");
+    assert_ne!(
+        answered.flags & EMIT_DONE,
+        0,
+        "the hop's answer is written whole: {answered:?}"
+    );
+
+    let (refused, _, body, writes) = door.refusal_writing(unit, RefusalCode::HookVeto, 403);
+    assert_eq!(refused, Outcome::Ready, "{body}");
+    assert_eq!(
+        writes, 1,
+        "the refusal read the finished hop's unit and wrote its audit row: {body}"
     );
 }
 
@@ -1451,13 +1584,56 @@ fn a_kernel_refusal_with_no_unit_answers_the_baseline_json_rpc_bytes() {
     }
 }
 
+/// A CARD LISTING THE HOST REFUSED IS LISTED AGAIN: the cards are warmed only once both their
+/// listings land, so an instance opened again over a store that refused its first tick's listing
+/// warms them on a following tick and serves the agent. RED before the fix: a refused listing counted
+/// as warmed, no tick listed again, and every arrival addressed to the agent was refused for want
+/// of a card until an operator looked again.
+#[test]
+fn a_card_listing_the_host_refused_is_listed_again() {
+    let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    store().clear();
+    let before = open();
+    let (outcome, status, body) = before.connect("vendor");
+    assert_eq!(
+        (outcome, status),
+        (Outcome::Ready, 200),
+        "`connect` holds the agent's card: {body}"
+    );
+    struct Available;
+    impl Drop for Available {
+        fn drop(&mut self) {
+            LIST_REFUSES.store(false, Ordering::SeqCst);
+        }
+    }
+    let _available = Available;
+    LIST_REFUSES.store(true, Ordering::SeqCst);
+    let after = open();
+    let (ticked, _) = after.tick();
+    assert_eq!(ticked, Outcome::Ready, "a refused listing ends the tick");
+    LIST_REFUSES.store(false, Ordering::SeqCst);
+    // The tick after a refused warm attempts the deliveries; the one after it warms again.
+    for n in 0..2 {
+        let (ticked, _) = after.tick();
+        assert_eq!(ticked, Outcome::Ready, "tick {n} after the refused one");
+    }
+    let route = ("POST", "/a2a/agents/{agent_id}");
+    assert_eq!(
+        after.arrive(14, route, "/a2a/agents/vendor", CARD_READ),
+        (Outcome::Ready, 0),
+        "the instance warmed the agent's card once the store listed it"
+    );
+}
+
 // ── the READY path the dropped-in twin carries ──────────────────────────────────────────────────
 
 /// What one addressed READY arrival allocates on a warmed instance (the agent's card held, its
 /// route entry already named by earlier arrivals). The bound is exact (the plane's own unit state,
 /// task rows and relay set-up; the route name costs none): a change that moves it moves this
-/// constant in the same commit, with the reason.
-const READY_ARRIVAL_ALLOCATIONS: u64 = 64;
+/// constant in the same commit, with the reason. It came down from 64 when the arrival's body
+/// was parsed once and its request handed to the hop rather than copied: the second parse and the
+/// copy each cost the card read's envelope (three keys, two string values and the map's node).
+const READY_ARRIVAL_ALLOCATIONS: u64 = 52;
 
 /// A WARMED READY ARRIVAL NAMES ITS ROUTE WITHOUT THE HEAP (THE DESIGN, the plugin ABI: "no
 /// allocation and no blocking on the hot path"; compiled in or dropped in, "NOTHING CHANGES about
