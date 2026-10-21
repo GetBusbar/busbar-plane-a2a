@@ -91,7 +91,7 @@ fn project_session(claim: usize, target: &str, body: &[u8]) -> (Outcome, Option<
     )
     .expect("the answer passes the loader's check");
     let s = out.view.session;
-    let session = (!s.is_absent()).then(|| {
+    let session = (!s.ptr().is_null()).then(|| {
         assert_eq!(s.fmt, BLOB_OCTETS);
         let at = s.ptr() as usize - arena.as_ptr() as usize;
         String::from_utf8(arena[at..at + s.len()].to_vec()).unwrap()
