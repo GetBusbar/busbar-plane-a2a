@@ -23,7 +23,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::os::raw::c_void;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use busbar_contract::abi::host::conn::connector::{
@@ -288,6 +288,28 @@ static HOST_SLOTS: HostSlots = HostSlots {
 /// The agent's card: unsigned (its registration is `unpinned`), one skill.
 const CARD: &[u8] = br#"{"protocolVersion":"0.3.0","name":"vendor","description":"a vendor agent","url":"https://vendor.example/agent","version":"1","capabilities":{},"defaultInputModes":["text/plain"],"defaultOutputModes":["text/plain"],"skills":[{"id":"quote","name":"quote","description":"quotes","tags":["quote"]}]}"#;
 
+/// The agent serves [`long_card`] in place of [`CARD`] while set.
+static LONG_CARD: AtomicBool = AtomicBool::new(false);
+
+/// [`CARD`] with a description long enough that the card is past the host's record ceiling
+/// ([`busbar_contract::bounded::MAX_RECORD_BYTES`]), as an ordinary card with a few interfaces, a
+/// provider and signatures is.
+fn long_card() -> Vec<u8> {
+    let description = "a vendor agent ".repeat(48);
+    String::from_utf8_lossy(CARD)
+        .replace("a vendor agent", description.trim_end())
+        .into_bytes()
+}
+
+/// The card the agent serves now.
+fn served_card() -> Vec<u8> {
+    if LONG_CARD.load(Ordering::SeqCst) {
+        long_card()
+    } else {
+        CARD.to_vec()
+    }
+}
+
 /// Each open exchange: how far its reply has been read.
 static WIRES: Mutex<Option<HashMap<u64, u8>>> = Mutex::new(None);
 static NEXT_WIRE: AtomicU64 = AtomicU64::new(1);
@@ -337,13 +359,14 @@ extern "C" fn read_reply(_: HostCtx, input: *const c_void, out: *mut ServiceOut)
             )
         }
         1 => {
-            buf[..CARD.len()].copy_from_slice(CARD);
+            let card = served_card();
+            buf[..card.len()].copy_from_slice(&card);
             (
                 ReplyPiece {
                     kind: REPLY_BODY,
                     ..ReplyPiece::default()
                 },
-                CARD.len(),
+                card.len(),
             )
         }
         _ => (
@@ -1040,6 +1063,54 @@ fn an_empty_envelope_from_a_reached_agent_reports_the_hops_fee_and_bytes() {
 }
 
 // ── (B2) an approved agent's card outlives the instance ─────────────────────────────────────────
+
+/// A CARD PAST THE HOST'S RECORD CEILING IS HELD, NEVER WRITTEN AS A RECORD THE HOST CANNOT KEEP
+/// (`busbar_contract::bounded::MAX_RECORD_BYTES`, 512 bytes: busbar dev's store refuses a longer
+/// record, and the kernel answers the whole `serve` `500` for a record write it cannot make). An
+/// operator's `connect` to an agent whose card is longer answers its view, holds the card for the
+/// relay, and carries no `card` record. RED before the fix: the answer carried the whole card as
+/// its `card` record (the busbar root cells `root::serve::plane_a2a_door::*` over the gRPC agent,
+/// whose signed card with its interface is past 512 bytes, at busbar-plane-a2a bcc9cff241 against
+/// busbar dev: every `connect` answered `500` `internal error`).
+#[test]
+fn a_card_past_the_hosts_record_ceiling_is_held_and_never_written_as_a_record() {
+    let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    store().clear();
+    assert!(
+        long_card().len() > busbar_contract::bounded::MAX_RECORD_BYTES,
+        "the long card is past the ceiling"
+    );
+    struct Plain;
+    impl Drop for Plain {
+        fn drop(&mut self) {
+            LONG_CARD.store(false, Ordering::SeqCst);
+        }
+    }
+    let _plain = Plain;
+    LONG_CARD.store(true, Ordering::SeqCst);
+    let door = open();
+    let (outcome, status, body) = door.connect("vendor");
+    assert_eq!(
+        (outcome, status),
+        (Outcome::Ready, 200),
+        "`connect` answers its view: {body}"
+    );
+    let too_long: Vec<(String, String, usize)> = store()
+        .iter()
+        .filter(|(_, _, value)| value.len() > busbar_contract::bounded::MAX_RECORD_BYTES)
+        .map(|(kind, key, value)| (kind.clone(), key.clone(), value.len()))
+        .collect();
+    assert!(
+        too_long.is_empty(),
+        "the answer wrote records past the host's ceiling: {too_long:?}"
+    );
+    let route = ("POST", "/a2a/agents/{agent_id}");
+    assert_eq!(
+        door.arrive(12, route, "/a2a/agents/vendor", CARD_READ),
+        (Outcome::Ready, 0),
+        "the card the look verified is held for the relay"
+    );
+}
 
 /// THE CARD WARM ON A UNIT'S TICKET NEVER SHARES A HANDLE WITH THE UNIT'S OWN CALLS
 /// (`abi::mechanism::ticket`: a handle's `seq` counts the services one ticket issued). An instance
