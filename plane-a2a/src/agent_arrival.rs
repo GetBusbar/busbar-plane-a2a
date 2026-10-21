@@ -369,8 +369,8 @@ pub fn origin_refusal<'a>(field: impl Fn(&str) -> Option<&'a str>) -> Result<(),
 }
 
 /// DECIDE ONE ARRIVAL on the JSON-RPC line. `field` reads a request head field by its lower-case
-/// name (the first, as sent; one that is not UTF-8 reads as absent).
-#[cfg(test)]
+/// name (the first, as sent; one that is not UTF-8 reads as absent). The conformance rig and the
+/// purity oracle decide arrivals through it.
 pub fn decide_arrival<'a>(
     body: &[u8],
     field: impl Fn(&str) -> Option<&'a str> + Copy,
