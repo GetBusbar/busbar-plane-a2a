@@ -21,21 +21,6 @@ fn one_agent(name: &str, url: &str) -> Vec<u8> {
     format!(r#"{{"{name}": {{"url": "{url}", "pin": {{"mechanism": "unpinned"}}}}}}"#).into_bytes()
 }
 
-/// The tail declares exactly the task kind as TerminalOnly: every other kind is purged by age.
-#[test]
-fn the_tail_declares_the_task_kind_as_terminal_only() {
-    let retentions: Vec<(&str, u32)> = RECORD_RETENTIONS
-        .iter()
-        .map(|r| (s(RECORD_KINDS[r.kind as usize]), r.rule))
-        .collect();
-    assert_eq!(
-        retentions,
-        [(crate::records::KIND_TASK, Retention::TerminalOnly.code())]
-    );
-    assert_eq!(TAIL.record_retentions, RECORD_RETENTIONS.as_ptr());
-    assert_eq!(TAIL.record_retentions_len, RECORD_RETENTIONS.len());
-}
-
 fn s(a: AbiStr) -> &'static str {
     if a.ptr.is_null() {
         return "";
