@@ -96,7 +96,14 @@ fn answer(out: *mut ServiceOut, outcome: Outcome, value: u64, len: u64) -> RawOu
             outcome: RawOutcome::of(outcome),
             value,
             len,
-            ..ServiceOut::ZERO
+            _reserved: [0; 3],
+            items: 0,
+            needed_bytes: 0,
+            needed_items: 0,
+            error: AbiStr {
+                ptr: std::ptr::null(),
+                len: 0,
+            },
         });
     }
     RawOutcome::of(outcome)
@@ -202,7 +209,14 @@ extern "C" fn records_list(_: HostCtx, input: *const c_void, out: *mut ServiceOu
             outcome: RawOutcome::of(Outcome::Ready),
             len: at as u64,
             items: rows.len() as u64,
-            ..ServiceOut::ZERO
+            _reserved: [0; 3],
+            value: 0,
+            needed_bytes: 0,
+            needed_items: 0,
+            error: AbiStr {
+                ptr: std::ptr::null(),
+                len: 0,
+            },
         });
     }
     RawOutcome::of(Outcome::Ready)
@@ -240,9 +254,6 @@ static HOST_SLOTS: HostSlots = HostSlots {
     trust_decide: Some(decided),
     trust_state: None,
     session_emit: None,
-    auth_call: None,
-    unit_hand_in: None,
-    unit_refuse: None,
 };
 
 // ── the agent behind the connector: it serves its card to every exchange ───────────────────────
