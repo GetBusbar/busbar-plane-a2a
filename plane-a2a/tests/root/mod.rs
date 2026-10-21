@@ -8179,9 +8179,9 @@ const TASK_ANSWER: &str = r#"{"jsonrpc":"2.0","id":1,"result":{"kind":"task","id
 fn pooled(entries: &str, members: &[&str]) -> String {
     let key = surface("section");
     let section: serde_yaml::Value = serde_yaml::from_str(entries).expect("a section");
-    let pools: BTreeMap<String, busbar_kernel::failover::CandidatePoolCfg> = [(
+    let pools: BTreeMap<String, busbar_kernel::config::pools::CandidatePoolCfg> = [(
         "planner".to_string(),
-        busbar_kernel::failover::CandidatePoolCfg {
+        busbar_kernel::config::pools::CandidatePoolCfg {
             members: members.iter().map(|m| (*m).to_string()).collect(),
             repeatable: Vec::new(),
             ..Default::default()
