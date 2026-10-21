@@ -116,7 +116,7 @@ pub struct Attempt {
     pub target: String,
     /// The head fields, in order. A field this plane spells is borrowed from its constant, so an
     /// attempt's head allocates its field list and nothing per field (the allocation pin,
-    /// `tests/alloc_gate.rs`).
+    /// `src/tests/alloc_gate.rs`).
     pub fields: Vec<(&'static str, std::borrow::Cow<'static, str>)>,
 }
 
@@ -155,7 +155,7 @@ pub enum PieceAnswer {
     ToFarEnd(Vec<u8>),
     /// The request's body, bound for the far end: the caller's piece itself, unchanged. The door
     /// writes it from the piece the host lent, so relaying an envelope it changes nothing about
-    /// copies nothing (the allocation pin, `tests/alloc_gate.rs`).
+    /// copies nothing (the allocation pin, `src/tests/alloc_gate.rs`).
     ToFarEndLent,
     /// The caller's whole answer: the unit is done.
     ToCaller(RelayReply),
@@ -360,7 +360,7 @@ pub fn target_of(url: &str) -> Option<String> {
 /// whose host is a plain name or address and whose path and query hold only characters the URL
 /// standard serializes as they are, with no dot segment to resolve and no fragment. Its target is
 /// then exactly the one a parse serializes, and reading it costs the target's one allocation, not
-/// a parse's (the allocation pin, `tests/alloc_gate.rs`). Any other url answers `None`, and the
+/// a parse's (the allocation pin, `src/tests/alloc_gate.rs`). Any other url answers `None`, and the
 /// parse decides.
 fn verbatim_target(url: &str) -> Option<String> {
     let rest = url

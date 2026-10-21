@@ -4,14 +4,14 @@
 //! The envelope frame and the operator-rewrite seat: metadata edits, transform composition, and the
 //! taps-observe-the-input rule.
 //!
-//! WHY THIS IS AN INTEGRATION TEST AND THE REST OF THE SUITE IS NOT. The tap fixture below records
-//! what it saw, which needs a `RefCell`, and this crate's purity oracle
-//! (`tests/purity.rs::the_plane_holds_no_interior_state`) walks `src/` and refuses one — rightly,
+//! WHY THIS SITS IN A TEST MODULE THE PURITY WALK SKIPS. The tap fixture below records what it
+//! saw, which needs a `RefCell`, and this crate's purity oracle
+//! (`src/tests/purity.rs::the_plane_holds_no_interior_state`) walks `src/` and refuses one — rightly,
 //! because a plane that holds a cell can answer differently the second time for a reason no caller
 //! can see. A HARNESS holding a cell to record what it observed is not the plane holding state, so
 //! the battery moved out of the walk rather than the rule being weakened around it.
 
-use busbar_plane_a2a::frame::*;
+use crate::frame::*;
 use std::cell::RefCell;
 
 /// `set` appends a new key and replaces an existing one in place; `get` reads the first; `remove`

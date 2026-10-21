@@ -86,8 +86,21 @@ pub const STATEMENT: Statement = Statement {
     needs_len: door_statement::NEEDS.len(),
     secret_refs: door_statement::SECRET_REFS.as_ptr(),
     secret_refs_len: door_statement::SECRET_REFS.len(),
+    extensions: EXTENSIONS,
     ..statement(crate::PLANE_KEY, VERSION, MAX_INFLIGHT)
 };
+
+busbar_contract::statement_extensions!(
+    /// The Statement's extensions: this plugin's whole `declares` document (BUSBAR-1.6.0.md l.246).
+    /// It states the plane's breaker fact (ARCHITECT Q4): one transient failure below the trip
+    /// threshold never benches an agent's cell — the cell refuses on a TRIP and nothing less, an
+    /// upstream `Retry-After` still honoured (docs/a2a.md, "These cells refuse on a trip and nothing
+    /// less").
+    EXTENSIONS: [(
+        busbar_contract::abi::mechanism::extensions::EXT_DECLARES,
+        include_bytes!("../declares.json")
+    )]
+);
 
 /// The most units the instance keeps state for at once; past it, the oldest unit the door is done
 /// with makes room first, and only when none is held the oldest unit ([`AgentUnit::over`]).

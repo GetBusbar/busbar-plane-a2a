@@ -9,8 +9,8 @@
 //! assert the operation class and the request id it reads; the door itself is then driven op by op,
 //! linked and dropped in, by the plugin crate's `tests/both_ways.rs`.
 
-use busbar_plane_a2a::agent_arrival::{self, AgentDisposition};
-use busbar_plane_a2a::ops;
+use crate::agent_arrival::{self, AgentDisposition};
+use crate::ops;
 
 /// The rig's own vocabulary table, read out of the file the rig imports it from.
 ///
@@ -137,7 +137,7 @@ fn the_two_vocabularies_agree_slot_for_slot() {
 #[test]
 fn every_local_verb_of_the_codec_is_carried() {
     let mut seen = 0usize;
-    for method in busbar_plane_a2a::LOCAL_VERB_METHODS {
+    for method in crate::LOCAL_VERB_METHODS {
         assert!(
             decode(&request("1", method)).is_ok(),
             "the codec answers {method} and this plane does not carry it"

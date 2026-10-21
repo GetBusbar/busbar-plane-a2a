@@ -36,12 +36,13 @@
 //! span table, the introspection verb that takes no argument, and the single byte class that cannot
 //! separate what was sent from what came back.
 
-#![forbid(unsafe_code)]
+#![cfg_attr(not(test), forbid(unsafe_code))]
+#![cfg_attr(test, deny(unsafe_code))]
 #![deny(missing_docs)]
 
 /// The wire dialect's own modules, keeping the `a2a::` parent they carried in the codec crate so
 /// their in-crate paths are the ones every caller already spells.
-pub mod a2a {
+mod a2a {
     pub mod agent_card;
     pub mod canonical;
     pub mod card;
@@ -51,53 +52,51 @@ pub mod a2a {
     pub mod task;
 }
 
-/// THE PLANE'S DECLARED METADATA (`declares.json`): its manifest `declares` section, the static
-/// statement the root reads for this linked door as it reads every linked plane door's. It states the
-/// plane's breaker fact (ARCHITECT Q4): one transient failure below the trip threshold never benches
-/// an agent's cell — the cell refuses on a TRIP and nothing less, an upstream `Retry-After` still
-/// honoured (docs/a2a.md, "These cells refuse on a trip and nothing less").
-pub const DECLARES: &str = include_str!("../declares.json");
-pub mod agent_arrival;
-pub mod agent_door;
-pub mod answer_bytes;
-pub mod binding;
-pub mod card_trust;
-pub mod cards;
-pub mod claims;
-pub mod diagnostics;
-pub mod door_statement;
-pub mod events;
-pub mod facts;
-pub mod frame;
-pub mod framed;
-pub mod jsonrpc;
-pub mod local;
-pub mod meta;
-pub mod mirror;
-pub mod ops;
-pub mod proto;
-pub mod push;
-pub mod push_door;
-pub mod push_serve;
-pub mod record;
-pub mod records;
-pub mod relay;
-pub mod rest;
-pub mod served_card;
-pub mod skill;
-pub mod split_record;
-pub mod sse;
-pub mod surface;
-pub mod task_door;
-pub mod task_hop;
-pub mod task_identity;
-pub mod tasks;
-pub mod wkt;
+mod agent_arrival;
+/// THE DOOR's module: the plane door the root re-exports as [`door`].
+mod agent_door;
+mod answer_bytes;
+mod binding;
+mod card_trust;
+mod cards;
+mod claims;
+mod diagnostics;
+mod door_statement;
+mod events;
+mod facts;
+// The frame rewriter is held by its own tests (`src/tests/frame.rs`); the door does not call it.
+#[cfg(test)]
+mod frame;
+mod framed;
+mod jsonrpc;
+mod local;
+mod meta;
+mod mirror;
+mod ops;
+mod proto;
+mod push;
+mod push_door;
+mod push_serve;
+mod record;
+mod records;
+mod relay;
+mod rest;
+mod served_card;
+mod skill;
+mod split_record;
+mod sse;
+mod surface;
+mod task_door;
+mod task_hop;
+mod task_identity;
+mod tasks;
+mod wkt;
 
-pub use frame::{rewrite, Direction, Frame, Tap, Transform};
+/// THE DOOR: this plugin's one public item (BUSBAR-1.6.0.md l.3567, Crate shape).
+pub use agent_door::door;
 
 /// The task and task-event row structs at the crate root, where the task type names them.
-pub use record::{TaskEventRow, TaskRow};
+use record::{TaskEventRow, TaskRow};
 
 // ══ THE A2A WIRE VOCABULARY ══════════════════════════════════════════════════════════════════════
 //
@@ -121,12 +120,12 @@ pub use record::{TaskEventRow, TaskRow};
 /// and cannot name the engine at all, so a key spelled on the server
 /// side would be a key the plane could only copy — which is how two answers to "what is this plane
 /// called" start to differ.
-pub const PLANE_KEY: &str = "a2a";
+const PLANE_KEY: &str = "a2a";
 
 /// THE CONFIGURATION SECTION THIS PLANE OWNS, named here for the same reason [`PLANE_KEY`] is: the
 /// plane declaration states it and the contract plane's configuration schema is asserted against it,
 /// and those two are on opposite sides of the purity seam.
-pub const CONFIG_SECTION: &str = "agents";
+const CONFIG_SECTION: &str = "agents";
 
 /// THE PLANE'S MOUNT, the path prefix the A2A plane's HTTP bindings are served under. Every route
 /// this plane serves over HTTP is under it, and the host's plane dispatch matches on it at a segment
@@ -136,7 +135,7 @@ pub const CONFIG_SECTION: &str = "agents";
 /// read from BOTH sides: the engine's serve module composes agent endpoints and the protected-resource
 /// metadata path from it, and `busbar-plane-a2a` declares its path claims against it. Two spellings
 /// of a mount is a plane claiming a path nothing is served at.
-pub const MOUNT_PATH: &str = "/a2a";
+const MOUNT_PATH: &str = "/a2a";
 
 /// THE PATH PREFIX THE gRPC BINDING IS SERVED AT, and busbar did not choose it.
 ///
@@ -146,7 +145,7 @@ pub const MOUNT_PATH: &str = "/a2a";
 /// [`MOUNT_PATH`]. Written as a constant beside the mount it is not under, because "the A2A plane
 /// answers here too" is a fact the mount table has to be told or this binding's tokens go unchecked
 /// for audience.
-pub const GRPC_MOUNT_PATH: &str = "/lf.a2a.v1.A2AService";
+const GRPC_MOUNT_PATH: &str = "/lf.a2a.v1.A2AService";
 
 // ══ THE ROUTES THIS PLANE SERVES, SPELLED EXACTLY ONCE ══════════════════════════════════════════
 //
@@ -159,28 +158,28 @@ pub const GRPC_MOUNT_PATH: &str = "/lf.a2a.v1.A2AService";
 // names and a template that renamed a capture is a different route.
 
 /// `POST` — the message-send operation.
-pub const ROUTE_MESSAGE_SEND: &str = "/message:send";
+const ROUTE_MESSAGE_SEND: &str = "/message:send";
 /// `POST` — the same body, the streaming method, an SSE answer.
-pub const ROUTE_MESSAGE_STREAM: &str = "/message:stream";
+const ROUTE_MESSAGE_STREAM: &str = "/message:stream";
 /// `GET` — the task list; its filters ride the query string.
-pub const ROUTE_TASKS: &str = "/tasks";
+const ROUTE_TASKS: &str = "/tasks";
 /// `GET` one task, and `POST` the colon-suffixed verbs against it. ONE template, two methods: the
 /// router merges methods for one path, and two templates differing only in the capture NAME are one
 /// pattern registered twice, which is a startup panic rather than a route.
-pub const ROUTE_TASK: &str = "/tasks/{id}";
+const ROUTE_TASK: &str = "/tasks/{id}";
 /// `POST` a push-notification config, `GET` the list.
-pub const ROUTE_PUSH_CONFIGS: &str = "/tasks/{id}/pushNotificationConfigs";
+const ROUTE_PUSH_CONFIGS: &str = "/tasks/{id}/pushNotificationConfigs";
 /// `GET` and `DELETE` one push-notification config.
-pub const ROUTE_PUSH_CONFIG: &str = "/tasks/{id}/pushNotificationConfigs/{config_id}";
+const ROUTE_PUSH_CONFIG: &str = "/tasks/{id}/pushNotificationConfigs/{config_id}";
 /// `GET` — the extended agent card.
-pub const ROUTE_EXTENDED_AGENT_CARD: &str = "/extendedAgentCard";
+const ROUTE_EXTENDED_AGENT_CARD: &str = "/extendedAgentCard";
 /// One FRONTED agent's endpoint, derived from the agent id so a caller's endpoint is stable and
 /// says which agent it reaches.
-pub const ROUTE_AGENT: &str = "/agents/{agent_id}";
+const ROUTE_AGENT: &str = "/agents/{agent_id}";
 
 /// EVERY SUFFIX ABOVE, as one list. The plane asserts its claim for each is [`MOUNT_PATH`] joined to
 /// it, so a route added on the server side with no claim behind it is a red test.
-pub const MOUNTED_ROUTE_SUFFIXES: &[&str] = &[
+const MOUNTED_ROUTE_SUFFIXES: &[&str] = &[
     ROUTE_MESSAGE_SEND,
     ROUTE_MESSAGE_STREAM,
     ROUTE_TASKS,
@@ -193,21 +192,21 @@ pub const MOUNTED_ROUTE_SUFFIXES: &[&str] = &[
 
 /// THE PROTOCOL'S CANONICAL CARD DISCOVERY PATH, from protocol v0.3 onward. Absolute, not under
 /// [`MOUNT_PATH`]: a well-known path is a property of the ORIGIN.
-pub const WELL_KNOWN_CARD_PATH: &str = "/.well-known/agent-card.json";
+const WELL_KNOWN_CARD_PATH: &str = "/.well-known/agent-card.json";
 
 /// THE RFC 9728 PROTECTED-RESOURCE METADATA PATH for this plane — the well-known prefix with the
 /// plane's mount appended, exactly as the sibling plane composes its own.
-pub const METADATA_PATH: &str = "/.well-known/oauth-protected-resource/a2a";
+const METADATA_PATH: &str = "/.well-known/oauth-protected-resource/a2a";
 
 /// THE SUFFIX A PUSH-NOTIFICATION DELIVERY IS POSTED TO on the caller's own callback base. Not a
 /// route busbar serves — it is a route busbar CALLS — but it is spelled here beside the others
 /// because the plane claims the mounted `/a2a/push` endpoint that pairs with it.
-pub const PUSH_PATH_SUFFIX: &str = "/push";
+const PUSH_PATH_SUFFIX: &str = "/push";
 
 /// [`MOUNT_PATH`] joined to one of the [`MOUNTED_ROUTE_SUFFIXES`]. One join, called from both sides,
 /// so the served route and the plane's claim cannot be two different strings.
 #[must_use]
-pub fn mounted_route(suffix: &str) -> String {
+fn mounted_route(suffix: &str) -> String {
     format!("{MOUNT_PATH}{suffix}")
 }
 
@@ -222,7 +221,7 @@ pub fn mounted_route(suffix: &str) -> String {
 /// row), and this crate publishes it as the set it may write. It was COPIED across the seam
 /// before, with the copy checked by searching the other crate's source text — a check that could
 /// only be run from a crate that could read a sibling it does not depend on.
-pub const ERRORS: &[(i64, &str)] = &[
+const ERRORS: &[(i64, &str)] = &[
     (-32001, "TASK_NOT_FOUND"),
     (-32002, "TASK_NOT_CANCELABLE"),
     (-32003, "PUSH_NOTIFICATION_NOT_SUPPORTED"),
@@ -243,7 +242,7 @@ pub const ERRORS: &[(i64, &str)] = &[
 /// half answers and the plane does not carry arrives as an unsupported operation. The rig scraped this
 /// out of the server half's source text before, which needed a crate that cannot depend on it to read
 /// its file.
-pub const LOCAL_VERB_METHODS: &[&str] = &[
+const LOCAL_VERB_METHODS: &[&str] = &[
     "ListTasks",
     "tasks/list",
     "CreateTaskPushNotificationConfig",
@@ -260,19 +259,11 @@ pub const LOCAL_VERB_METHODS: &[&str] = &[
 
 /// The `@type` of the detail entry an A2A error carries in `error.data` — `google.rpc.ErrorInfo`,
 /// spelled as the protobuf type URL the specification names.
-pub const ERROR_INFO_TYPE: &str = "type.googleapis.com/google.rpc.ErrorInfo";
+const ERROR_INFO_TYPE: &str = "type.googleapis.com/google.rpc.ErrorInfo";
 
 /// The `ErrorInfo.domain` every A2A error is reported under. The protocol's own, not busbar's: the
 /// reason tokens above are the specification's vocabulary and the domain says so.
-pub const ERROR_INFO_DOMAIN: &str = "a2a-protocol.org";
-
-/// THE ENTRY A COMPOSITION ROOT THAT LINKED THIS PLANE READS beside its door (the root's
-/// `[package.metadata.busbar.linked-axes]` row for this crate): the plane's diagnostics catalog. The
-/// door itself is `agent_door::door`, the plane-door row's entry.
-pub mod linked {
-    /// The diagnostics axis: the `A2A_*` catalog entries this plane owns.
-    pub use crate::diagnostics::DIAGNOSTICS;
-}
+const ERROR_INFO_DOMAIN: &str = "a2a-protocol.org";
 
 use busbar_contract::ids::LaneId;
 use busbar_contract::plugin::{AbiVersion, Kind, Plugin};
@@ -286,7 +277,7 @@ use busbar_contract::plugin::{AbiVersion, Kind, Plugin};
 /// after registration can vary them, and the memory the names occupy is a fixed term rather than
 /// one that grows with traffic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Agent {
+struct Agent {
     /// The name the operator gave this agent, and the resource the scope unit judges.
     pub id: &'static str,
     /// The priced lane this agent is reached on.
@@ -302,7 +293,7 @@ pub struct Agent {
 /// The one field is a borrowed, immutable list. There is no cell here, no lock and no atomic: the
 /// purity test asserts that by walking the type, not by trusting this sentence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct A2aPlane {
+struct A2aPlane {
     agents: &'static [Agent],
 }
 
@@ -345,4 +336,19 @@ impl Plugin for A2aPlane {
     fn abi(&self) -> AbiVersion {
         AbiVersion(1)
     }
+}
+
+/// The crate's tests that reach past [`door`]: once integration tests (`tests/*.rs`), now in-crate
+/// because the crate's only public item is the door.
+#[cfg(test)]
+mod tests {
+    /// The crate's one `#[global_allocator]` and its count, every allocation gate's.
+    #[allow(unsafe_code)]
+    mod alloc_counter;
+    mod alloc_gate;
+    mod conformance;
+    mod frame;
+    mod project_session;
+    mod purity;
+    mod unit_lifetime;
 }

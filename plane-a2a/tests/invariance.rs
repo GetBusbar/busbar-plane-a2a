@@ -71,19 +71,29 @@ fn no_item_is_conditionally_compiled() {
     );
 }
 
-/// The crate carries the two lint gates the design requires of a plugin.
+/// The crate carries the two lint gates the design requires of a plugin. The shipped build forbids
+/// `unsafe`; the test build denies it, so the one allocation counter's module may allow it
+/// (ARCHITECT ruling 2026-10-21, allocation-counting gates).
 #[test]
 fn the_crate_forbids_unsafe_and_undocumented_items() {
     let lib = std::fs::read_to_string(src_dir().join("lib.rs")).expect("the root is readable");
-    assert!(lib.contains("#![forbid(unsafe_code)]"));
+    assert!(lib.contains("#![cfg_attr(not(test), forbid(unsafe_code))]"));
+    assert!(lib.contains("#![cfg_attr(test, deny(unsafe_code))]"));
     assert!(lib.contains("#![deny(missing_docs)]"));
 }
 
 /// No source file contains the word the lint gate forbids.
+///
+/// The crate's test modules (`src/tests`, `src/a2a/tests`) are exempt, as they are from the
+/// conditional-compilation scan: they are compiled only when the tests are, never shipped, and the
+/// allocation counter there is the one module the test build lets write `unsafe`.
 #[test]
 fn the_source_contains_no_unsafe_block() {
     let mut offenders = Vec::new();
     walk(&src_dir(), &mut |path, text| {
+        if path.components().any(|c| c.as_os_str() == "tests") {
+            return;
+        }
         for (n, line) in text.lines().enumerate() {
             let t = line.trim_start();
             if t.starts_with("//") {

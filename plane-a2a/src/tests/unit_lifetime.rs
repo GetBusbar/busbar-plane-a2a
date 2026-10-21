@@ -19,13 +19,13 @@
 
 #![allow(unsafe_code)]
 
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::cell::Cell;
 use std::collections::HashMap;
 use std::os::raw::c_void;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
+use crate::agent_door::{self, MAX_UNITS};
+use crate::door_statement::{self, CLASS_BYTES_INDEX, CLASS_FEE_INDEX, DIALECT_DOCUMENT};
 use busbar_contract::abi::host::conn::connector::{
     ConnectorSlots, ReplyIn, ReplyPiece, RequestIn, RequestPiece, StreamIn, REPLY_BODY, REPLY_END,
     REPLY_HEAD, SERVICES as CONN_SERVICES,
@@ -48,47 +48,10 @@ use busbar_contract::abi::plane::{
     RefusalOut, ServeIn, ServeOut, UnitCount, EMIT_DONE, FROM_CALLER, FROM_FAR_END, FROM_KERNEL,
     PIECE_HAS_STATUS, PIECE_LAST, PIECE_REFUSED, REFUSAL_KERNEL,
 };
-use busbar_plane_a2a::agent_door::{self, MAX_UNITS};
-use busbar_plane_a2a::door_statement::{
-    self, CLASS_BYTES_INDEX, CLASS_FEE_INDEX, DIALECT_DOCUMENT,
-};
 
-// ── the allocation count ────────────────────────────────────────────────────────────────────────
+// ── the allocation count: the crate's one counter ([`super::alloc_counter`]) ──────────────────────
 
-thread_local! {
-    /// Allocations made by THIS thread since the counter was last read.
-    static ALLOCS: Cell<u64> = const { Cell::new(0) };
-}
-
-/// The system allocator, counting.
-struct Counting;
-
-// SAFETY: every call is forwarded verbatim to the system allocator; the counter is a thread-local
-// `Cell` of a plain integer, touched only on the allocating thread, and never reads or writes the
-// memory being handed out.
-unsafe impl GlobalAlloc for Counting {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let _ = ALLOCS.try_with(|c| c.set(c.get() + 1));
-        unsafe { System.alloc(layout) }
-    }
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        unsafe { System.dealloc(ptr, layout) }
-    }
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        let _ = ALLOCS.try_with(|c| c.set(c.get() + 1));
-        unsafe { System.realloc(ptr, layout, new_size) }
-    }
-}
-
-#[global_allocator]
-static ALLOC: Counting = Counting;
-
-/// How many allocations `f` made on this thread, and what it returned.
-fn allocations_of<R>(f: impl FnOnce() -> R) -> (u64, R) {
-    let before = ALLOCS.with(Cell::get);
-    let r = f();
-    (ALLOCS.with(Cell::get) - before, r)
-}
+use super::alloc_counter::allocations_of;
 
 // ── the host's services ─────────────────────────────────────────────────────────────────────────
 
@@ -695,8 +658,8 @@ impl Door {
 
     /// Busbar's own card read, on the open line.
     fn arrive_own_card(&self, unit: u64) {
-        let route = ("GET", busbar_plane_a2a::WELL_KNOWN_CARD_PATH);
-        let (outcome, _) = self.arrive(unit, route, busbar_plane_a2a::WELL_KNOWN_CARD_PATH, b"");
+        let route = ("GET", crate::WELL_KNOWN_CARD_PATH);
+        let (outcome, _) = self.arrive(unit, route, crate::WELL_KNOWN_CARD_PATH, b"");
         assert_eq!(outcome, Outcome::Ready, "busbar's own card read arrives");
     }
 
@@ -837,7 +800,7 @@ impl Door {
             std::ptr::from_mut(&mut o).cast(),
         );
         // The kernel writes the answer's record writes to the store, in order.
-        let held = busbar_plane_a2a::records::HELD_KINDS;
+        let held = crate::records::HELD_KINDS;
         let mut status = o.status;
         for w in &records[..(o.records_written as usize).min(records.len())] {
             let at = |s: busbar_contract::abi::mechanism::call::Span| {
