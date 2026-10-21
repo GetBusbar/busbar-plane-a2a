@@ -210,12 +210,13 @@ const RECORD_KINDS: &[AbiStr] = &[
     abi_str(crate::records::HELD_KINDS[1]),
     abi_str(crate::records::HELD_KINDS[2]),
     abi_str(crate::records::HELD_KINDS[3]),
+    abi_str(crate::records::HELD_KINDS[4]),
 ];
 
 /// The retention rule of each held kind that is not purged by age: a task row is kept while it is
 /// active (working or interrupted), so a purge drops only the terminal ones. `task_event` rows are
 /// always written active (they are the task's chain), so they list no rule and go by age, as do
-/// the push configs and cards.
+/// the push configs, the cards and their approvals.
 const RECORD_RETENTIONS: &[RecordRetention] = &[record_retention(0, Retention::TerminalOnly)];
 
 /// THE TASK CHAIN (ARCHITECT ruling B1, 2026-10-07; `BUSBAR-1.6.0.md` Part 3, the chain section, and THE

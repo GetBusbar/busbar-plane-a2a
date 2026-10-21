@@ -69,6 +69,7 @@ fn known_bytes(a: AbiStr) -> &'static [u8] {
         crate::records::KIND_TASK_EVENT,
         crate::records::KIND_PUSH_CONFIG,
         crate::records::KIND_CARD,
+        crate::records::KIND_CARD_APPROVAL,
     ]
     .into_iter()
     .find(|c| c.as_ptr() == a.ptr && c.len() == a.len)
