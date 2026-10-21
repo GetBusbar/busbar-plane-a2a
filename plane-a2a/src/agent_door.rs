@@ -546,6 +546,9 @@ pub struct A2aDoor {
     pub(crate) cards: crate::cards::Cards,
     /// The held cards were warmed from the `card` host records after `open` ([`warm_cards`]).
     cards_warmed: Keyed<(), bool>,
+    /// A `tick`'s warm of the held cards pended on the driver ticket: the `drive` its wake runs
+    /// carries it on, on the same handles, before anything else the drive does.
+    warm_driving: Keyed<(), bool>,
     /// The push notifications waiting for delivery, and the webhook credentials they present.
     pub(crate) deliveries: crate::push::Deliveries,
     /// The delivery attempt in flight across a PENDING `tick`, which `drive` carries on.
@@ -647,23 +650,41 @@ fn warm_cards(plane: &A2aDoor, ticket: Ticket, issued: u32) -> (Poll<()>, u32) {
 }
 
 /// The `card` host record of `agent`'s verified `card`: keyed by the agent's id under the
-/// operator's scope (no caller prefix).
-fn card_record(agent: &str, card: &serde_json::Value) -> Write {
-    Write {
-        kind: crate::records::KIND_CARD,
-        key: agent.to_string(),
-        value: serde_json::to_vec(card).unwrap_or_default(),
-    }
+/// operator's scope (no caller prefix). `None` when the card is longer than a host record holds
+/// ([`kept_record`]).
+fn card_record(agent: &str, card: &serde_json::Value) -> Option<Write> {
+    kept_record(
+        crate::records::KIND_CARD,
+        agent,
+        serde_json::to_vec(card).ok()?,
+    )
 }
 
 /// The `card_approval` host record of the skills (`id -> digest`) of the card the operator approved
-/// for `agent`: keyed like its `card` record.
-fn approval_record(agent: &str, approved: &std::collections::BTreeMap<String, String>) -> Write {
-    Write {
-        kind: crate::records::KIND_CARD_APPROVAL,
+/// for `agent`: keyed like its `card` record. `None` when the list is longer than a host record
+/// holds ([`kept_record`]).
+fn approval_record(
+    agent: &str,
+    approved: &std::collections::BTreeMap<String, String>,
+) -> Option<Write> {
+    kept_record(
+        crate::records::KIND_CARD_APPROVAL,
+        agent,
+        serde_json::to_vec(approved).ok()?,
+    )
+}
+
+/// A host record of `kind` under `agent` holding `value`, when the host's store can keep it: a
+/// record is at most [`busbar_contract::bounded::MAX_RECORD_BYTES`] (busbar dev's store refuses a
+/// longer one, and the kernel answers the whole verb `500` for a write it cannot make). A card or
+/// an approval past that is held in plane memory only, as it was before these records existed: an
+/// instance opened again looks at that agent afresh.
+fn kept_record(kind: &'static str, agent: &str, value: Vec<u8>) -> Option<Write> {
+    (value.len() <= busbar_contract::bounded::MAX_RECORD_BYTES).then(|| Write {
+        kind,
         key: agent.to_string(),
-        value: serde_json::to_vec(approved).unwrap_or_default(),
-    }
+        value,
+    })
 }
 
 /// A trust verb's whole answer: `status`, the head `fields`, `body`, the `AUDIT_*` row, and the
@@ -903,6 +924,7 @@ slot!(
             backends: BackendIds::default(),
             cards: crate::cards::Cards::new(),
             cards_warmed: Keyed::new(),
+            warm_driving: Keyed::new(),
             deliveries: crate::push::Deliveries::new(),
             attempting: crate::push_door::Attempting::default(),
             tokens: crate::push::Tokens::new(),
@@ -1027,19 +1049,26 @@ slot!(
             out.set(|o| &o.next_tick_ns, 0);
             return Outcome::Ready;
         };
+        // THE DRIVER TICKET'S WAKE IS ARMED ON EVERY TICK, the first included: a notification
+        // queued while the cards are still warming wakes the driver ticket, never waits for a
+        // scheduled tick.
+        crate::push_door::arm(plane, &instance);
         // THE FIRST TICK AFTER `open` warms the held cards from the `card` host records, on a
-        // tick of its own (its host calls are this op's only ones); a listing still in flight is
-        // tried again a second later.
+        // tick of its own (its host calls are this op's only ones). A listing in flight ends the
+        // tick PENDING and goes on through `drive` (`abi::mechanism::lifecycle`: a tick's PENDING
+        // answer ends it, and what pended inside it goes on through `drive`; the next tick's start
+        // forgets the cycle's answers, so a warm left in flight behind a READY tick could never
+        // land, and its listing's every completion would tick again). A warm that landed asks for
+        // the next tick at once, for the deliveries.
         if !plane.cards_warmed.get(&()).unwrap_or(false) {
-            let now = input.get().now_ns;
-            let next = match warm_cards(plane, instance.ticket(), 0).0 {
-                Poll::Ready(()) => {
-                    plane.cards_warmed.insert((), true);
-                    now
-                }
-                Poll::Pending => now.saturating_add(1_000_000_000),
-            };
-            out.set(|o| &o.next_tick_ns, next.max(1));
+            if warm_cards(plane, instance.ticket(), 0).0.is_pending() {
+                plane.warm_driving.insert((), true);
+                out.set(|o| &o.next_tick_ns, 0);
+                return Outcome::Pending;
+            }
+            plane.cards_warmed.insert((), true);
+            plane.warm_driving.insert((), false);
+            out.set(|o| &o.next_tick_ns, input.get().now_ns.max(1));
             return Outcome::Ready;
         }
         let outcome = crate::push_door::tick_deliveries(plane, &instance, input.get().now_ns);
@@ -1055,10 +1084,23 @@ slot!(
     /// `drive`: no session has unsolicited output; a push delivery the last `tick` left PENDING
     /// goes on ([`crate::push_door::drive`]).
     Drive, PlaneDriveIn, PlaneDriveOut, |instance, _, _| {
-        match instance.get() {
-            Some(plane) => crate::push_door::drive(plane, &instance),
-            None => Outcome::Ready,
+        let Some(plane) = instance.get() else {
+            return Outcome::Ready;
+        };
+        // THE WARM A TICK LEFT PENDING goes on here, on the tick's handles, until it lands (or a
+        // unit's own warm landed it first); the drive then answers READY, and the tick that
+        // follows attempts the deliveries.
+        if plane.warm_driving.get(&()).unwrap_or(false) {
+            if !plane.cards_warmed.get(&()).unwrap_or(false) {
+                if warm_cards(plane, instance.ticket(), 0).0.is_pending() {
+                    return Outcome::Pending;
+                }
+                plane.cards_warmed.insert((), true);
+            }
+            plane.warm_driving.insert((), false);
+            return Outcome::Ready;
         }
+        crate::push_door::drive(plane, &instance)
     }
 );
 
@@ -4006,7 +4048,7 @@ slot!(
         let writes: Vec<Write> = looked
             .card
             .as_ref()
-            .map(|card| card_record(&name, card))
+            .and_then(|card| card_record(&name, card))
             .into_iter()
             .collect();
         let Some(claimed) = claimed else {
@@ -4053,7 +4095,7 @@ slot!(
             standing
                 .approved
                 .as_ref()
-                .map(|approved| approval_record(&name, approved)),
+                .and_then(|approved| approval_record(&name, approved)),
         );
         let view = crate::card_trust::registration_view(
             &name,
