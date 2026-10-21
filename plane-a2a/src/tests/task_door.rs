@@ -1,23 +1,23 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! The door's half of the task verbs: the once-a-second sweep claim and the record kind indices.
+//! The door's half of the task verbs: the restore claim, the records reach and the record kind
+//! indices.
 
 use super::*;
 
-/// The first caller of each second runs the sweep, and no other caller of that second does; the
-/// instance's very first caller runs its restore too, and no other one does.
+/// The instance's very first local verb runs its restore, and no local verb after it does, whatever
+/// second it arrives in. A local verb claims nothing else: the retention sweep runs from a submit, never
+/// from a read or a timer, so no second's first caller sweeps.
 #[test]
-fn the_sweep_runs_once_a_second() {
-    let swept = Keyed::new();
-    assert_eq!(claim_sweep(&swept, 10), (true, true), "the first restores");
-    assert_eq!(claim_sweep(&swept, 10), (false, false));
-    assert_eq!(
-        claim_sweep(&swept, 9),
-        (false, false),
-        "time read late never sweeps again"
+fn only_the_first_local_verb_restores_and_none_sweeps() {
+    let restored = Keyed::new();
+    assert!(claim_restore(&restored, 10), "the first restores");
+    assert!(!claim_restore(&restored, 10));
+    assert!(
+        !claim_restore(&restored, 11),
+        "the next second restores nothing"
     );
-    assert_eq!(claim_sweep(&swept, 11), (false, true));
 }
 
 /// A record write names its kind by its index in the tail's record kinds.

@@ -217,3 +217,40 @@ fn busbars_callback_replaces_the_public_urls_path_as_every_published_url_does() 
         crate::a2a::public::absolute("https://gw.example/busbar", "/a2a/push").as_deref()
     );
 }
+
+/// A READ FINDS BUSBAR'S REGISTRATION BY ITS WHOLE `id`, never by a substring: `busbar-t10` is not
+/// `busbar-t1`, and a member that only mentions the id (a url) is no config. The v0.3 nesting and
+/// both listing shapes are read the same way. RED against a substring test of the whole result.
+#[test]
+fn a_read_names_busbars_config_by_its_whole_id() {
+    let read = |result: Value| {
+        serde_json::json!({ "jsonrpc": "2.0", "id": ORIGINATED_RPC_ID, "result": result })
+            .to_string()
+    };
+    let drifted_on = |result: Value| {
+        let body = read(result);
+        drifted(Binding::JsonRpc, Some((200, body.as_bytes())), "busbar-t1")
+    };
+    assert!(
+        drifted_on(serde_json::json!({ "id": "busbar-t10", "taskId": "t10" })),
+        "another task's config is not busbar's"
+    );
+    assert!(
+        drifted_on(serde_json::json!({ "configs": [ { "id": "busbar-t10" } ] })),
+        "a listing of another task's config does not hold busbar's"
+    );
+    assert!(
+        drifted_on(serde_json::json!({ "id": "theirs", "url": "https://x.test/busbar-t1" })),
+        "a member that mentions the id is not the config"
+    );
+    assert!(!drifted_on(serde_json::json!({ "id": "busbar-t1" })));
+    assert!(!drifted_on(
+        serde_json::json!({ "configs": [ { "id": "other" }, { "id": "busbar-t1" } ] })
+    ));
+    assert!(!drifted_on(serde_json::json!([
+        { "taskId": "t1", "pushNotificationConfig": { "id": "busbar-t1" } }
+    ])));
+    assert!(!drifted_on(
+        serde_json::json!({ "taskId": "t1", "pushNotificationConfig": { "id": "busbar-t1" } })
+    ));
+}

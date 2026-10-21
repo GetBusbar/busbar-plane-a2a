@@ -229,8 +229,59 @@ fn json_str(s: &str) -> Vec<u8> {
     serde_json::to_vec(s).unwrap_or_default()
 }
 
-/// A message's identity: its `taskId` and `contextId`, where it names them, are busbar's.
-fn message_identity(b: &[u8], msg: &Range<usize>, task_id: &str, context_id: &str, e: &mut Edits) {
+/// The span of every item of the array spanning `span` (`b[span.start]` is `[`), in byte order.
+fn array_items(b: &[u8], span: &Range<usize>) -> Option<Vec<Range<usize>>> {
+    if b.get(span.start) != Some(&b'[') {
+        return None;
+    }
+    let mut out = Vec::new();
+    let mut j = past_blank(b, span.start + 1);
+    while j < span.end - 1 {
+        let item = value_at(b, j)?;
+        j = past_blank(b, item.end);
+        out.push(item);
+        if b.get(j) == Some(&b',') {
+            j = past_blank(b, j + 1);
+        }
+    }
+    Some(out)
+}
+
+/// The string the JSON value at `span` spells, when it is one.
+fn string_at(b: &[u8], span: &Range<usize>) -> Option<String> {
+    if b.get(span.start) != Some(&b'"') {
+        return None;
+    }
+    serde_json::from_slice(&b[span.clone()]).ok()
+}
+
+/// Every string of the array spanning `list` that `to` answers for, replaced by its answer.
+fn translate_list(
+    b: &[u8],
+    list: &Range<usize>,
+    to: &dyn Fn(&str) -> Option<String>,
+    e: &mut Edits,
+) {
+    for item in array_items(b, list).unwrap_or_default() {
+        if let Some(id) = string_at(b, &item).and_then(|s| to(&s)) {
+            e.set(item, json_str(&id));
+        }
+    }
+}
+
+/// The members a message names the tasks it refers to under (A2A `Message.reference_task_ids`,
+/// a2a.proto:276, in either spelling).
+pub const REFERENCE_MEMBERS: [&str; 2] = ["referenceTaskIds", "reference_task_ids"];
+
+/// A message's identity: its `taskId` and `contextId`, where it names them, are busbar's, and every
+/// task it refers to that `refer` knows is named by busbar's id.
+fn message_identity(
+    b: &[u8],
+    msg: &Range<usize>,
+    (task_id, context_id): (&str, &str),
+    refer: &dyn Fn(&str) -> Option<String>,
+    e: &mut Edits,
+) {
     let Some(ms) = object_members(b, msg) else {
         return;
     };
@@ -238,6 +289,7 @@ fn message_identity(b: &[u8], msg: &Range<usize>, task_id: &str, context_id: &st
         match m.key.as_str() {
             "taskId" => e.set(m.value.clone(), json_str(task_id)),
             "contextId" => e.set(m.value.clone(), json_str(context_id)),
+            key if REFERENCE_MEMBERS.contains(&key) => translate_list(b, &m.value, refer, e),
             _ => {}
         }
     }
@@ -245,14 +297,18 @@ fn message_identity(b: &[u8], msg: &Range<usize>, task_id: &str, context_id: &st
 
 /// THE BYTE TWIN OF `task_identity::rewrite_identity`: the far end's `result` bytes with busbar's
 /// task and context ids (and the matched skill) spliced in, every other byte as the far end wrote
-/// it. `None` when `result` is not an object (the value path then answers).
+/// it. The task's identity member is the one its wrapper names (`wrappers`), or, unwrapped, the one
+/// its `kind` names (`kinds`), else `id`. A task a message refers to is named by busbar's id where
+/// the far end's is this task's own or one of `references` (each the far end's id, then busbar's).
+/// `None` when `result` is not an object.
 #[must_use]
 pub fn rewrite_identity(
     result: &[u8],
-    wrappers: &[(&str, &str)],
+    (wrappers, kinds): (&[(&str, &str)], &[(&str, &str)]),
     task_id: &str,
     context_id: &str,
     skill: Option<(&str, &str)>,
+    references: &[(String, String)],
 ) -> Option<Vec<u8>> {
     let b = result;
     let top = document(b)?;
@@ -262,35 +318,58 @@ pub fn rewrite_identity(
             .filter(|m| b[m.value.start] == b'{')
             .map(|m| (*w, *id, m.value.clone()))
     });
+    let kind = last(&top_ms, "kind").and_then(|m| string_at(b, &m.value));
     let (wrapper, id_member, payload) = match wrapped {
         Some((w, id, span)) => (Some(w), id, span),
-        None => (None, "id", top),
+        None => {
+            let by_kind = kinds
+                .iter()
+                .find(|(k, _)| Some(*k) == kind.as_deref())
+                .map_or("id", |(_, id)| *id);
+            (None, by_kind, top)
+        }
+    };
+    let message = match wrapper {
+        Some(w) => w == "message",
+        None => kind.as_deref() == Some("message"),
     };
     let ms = object_members(b, &payload)?;
+    // The far end's own id for this task, read before busbar's replaces it.
+    let own = last(&ms, id_member).and_then(|m| string_at(b, &m.value));
+    let refer = |far: &str| {
+        if own.as_deref() == Some(far) {
+            return Some(task_id.to_string());
+        }
+        references
+            .iter()
+            .find(|(theirs, _)| theirs == far)
+            .map(|(_, ours)| ours.clone())
+    };
     let mut e = Edits::default();
-    if id_member != "taskId" || wrapper != Some("message") || last(&ms, "taskId").is_some() {
+    // A standalone message names no task: `taskId` is added only to one that belongs to a task.
+    if !message || last(&ms, "taskId").is_some() {
         e.put(b, &payload, &ms, id_member, json_str(task_id));
     }
     e.put(b, &payload, &ms, "contextId", json_str(context_id));
+    for m in ms
+        .iter()
+        .filter(|m| REFERENCE_MEMBERS.contains(&m.key.as_str()))
+    {
+        translate_list(b, &m.value, &refer, &mut e);
+    }
     if let Some(status) = last(&ms, "status").filter(|m| b[m.value.start] == b'{') {
         if let Some(msg) = object_members(b, &status.value)
             .as_deref()
             .and_then(|s| last(s, "message"))
             .filter(|m| b[m.value.start] == b'{')
         {
-            message_identity(b, &msg.value, task_id, context_id, &mut e);
+            message_identity(b, &msg.value, (task_id, context_id), &refer, &mut e);
         }
     }
     if let Some(history) = last(&ms, "history").filter(|m| b[m.value.start] == b'[') {
-        let mut j = past_blank(b, history.value.start + 1);
-        while j < history.value.end - 1 {
-            let item = value_at(b, j)?;
+        for item in array_items(b, &history.value)? {
             if b[item.start] == b'{' {
-                message_identity(b, &item, task_id, context_id, &mut e);
-            }
-            j = past_blank(b, item.end);
-            if b.get(j) == Some(&b',') {
-                j = past_blank(b, j + 1);
+                message_identity(b, &item, (task_id, context_id), &refer, &mut e);
             }
         }
     }
@@ -316,6 +395,47 @@ pub fn rewrite_identity(
             }
             None => e.append(b, &payload, ms.is_empty(), "metadata", &entry()),
         }
+    }
+    Some(e.apply(b))
+}
+
+/// THE CALLER'S REQUEST `envelope` WITH THE TASK IDS `to` ANSWERS FOR SPLICED IN, every other byte
+/// as the caller wrote it: each string member of `params` named in `top`, each of its `message`'s
+/// named in `message`, and each id in the message's [`REFERENCE_MEMBERS`] lists. `None` when
+/// nothing was translated (or `envelope` is not an object whose `params` is one).
+#[must_use]
+pub fn translate_ids(
+    envelope: &[u8],
+    top: &[&str],
+    message: &[&str],
+    to: &dyn Fn(&str) -> Option<String>,
+) -> Option<Vec<u8>> {
+    let b = envelope;
+    let doc = document(b)?;
+    let params = last(&object_members(b, &doc)?, "params")?.value.clone();
+    let params_ms = object_members(b, &params)?;
+    let mut e = Edits::default();
+    let strings = |ms: &[ObjectMember], keys: &[&str], e: &mut Edits| {
+        for m in ms.iter().filter(|m| keys.contains(&m.key.as_str())) {
+            if let Some(id) = string_at(b, &m.value).and_then(|s| to(&s)) {
+                e.set(m.value.clone(), json_str(&id));
+            }
+        }
+    };
+    strings(params_ms.as_slice(), top, &mut e);
+    if let Some(msg) = last(&params_ms, "message").filter(|m| b[m.value.start] == b'{') {
+        if let Some(msg_ms) = object_members(b, &msg.value) {
+            strings(msg_ms.as_slice(), message, &mut e);
+            for m in msg_ms
+                .iter()
+                .filter(|m| REFERENCE_MEMBERS.contains(&m.key.as_str()))
+            {
+                translate_list(b, &m.value, to, &mut e);
+            }
+        }
+    }
+    if e.replace.is_empty() {
+        return None;
     }
     Some(e.apply(b))
 }

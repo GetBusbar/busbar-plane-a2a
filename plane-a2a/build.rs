@@ -110,7 +110,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut generated = std::fs::read_to_string(&serde_path)?;
     // COUNTED, so a change in pbjson's output shape fails the build instead of silently matching
     // nothing (a null map or list would then be refused): every map field's line is patched, and
-    // every listed repeated member is patched at least once.
+    // each listed repeated member is patched exactly as many times as the vendored proto declares a
+    // repeated field of that name (`extensions` is three fields, `parts` two), so a generator
+    // change that alters the line of one of them fails too.
+    let proto = std::fs::read_to_string(PROTO_FILES[0])?;
     let maps = generated.matches(NULL_MAP.0).count();
     if maps != NULL_MAP_FIELDS {
         return Err(format!(
@@ -124,13 +127,34 @@ fn main() -> Result<(), Box<dyn Error>> {
         let patch =
             format!("{member}__ = Some(map_.next_value::<Option<_>>()?.unwrap_or_default());");
         let (patched, hits) = replace_whole(&generated, &needle, &patch);
-        if hits == 0 {
-            return Err(format!("the null-repeated patch for `{member}` matched nothing").into());
+        let declared = repeated_fields(&proto, member);
+        if declared == 0 || hits != declared {
+            return Err(format!(
+                "the null-repeated patch for `{member}` matched {hits} field(s), not the vendored \
+                 proto's {declared}"
+            )
+            .into());
         }
         generated = patched;
     }
     std::fs::write(serde_path, generated)?;
     Ok(())
+}
+
+/// How many fields named `name` the proto source `proto` declares `repeated`: every line
+/// `repeated <type> <name> = <tag>;`.
+fn repeated_fields(proto: &str, name: &str) -> usize {
+    proto
+        .lines()
+        .filter(|line| {
+            let mut words = line.split_whitespace();
+            words.next() == Some("repeated")
+                && words.next().is_some()
+                && words
+                    .next()
+                    .is_some_and(|field| field.split('=').next() == Some(name))
+        })
+        .count()
 }
 
 /// `text` with every `needle` that starts a whole identifier replaced by `with`, and how many were:

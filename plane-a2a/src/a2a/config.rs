@@ -276,9 +276,10 @@ pub struct AgentDefCfg {
     /// within its gift.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recovery_backoff: Option<String>,
-    /// The A2A protocol version this registration is PINNED to. Absent ⇒ the release default.
-    /// Pinned per registration because the well-known card path moved between versions and a
-    /// registration that follows whatever the upstream now claims has no pin at all.
+    /// The A2A protocol version an operator states for this registration. ACCEPTED AND READ BY
+    /// NOTHING: the key is the predev grammar's, so a config that states it still parses, but the
+    /// plane pins nothing on it: the card is fetched at both well-known paths, canonical first
+    /// ([`crate::card_trust`]), whatever version it names.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub protocol_version: Option<String>,
     /// MAY THIS AGENT LIVE ON A PRIVATE OR LOOPBACK ADDRESS, AND BE REACHED OVER PLAINTEXT.
@@ -311,9 +312,9 @@ pub struct AgentDefCfg {
     /// plus its lease policy. Never the secret, never the caller's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upstream_credential: Option<super::creds::OutboundCredential>,
-    /// WHICH FRONTED AGENTS MAY DELEGATE HERE. Egress policy, over the same `ScopeRef` kind as
-    /// inbound authZ. Absent or empty ⇒ NONE may: the fail-closed floor, because reading an empty
-    /// list as "everyone" is a registration granting egress nobody wrote down.
+    /// WHICH FRONTED AGENTS MAY DELEGATE HERE, as the predev grammar spelled the egress policy.
+    /// Judged for shape only ([`validate_agent`] refuses an empty name) and READ BY NOTHING: the
+    /// plane has no delegating-from path, so no request is ever judged against this list.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub egress_scopes: Vec<String>,
     /// Hooks attached to THIS agent, by bare name from the top-level `hooks:` map. ADDS to the
@@ -390,6 +391,20 @@ impl<'de> Deserialize<'de> for AgentsCfg {
     }
 }
 
+/// `url` as a refusal may repeat it: any userinfo in its authority (everything before the last `@`
+/// ahead of the path) replaced by `***`, so no refusal repeats a credential a URL carried.
+#[must_use]
+pub fn without_userinfo(url: &str) -> std::borrow::Cow<'_, str> {
+    let start = url.find("://").map_or(0, |i| i + 3);
+    let authority_end = url[start..]
+        .find(['/', '?', '#'])
+        .map_or(url.len(), |i| start + i);
+    match url[start..authority_end].rfind('@') {
+        Some(at) => std::borrow::Cow::Owned(format!("{}***{}", &url[..start], &url[start + at..])),
+        None => std::borrow::Cow::Borrowed(url),
+    }
+}
+
 /// THE VALUE-LEVEL RULES for one `agents:` entry.
 ///
 /// Split out as a free function on purpose: `serde` types check SHAPE, and every rule below is
@@ -404,13 +419,25 @@ pub fn validate_agent(name: &str, def: &AgentDefCfg) -> Result<(), String> {
     if def.url.trim().is_empty() {
         return Err(format!("{at}: `url:` must name the agent's A2A endpoint"));
     }
-    // Scheme is checked here rather than at fetch time so the failure lands on the operator who
-    // wrote it, at boot, rather than on a delegation six hours later.
-    let scheme_ok = def.url.starts_with("https://") || def.url.starts_with("http://");
+    // The URL is PARSED here rather than at fetch time so the failure lands on the operator who
+    // wrote it, at boot, rather than on a delegation hours after: an `http://` or `https://`
+    // URL with a host, and no userinfo, which is refused without being repeated (a password in a
+    // URL is a credential, and a refusal is logged).
+    let parsed = busbar_contract::net::parse_url(&def.url);
+    let scheme_ok = (def.url.starts_with("https://") || def.url.starts_with("http://"))
+        && parsed
+            .as_ref()
+            .is_ok_and(|p| p.scheme == "https" || p.scheme == "http");
     if !scheme_ok {
         return Err(format!(
             "{at}: `url:` must be an http:// or https:// endpoint, got `{}`",
-            def.url
+            without_userinfo(&def.url)
+        ));
+    }
+    if parsed.as_ref().is_ok_and(|p| p.userinfo) {
+        return Err(format!(
+            "{at}: `url:` carries a userinfo (`user@` or `user:password@`) in its authority; name \
+             the agent's credential under `upstream_credential:`, never in its URL"
         ));
     }
 
@@ -432,7 +459,7 @@ pub fn validate_agent(name: &str, def: &AgentDefCfg) -> Result<(), String> {
     }
     // A client certificate is a TLS-handshake object. Over `http://` there is no handshake to put it
     // in, so an operator who wrote one there is being protected by nothing while reading the config
-    // as though they were — the same failure the `unpinned`-with-a-key rule above refuses.
+    // as though they were.
     if def.client_identity.is_some() && def.url.starts_with("http://") {
         return Err(format!(
             "{at}: `client_identity:` is a TLS client certificate and `url:` is `http://`, which \
