@@ -3093,7 +3093,10 @@ slot!(
                 .flatten()
                 .map(|agent| agent_arrival::not_granted_sentence(&door_statement::agent_resource(&agent)));
             let text = ungranted.as_deref().unwrap_or(text);
-            agent_arrival::render(dialect, &agent_arrival::kernel_refusal(given.status, text), false)
+            // The code is the reason's CLASS's (`class_code`): a node fault reads as the internal
+            // error, every other class as the engine's admission refusal.
+            let refusal = agent_arrival::kernel_refusal_of(given.reason, given.status, text);
+            agent_arrival::render(dialect, &refusal, false)
         };
         // ON THE gRPC LINE the rendered envelope is the status the call ends with, as the engine's
         // bridge read its ingress's envelope: the status in the line's own numbering, its message
