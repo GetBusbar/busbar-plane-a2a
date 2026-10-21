@@ -41,6 +41,9 @@ const SWEEP_BUDGET: usize = 32;
 pub struct Pass {
     /// The host services its finished pieces made: the next piece's handles count on from here.
     pub(crate) issued: u32,
+    /// The held cards' warm runs on this unit's handles and has not landed: the next entry
+    /// replays it from `issued`, on the same handles, before anything else the piece does.
+    pub(crate) warming: bool,
     /// The piece in flight's stamp, kept across its re-entries.
     entry: Option<Entry>,
     /// The reply bytes the last window did not hold.
