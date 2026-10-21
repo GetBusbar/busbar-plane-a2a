@@ -1093,3 +1093,120 @@ fn a_refused_hops_journal_line_names_the_backend_and_the_callers_answer_does_not
         );
     }
 }
+
+/// P-ITEM: UNARY/EMPTY TERMINALITY (spec DONE item 2, "All P-item behaviours match 1.5.5"; the
+/// drive log's P3, commit 470351a480). A unary answer closes its unit exactly once, an empty
+/// envelope is never an answer, and a streamed answer ends only at its last frame.
+///
+/// The old `!has("/result/kind")` predicate had this money boundary backwards: a real Task or
+/// Message answer carries a `kind`, so it never ended its unit, while an empty envelope carried none
+/// and closed as `Complete` for nothing. Here the unary hop ends on its far end's one answer, a
+/// `result` (relayed, the task's report settled, the destination read healthy) or an `error` (the
+/// destination answering, refused to the caller), exactly once; an envelope carrying neither is
+/// never relayed, never settled as the task's answer and never read as the agent answering. A
+/// streamed answer's events, a whole initial Task among them, are frames, not endings: the answer
+/// ends once, on its last frame. The 1.5.5 behaviour this plane matches is its one surface's (the
+/// llm surface; owner correction 2026-09-28): a delivered answer is billed once, at its end, and a
+/// response the caller cannot use is not billed as a delivered one (v1.5.5
+/// `crates/busbar/src/proxy/response_body.rs:415-440`, the token-billing gate on an aborted
+/// stream; `crates/busbar/src/proxy/usage.rs:57-103`, the one accrual site per delivered response).
+#[test]
+fn p_item_unary_empty_terminality_an_answer_closes_once_an_empty_envelope_never_and_a_stream_at_its_last_frame(
+) {
+    // A unary Task answer: relayed, its report settled, read healthy; once.
+    let task_answer = br#"{"jsonrpc":"2.0","id":7,"result":{"kind":"task","id":"far-1","status":{"state":"completed"}}}"#;
+    let mut r = task_sent(false);
+    let reply = answered(&mut r, 200, task_answer);
+    assert_eq!(reply.status, 200);
+    assert_eq!(body(&reply)["result"]["kind"], "task");
+    assert!(r.answered(), "a unary Task answer closes its unit");
+    assert_eq!(r.take_reading(), Some(Reading::Healthy));
+    assert_eq!(
+        r.take_settled(),
+        vec![TaskSettled::Reported {
+            state: TaskState::Completed,
+            backend_id: Some("far-1".into()),
+        }]
+    );
+    assert_eq!(
+        r.on_piece(far(None, task_answer, true)),
+        PieceAnswer::Nothing,
+        "and closes it exactly once"
+    );
+    assert_eq!(r.take_settled(), Vec::new(), "nothing settles twice");
+
+    // A unary Message answer, likewise.
+    let message = br#"{"jsonrpc":"2.0","id":7,"result":{"kind":"message","messageId":"m-1"}}"#;
+    let mut r = sent();
+    let reply = answered(&mut r, 200, message);
+    assert_eq!(body(&reply)["result"]["kind"], "message");
+    assert!(r.answered(), "a unary Message answer closes its unit");
+    assert_eq!(r.take_reading(), Some(Reading::Healthy));
+    assert_eq!(r.on_piece(far(None, message, true)), PieceAnswer::Nothing);
+
+    // An error answer is the destination answering: it closes the unit too, once.
+    let error = br#"{"jsonrpc":"2.0","id":7,"error":{"code":-32001,"message":"no"}}"#;
+    let mut r = sent();
+    let reply = answered(&mut r, 200, error);
+    assert!(body(&reply).get("result").is_none());
+    assert!(body(&reply).get("error").is_some());
+    assert!(r.answered(), "an error answer is terminal");
+    assert_eq!(r.take_reading(), Some(Reading::Healthy));
+    assert_eq!(r.on_piece(far(None, error, true)), PieceAnswer::Nothing);
+
+    // An envelope with neither result nor error is NOT an answer: never relayed as one, never
+    // settled as the task's report, never read as the agent answering.
+    let empty = br#"{"jsonrpc":"2.0","id":7}"#;
+    let mut r = sent();
+    let reply = answered(&mut r, 200, empty);
+    assert_eq!(
+        reply.body,
+        refused(
+            "a2a.hop.reply_not_json",
+            "this agent's backend replied with something that is not a JSON-RPC answer"
+        )
+    );
+    assert_eq!(r.take_reading(), Some(Reading::Transient));
+    let mut r = task_sent(false);
+    let reply = answered(&mut r, 200, empty);
+    assert_eq!(reply.status, 502);
+    assert!(body(&reply).get("result").is_none());
+    assert!(
+        !r.take_settled()
+            .iter()
+            .any(|s| matches!(s, TaskSettled::Reported { .. })),
+        "an empty envelope is never the task's answer"
+    );
+    assert_eq!(r.take_reading(), Some(Reading::Transient));
+
+    // A streamed answer: its first event is a whole Task, and it is not the end; an intermediate
+    // status update is not the end; the answer ends once, on its last frame (the `final:true`
+    // update the far end closes on), and nothing follows it.
+    let (mut r, _) = events_sent();
+    let initial = event(json!({ "kind": "task", "id": "far-1", "contextId": "far-c",
+        "status": { "state": "submitted" } }));
+    let first = part(r.on_piece(far(Some(200), &initial, false)));
+    assert!(
+        first.head && !first.last,
+        "a streamed initial Task is not the end"
+    );
+    assert!(!r.answered());
+    let update = event(json!({ "kind": "status-update", "taskId": "far-1",
+        "status": { "state": "working" }, "final": false }));
+    let middle = part(r.on_piece(far(None, &update, false)));
+    assert!(
+        !middle.head && !middle.last,
+        "an intermediate update is not the end"
+    );
+    assert!(!r.answered());
+    let last = event(json!({ "kind": "status-update", "taskId": "far-1",
+        "status": { "state": "completed" }, "final": true }));
+    let end = part(r.on_piece(far(None, &last, true)));
+    assert!(end.last, "the final frame ends the stream");
+    assert!(r.answered());
+    assert_eq!(
+        r.on_piece(far(None, &last, true)),
+        PieceAnswer::Nothing,
+        "and it ends once"
+    );
+}

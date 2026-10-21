@@ -480,6 +480,42 @@ pub fn kernel_refusal(status: u32, text: &str) -> AgentRefusal {
     AgentRefusal::unnamed(status, CODE_UNSUPPORTED_OPERATION, text)
 }
 
+/// THE CLASS-TO-WIRE TABLE (the P-item "refusal-reason collapse"): the JSON-RPC code a kernel
+/// refusal of `class` is rendered under. Which class a reason is in is decided once, by the
+/// contract's one classification ([`busbar_contract::abi::plane::RefusalCode::class`]); this plane
+/// says only how each class reads on its wire. A node fault is this node breaking and is rendered
+/// as the internal error; every other class is a refusal the caller is owed by name, under the
+/// engine's admission code. The match has no `_` arm: a class with no row does not compile.
+#[must_use]
+pub const fn class_code(class: busbar_contract::abi::plane::RefusalClass) -> i64 {
+    use busbar_contract::abi::plane::RefusalClass as C;
+    match class {
+        C::PlaneFault | C::NodeFault => crate::jsonrpc::CODE_INTERNAL,
+        C::Unreadable
+        | C::Rejected
+        | C::Unauthenticated
+        | C::Forbidden
+        | C::TooLarge
+        | C::Throttled
+        | C::Busy
+        | C::QuotaExhausted
+        | C::NotFound
+        | C::Unreachable
+        | C::Unavailable
+        | C::Timeout => CODE_UNSUPPORTED_OPERATION,
+    }
+}
+
+/// A KERNEL REFUSAL OF WIRE REASON `reason` at `status` in the words `text`: [`kernel_refusal`]
+/// under its class's code ([`class_code`]). A number the wire table does not hold is rendered as
+/// the engine's admission refusal.
+#[must_use]
+pub fn kernel_refusal_of(reason: u32, status: u32, text: &str) -> AgentRefusal {
+    let code = busbar_contract::abi::plane::RefusalCode::of(reason)
+        .map_or(CODE_UNSUPPORTED_OPERATION, |c| class_code(c.class()));
+    AgentRefusal::unnamed(status, code, text)
+}
+
 /// THE UNGRANTED CALLER'S SENTENCE (1.5.5's `InboundRefusal::NotInScope`): the caller's grant does
 /// not reach `resource` (`agent:<id>`). 1.5.5 named the key's id where this says `this key`: the
 /// refusal the kernel hands a plane carries no principal.
