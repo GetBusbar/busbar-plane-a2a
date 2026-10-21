@@ -1073,7 +1073,7 @@ fn served_core(
                 host: {
                     let live = Arc::clone(&live);
                     Arc::new(move || {
-                        busbar_kernel::plane_host::engine_host(
+                        busbar_kernel::test_support::engine_host(
                             live.get().expect("the App is built before a unit runs"),
                         )
                     })
