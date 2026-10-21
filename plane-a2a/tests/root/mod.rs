@@ -29,26 +29,14 @@ use busbar_kernel::{
     plane_routes::ListenerScheme,
 };
 
-use super::planes_tests::{Published, PUBLISHING};
-use super::{compose_planes, door_routes};
-use crate::root::loader::dispatch::kinds::plane::Plane;
-use crate::root::loader::dispatch::{load_linked, Bind, LinkedRow, NoSink};
-use crate::root::plane_node::{Node, NodeEndPost};
+// THE ROOT, THROUGH ITS DOOR CELLS' RIG ALONE (`root::serve::door_rig`): the one surface these
+// cells may reach the composition root through, so a root refactor keeps this file compiling.
+use super::door_rig as rig;
+use rig::{LinkedRow, Node, NodeEndPost, Published, PUBLISHING};
 
 /// The deployment's dated card history, billing off (one entry, no price).
-static CARD: std::sync::LazyLock<crate::root::kernel::RootHistory> =
-    std::sync::LazyLock::new(|| {
-        let holder = crate::root::kernel::RootHistory::default();
-        holder.apply(
-            crate::root::kernel::card_from_config(
-                std::iter::empty::<(&str, busbar_contract::billing::RawTierRates)>(),
-                0,
-                true,
-            ),
-            1_000,
-        );
-        holder
-    });
+static CARD: std::sync::LazyLock<rig::RootHistory> =
+    std::sync::LazyLock::new(|| rig::unpriced_card(1_000));
 
 /// The governance book's admin token.
 const ADMIN_TOKEN: &str = "admintok";
@@ -78,28 +66,7 @@ fn mount() -> &'static str {
 /// never a skip (every cell that drives the door fails through [`door`]).
 fn linked_door() -> Option<DoorFn> {
     static DOOR: std::sync::OnceLock<Option<DoorFn>> = std::sync::OnceLock::new();
-    *DOOR.get_or_init(|| {
-        let section = surface("section");
-        let dispatcher = Arc::new(crate::root::loader::dispatch::Dispatcher::new(
-            crate::root::loader::dispatch::DispatchConfig::default(),
-        ));
-        crate::LINKED.plane_doors.iter().copied().find(|&door| {
-            let Ok(row) = LinkedRow::of(door) else {
-                return false;
-            };
-            load_linked::<Plane>(
-                &row,
-                Bind {
-                    instance: Arc::from("agent-door-probe"),
-                    max_inflight_cap: 64,
-                    sink: Arc::new(NoSink),
-                    dispatcher: dispatcher.adopter(),
-                    conns: crate::root::loader::dispatch::ConnTable::Probe,
-                },
-            )
-            .is_ok_and(|plane| plane.served().section == section)
-        })
-    })
+    *DOOR.get_or_init(|| rig::door_declaring(surface("section")))
 }
 
 /// The agent door, which a cell's `Served` needs (see [`linked_door`]).
@@ -210,7 +177,7 @@ struct Served {
     /// The handle a config apply swaps the serving generation on.
     handle: Arc<busbar_kernel::state::AppHandle>,
     /// The node's book: every unit's one line.
-    book: Arc<std::sync::Mutex<crate::root::durability::Durability>>,
+    book: Arc<std::sync::Mutex<rig::Durability>>,
     /// The node's end post: the units whose facts are still open.
     post: Arc<NodeEndPost>,
     /// The paths the door's routes were mounted at on the data router, as its construction
@@ -412,7 +379,7 @@ impl busbar_contract::store_calls::StoreCalls for Refusing {
 /// `conns` of the door's reach), every call the connector's own, and the `(owner, need)` of every
 /// open the walk made recorded, so a cell reads which of the door's needs a hop rode.
 struct Riding {
-    inner: Arc<busbar_core_connector::Connector>,
+    inner: Arc<rig::Connector>,
     opened: std::sync::Mutex<
         Vec<(
             busbar_contract::conn::InstanceId,
@@ -763,14 +730,7 @@ fn priced_cost(
     priced: &Priced,
     groups: &BTreeMap<String, busbar_kernel::config::GroupCfg>,
 ) -> CostModel {
-    let folded = {
-        use crate::root::loader::dispatch::kinds::plane::{linked_probe, registration};
-        busbar_kernel::plane::door::fold(
-            registration(linked_probe(door(), "serve-agent-priced")).expect("the door binds"),
-        )
-        .expect("the door folds")
-    };
-    busbar_kernel::plane::registry::register_test_plane(folded);
+    rig::register_door(door(), "serve-agent-priced").expect("the door binds and folds");
     let (section, kind, class) = (
         surface("section"),
         surface("resource_kind"),
@@ -866,39 +826,19 @@ fn served_core(
     };
     // The generation's engine host the hook stage reads per unit, set once the App is built.
     let live: Arc<std::sync::OnceLock<Arc<busbar_kernel::state::App>>> = Arc::default();
-    let judge = crate::root::connector::guard_for(&destinations).expect("the guard");
+    let judge = rig::destination_guard(&destinations).expect("the guard");
     // The door's own requests (a card fetch, a mirrored push config) are made on a dispatcher
     // worker, off any runtime: their sockets register on the process's reactor, which the boot
     // path installs (`root::connector::boot`) and this cell installs the same way.
-    crate::root::connector::install_io_reactor();
+    rig::install_io_reactor();
     // THE GOVERNANCE BOOK over a store opened through its door, so its record slots are the
     // kernel's record store (ARCHITECT Q-L3B-RECORDS): the door's task rows are kept there.
-    let axis = crate::root::loader::store_v3::DoorStoreAxis {
-        dispatcher: Arc::new(crate::root::loader::dispatch::Dispatcher::new(
-            crate::root::loader::dispatch::DispatchConfig::default(),
-        )),
-        logs: crate::root::boot::plugin_logs().clone(),
-        conns: crate::root::loader::dispatch::ConnTable::NoNeeds,
-        mint: busbar_kernel::door::op_id,
-    };
-    let opened = busbar_contract::store_calls::StoreAxis::open(
-        &axis,
-        busbar_contract::store_calls::StoreDoor::Linked(
-            crate::LINKED
-                .stores
-                .iter()
-                .find(|s| s.1)
-                .expect("the build links an ephemeral store")
-                .2,
-        ),
-        instance,
-        b"{}",
-    )
-    .expect("the default store opens through its door");
+    let opened =
+        rig::open_ephemeral_store(instance).expect("the default store opens through its door");
     let signer = TokenSigner::from_secret_bytes(&[9u8; 32], DEFAULT_KID);
     let gov = Arc::new(
         GovState::new_with_signer(
-            Arc::clone(&opened.records),
+            opened.records(),
             Some(ADMIN_TOKEN.to_string()),
             Some(signer),
         )
@@ -909,79 +849,30 @@ fn served_core(
     let refuse = Arc::new(std::sync::Mutex::new(None));
     assert!(gov.attach_store_calls(Arc::new(Refusing {
         inner: opened
-            .calls
+            .calls()
             .expect("a door-opened store has its record slots"),
         named: Arc::clone(&refuse),
     })));
-    let services = super::LateServices::new();
     // The kernel's services judge every destination by the deployment's one guard, as boot
     // composes them (`dest.judge`: the card fetch's per-hop guard reads it).
-    let kernel = Arc::new(super::kernel_services(
-        Arc::clone(&judge) as Arc<dyn busbar_kernel::host_services::DestJudge>
-    ));
-    services
-        .install_kernel(
-            Arc::clone(&kernel),
-            Arc::clone(&kernel) as Arc<dyn busbar_contract::services::HostServices>,
-        )
-        .expect("installed once");
+    let services = rig::late_services(Arc::clone(&judge));
     // THE LATE ATTACH, as the first app build runs it: the runtime's blocking pool and the
     // governance store as the record store.
-    super::attach(
-        &services,
-        Some(&gov),
-        Some(Arc::clone(&gov) as Arc<dyn busbar_kernel::host_services::SignKey>),
-        &Arc::new(super::DemotionRecord::default()),
-        &[],
-    );
-    let dispatcher = Arc::new(crate::root::dispatch::build(
-        1,
-        Arc::clone(&services) as Arc<dyn busbar_contract::services::HostServices>,
-    ));
+    rig::attach_late(&services, &gov);
+    let dispatcher = rig::dispatcher(1, &services);
     // Its connection reads through a ticket (a trust verb's card fetch) wake on the dispatcher.
-    let settings = busbar_contract::transport::TransportSettings::default();
+    let process = rig::ProcessRig::new(judge, dispatcher.conn_waker());
     let connector = match root {
-        None => busbar_core_connector::process::build(
-            || crate::root::connector::entries(crate::LINKED_TRANSPORT_DOORS, &settings),
-            judge,
-            &[],
-            dispatcher.conn_waker(),
-            crate::root::connector::pool_posture(&settings),
-        )
-        .expect("the connector builds"),
-        Some(root) => {
-            let tls = busbar_core_connector::tls::client::build_client_config(
-                &busbar_contract::transport::trust::EgressTrust {
-                    extra_anchors: vec![root],
-                    ..Default::default()
-                },
-            )
-            .expect("the client config");
-            let view = busbar_core_connector::registry::Transports::new(
-                crate::root::connector::entries(crate::LINKED_TRANSPORT_DOORS, &settings)
-                    .expect("the entries"),
-            )
-            .expect("the view");
-            Arc::new(busbar_core_connector::Connector::serving(
-                view,
-                busbar_core_connector::process::judge(judge, &[]),
-                Some(Arc::new(tls)),
-                dispatcher.conn_waker(),
-            ))
-        }
-    };
-    let row = LinkedRow::of(door()).expect("the door states its Statement");
-    let plane = load_linked::<Plane>(
-        &row,
-        Bind {
-            instance: Arc::from(instance),
-            max_inflight_cap: 64,
-            sink: Arc::new(NoSink),
-            dispatcher: dispatcher.adopter(),
-            conns: crate::root::loader::dispatch::ConnTable::Host(
-                Arc::clone(&connector) as Arc<dyn DeclaredConns>
-            ),
-        },
+        None => process,
+        Some(root) => process.trusting(root),
+    }
+    .build()
+    .expect("the connector builds");
+    let plane = rig::bind_door(
+        door(),
+        instance,
+        &dispatcher,
+        Arc::clone(&connector) as Arc<dyn DeclaredConns>,
     )
     .expect("the linked door binds");
     let section_key = plane.served().section;
@@ -1000,7 +891,7 @@ fn served_core(
         .expect("mint");
     gov.hydrate_budgets(&cost, 0).expect("hydrate");
     let node = Arc::new(Node::new());
-    let book = crate::root::durability::node_book_over(Box::new(|| CARD.pin()));
+    let book = rig::node_book(|| CARD.pin());
     node.bind_book(Arc::clone(&book.durability));
     let post = Arc::new(NodeEndPost::new(Arc::clone(&node)));
     let end = Arc::clone(&post);
@@ -1032,117 +923,60 @@ fn served_core(
         );
     }
     // THE EGRESS, AS PRODUCTION SEALS IT: no provider (an agent is reached at its own `url`),
-    // the process's connector, the node's journal.
-    let providers = std::collections::BTreeMap::new();
-    let secrets: Arc<dyn busbar_contract::secret::SecretResolve> =
-        Arc::new(busbar_kernel::config::secret::SecretResolver::builtins_only());
-    let auths = crate::root::door_steps::OutboundAuths::new(
-        Arc::clone(&dispatcher),
-        crate::LINKED.auths,
-        None,
-        crate::root::loader::dispatch::ConnTable::Host(
-            Arc::clone(&connector) as Arc<dyn DeclaredConns>
-        ),
-    );
-    // The walk reaches the far ends through the cell's connector, every open it makes recorded.
+    // the process's connector, the node's journal. The walk reaches the far ends through the
+    // cell's connector, every open it makes recorded.
     let riding = Arc::new(Riding {
         inner: Arc::clone(&connector),
         opened: std::sync::Mutex::default(),
     });
-    let reach = crate::root::door_steps::DoorReach {
-        providers: &providers,
-        secrets: Arc::clone(&secrets),
-        auths: Arc::new(auths),
-        conns: Arc::clone(&riding) as Arc<dyn busbar_contract::conn::PollConns>,
-        stream_ceiling_secs: 600,
-        catalog: None,
-        upgrades: Vec::new(),
-        models: None,
-    };
-    let mut composed = compose_planes(
-        &[(instance.to_string(), Arc::new(plane))],
+    let egress = rig::EgressRig::new(
+        &dispatcher,
+        Arc::clone(&connector) as Arc<dyn DeclaredConns>,
+        Arc::clone(&riding) as Arc<dyn busbar_contract::conn::PollConns>,
+        Arc::clone(&post) as Arc<dyn busbar_kernel_egress::ports::Journal>,
+    );
+    let mut compose = rig::DoorCompose::new(
+        vec![(instance.to_string(), plane)],
         &dispatcher,
         &services,
         &sections,
-        Some("https://gw.example"),
         &plane_money,
-        Some(&super::DoorEgress {
-            reach: &reach,
-            journal: Arc::clone(&post) as Arc<dyn busbar_kernel_egress::ports::Journal>,
-        }),
-        hooks
-            .as_ref()
-            .map(|_| super::HookStage {
-                host: {
-                    let live = Arc::clone(&live);
-                    Arc::new(move || {
-                        busbar_kernel::plane_host::engine_host(
-                            live.get().expect("the App is built before a unit runs"),
-                        )
-                    })
-                },
-                gov: Arc::clone(&gov),
-            })
-            .as_ref(),
     )
-    .expect("the agent door composes");
-    composed.post = Some(post);
+    .public_url("https://gw.example")
+    .egress(&egress)
+    .post(post)
     // THE FRAMER THAT FRAMES A STREAM ANOTHER FRAMER ANSWERS (the gRPC line's calls, ARCHITECT
     // 4l): this cell's connector's, as boot's is the process's one connector's.
-    let framing = Arc::clone(&connector);
-    composed.framers = Some(super::StreamFramers(Arc::new(move |claim: &str| {
-        framing.framer_for(claim)
-    })));
+    .framers(Arc::clone(&connector));
+    if hooks.is_some() {
+        let live = Arc::clone(&live);
+        compose = compose.hooks(
+            Arc::new(move || {
+                busbar_kernel::plane_host::engine_host(
+                    live.get().expect("the App is built before a unit runs"),
+                )
+            }),
+            Arc::clone(&gov),
+        );
+    }
+    let composed = compose.compose().expect("the agent door composes");
     if ticking {
         composed.spawn_ticks();
     }
     // THE DOOR'S FACING, as boot's `build_dispatch` reads it off the door: each claim mounted
     // at its literal prefix, and the audience and metadata document its snapshot states.
-    let facing_of: Vec<(Vec<String>, busbar_kernel::plane::PlaneAdmission)> =
-        if facing == Facing::Admitted {
-            composed
-                .planes
-                .iter()
-                .filter_map(|p| {
-                    let admission = busbar_kernel::plane::PlaneAdmission {
-                        audience: p.snapshot.audience.clone()?,
-                        resource_metadata: p.snapshot.resource_metadata.clone()?,
-                    };
-                    let paths = p
-                        .snapshot
-                        .claims
-                        .iter()
-                        .map(|c| {
-                            let literal = c.target.split("/{").next().unwrap_or(&c.target);
-                            literal.trim_end_matches('/').to_string()
-                        })
-                        .filter(|path| !path.is_empty())
-                        .collect();
-                    Some((paths, admission))
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
+    let facing_of = if facing == Facing::Admitted {
+        rig::admissions(&composed)
+    } else {
+        Vec::new()
+    };
     // THE ADMIN SURFACE, as boot mounts it: the admin mount, and the operator credential's row
     // on the auth axis the admin chain authenticates `x-admin-token` with.
     busbar_core_admin::install();
     // THE DOOR'S REGISTRY ROW, folded from its Statement and installed as the composition root
     // installs it (DECL-FOLD): the admin router mounts the door's stated admin routes off it.
-    let folded = {
-        use crate::root::loader::dispatch::kinds::plane::{linked_probe, registration};
-        busbar_kernel::plane::door::fold(
-            registration(linked_probe(door(), "serve-agent-row")).expect("the door binds"),
-        )
-        .expect("the door folds")
-    };
-    busbar_kernel::plane::registry::register_test_plane(folded);
-    busbar_kernel::preflight::install_linked_auth(
-        crate::LINKED.auths,
-        crate::root::auth_bindings::operator_words(),
-    )
-    .expect("the root's one table and words");
-    busbar_kernel::preflight::install_auth_axis(crate::root::dispatch::auth_axis);
+    rig::register_door(door(), "serve-agent-row").expect("the door binds and folds");
+    rig::install_root_auth();
     let mut builder = busbar_kernel::test_support::TestApp::new()
         .keys_chain()
         .admin_chain(vec![busbar_kernel::config::operator_provider().to_string()])
@@ -1179,7 +1013,7 @@ fn served_core(
     let app = builder.build();
     let _ = live.set(Arc::clone(&app));
     let appliers = composed.appliers();
-    let doors = door_routes(composed, || CARD.pin(), &[], &[]).expect("its claims mount");
+    let doors = rig::door_routes(composed, || CARD.pin()).expect("its claims mount");
     let routes = doors.iter().map(|r| r.path.clone()).collect();
     let (router, admin, handle) =
         busbar_kernel::build_split_routers_serving(Arc::clone(&app), doors, 1 << 20, 0, false);
@@ -1193,15 +1027,7 @@ fn served_core(
     // THE NODE'S ADMIN SURFACE OVER IT, as boot mounts it (`units_admin::mount_node`, the one
     // function both call): the generic trust verbs over the kernel's trust book among it
     // (ruling (d), coordinator 2026-10-07).
-    let admin = crate::root::units_admin::mount_node(
-        admin,
-        1 << 20,
-        &handle,
-        &book,
-        None,
-        &services,
-        crate::root::adapters::BreakerPolicy::new(),
-    );
+    let admin = rig::mount_node_admin(admin, 1 << 20, &handle, &book, &services);
     // Every config apply refreshes the door, as production binds it.
     handle.on_apply(Box::new(move |app| appliers.apply(app)));
     Served {
@@ -1943,7 +1769,7 @@ async fn a_failing_agent_trips_its_breaker_and_the_next_unit_is_refused_before_i
 }
 
 /// The node's book lines whose counts name agent `agent`'s lane, in book order.
-fn agent_counts(s: &Served, agent: &str) -> Vec<crate::root::durability::UnitCounts> {
+fn agent_counts(s: &Served, agent: &str) -> Vec<rig::UnitCounts> {
     let resource = format!("{}:{agent}", surface("resource_kind"));
     s.book
         .lock()
@@ -1956,7 +1782,7 @@ fn agent_counts(s: &Served, agent: &str) -> Vec<crate::root::durability::UnitCou
 }
 
 /// The count a line carries under `class`, `0` when it carries none.
-fn counted(counts: &crate::root::durability::UnitCounts, class: &str) -> u64 {
+fn counted(counts: &rig::UnitCounts, class: &str) -> u64 {
     counts.classes.get(class).copied().unwrap_or(0)
 }
 
@@ -2069,9 +1895,7 @@ async fn an_agent_sections_per_request_fee_validates_and_per_session_is_refused(
     // The config fixture's provider names the registry's residual-default dialect; in a test
     // binary the protocol set is installed by whichever test installs it first, so the cell
     // installs the linked declarations itself, as the root's other config-fixture cells do.
-    for decls in crate::LINKED.protocols {
-        busbar_kernel::proto::register_test_protocols(decls);
-    }
+    rig::register_linked_protocols();
     let with_fees = |per_request: i64, per_session: i64| {
         let mut cfg = busbar_kernel::test_support::cfg_with_provider_api_key(
             busbar_kernel::config::SecretRef::none(),
@@ -2492,13 +2316,8 @@ async fn a_hop_refused_before_the_socket_keeps_no_fee() {
 /// (`DoorSection::ledger_lanes`). A card pricing every agent boots.
 #[test]
 fn a_present_agents_card_silent_about_an_agent_refuses_the_config() {
-    let folded = {
-        use crate::root::loader::dispatch::kinds::plane::{linked_probe, registration};
-        busbar_kernel::plane::door::fold(
-            registration(linked_probe(door(), "serve-agent-card-row")).expect("the door binds"),
-        )
-        .expect("the door folds")
-    };
+    let folded =
+        rig::folded_door(door(), "serve-agent-card-row").expect("the door binds and folds");
     let _registry = busbar_kernel::plane::registry::TestRegistryIsolation::seeded(&[
         busbar_kernel::test_support::neutral_fallback_plane(),
         folded,
@@ -2919,7 +2738,7 @@ struct AgentTls {
 
 impl AgentTls {
     fn new() -> Self {
-        busbar_core_connector::tls::install_crypto_provider();
+        rig::install_crypto_provider();
         let kp = rcgen::KeyPair::generate().expect("a key");
         let mut params = rcgen::CertificateParams::new(Vec::new()).expect("params");
         params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
@@ -4052,14 +3871,7 @@ async fn the_legacy_well_known_path_is_tried_only_when_the_canonical_one_served_
 /// its row states the manifest needs a dropped-in hook's signed manifest does, and the hook
 /// port answers it in process through the frame the kernel built.
 fn hook_env() -> busbar_kernel::hooks::HookEnv {
-    use crate::root::loader::sign::{HookNeeds, NeedLevel};
-    busbar_kernel::test_support::test_hook_env(
-        &["test-hook"],
-        HookNeeds {
-            prompt: NeedLevel::Rw,
-            user: NeedLevel::Ro,
-        },
-    )
+    rig::hook_env(&["test-hook"], rig::NeedLevel::Rw, rig::NeedLevel::Ro)
 }
 
 /// A `hooks:` definition on the kernel's hook double, as an operator writes it, its `prompt:` grant
@@ -4245,7 +4057,7 @@ fn the_agent_door_states_a_cell_refuses_on_a_trip_and_nothing_less() {
     let name = busbar_contract::abi::mechanism::rendering::read(&row.statement)
         .expect("its Statement reads")
         .name;
-    let stated = crate::root::linked::door_breaker(&crate::LINKED, None, &name)
+    let stated = rig::door_breaker(&name)
         .expect("its declares section reads");
     assert_eq!(stated.map(|b| b.bench_below_trip_threshold), Some(false));
 }
@@ -5605,7 +5417,7 @@ mod upstream_credential {
     /// REFRESH every served credential now, off the runtime's workers (each lease here is a
     /// minute, so no cell waits on the refresher's own schedule).
     async fn refreshed() {
-        tokio::task::spawn_blocking(crate::root::door_steps::refresh_credentials)
+        tokio::task::spawn_blocking(rig::refresh_credentials)
             .await
             .expect("the refresh");
     }
@@ -6105,7 +5917,7 @@ mod upstream_credential {
     /// the source's own refusal names it (the control).
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_credential_that_stops_resolving_reaches_the_caller_without_its_source() {
-        use super::super::secret_source_tests::{
+        use super::rig::{
             assert_clean, missing, refused_naming_its_source, unset,
         };
         let _one = PUBLISHING.lock().await;
@@ -7154,15 +6966,7 @@ async fn an_apply_carrying_a_malformed_agent_push_ca_is_refused_and_deliveries_k
 
     // THE APPLY: a document writing the same agent and a malformed `agent_push.ca`, built as an
     // apply builds it, under the root's check.
-    {
-        use crate::root::loader::dispatch::kinds::plane::{linked_probe, registration};
-        busbar_kernel::plane::registry::register_test_plane(
-            busbar_kernel::plane::door::fold(
-                registration(linked_probe(door(), instance)).expect("the door binds"),
-            )
-            .expect("the door folds"),
-        );
-    }
+    rig::register_door(door(), instance).expect("the door binds and folds");
     let text = format!(
         "store: {{module: memory}}\nproviders: {{}}\nmodels: {{}}\n{}:\n  planner: {{ url: \
          https://planner.example/rpc, pin: {{ mechanism: unpinned }} }}\nagent_push:\n  ca: \
@@ -7171,7 +6975,7 @@ async fn an_apply_carrying_a_malformed_agent_push_ca_is_refused_and_deliveries_k
     );
     let deploy = busbar_kernel::config::deploy_from_yaml_str(&text).expect("the config parses");
     let cfg = busbar_kernel::config::resolve(&deploy, &Default::default()).expect("resolves");
-    let rules = Arc::new(crate::root::door_steps::Rules::default());
+    let rules = Arc::new(rig::Rules::default());
     rules.hold_owned_anchors(&[busbar_plane_a2a::door_statement::PUSH_TRUST_FROM]);
     let built = busbar_kernel::build_app_from_config(
         cfg,
@@ -8199,7 +8003,7 @@ fn pooled(entries: &str, members: &[&str]) -> String {
         },
     )]
     .into();
-    let sections = super::with_pools([(key, section)].into(), &[(key, pools)]);
+    let sections = rig::with_pools([(key, section)].into(), &[(key, pools)]);
     serde_yaml::to_string(&sections[key]).expect("the section writes")
 }
 
