@@ -101,18 +101,9 @@ busbar_contract::statement_extensions!(
 );
 
 /// The most units the instance keeps state for at once. At it, the units the door is done with
-/// make room ([`AgentUnit::over`]), and so do the units past the unit deadline that never saw a
-/// piece ([`gone_unseen`]); a live unit never does, so an instance full of live units refuses the
-/// next arrival ([`room_for`]).
+/// make room ([`AgentUnit::over`]); a live unit never does, so an instance full of live units
+/// refuses the next arrival ([`room_for`]).
 pub const MAX_UNITS: usize = 4096;
-
-/// THE UNIT DEADLINE, nanoseconds: the longest any unit of this plane runs, its stated stream
-/// ceiling ([`door_statement::STREAM_CEILING_SECS`], which the kernel stamps as a streamed unit's
-/// deadline once its route is known). A unit's first piece is its first ATTEMPT, which comes the
-/// moment its route is known, so a unit kept this long since its arrival with no piece seen is one
-/// the kernel ended without telling the door (a caller gone during the gated-hook screen): its
-/// place is free ([`gone_unseen`]).
-pub const UNIT_DEADLINE_NS: u64 = door_statement::STREAM_CEILING_SECS * 1_000_000_000;
 
 /// One unit the instance keeps, from its arrival: what the arrival was, the agent the caller
 /// addressed by name (if it did), the section of the generation it arrived under, and what its
@@ -152,12 +143,6 @@ pub struct AgentUnit {
     /// `refusal` may still read it (the kernel judges the plane's last answer after it returns), and
     /// that refusal forgets it; until then it makes room when the instance is full ([`room_for`]).
     pub over: bool,
-    /// When it arrived, on the host's monotonic clock (`clock.now`, nanoseconds); `None` where
-    /// `arrive` read no clock, and such a unit is never judged gone unseen ([`gone_unseen`]).
-    pub arrived_ns: Option<u64>,
-    /// Its first piece has entered `on_piece`: the kernel routed it, so it is no longer judged by
-    /// its arrival's age ([`gone_unseen`]).
-    pub pieced: bool,
 }
 
 /// One unit's unary hop, and the answer it is part way through writing.
@@ -923,50 +908,22 @@ fn agents_section(bytes: &[u8]) -> Result<AgentsCfg, Refusal> {
     door_statement::read_agents_section(bytes).map_err(Refusal::refused)
 }
 
-/// WHETHER THE INSTANCE HAS ROOM for a unit under `key`, judged before `arrive` states anything,
-/// at `now_ns` on the host's monotonic clock (`None`: no clock was read): below [`MAX_UNITS`] it
-/// has; at it, every unit the door is done with ([`AgentUnit::over`]) and every unit gone unseen
-/// ([`gone_unseen`]) is dropped in the one pass, so the next arrivals find room without looking
-/// again. A unit is held in [`A2aDoor::units`] alone until its first piece (no flight, ticket or
-/// task is tied to it before then), so dropping one gone unseen leaves nothing behind. A LIVE UNIT
-/// IS NEVER DROPPED (THE DESIGN section 1: admission bounds live work, nothing evicts it): an
+/// WHETHER THE INSTANCE HAS ROOM for a unit under `key`, judged before `arrive` states anything:
+/// below [`MAX_UNITS`] it has; at it, every unit the door is done with ([`AgentUnit::over`]) is
+/// dropped in the one pass, so the next arrivals find room without looking again. A LIVE UNIT IS
+/// NEVER DROPPED (THE DESIGN section 1: admission bounds live work, nothing evicts it): an
 /// instance full of live units has no room, and the arrival is refused
 /// ([`agent_arrival::units_full`]). The room is judged and the unit kept under two holds of the
 /// map, so arrivals in flight at once may each keep theirs past the bound, never more than the
 /// calls the kernel keeps in flight ([`MAX_INFLIGHT`]).
-fn room_for(units: &Keyed<u64, AgentUnit>, key: u64, now_ns: Option<u64>) -> bool {
+fn room_for(units: &Keyed<u64, AgentUnit>, key: u64) -> bool {
     units.with_all(|m| {
         if m.len() < MAX_UNITS || m.contains_key(&key) {
             return true;
         }
-        m.retain(|_, u| !u.over && !gone_unseen(u, now_ns));
+        m.retain(|_, u| !u.over);
         m.len() < MAX_UNITS
     })
-}
-
-/// THE KERNEL ENDED IT UNSEEN: `unit` arrived more than [`UNIT_DEADLINE_NS`] before `now_ns` and
-/// no piece of it ever entered `on_piece`. The kernel ends a unit whose caller left during the
-/// gated-hook screen without a `cancel`, and nothing else would ever make it [`AgentUnit::over`];
-/// a live unit has had its first ATTEMPT well inside the deadline. With no clock reading (at its
-/// arrival or now) a unit is never judged gone.
-fn gone_unseen(unit: &AgentUnit, now_ns: Option<u64>) -> bool {
-    match (unit.arrived_ns, now_ns) {
-        (Some(arrived), Some(now)) => {
-            !unit.pieced && now.saturating_sub(arrived) > UNIT_DEADLINE_NS
-        }
-        _ => false,
-    }
-}
-
-/// The host's monotonic clock (`clock.now`, the kernel's one clock), nanoseconds: what a unit's
-/// age is measured on, so a step of the wall clock never ages a live unit. `None` when the instance
-/// was opened without a host or the host answered no reading.
-fn mono_now(plane: &A2aDoor, ticket: Ticket) -> Option<u64> {
-    let host = plane.host.as_ref()?;
-    match host.connector(ticket).clock_now() {
-        Poll::Ready(Ok(reading)) => Some(reading.mono_ns),
-        _ => None,
-    }
 }
 
 /// The agent a JSON-RPC target names below the catalogue, if it names one.
@@ -1374,8 +1331,7 @@ slot!(
             return Outcome::Failed;
         };
         let given = input;
-        let arrived_ns = mono_now(plane, instance.ticket());
-        if !room_for(&plane.units, given.unit(), arrived_ns) {
+        if !room_for(&plane.units, given.unit()) {
             return refused(&mut out, &agent_arrival::units_full());
         }
         let Some(route) = door_statement::ROUTES.get(given.claim() as usize) else {
@@ -1390,10 +1346,7 @@ slot!(
                 Ok(None) => return unserved(&mut out),
                 Err(refusal) => return refused(&mut out, &refusal),
             },
-            Line::Open => {
-                let unit = (given.unit(), arrived_ns);
-                return arrive_card(plane, route, target, unit, &mut out);
-            }
+            Line::Open => return arrive_card(plane, route, target, given.unit(), &mut out),
             // THE gRPC LINE (the engine's `grpc.rs`): the rpc the target names, its one request
             // message composed as the v1.0 JSON-RPC request it is, served from there as the
             // JSON-RPC line serves its own; a method the service does not have, or a message that
@@ -1495,8 +1448,6 @@ slot!(
                     pool: None,
                     ticket: Ticket::NONE,
                     over: false,
-                    arrived_ns,
-                    pieced: false,
                 },
             );
             return Outcome::Ready;
@@ -1603,8 +1554,6 @@ slot!(
             pool,
             ticket: Ticket::NONE,
             over: false,
-            arrived_ns,
-            pieced: false,
         };
         plane.units.insert(given.unit(), unit);
         Outcome::Ready
@@ -1634,7 +1583,7 @@ fn arrive_card(
     plane: &A2aDoor,
     route: &door_statement::Route,
     target: &str,
-    (unit, arrived_ns): (u64, Option<u64>),
+    unit: u64,
     out: &mut Out<'_, ArriveOut>,
 ) -> Outcome {
     let generation = plane.newest();
@@ -1684,8 +1633,6 @@ fn arrive_card(
             pool: None,
             ticket: Ticket::NONE,
             over: false,
-            arrived_ns,
-            pieced: false,
         },
     );
     Outcome::Ready
@@ -3039,13 +2986,9 @@ slot!(
         // another unit's warm landed meanwhile. A warm the host refused leaves the cards unwarmed
         // and the unit served: each unit warms on its first piece only (its ticket not yet
         // recorded), so a store that keeps refusing the listing costs a unit one warm, not one per
-        // piece. Its first entry marks it pieced: routed, so no longer judged by its arrival's age
-        // ([`gone_unseen`]).
+        // piece.
         let warm = plane.units.with(&unit, |u| {
-            u.map(|u| {
-                u.pieced = true;
-                (u.pass.warming, u.pass.issued, u.ticket == Ticket::NONE)
-            })
+            u.map(|u| (u.pass.warming, u.pass.issued, u.ticket == Ticket::NONE))
         });
         if let Some((warming, issued, first)) = warm {
             if warming || (first && !plane.cards_warmed.get(&()).unwrap_or(false)) {

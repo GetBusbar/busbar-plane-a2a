@@ -12,10 +12,6 @@
 /// `agent_door::MAX_UNITS`: the most units the instance keeps state for at once.
 pub const MAX_UNITS: usize = 4096;
 
-/// `agent_door::UNIT_DEADLINE_NS`: how long a unit with no piece seen is kept from its arrival
-/// before its place is free.
-pub const UNIT_DEADLINE_NS: u64 = 600_000_000_000;
-
 /// `door_statement::DIALECT_DOCUMENT`: the JSON-RPC line's dialect index.
 pub const DIALECT_DOCUMENT: u32 = 0;
 
