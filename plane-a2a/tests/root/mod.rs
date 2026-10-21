@@ -8018,7 +8018,7 @@ async fn a_backend_that_cannot_be_reached_is_counted_as_a_transient_upstream_fai
     assert!(
         lines.iter().any(|l| l.contains(&format!(
             "disposition=\"{}\"",
-            busbar_kernel::proxy::DISPOSITION_TRANSIENT
+            busbar_contract::upstream::Disposition::TransientUpstream.label()
         ))),
         "the failure carries the model plane's own disposition word: {lines:?}"
     );
