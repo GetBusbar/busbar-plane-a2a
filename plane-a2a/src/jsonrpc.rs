@@ -58,7 +58,7 @@ pub const PTR_ERROR_CODE: &str = "/error/code";
 // inside the crate that defines it is a second name for one value — the shape a divergence hides
 // in, and one a re-export cannot grow. The engine's own `A2aError` is still pinned against the
 // table row for row, in the crate that owns that enum.
-pub use crate::{ERRORS, ERROR_INFO_DOMAIN, ERROR_INFO_TYPE};
+use crate::{ERRORS, ERROR_INFO_DOMAIN, ERROR_INFO_TYPE};
 
 /// The request was not well formed.
 pub const CODE_INVALID_REQUEST: i64 = -32600;

@@ -5,8 +5,8 @@
 //! would make either false, and the door's arrival is driven repeatedly over the same inputs and its
 //! answers compared. A comment claiming purity is worth nothing; a scan and a repeat are worth something.
 
+use crate::A2aPlane;
 use busbar_contract::plane::PlaneMeta;
-use busbar_plane_a2a::A2aPlane;
 use std::path::{Path, PathBuf};
 
 /// The crate's own source directory.
@@ -194,7 +194,7 @@ fn the_plane_names_no_kernel_side_crate() {
 fn the_arrival_is_deterministic() {
     let bodies: Vec<Vec<u8>> = A2aPlane::OP_CLASSES
         .iter()
-        .filter_map(|op| busbar_plane_a2a::ops::METHODS.iter().find(|r| r.op == *op))
+        .filter_map(|op| crate::ops::METHODS.iter().find(|r| r.op == *op))
         .map(|row| {
             format!(
                 r#"{{"jsonrpc":"2.0","id":5,"method":"{}","params":{{"id":"t1"}}}}"#,
@@ -213,12 +213,7 @@ fn the_arrival_is_deterministic() {
     );
     for body in &bodies {
         let answers: Vec<String> = (0..8)
-            .map(|_| {
-                format!(
-                    "{:?}",
-                    busbar_plane_a2a::agent_arrival::decide_arrival(body, |_| None)
-                )
-            })
+            .map(|_| format!("{:?}", crate::agent_arrival::decide_arrival(body, |_| None)))
             .collect();
         assert!(
             answers.windows(2).all(|w| w[0] == w[1]),

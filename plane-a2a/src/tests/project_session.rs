@@ -5,11 +5,11 @@
 //! half): the door's `project`, entered as the dispatcher enters it and checked as the loader checks
 //! every answer, writes the caller's `contextId` into the hook view's opaque session.
 
+use crate::agent_door::Project;
+use crate::door_statement;
 use busbar_contract::abi::mechanism::call::Outcome;
 use busbar_contract::abi::plane::{ProjectIn, ProjectOut};
 use busbar_contract::abi::sdk::Safe;
-use busbar_plane_a2a::agent_door::Project;
-use busbar_plane_a2a::door_statement;
 use serde_json::json;
 
 /// One `project` of `body` arriving on claim `claim` at `target`, through the door's own entry,
