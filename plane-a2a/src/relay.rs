@@ -534,6 +534,10 @@ pub struct TaskHop {
     pub references: Vec<(String, String)>,
 }
 
+/// What reading a 2xx far-end piece's events answers: `None` while no event is framed; else the
+/// events for the caller, or the refusal they earn with the events read before it.
+type EventsRead = Option<Result<Vec<u8>, (HopRefusal, Vec<u8>)>>;
+
 /// WHAT A TASK HOP'S ANSWER SAYS ABOUT ITS TASK, for the door to record.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TaskSettled {
@@ -1065,10 +1069,10 @@ impl HopRelay {
         })
     }
 
-    /// The events a 2xx far-end piece's `bytes` finish, read: `None` while the far end has framed
+    /// The events a 2xx far-end piece's `bytes` finish, read ([`EventsRead`]): `None` while the far end has framed
     /// no event (its bytes kept, as one document's are); else the events for the caller, or the
     /// refusal they earn with the events read before it.
-    fn events_read(&mut self, bytes: &[u8]) -> Option<Result<Vec<u8>, (HopRefusal, Vec<u8>)>> {
+    fn events_read(&mut self, bytes: &[u8]) -> EventsRead {
         let (frames, pending, framed) = {
             let events = self.events.as_mut()?;
             let frames = events.reader.feed(bytes);

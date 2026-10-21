@@ -295,6 +295,11 @@ fn message_identity(
     }
 }
 
+/// A table of `(name, identity member)` pairs: [`crate::task_identity::WRAPPERS`] (a wrapper and
+/// the member naming the task inside it) or [`crate::task_identity::KINDS`] (a `kind` and the
+/// member naming its task).
+pub type IdMembers<'a> = &'a [(&'a str, &'a str)];
+
 /// THE BYTE TWIN OF `task_identity::rewrite_identity`: the far end's `result` bytes with busbar's
 /// task and context ids (and the matched skill) spliced in, every other byte as the far end wrote
 /// it. The task's identity member is the one its wrapper names (`wrappers`), or, unwrapped, the one
@@ -304,7 +309,7 @@ fn message_identity(
 #[must_use]
 pub fn rewrite_identity(
     result: &[u8],
-    (wrappers, kinds): (&[(&str, &str)], &[(&str, &str)]),
+    (wrappers, kinds): (IdMembers<'_>, IdMembers<'_>),
     task_id: &str,
     context_id: &str,
     skill: Option<(&str, &str)>,

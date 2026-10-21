@@ -137,8 +137,8 @@ pub enum Opened {
     /// The hop goes ahead for this task, sending `instead` in place of the caller's bytes when a
     /// task id was translated.
     Hop {
-        /// The task.
-        task: TaskHop,
+        /// The task, boxed: the hop's answer is the larger arm by far.
+        task: Box<TaskHop>,
         /// The translated request, if any id was.
         instead: Option<Vec<u8>>,
         /// The push callback the request carried inline, registered on the task.
@@ -448,7 +448,7 @@ pub fn open(
     };
     let (instead, references) = translated(reach, req, backends)?;
     Ok(Opened::Hop {
-        task: TaskHop { references, ..task },
+        task: Box::new(TaskHop { references, ..task }),
         instead,
         callback,
         unrecorded,

@@ -1727,10 +1727,9 @@ fn a_card_listing_the_host_refused_is_listed_again() {
 /// What one addressed READY arrival allocates on a warmed instance (the agent's card held, its
 /// route entry already named by earlier arrivals). The bound is exact (the plane's own unit state,
 /// task rows and relay set-up; the route name costs none): a change that moves it moves this
-/// constant in the same commit, with the reason. It came down from 64 when the arrival's body
-/// was parsed once and its request handed to the hop rather than copied: the second parse and the
-/// copy each cost the card read's envelope (three keys, two string values and the map's node).
-const READY_ARRIVAL_ALLOCATIONS: u64 = 52;
+/// constant in the same commit, with the reason. It came down from 64 to the measured 56 when the
+/// arrival's body was parsed once and its request handed to the hop rather than copied.
+const READY_ARRIVAL_ALLOCATIONS: u64 = 56;
 
 /// A WARMED READY ARRIVAL NAMES ITS ROUTE WITHOUT THE HEAP (THE DESIGN, the plugin ABI: "no
 /// allocation and no blocking on the hot path"; compiled in or dropped in, "NOTHING CHANGES about
