@@ -1837,7 +1837,7 @@ fn open_task(
                     .remember_auth(&task.task_id, callback.auth);
             }
             task.skill = skill;
-            hop.relay.for_task(task);
+            hop.relay.for_task(*task);
             if let Some(body) = instead {
                 hop.relay.send_instead(body);
             }
