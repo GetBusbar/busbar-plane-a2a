@@ -273,7 +273,7 @@ mod both_ways {
             return format!("project {unit} {:?}", c.outcome);
         }
         let v = j.out.view;
-        let session = if v.session.is_absent() {
+        let session = if v.session.ptr().is_null() {
             "-".to_string()
         } else {
             in_arena(
