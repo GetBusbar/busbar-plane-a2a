@@ -39,14 +39,14 @@ use busbar_contract::abi::mechanism::call::{
     AbiStr, Blob, Field, InHead, OutHead, Outcome, RawOutcome, BLOB_OCTETS,
 };
 use busbar_contract::abi::mechanism::lifecycle::{
-    slot as life, CancelIn, OpenIn, OpenOut, OpsHead, TickIn, TickOut,
+    slot as life, CancelIn, DriveIn, OpenIn, OpenOut, OpsHead, TickIn, TickOut,
 };
 use busbar_contract::abi::mechanism::ticket::{HostCtx, HostTables, Ticket};
 use busbar_contract::abi::plane::{
     slot, ArriveIn, ArriveOut, OnPieceIn, OnPieceOut, Ops, OutField, PlaneCancelIn, PlaneCancelOut,
-    PlaneOpenIn, PlaneOpenOut, RecordWrite, RefusalCode, RefusalIn, RefusalOut, ServeIn, ServeOut,
-    UnitCount, EMIT_DONE, FROM_CALLER, FROM_FAR_END, FROM_KERNEL, PIECE_HAS_STATUS, PIECE_LAST,
-    PIECE_REFUSED, REFUSAL_KERNEL,
+    PlaneDriveIn, PlaneDriveOut, PlaneOpenIn, PlaneOpenOut, RecordWrite, RefusalCode, RefusalIn,
+    RefusalOut, ServeIn, ServeOut, UnitCount, EMIT_DONE, FROM_CALLER, FROM_FAR_END, FROM_KERNEL,
+    PIECE_HAS_STATUS, PIECE_LAST, PIECE_REFUSED, REFUSAL_KERNEL,
 };
 use busbar_plane_a2a::agent_door::{self, MAX_UNITS};
 use busbar_plane_a2a::door_statement::{
@@ -186,8 +186,24 @@ fn store() -> MutexGuard<'static, Vec<(String, String, Vec<u8>)>> {
 }
 
 /// `records.list`: every stored record of the kind asked, in key order, one page.
+/// While set, `records.list` answers PENDING the first time it is handed a handle and the rows
+/// when that handle is issued again (a store read on the host's pool, completed before the replay).
+static LIST_PENDS: AtomicBool = AtomicBool::new(false);
+
 extern "C" fn records_list(_: HostCtx, input: *const c_void, out: *mut ServiceOut) -> RawOutcome {
     handed(input);
+    if LIST_PENDS.load(Ordering::SeqCst) {
+        // SAFETY: every service's `in` leads with its head.
+        let h = unsafe { input.cast::<ServiceHead>().read() }.handle;
+        let at = (h.ticket.slot, h.ticket.generation, h.seq);
+        let seen = handles()
+            .iter()
+            .filter(|(handle, op)| *handle == at && *op == service_op::RECORDS_LIST)
+            .count();
+        if seen < 2 {
+            return answer(out, Outcome::Pending, 0, 0);
+        }
+    }
     // SAFETY: the SDK hands a `RecordsListIn` over its own text and buffers.
     let i = unsafe { input.cast::<RecordsListIn>().read() };
     // SAFETY: as above.
@@ -838,6 +854,28 @@ impl Door {
         (ret.outcome(), o.next_tick_ns)
     }
 
+    /// The `drive` a wake of the instance's driver ticket runs, on the ticket its `tick` ran on.
+    fn drive(&self) -> Outcome {
+        let mut sessions = [0_u64; 4];
+        let i = PlaneDriveIn {
+            drive: DriveIn {
+                head: head::<PlaneDriveIn>(life::DRIVE, ticket(1 << 29)),
+                driver: ticket(1 << 29),
+            },
+            sessions_buf: sessions.as_mut_ptr(),
+            sessions_cap: sessions.len(),
+        };
+        let mut o: PlaneDriveOut = z();
+        o.head = out_head::<PlaneDriveOut>();
+        let f = lifecycle().drive.expect("drive");
+        let ret = f(
+            self.instance,
+            std::ptr::from_ref(&i).cast(),
+            std::ptr::from_mut(&mut o).cast(),
+        );
+        ret.outcome()
+    }
+
     /// The kernel's `cancel` of `unit`'s ticket.
     fn cancel(&self, unit: u64) -> Outcome {
         let mut i: PlaneCancelIn = z();
@@ -1206,6 +1244,57 @@ fn a_restarted_instance_serves_an_agent_from_its_recorded_card() {
         after.arrive(8, route, "/a2a/agents/vendor", CARD_READ),
         (Outcome::Ready, 0),
         "the instance opened again serves the agent from its recorded card"
+    );
+}
+
+/// A TICK WHOSE CARD WARM PENDS ENDS PENDING, AND THE `drive` ITS WAKE RUNS LANDS THE WARM
+/// (`abi::mechanism::lifecycle`: a tick's PENDING answer ends it, what pended inside it goes on
+/// through `drive`, and the next tick's start forgets the cycle's answers). An instance opened again
+/// over a store whose `card` listing the host answers on its pool: the first tick's listing pends,
+/// so the tick answers PENDING, and the drives its completions run replay the listing on the same
+/// handles until the cards are held; an arrival addressed to the agent is then admitted. RED before
+/// the fix: the tick answered READY with the listing still in flight and asked for another tick a
+/// second later, whose start forgot the listing, so on busbar dev the warm landed through no tick,
+/// each completion ran another tick, and the driver ticket's schedule served the warm in place of
+/// the deliveries (the busbar root cells `root::serve::plane_a2a_door::*` that wait for a delivery,
+/// at busbar-plane-a2a bcc9cff241 against busbar dev: no delivery within the window).
+#[test]
+fn a_tick_whose_card_warm_pends_ends_pending_and_its_drive_lands_the_warm() {
+    let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    store().clear();
+    handles().clear();
+    let before = open();
+    let (outcome, status, body) = before.connect("vendor");
+    assert_eq!(
+        (outcome, status),
+        (Outcome::Ready, 200),
+        "`connect` holds the agent's card: {body}"
+    );
+    struct Prompt;
+    impl Drop for Prompt {
+        fn drop(&mut self) {
+            LIST_PENDS.store(false, Ordering::SeqCst);
+        }
+    }
+    let _prompt = Prompt;
+    LIST_PENDS.store(true, Ordering::SeqCst);
+    let after = open();
+    let (ticked, _) = after.tick();
+    assert_eq!(
+        ticked,
+        Outcome::Pending,
+        "the first tick's warm is in flight: the tick ends PENDING and goes on through `drive`"
+    );
+    let driven: Vec<Outcome> = (0..4).map(|_| after.drive()).collect();
+    assert!(
+        driven.contains(&Outcome::Ready),
+        "the drives land the warm: {driven:?}"
+    );
+    let route = ("POST", "/a2a/agents/{agent_id}");
+    assert_eq!(
+        after.arrive(13, route, "/a2a/agents/vendor", CARD_READ),
+        (Outcome::Ready, 0),
+        "the instance opened again serves the agent from the card its drive warmed"
     );
 }
 
