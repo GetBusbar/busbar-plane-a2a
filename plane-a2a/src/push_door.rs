@@ -10,10 +10,10 @@
 //!   task with neither queues nothing.
 //! * The lifecycle `tick` ([`tick_deliveries`]) attempts ONE due notification per op: the kernel's random
 //!   byte for the retry's jitter, then the destination judge over the callback, its name resolved,
-//!   then predev's anti-rebinding rule over the judged addresses
-//!   ([`crate::push::Deliveries::rebound`]), then one exchange over the plane's outbound `open-web`
-//!   need ([`crate::door_statement::NEED_OPEN_WEB`]) landing only on those addresses. An attempt whose
-//!   exchange pends ends its `tick` PENDING (a driver ticket's op is never resumed) and goes on
+//!   then one exchange over the plane's outbound `open-web` need
+//!   ([`crate::door_statement::NEED_OPEN_WEB`]) landing only on the addresses it judged. Judging a
+//!   destination is the host's (THE DESIGN, its connections section: the connector judges every
+//!   open); the plane keeps no address rule of its own. An attempt whose exchange pends ends its `tick` PENDING (a driver ticket's op is never resumed) and goes on
 //!   through `drive` ([`drive`]), held in plane memory across the entries, each making the same host
 //!   calls in the same order (the replay rule). Its end settles the queue and is OWED to the task's
 //!   chain. A queued notification wakes the driver ticket ([`queue`]), so the kernel runs `drive`
@@ -43,7 +43,7 @@ use crate::a2a::task::Task;
 use crate::agent_door::A2aDoor;
 use crate::door_statement::NEED_OPEN_WEB;
 use crate::local::{self, PushConfig};
-use crate::push::{Attempted, Deliveries, Delivery, Owed};
+use crate::push::{Attempted, Deliveries, Delivery, DeliverySettled, Owed, Tokens};
 use crate::records::KIND_PUSH_CONFIG;
 use crate::tasks::{self, Halt, Records, Stamp, Write};
 use crate::TaskRow;
@@ -68,15 +68,32 @@ pub fn queue(deliveries: &Deliveries, row: &TaskRow, config: Option<&PushConfig>
     };
     if let Some(cfg) = config {
         task.push_callback = Some(cfg.url.clone());
+        task.push_version.clone_from(&cfg.version);
         deliveries.remember_auth(&task.task_id, cfg.authentication.clone());
     }
     let Some(delivery) = Delivery::of(&task) else {
+        // An ended task with nothing to deliver leaves no credential behind: no delivery is left
+        // to present it.
+        if task.state.is_terminal() {
+            deliveries.remember_auth(&task.task_id, None);
+        }
         return false;
     };
     deliveries.enqueue(delivery, 0);
-    // The delivery is attempted on this wake of the driver ticket, not at the next scheduled tick.
+    // The delivery is attempted on this wake of the driver ticket, not at the next scheduled tick;
+    // while an attempt is held, on that attempt's own completion wake ([`Deliveries::wake`]).
     deliveries.wake();
     true
+}
+
+/// RELEASE busbar's own callback token for `row`'s task once the move has ENDED it, whichever way
+/// it ended (the relayed answer, a cancel, a mirror refresh, the agent's own push): an ended task
+/// has nothing left to report, and a token held past it would count against
+/// [`crate::push::MAX_TOKENS`] for the life of the instance.
+pub fn ended(tokens: &Tokens, row: &TaskRow) {
+    if Task::from_row(row).is_ok_and(|t| t.state.is_terminal()) {
+        tokens.forget(&row.task_id);
+    }
 }
 
 /// FORGET the webhook credential of every push config `writes` deletes for `caller` (the tombstone
@@ -171,12 +188,12 @@ impl Calls<'_> {
 /// WHAT ONE ATTEMPT ASKS OF THE HOST after its jitter byte, in its one order: the destination judge
 /// over the callback, then the exchange. A seam, so what a verdict stops and what reaches the
 /// receiver hold under a test's host as under the kernel's ([`attempt`]).
-/// One judgement: the `DEST_*` verdict, the addresses judged, and the set a dial must land within.
-type Judgement = (u64, Vec<String>, String);
+/// One judgement: the `DEST_*` verdict and the set a dial must land within.
+type Judgement = (u64, String);
 
 trait Line {
-    /// The destination judge over `url`: its `DEST_*` verdict, the addresses it judged, and the set
-    /// a dial must land within; `None` when nothing was checked.
+    /// The destination judge over `url`: its `DEST_*` verdict and the set a dial must land within;
+    /// `None` when nothing was checked.
     fn judge(&mut self, url: &str) -> Poll<Option<Judgement>>;
     /// One exchange of `ex` to `url`: the receiver's status; `None` when the connection or the
     /// exchange failed.
@@ -223,11 +240,7 @@ impl Line for Calls<'_> {
         match judged {
             Poll::Pending => Poll::Pending,
             Poll::Ready(Err(_)) => Poll::Ready(None),
-            Poll::Ready(Ok(j)) => Poll::Ready(Some((
-                j.verdict,
-                j.addresses.names().map(str::to_string).collect(),
-                j.within(),
-            ))),
+            Poll::Ready(Ok(j)) => Poll::Ready(Some((j.verdict, j.within()))),
         }
     }
 
@@ -241,45 +254,36 @@ impl Line for Calls<'_> {
     }
 }
 
-/// One attempt of `flight` over `line`: its end once known, with the addresses its request reached.
-/// The destination is judged afresh on EVERY attempt (the engine's delivery re-ran its guard against
-/// a fresh resolution before each one): a refusal, the judge's or the anti-rebinding rule's, ends
-/// the attempt before anything is framed or sent.
-fn attempt(
-    line: &mut dyn Line,
-    deliveries: &Deliveries,
-    flight: &mut Flight,
-) -> Poll<(Attempted, Vec<String>)> {
+/// One attempt of `flight` over `line`: its end once known. The destination is judged afresh on
+/// EVERY attempt (spec l.392-393, "re-runs the destination judge on every attempt"), and the dial
+/// lands only within what that judgement admitted: a refusal ends the attempt before anything is
+/// framed or sent.
+fn attempt(line: &mut dyn Line, deliveries: &Deliveries, flight: &mut Flight) -> Poll<Attempted> {
     let url = flight.delivery.url.clone();
-    let (verdict, addrs, within) = match line.judge(&url) {
+    let (verdict, within) = match line.judge(&url) {
         Poll::Pending => return Poll::Pending,
         // Nothing was checked, so nothing is allowed.
-        Poll::Ready(None) => {
-            return Poll::Ready((Attempted::Judged(DEST_UNRESOLVABLE), Vec::new()))
-        }
+        Poll::Ready(None) => return Poll::Ready(Attempted::Judged(DEST_UNRESOLVABLE)),
         Poll::Ready(Some(judged)) => judged,
     };
     if verdict != DEST_ALLOWED {
-        return Poll::Ready((Attempted::Judged(verdict), Vec::new()));
-    }
-    if let Some(moved) = deliveries.rebound(&url, &addrs) {
-        return Poll::Ready((moved, Vec::new()));
+        return Poll::Ready(Attempted::Judged(verdict));
     }
     // The credential joins the request only now, after the judge has passed.
     if flight.exchange.is_none() {
         match Exchange::request(deliveries.request(&flight.delivery)) {
             Ok(ex) => flight.exchange = Some(ex.landing_within(within)),
             // A request busbar cannot frame sends nothing.
-            Err(_) => return Poll::Ready((Attempted::Judged(DEST_UNRESOLVABLE), Vec::new())),
+            Err(_) => return Poll::Ready(Attempted::Judged(DEST_UNRESOLVABLE)),
         }
     }
     let Some(ex) = flight.exchange.as_mut() else {
-        return Poll::Ready((Attempted::Transport, Vec::new()));
+        return Poll::Ready(Attempted::Transport);
     };
     match line.send(ex, &url) {
         Poll::Pending => Poll::Pending,
-        Poll::Ready(Some(status)) => Poll::Ready((Attempted::of_status(status), addrs)),
-        Poll::Ready(None) => Poll::Ready((Attempted::Transport, addrs)),
+        Poll::Ready(Some(status)) => Poll::Ready(Attempted::of_status(status)),
+        Poll::Ready(None) => Poll::Ready(Attempted::Transport),
     }
 }
 
@@ -311,12 +315,12 @@ impl Attempting {
     }
 }
 
-/// THE TIME A DELIVERY ATTEMPT MAY TAKE, predev's own: `RELAY_TIMEOUT`, sixty seconds, the request
-/// ceiling of `origin/predev:crates/busbar-a2a/src/a2a/transport.rs:92`, which
-/// `crates/busbar-a2a/src/a2a/pushdeliver.rs:85` names as the delivery's time ceiling. An attempt
-/// held longer than this lost its wake: it is abandoned, then requeued under predev's retry rules
-/// (spec :390-393, B3).
-const DELIVERY_TIMEOUT_NS: u64 = 60_000_000_000;
+/// THE TIME A WHOLE DELIVERY ATTEMPT MAY TAKE, from the tick that began it: judge, open, write and
+/// response together, [`crate::push::ATTEMPT_TIMEOUT_MS`], ten seconds (ARCHITECT ruling on a slow
+/// push receiver; 1.5.5 had no A2A push client, so it has no value of its own to keep). An attempt
+/// still held then is abandoned, its connection closed, and settles as a transport error under the
+/// three-attempt rule (spec l.391-393).
+const DELIVERY_TIMEOUT_NS: u64 = crate::push::ATTEMPT_TIMEOUT_MS * 1_000_000;
 
 /// When the lifecycle tick is next wanted: the earliest waiting delivery, or the moment a held
 /// attempt is abandoned; `0` = neither.
@@ -338,14 +342,21 @@ pub(crate) fn tick_deliveries(
     instance: &Instance<'_, A2aDoor>,
     now_ns: u64,
 ) -> Outcome {
-    let Some((ticket, mut calls)) = calls_of(plane, instance) else {
+    let Some((_, mut calls)) = calls_of(plane, instance) else {
         return Outcome::Ready;
     };
-    // This op runs on the instance's driver ticket: the one a queued delivery wakes.
-    if let Some(host) = plane.host {
+    arm(plane, instance);
+    tick_over(&mut calls, &plane.deliveries, &plane.attempting, now_ns)
+}
+
+/// ARM the wake of the instance's driver ticket, the one a `tick` runs on, once: a queued
+/// delivery wakes it ([`Deliveries::wake`]). Every tick arms it, so the first tick after `open`
+/// does whatever else it does first.
+pub(crate) fn arm(plane: &A2aDoor, instance: &Instance<'_, A2aDoor>) {
+    let ticket = instance.ticket();
+    if let (Some(host), false) = (plane.host, ticket.is_none()) {
         plane.deliveries.arm(|| Box::new(move || host.wake(ticket)));
     }
-    tick_over(&mut calls, &plane.deliveries, &plane.attempting, now_ns)
 }
 
 /// `drive`: the attempt a `tick` left PENDING goes on, the wake on the driver ticket being its
@@ -383,6 +394,8 @@ fn tick_over(
     attempting: &Attempting,
     now_ns: u64,
 ) -> Outcome {
+    // A retry whose attempt ended in `drive` waits from now, the tick after its end.
+    deliveries.anchor(now_ns);
     if let Some(started) = attempting.started_ns() {
         // A held attempt belongs to `drive`, until it outlives its timeout (its wake was lost):
         // then it is CANCELLED FIRST (its connection closed, so it can never also complete), and
@@ -390,6 +403,7 @@ fn tick_over(
         // flight at once.
         if now_ns >= started.saturating_add(DELIVERY_TIMEOUT_NS) {
             if let Some((flight, _)) = attempting.take() {
+                deliveries.holding(false);
                 line.abandon(flight.exchange.as_ref().and_then(Exchange::stream));
                 let jitter = line.jitter();
                 deliveries.owe(&flight.delivery, Attempted::Transport);
@@ -413,6 +427,7 @@ fn tick_over(
                 exchange: None,
             },
             now_ns,
+            Some(now_ns),
         ),
         None => Outcome::Ready,
     }
@@ -421,30 +436,47 @@ fn tick_over(
 /// [`drive`] over `line`.
 fn drive_over(line: &mut dyn Line, deliveries: &Deliveries, attempting: &Attempting) -> Outcome {
     match attempting.take() {
-        Some((flight, now_ns)) => advance_attempt(line, deliveries, attempting, flight, now_ns),
+        Some((flight, started_ns)) => {
+            advance_attempt(line, deliveries, attempting, flight, started_ns, None)
+        }
         None => Outcome::Ready,
     }
 }
 
-/// One entry of `flight`'s attempt, begun at `now_ns`: held again while its exchange pends, else
-/// settled.
+/// One entry of `flight`'s attempt, begun at `started_ns`: held again while its exchange pends,
+/// else settled. A retry's wait counts from when the attempt ENDED (spec l.391-392, two delays of
+/// 250/500 ms): `now_ns` on a `tick`; a `drive` reads no clock (`None`), so its wait is counted by
+/// the tick the wake is followed by, and the driver ticket is woken for it.
 fn advance_attempt(
     line: &mut dyn Line,
     deliveries: &Deliveries,
     attempting: &Attempting,
     mut flight: Flight,
-    now_ns: u64,
+    started_ns: u64,
+    now_ns: Option<u64>,
 ) -> Outcome {
     let jitter = line.jitter();
     match attempt(line, deliveries, &mut flight) {
         Poll::Pending => {
-            attempting.hold(flight, now_ns);
+            attempting.hold(flight, started_ns);
+            deliveries.holding(true);
             Outcome::Pending
         }
-        Poll::Ready((end, reached)) => {
-            deliveries.reached(&flight.delivery.url, &reached);
+        Poll::Ready(end) => {
+            deliveries.holding(false);
             deliveries.owe(&flight.delivery, end);
-            let _ = deliveries.settle(&flight.delivery.task_id, end, now_ns, jitter);
+            let task_id = &flight.delivery.task_id;
+            match now_ns {
+                Some(now_ns) => {
+                    let _ = deliveries.settle(task_id, end, now_ns, jitter);
+                }
+                None => {
+                    if let DeliverySettled::Retry(_) = deliveries.settle_ended(task_id, end, jitter)
+                    {
+                        deliveries.wake();
+                    }
+                }
+            }
             Outcome::Ready
         }
     }

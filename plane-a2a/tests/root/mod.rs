@@ -24,7 +24,10 @@ use busbar_contract::conn::DeclaredConns;
 use busbar_kernel::cost::CostModel;
 use busbar_kernel::governance::signing::{TokenSigner, DEFAULT_KID};
 use busbar_kernel::governance::{GovState, NewKeySpec};
-use busbar_kernel::plane_driver::{EndPost, PlaneMoney};
+use busbar_kernel::{
+    plane_driver::{EndPost, PlaneMoney},
+    plane_routes::ListenerScheme,
+};
 
 use super::planes_tests::{Published, PUBLISHING};
 use super::{compose_planes, door_routes};
@@ -1137,7 +1140,8 @@ fn served_core(
     busbar_kernel::preflight::install_linked_auth(
         crate::LINKED.auths,
         crate::root::auth_bindings::operator_words(),
-    );
+    )
+    .expect("the root's one table and words");
     busbar_kernel::preflight::install_auth_axis(crate::root::dispatch::auth_axis);
     let mut builder = busbar_kernel::test_support::TestApp::new()
         .keys_chain()
@@ -1179,6 +1183,13 @@ fn served_core(
     let routes = doors.iter().map(|r| r.path.clone()).collect();
     let (router, admin, handle) =
         busbar_kernel::build_split_routers_serving(Arc::clone(&app), doors, 1 << 20, 0, false);
+    // THE LISTENER'S SCHEME, stated on every request the data router serves, as busbar's plain
+    // listener states it (`listener_scheme(false)`): a framed claim's stream begins with it, and a
+    // begin that declares none is refused (BeginIn.scheme). The rig drives the router with no
+    // listener, so it states the plain one's.
+    let router = router.layer(axum::Extension(ListenerScheme(
+        busbar_contract::abi::host::service::SCHEME_PLAIN,
+    )));
     // THE NODE'S ADMIN SURFACE OVER IT, as boot mounts it (`units_admin::mount_node`, the one
     // function both call): the generic trust verbs over the kernel's trust book among it
     // (ruling (d), coordinator 2026-10-07).
@@ -4041,8 +4052,9 @@ async fn the_legacy_well_known_path_is_tried_only_when_the_canonical_one_served_
 /// its row states the manifest needs a dropped-in hook's signed manifest does, and the hook
 /// port answers it in process through the frame the kernel built.
 fn hook_env() -> busbar_kernel::hooks::HookEnv {
-    use crate::root::loader::sign::{HookNeeds, NeedLevel};
-    busbar_kernel::test_support::test_hook_env(
+    use busbar_contract::plugin_rows::NeedLevel;
+    use busbar_kernel::test_support::{test_hook_env, HookNeeds};
+    test_hook_env(
         &["test-hook"],
         HookNeeds {
             prompt: NeedLevel::Rw,
@@ -6104,12 +6116,18 @@ mod upstream_credential {
             (
                 "serve-agent-cred-source-env",
                 format!("{{secret: {{env: {var}}}, placement: bearer, lease_ttl_ms: 60000}}"),
-                busbar_contract::secret_ref::SecretRef::env(&var),
+                serde_json::from_value::<busbar_contract::secret_ref::SecretRef>(
+                    serde_json::json!({ "env": var.clone() }),
+                )
+                .expect("a sugar reference"),
             ),
             (
                 "serve-agent-cred-source-file",
                 format!("{{secret: {{file: '{path}'}}, placement: bearer, lease_ttl_ms: 60000}}"),
-                busbar_contract::secret_ref::SecretRef::file(&path),
+                serde_json::from_value::<busbar_contract::secret_ref::SecretRef>(
+                    serde_json::json!({ "file": path.clone() }),
+                )
+                .expect("a sugar reference"),
             ),
         ];
         for (instance, credential, secret) in cases {
@@ -6592,7 +6610,9 @@ async fn a_grpc_call_naming_a_version_this_endpoint_does_not_speak_is_unimplemen
 /// `no-such-task`): `HTTP/2 200`, `content-type: application/grpc`, `grpc-status: 5`,
 /// `grpc-message: the%20backend%20agent%20refused%20this%20task`, `grpc-status-details-bin: …`,
 /// `content-length: 0`, in one block. RED before the fix: the head went out alone (with no media
-/// type) and the status followed in a trailer block.
+/// type) and the status followed in a trailer block. The caller holds no `no-such-task`, so busbar
+/// now refuses it itself, `TaskNotFoundError` (`404`, `NOT_FOUND`), without dialling the agent; the
+/// answer's shape is the same trailers-only block.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_grpc_call_refused_before_any_message_closes_trailers_only_as_predev() {
     use busbar_plane_a2a::framed::{request_message, Rpc};
@@ -8164,7 +8184,10 @@ async fn each_registration_presents_its_own_certificate_and_not_another_registra
 const TASK_ANSWER: &str = r#"{"jsonrpc":"2.0","id":1,"result":{"kind":"task","id":"far-task","contextId":"far-ctx","status":{"state":"working"}}}"#;
 
 /// The `agents:` section `entries`, with the pool `planner` of `members` (in that order) handed
-/// to it as the root hands a named-definition section its unified pools.
+/// to it as the root hands a named-definition section its unified pools. The pool literal ends
+/// `..Default::default()` so it compiles before and after the pool grows a field (ruling (a)); the
+/// allow travels with it, since busbar compiles these cells under its own lints.
+#[allow(clippy::needless_update)]
 fn pooled(entries: &str, members: &[&str]) -> String {
     let key = surface("section");
     let section: serde_yaml::Value = serde_yaml::from_str(entries).expect("a section");

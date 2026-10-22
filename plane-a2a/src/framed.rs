@@ -850,6 +850,14 @@ pub fn take_message(buf: &[u8]) -> Result<Option<(usize, usize)>, String> {
         return Err("the far end compressed a message busbar did not offer to decompress".into());
     }
     let len = u32::from_be_bytes([buf[1], buf[2], buf[3], buf[4]]) as usize;
+    // A declared length past the reply ceiling is refused at once, never waited for: the far end
+    // would otherwise hold the call buffering toward 4 GiB.
+    if len > crate::relay::MAX_REPLY_BYTES {
+        return Err(format!(
+            "the far end declared a {len}-byte message, past the {}-byte reply ceiling",
+            crate::relay::MAX_REPLY_BYTES
+        ));
+    }
     if buf.len() < MESSAGE_PREFIX + len {
         return Ok(None);
     }

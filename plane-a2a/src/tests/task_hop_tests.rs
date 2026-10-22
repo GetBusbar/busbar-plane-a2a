@@ -171,13 +171,13 @@ fn a_request_naming_a_task_the_caller_holds_reuses_it_and_opens_nothing() {
 }
 
 #[test]
-fn a_task_another_caller_holds_is_not_addressed_so_a_fresh_one_is_minted() {
+fn a_task_another_caller_holds_is_not_addressed_and_is_refused_not_found() {
     let mut desk = desk();
     let get_task =
         json!({ "jsonrpc": "2.0", "id": 7, "method": "GetTask", "params": { "id": "t2" } });
-    let (task, _) = hop(opened(&mut desk, &get_task, ALICE));
-    assert_eq!(task.task_id, MINTED);
-    assert!(!task.addressed);
+    let (status, code, _) = refusal_of(opened(&mut desk, &get_task, ALICE));
+    assert_eq!((status, code), (404, -32001));
+    assert_eq!(desk.draws, 0, "no fresh task is minted");
 }
 
 #[test]
@@ -243,10 +243,13 @@ fn a_held_task_id_whose_far_end_id_is_known_is_sent_on_as_the_far_ends() {
     let (_, instead) = hop(opened_with(&mut desk, &cancel, ALICE, &back));
     let sent: Value = serde_json::from_slice(&instead.expect("translated")).unwrap();
     assert_eq!(sent["params"]["id"], "far-t1");
+    // Another caller's task is never sent on, translated or not: it is refused as not found.
     let foreign =
         json!({ "jsonrpc": "2.0", "id": 7, "method": "CancelTask", "params": { "id": "t2" } });
-    let (_, instead) = hop(opened_with(&mut desk, &foreign, ALICE, &back));
-    assert_eq!(instead, None);
+    assert!(matches!(
+        opened_with(&mut desk, &foreign, ALICE, &back),
+        Opened::Refused(_)
+    ));
 }
 
 fn settled(desk: &mut Desk, task: &TaskHop, how: &TaskSettled) -> usize {
@@ -410,10 +413,10 @@ fn an_inline_callback_that_passes_is_the_opened_tasks_callback() {
     assert_eq!(held.next_seq, 3, "submitted and delegated, nothing more");
 }
 
-/// A request addressing a task the caller holds registers the callback on THAT task, keeping its
-/// chain where it was (the engine's `set_push_callback` chains no event).
+/// A request addressing a task the caller holds registers the callback as THAT task's push config,
+/// leaving its row and its chain where they were (no event is chained, and no row is rewritten).
 #[test]
-fn an_inline_callback_on_an_addressed_task_is_registered_without_an_event() {
+fn an_inline_callback_on_an_addressed_task_is_its_push_config_without_an_event() {
     let mut desk = desk();
     let before = get(&mut desk.book, ALICE, "t1", 300).unwrap().unwrap();
     let envelope = send(json!({
@@ -423,11 +426,11 @@ fn an_inline_callback_on_an_addressed_task_is_registered_without_an_event() {
     let (task, _) = hop(opened(&mut desk, &envelope, ALICE));
     assert_eq!(task.task_id, "t1");
     let after = get(&mut desk.book, ALICE, "t1", 300).unwrap().unwrap();
-    assert_eq!(after.row.push_callback, "https://hook.example/t1");
-    assert_eq!(
-        after.next_seq, before.next_seq,
-        "no event was chained: the chain's position is kept"
-    );
+    assert_eq!(after, before, "the row and the chain's position are kept");
+    let cfg = crate::local::held_config(&mut desk.book, ALICE, "t1")
+        .unwrap()
+        .expect("the push config");
+    assert_eq!(cfg.url, "https://hook.example/t1");
 }
 
 /// A request with no inline callback carries none back, and opens a task with none.
@@ -468,10 +471,15 @@ fn alice_sends(envelope: &Value) -> (TaskHop, Option<Vec<u8>>) {
 /// Ported from busbar-a2a a2a/tests/idmap_tests.rs::no_spelling_of_the_task_member_crosses_the_boundary.
 #[test]
 fn no_spelling_of_the_task_member_crosses_the_boundary() {
-    for member in ["id", "taskId", "task_id"] {
+    // `id` names the task on v0.3's spelling; on v1.0's it is the config's id.
+    for (member, method) in [
+        ("id", "tasks/pushNotificationConfig/get"),
+        ("taskId", "GetTaskPushNotificationConfig"),
+        ("task_id", "GetTaskPushNotificationConfig"),
+    ] {
         let naming = |id: &str| {
             json!({
-                "jsonrpc": "2.0", "id": 7, "method": "GetTaskPushNotificationConfig",
+                "jsonrpc": "2.0", "id": 7, "method": method,
                 "params": { member: id }
             })
         };
@@ -500,7 +508,7 @@ fn no_spelling_of_the_task_member_crosses_the_boundary() {
 
 /// THE WRITE THROUGH THE SECOND TURN. `params.message.taskId` is how a caller continues a
 /// conversation: the owner's second turn reaches its own open task, and an intruder's pointed at
-/// another caller's task is left untranslated, the same as one pointed at a task that never was.
+/// another caller's task is refused, never sent on, exactly as one pointed at a task that never was.
 /// Ported from busbar-a2a a2a/tests/idmap_tests.rs::the_second_turns_task_id_cannot_be_pointed_at_another_principals_conversation.
 #[test]
 fn the_second_turns_task_id_cannot_be_pointed_at_another_principals_conversation() {
@@ -508,14 +516,21 @@ fn the_second_turns_task_id_cannot_be_pointed_at_another_principals_conversation
         send(json!({ "message": { "role": "ROLE_USER", "messageId": "m-9", "taskId": id } }))
     };
 
-    let (_, mine) = alice_sends(&turn("t1"));
+    let (task, mine) = alice_sends(&turn("t1"));
+    assert_eq!(
+        task.task_id, "t1",
+        "the owner's second turn addresses its task"
+    );
     let mine: Value =
         serde_json::from_slice(&mine.expect("the owner's second turn is translated")).unwrap();
     assert_eq!(mine.pointer("/params/message/taskId").unwrap(), "far-t1");
 
-    let (_, at_bobs) = alice_sends(&turn("t2"));
-    let (_, at_nothing) = alice_sends(&turn("never-was"));
-    assert_eq!(at_bobs, None, "another caller's task is not joined");
+    let refused = |id: &str| match opened_with(&mut desk(), &turn(id), ALICE, &far) {
+        Opened::Refused(reply) => reply,
+        opened => panic!("a second turn at `{id}` must be refused: {opened:?}"),
+    };
+    let (at_bobs, at_nothing) = (refused("t2"), refused("never-was"));
+    assert_eq!(at_bobs.status, 404, "another caller's task is not joined");
     assert_eq!(
         at_bobs, at_nothing,
         "a second turn at another caller's task is indistinguishable from one at a task that does not exist"
@@ -1168,4 +1183,198 @@ fn an_opening_states_the_engines_answer_should_the_store_refuse_its_writes() {
         addressed, None,
         "the engine sent an addressed task's hop whether or not its callback was recorded"
     );
+}
+
+// ── a task-addressed verb naming a task the caller does not hold ───────────────────────────────
+
+/// A GetTask, CancelTask or second-turn SendMessage naming a task the caller does NOT hold is
+/// refused locally with A2A's `TaskNotFoundError` (`-32001`, `404`), and nothing is opened: no id
+/// is minted, nothing is written, and nothing is relayed. Another caller's task and a task that
+/// never was are refused with the same bytes, so the refusal is no existence oracle.
+#[test]
+fn a_task_verb_naming_a_task_the_caller_does_not_hold_is_refused_task_not_found() {
+    let requests = |id: &str| {
+        [
+            json!({ "jsonrpc": "2.0", "id": 7, "method": "GetTask", "params": { "id": id } }),
+            json!({ "jsonrpc": "2.0", "id": 7, "method": "tasks/get", "params": { "id": id } }),
+            json!({ "jsonrpc": "2.0", "id": 7, "method": "CancelTask", "params": { "id": id } }),
+            json!({ "jsonrpc": "2.0", "id": 7, "method": "tasks/cancel", "params": { "id": id } }),
+            send(json!({ "message": { "messageId": "m", "taskId": id } })),
+        ]
+    };
+    for (foreign, missing) in requests("t2").into_iter().zip(requests("never-was")) {
+        let mut bodies = Vec::new();
+        for envelope in [foreign, missing] {
+            let mut d = desk();
+            let before = d.book.clone();
+            let mut out = Vec::new();
+            let req = Request {
+                envelope: &envelope,
+                relayed: None,
+                caller: ALICE,
+                member: MEMBER,
+                addressed: None,
+                now: 300,
+            };
+            let opened = open(&mut d, &req, &json!(7), &far, &mut out).unwrap();
+            let Opened::Refused(reply) = opened else {
+                panic!("{envelope}: a task the caller does not hold must be refused, not opened: {opened:?}");
+            };
+            assert_eq!(reply.status, 404, "{envelope}");
+            let doc: Value = serde_json::from_slice(&reply.body).unwrap();
+            assert_eq!(
+                (&doc["id"], &doc["error"]["code"], &doc["error"]["message"]),
+                (
+                    &json!(7),
+                    &json!(-32001),
+                    &json!(crate::local::NO_SUCH_TASK)
+                ),
+                "{envelope}"
+            );
+            assert_eq!(
+                doc["error"]["data"][0]["reason"], "TASK_NOT_FOUND",
+                "{envelope}: A2A's ErrorInfo for the code"
+            );
+            assert!(out.is_empty(), "{envelope}: nothing is written: {out:?}");
+            assert_eq!(d.draws, 0, "{envelope}: no id is minted");
+            assert_eq!(d.book, before, "{envelope}: the store is untouched");
+            bodies.push(reply.body);
+        }
+        assert_eq!(
+            bodies[0], bodies[1],
+            "another caller's task reads exactly as a missing one"
+        );
+    }
+}
+
+/// A SECOND TURN (`params.message.taskId`, A2A v1.0 `Message.task_id`) naming a task the caller
+/// holds ADDRESSES that task: its identity is reused, nothing is minted or opened, and a pooled
+/// request is pinned to the member holding it.
+#[test]
+fn a_second_turn_naming_a_held_task_in_its_message_addresses_that_task() {
+    let mut d = desk();
+    let mut out = Vec::new();
+    let at = Stamp {
+        caller: ALICE,
+        request_id: "r",
+        now: 150,
+    };
+    tasks::dispatch(&mut d.book, &at, "t1", "planner-b", &mut out).unwrap();
+    d.book.apply(&out);
+    let before = d.book.clone();
+    let turn = send(json!({ "message": { "messageId": "m-2", "taskId": "t1" } }));
+    let members = ["planner-a".to_string(), "planner-b".to_string()];
+    assert_eq!(
+        holder(&mut d, &turn, ALICE, 300, &members).unwrap(),
+        Some("planner-b".to_string()),
+        "the continuation is pinned to the member holding its task"
+    );
+    let (task, _) = hop(opened(&mut d, &turn, ALICE));
+    assert_eq!(task.task_id, "t1", "the held task is the one continued");
+    assert_eq!(task.context_id, "ctx-1");
+    assert!(task.addressed);
+    assert_eq!(d.draws, 0, "no id is minted");
+    assert_eq!(d.book, before, "nothing is opened");
+}
+
+// ── an inline callback on an addressed task, racing another writer ──────────────────────────────
+
+/// The writes opening `envelope` for Alice makes at 300, NOT applied: what the piece's answer
+/// carries out while other units may land theirs first.
+fn writes_of(desk: &mut Desk, envelope: &Value) -> Vec<Write> {
+    let mut out = Vec::new();
+    let req = Request {
+        envelope,
+        relayed: None,
+        caller: ALICE,
+        member: MEMBER,
+        addressed: None,
+        now: 300,
+    };
+    let opened = open(desk, &req, &json!(7), &|_| None, &mut out).unwrap();
+    assert!(matches!(opened, Opened::Hop { .. }), "{opened:?}");
+    out
+}
+
+/// AN INLINE CALLBACK ON AN ADDRESSED TASK IS A PUSH-CONFIG SET, last writer wins: two sets read
+/// the same task and land in turn, with another unit's move of the task landing between their read
+/// and their writes. The later set is the config held, and the other writer's move stands: the
+/// task's state and its chain's next sequence never go back, so the task moves on afterwards.
+#[test]
+fn two_inline_callbacks_on_an_addressed_task_leave_the_later_and_never_regress_the_task() {
+    let mut d = desk();
+    let set = |url: &str| {
+        send(json!({
+            "id": "t1",
+            "configuration": { "pushNotificationConfig": { "id": "c1", "url": url } },
+        }))
+    };
+    let next = get(&mut d.book, ALICE, "t1", 300)
+        .unwrap()
+        .unwrap()
+        .next_seq;
+    let first = writes_of(&mut d, &set("https://hook.example/a"));
+    let second = writes_of(&mut d, &set("https://hook.example/b"));
+
+    let mut theirs = Vec::new();
+    let other = Stamp {
+        caller: ALICE,
+        request_id: "another-unit",
+        now: 300,
+    };
+    tasks::transition(&mut d.book, &other, "t1", TaskState::Working, &mut theirs)
+        .unwrap()
+        .expect("it moved");
+    d.book.apply(&theirs);
+    d.book.apply(&first);
+    d.book.apply(&second);
+
+    let held = get(&mut d.book, ALICE, "t1", 300).unwrap().unwrap();
+    assert_eq!(held.row.state, "working", "the other writer's move stands");
+    assert_eq!(
+        held.next_seq,
+        next + 1,
+        "the chain's position never goes back"
+    );
+    let mut after = Vec::new();
+    tasks::transition(&mut d.book, &other, "t1", TaskState::Completed, &mut after)
+        .expect("the task still moves")
+        .expect("it moved");
+    let cfg = crate::local::held_config(&mut d.book, ALICE, "t1")
+        .unwrap()
+        .expect("the set is held as the task's push config");
+    assert_eq!(cfg.id, "c1");
+    assert_eq!(cfg.url, "https://hook.example/b", "the later set wins");
+}
+
+// ── a cancel of a task busbar holds as terminal ────────────────────────────────────────────────
+
+/// A CANCEL OF A TASK BUSBAR HOLDS AS TERMINAL is answered by busbar, never relayed: A2A's
+/// `TaskNotCancelableError` (`-32002`, `409`) in the plane's words, nothing written. A read of the
+/// same task is still the agent's to answer.
+#[test]
+fn a_cancel_of_a_task_held_as_terminal_is_refused_not_cancelable() {
+    for method in ["CancelTask", "tasks/cancel"] {
+        let mut d = desk();
+        let mut out = Vec::new();
+        let at = Stamp {
+            caller: ALICE,
+            request_id: "r",
+            now: 150,
+        };
+        tasks::transition(&mut d.book, &at, "t1", TaskState::Completed, &mut out).unwrap();
+        d.book.apply(&out);
+        let before = d.book.clone();
+        let cancel =
+            json!({ "jsonrpc": "2.0", "id": 7, "method": method, "params": { "id": "t1" } });
+        let (status, code, message) = refusal_of(opened(&mut d, &cancel, ALICE));
+        assert_eq!((status, code), (409, -32002), "{method}");
+        assert_eq!(message, TASK_NOT_CANCELABLE, "{method}");
+        assert_eq!(d.book, before, "{method}: nothing is written");
+
+        let read =
+            json!({ "jsonrpc": "2.0", "id": 7, "method": "GetTask", "params": { "id": "t1" } });
+        let (task, _) = hop(opened(&mut d, &read, ALICE));
+        assert!(task.addressed, "a read of a terminal task is relayed");
+    }
 }

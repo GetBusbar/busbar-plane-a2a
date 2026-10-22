@@ -41,6 +41,9 @@ const SWEEP_BUDGET: usize = 32;
 pub struct Pass {
     /// The host services its finished pieces made: the next piece's handles count on from here.
     pub(crate) issued: u32,
+    /// The held cards' warm runs on this unit's handles and has not landed: the next entry
+    /// replays it from `issued`, on the same handles, before anything else the piece does.
+    pub(crate) warming: bool,
     /// The piece in flight's stamp, kept across its re-entries.
     entry: Option<Entry>,
     /// The reply bytes the last window did not hold.
@@ -873,6 +876,7 @@ fn refresh_listed<'h>(
             local::held_config(&mut tasks::Staged::new(via, writes), caller, &row.task_id)?;
         if i >= queued {
             crate::push_door::queue(&plane.deliveries, row, config.as_ref());
+            crate::push_door::ended(&plane.tokens, row);
             plane.units.with(&unit, |u| {
                 if let Some(u) = u {
                     u.pass.refreshed_queued = i + 1;
@@ -1211,6 +1215,13 @@ fn window_core(
             .with(&unit, |u| u.is_some_and(|u| u.pass.message)),
     };
     if rest.is_empty() {
+        // The answer is written whole: the door is done with the unit, the first to make room
+        // ([`crate::agent_door::AgentUnit::over`]).
+        plane.units.with(&unit, |u| {
+            if let Some(u) = u {
+                u.over = true;
+            }
+        });
         let mut flags = EMIT_DONE;
         if message {
             flags |= busbar_contract::abi::plane::EMIT_MESSAGE_END;

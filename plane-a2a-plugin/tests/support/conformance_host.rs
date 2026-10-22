@@ -3,7 +3,7 @@
 //
 // RENDERED by `busbar-release plugin heal busbar-plane-a2a` from GetBusbar/busbar-release
 // template/conformance-host/, because this repo's declares file states network needs (`needs`:
-// `http`); a hand edit is overwritten by the next sync.
+// `grpc`, `http`); a hand edit is overwritten by the next sync.
 
 //! **THE SUITE'S HOST CONNECTOR, IN THIS PLUGIN'S OWN TEST** (ARCHITECT Q-P4-9 (d)). busbar keeps
 //! only the neutral seam (`busbar_plugin_loader::conformance::Host`, the suite's `host:` and `tls:`
@@ -11,7 +11,7 @@
 //! one connector — carrier -> [TLS] -> framer (`BUSBAR-1.6.0.md` THE DESIGN §5):
 //!
 //! * busbar's own `Connector` (`busbar-core-connector`, a dev-dependency at the pin), its framer
-//!   entries the transport doors this plugin's needs name (`tcp`, `http`), each loaded
+//!   entries the transport doors this plugin's needs name (`tcp`, `grpc`, `http`), each loaded
 //!   through the loader's one load and opened as the root opens a transport door;
 //! * the connector's own TLS (connsec), trusting the platform roots plus the suite's TEST trust
 //!   anchors (`tls:`), never handed to the plugin: no plugin holds a key, a certificate or a TLS
@@ -39,7 +39,7 @@
 //! ```
 //!
 //! with the dev-dependencies the rendered root `Cargo.toml` states (`{ workspace = true }`):
-//! `busbar-core-connector`, `busbar-transport-tcp`, `busbar-transport-http`, `tokio`.
+//! `busbar-core-connector`, `busbar-transport-tcp`, `busbar-transport-grpc`, `busbar-transport-http`, `tokio`.
 
 #![allow(dead_code)]
 
@@ -72,18 +72,20 @@ use busbar_plugin_loader::dispatch::{
 };
 
 /// Where [`far_end`] listens: loopback, a port of this repo's own.
-pub const FAR_END: &str = "localhost:47691";
+pub const FAR_END: &str = "localhost:52722";
 
 /// The framer doors the host serves, as the root links them: (claim, door). One row a line,
 /// whatever the claims' lengths (a `vec!` would be reflowed by rustfmt).
 #[allow(clippy::vec_init_then_push)]
 fn doors() -> Vec<(&'static str, DoorFn)> {
+    use busbar_transport_grpc::linked::door as grpc_door;
     use busbar_transport_http::linked::door as http_door;
     use busbar_transport_tcp::linked::door as tcp_door;
     // Each row is compiled against this repo's own pin of busbar-contract (the rendered `[patch]`),
     // as busbar compiles the rows it links.
     let mut doors: Vec<(&'static str, DoorFn)> = Vec::new();
     doors.push(("tcp", tcp_door));
+    doors.push(("grpc", grpc_door));
     doors.push(("http", http_door));
     doors
 }
@@ -105,7 +107,10 @@ pub fn anchors() -> &'static str {
 /// # Panics
 /// The anchors do not parse, a transport door does not load or open, or the view does not compose.
 #[must_use]
-pub fn host(wake: Arc<dyn Fn(u64) + Send + Sync>, anchors: Option<&str>) -> Arc<dyn DeclaredConns> {
+pub fn host(
+    wake: busbar_contract::conn::ConnWake,
+    anchors: Option<&str>,
+) -> Arc<dyn DeclaredConns> {
     // The reactor a socket a plugin opens from a dispatcher worker registers on, as the root
     // installs it (`root::connector::io_reactor`): the connector's own I/O thread.
     busbar_core_connector::io::install_process_reactor(io_reactor());
@@ -238,6 +243,7 @@ impl Opened {
             composes_over: stated.composes_over,
             ported: stated.ported,
             status_rows: stated.status_rows,
+            datagram: stated.datagram,
             duplex: stated
                 .upgrades
                 .iter()
@@ -587,7 +593,7 @@ fn tls_echo() -> String {
 /// to the test CA is upgraded and round-trips (the anchors went to the host, never to the plugin).
 #[test]
 fn the_hosts_tls_upgrade_verifies_against_the_suites_test_anchors() {
-    let c = host(Arc::new(|_| {}), Some(anchors()));
+    let c = host(Arc::new(|_, _| {}), Some(anchors()));
     assert_eq!(
         upgraded_echo(c.as_ref(), &tls_echo()),
         Ok(b"hello".to_vec())
@@ -598,7 +604,7 @@ fn the_hosts_tls_upgrade_verifies_against_the_suites_test_anchors() {
 /// trust the test CA.
 #[test]
 fn red_with_the_anchors_withheld_the_hosts_tls_upgrade_is_refused() {
-    let c = host(Arc::new(|_| {}), None);
+    let c = host(Arc::new(|_, _| {}), None);
     let answer = upgraded_echo(c.as_ref(), &tls_echo());
     assert!(answer.is_err(), "upgraded over an untrusted CA: {answer:?}");
 }
@@ -626,7 +632,7 @@ fn an_http_need_reaches_a_local_http_listener_through_the_hosts_framer() {
         String::from_utf8_lossy(&seen).into_owned()
     });
 
-    let c = host(Arc::new(|_| {}), None);
+    let c = host(Arc::new(|_, _| {}), None);
     assert!(c.serves_scheme("http"), "the host serves http");
     c.declare(
         OWNER,
