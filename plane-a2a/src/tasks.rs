@@ -39,7 +39,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::a2a::task::{plan_transition, readable_row, TaskState};
 use crate::record::DIGEST_VERSION_LEN_PREFIXED;
-use crate::records::{KIND_PUSH_CONFIG, KIND_TASK, KIND_TASK_EVENT};
+use crate::records::{retention_of, KIND_PUSH_CONFIG, KIND_TASK, KIND_TASK_EVENT};
 use crate::{TaskEventRow, TaskRow};
 
 /// How long a terminal task stays readable after its terminal transition, in seconds.
@@ -196,11 +196,18 @@ fn terminal(state: &str) -> bool {
     TaskState::parse(state).is_ok_and(TaskState::is_terminal)
 }
 
-/// Whether a held task is past its window at `now`: terminal and unchanged for longer than
-/// [`TERMINAL_TTL_SECS`].
+/// The cutoff of the task kind's purge at `now`: a row unchanged since before it is past its
+/// window.
+fn cutoff(now: u64) -> u64 {
+    now.saturating_sub(TERMINAL_TTL_SECS)
+}
+
+/// Whether a held task is past its window at `now`: the task kind's rule
+/// ([`retention_of`]`(KIND_TASK)`, terminal-only) drops it against the cutoff, so it is terminal and
+/// unchanged for longer than [`TERMINAL_TTL_SECS`]. An active task is never past its window.
 #[must_use]
 pub fn expired(row: &TaskRow, now: u64) -> bool {
-    terminal(&row.state) && now.saturating_sub(row.updated_at) > TERMINAL_TTL_SECS
+    retention_of(KIND_TASK).drops(row.updated_at, cutoff(now), terminal(&row.state))
 }
 
 fn decode(bytes: &[u8]) -> Option<HeldTask> {
@@ -541,32 +548,6 @@ pub fn dispatch(
     change(rec, at, task, &mut plan, out)
 }
 
-/// REGISTER `callback` as task `task`'s push callback (the engine's `set_push_callback`): the row
-/// changes and no event is chained, so the chain's position is kept. `None` when the caller holds
-/// no such task.
-///
-/// # Errors
-/// [`Halt`].
-pub fn set_callback(
-    rec: &mut dyn Records,
-    at: &Stamp<'_>,
-    task: &str,
-    callback: &str,
-    out: &mut Vec<Write>,
-) -> Result<Option<TaskRow>, Halt> {
-    let Some(mut held) = get(rec, at.caller, task, at.now)? else {
-        return Ok(None);
-    };
-    held.row.push_callback = callback.to_string();
-    held.row.updated_at = at.now;
-    out.push(Write {
-        kind: KIND_TASK,
-        key: task_key(at.caller, task),
-        value: encode(&held)?,
-    });
-    Ok(Some(held.row))
-}
-
 /// ADVANCE the artifact cursor to `cursor`, monotonic, with a `task.artifact` event; nothing when it
 /// would not move forward.
 ///
@@ -627,11 +608,13 @@ pub fn record_push_delivery(
     change(rec, at, task, &mut plan, out).map(|_| ())
 }
 
-/// THE RETENTION SWEEP at `now`, over the TERMINAL tasks this instance holds and no others: one
-/// past its window is tombstoned with its events and its push config; while [`MAX_RETAINED`] or
-/// more terminal ones are held, the oldest go too. An active task is never touched, however long
-/// it has been idle (Q128 K2-H5, coordinator 2026-10-07; spec :198-203). At most `budget` tasks are
-/// touched; the rest wait for the next sweep.
+/// THE RETENTION SWEEP at `now`, the plane's own purge of the task kind under its rule
+/// ([`retention_of`]`(KIND_TASK)`, [`crate::records::Retention::TerminalOnly`]: busbar dev's tail
+/// declares no retention, so the plane holds it), over the TERMINAL tasks this instance holds and
+/// no others: one past its window is tombstoned with its events and its push config; while
+/// [`MAX_RETAINED`] or more terminal ones are held, the oldest go too. An active task is never
+/// touched, however long it has been idle (Q128 K2-H5, coordinator 2026-10-07; spec :198-203). At
+/// most `budget` tasks are touched; the rest wait for the next sweep.
 ///
 /// # Errors
 /// [`Halt`].
@@ -641,11 +624,12 @@ pub fn retention_sweep(
     budget: usize,
     out: &mut Vec<Write>,
 ) -> Result<(), Halt> {
+    let rule = retention_of(KIND_TASK);
     let mut held: Vec<(String, TaskRow)> = rec
         .list(KIND_TASK, "")?
         .into_iter()
         .filter_map(|(k, b)| Some((k.split_once('/')?.0.to_string(), decode(&b)?.row)))
-        .filter(|(_, row)| terminal(&row.state))
+        .filter(|(_, row)| rule.reaches(terminal(&row.state)))
         .collect();
     held.sort_by(|a, b| (a.1.updated_at, &a.1.task_id).cmp(&(b.1.updated_at, &b.1.task_id)));
     let mut touched = 0usize;

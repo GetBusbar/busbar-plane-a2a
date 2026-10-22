@@ -34,6 +34,9 @@ description = "The A2A plane for busbar: the plugin contract's plane kind implem
 # without naming this crate or resolving its checkout. Links no native library.
 links = "busbar-door-cells-busbar-plane-a2a"
 
+[lints]
+workspace = true
+
 [lib]
 name = "busbar_plane_a2a"
 path = "src/lib.rs"

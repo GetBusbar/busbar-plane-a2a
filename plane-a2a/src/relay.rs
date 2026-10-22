@@ -290,7 +290,10 @@ pub fn read_answer(status: u32, body: &[u8], id: &Value) -> Result<Value, HopRef
     if body.len() > MAX_REPLY_BYTES {
         return Err(HopRefusal::BodyTooLarge);
     }
-    let envelope: Value = serde_json::from_slice(body).map_err(|_| HopRefusal::NotJson)?;
+    // Read through the reading copy: a number past `f64`'s range is still JSON
+    // ([`crate::answer_bytes::readable`]); the caller's bytes keep its spelling.
+    let envelope: Value = serde_json::from_slice(&crate::answer_bytes::readable(body))
+        .map_err(|_| HopRefusal::NotJson)?;
     match read_response(&envelope, id) {
         Ok(RpcReply::Result(result)) => Ok(result),
         Ok(RpcReply::Error { .. }) => Err(HopRefusal::BackendError),
@@ -322,6 +325,17 @@ pub fn relayed(id: &Value, result: Value) -> RelayReply {
         content_type: JSON_MEDIA_TYPE,
         body: serde_json::to_vec(&json!({ "jsonrpc": "2.0", "id": id, "result": result }))
             .unwrap_or_default(),
+    }
+}
+
+/// The caller's answer to a relayed `result` given as the far end's own bytes (spliced, never
+/// re-serialised; Law 5), under the caller's own `id`.
+#[must_use]
+pub fn relayed_bytes(id: &Value, result: &[u8]) -> RelayReply {
+    RelayReply {
+        status: STATUS_OK,
+        content_type: JSON_MEDIA_TYPE,
+        body: crate::answer_bytes::result_reply(id, result),
     }
 }
 
@@ -1063,6 +1077,7 @@ impl HopRelay {
             Some(t) => (t.task_id.clone(), t.context_id.clone(), t.skill.clone()),
             None => (String::new(), String::new(), None),
         };
+        let opened = self.task.as_ref().is_some_and(|t| !t.addressed);
         let rest = self.binding == Binding::HttpJson;
         let id = self.id.clone();
         let mut body = Vec::new();
@@ -1075,11 +1090,16 @@ impl HopRelay {
             match events::read_event(&frame, &id, &task_id, &context_id, skill.as_deref()) {
                 Ok(event) => {
                     body.extend_from_slice(&event.sse);
-                    let said =
-                        event.state.is_some() || event.artifact || event.backend_task_id.is_some();
+                    // A message naming no task ends the task this hop opened, as the unary answer.
+                    let state = if opened && event.names_no_task {
+                        Some(TaskState::Completed)
+                    } else {
+                        event.state
+                    };
+                    let said = state.is_some() || event.artifact || event.backend_task_id.is_some();
                     if self.task.is_some() && said {
                         self.settled.push(TaskSettled::Event {
-                            state: event.state,
+                            state,
                             artifact: event.artifact,
                             backend_id: event.backend_task_id,
                         });
@@ -1288,10 +1308,22 @@ impl HopRelay {
                 self.reading = Some(Reading::Hard);
             }
         }
+        // THE ENVELOPE THE ANSWER IS READ FROM, as bytes: the far end's own, or an HTTP+JSON
+        // body re-framed around its own bytes. The caller's `result` is spliced out of it.
+        let rewrapped = match self.binding {
+            Binding::HttpJson
+                if (200..300).contains(&status) && self.far.len() <= MAX_REPLY_BYTES =>
+            {
+                binding::rewrap(&self.far, &self.id).ok()
+            }
+            _ => None,
+        };
         let answer = match self.binding {
             Binding::JsonRpc | Binding::Grpc => read_answer(status, &self.far, &self.id),
-            Binding::HttpJson => match read_rest_answer(status, &self.far, &self.id) {
-                Some(answer) => answer,
+            Binding::HttpJson => match &rewrapped {
+                Some(envelope) => read_answer(status, envelope, &self.id),
+                None if !(200..300).contains(&status) => Err(HopRefusal::Status),
+                None if self.far.len() > MAX_REPLY_BYTES => Err(HopRefusal::BodyTooLarge),
                 None => return self.unframable(),
             },
         };
@@ -1299,25 +1331,54 @@ impl HopRelay {
         if let Err(refusal) = &answer {
             self.journal(*refusal, false);
         }
+        let envelope: &[u8] = rewrapped.as_deref().unwrap_or(&self.far);
+        let result_bytes = crate::answer_bytes::result_span(envelope).map(|r| &envelope[r]);
         let Some(task) = &self.task else {
             return PieceAnswer::ToCaller(match answer {
-                Ok(result) => relayed(&self.id, result),
+                Ok(result) => match result_bytes {
+                    Some(bytes) => relayed_bytes(&self.id, bytes),
+                    None => relayed(&self.id, result),
+                },
                 Err(refusal) => refusal.reply(&self.id),
             });
         };
         PieceAnswer::ToCaller(match answer {
             Ok(mut result) => {
+                // A message naming no task ends the task this hop opened: there is no other.
+                let state = if !task.addressed && task_identity::names_no_task(&result) {
+                    TaskState::Completed
+                } else {
+                    task_identity::reported_task_state(&result)
+                };
                 self.settled.push(TaskSettled::Reported {
-                    state: task_identity::reported_task_state(&result),
+                    state,
                     backend_id: task_identity::backend_task_id(&result),
                 });
-                task_identity::rewrite_identity(
-                    &mut result,
-                    &task.task_id,
-                    &task.context_id,
-                    task.skill.as_deref(),
-                );
-                relayed(&self.id, result)
+                // The far end's bytes with busbar's identity spliced in; the value path only for a
+                // result that is no object (the engine answered a bare task for it).
+                let spliced = result_bytes.and_then(|bytes| {
+                    crate::answer_bytes::rewrite_identity(
+                        bytes,
+                        &task_identity::WRAPPERS,
+                        &task.task_id,
+                        &task.context_id,
+                        task.skill
+                            .as_deref()
+                            .map(|s| (task_identity::SKILL_METADATA_KEY, s)),
+                    )
+                });
+                match spliced {
+                    Some(bytes) => relayed_bytes(&self.id, &bytes),
+                    None => {
+                        task_identity::rewrite_identity(
+                            &mut result,
+                            &task.task_id,
+                            &task.context_id,
+                            task.skill.as_deref(),
+                        );
+                        relayed(&self.id, result)
+                    }
+                }
             }
             Err(refusal) => {
                 let code = (refusal == HopRefusal::BackendError)
