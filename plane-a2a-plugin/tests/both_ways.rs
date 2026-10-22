@@ -48,7 +48,6 @@ mod both_ways {
         RefusalIn, RefusalOut, REFUSAL_ARRIVE, REFUSAL_GATE, REFUSAL_KERNEL,
     };
     use busbar_contract::abi::sdk::door::abi_str;
-    use busbar_plane_a2a::door;
     use busbar_plugin_loader::dispatch::kinds::plane::{OwnedSnapshot, Plane};
     use busbar_plugin_loader::dispatch::{
         in_head, load_dropped, load_linked, out_head, Bind, DispatchConfig, Dispatcher, Frame,
