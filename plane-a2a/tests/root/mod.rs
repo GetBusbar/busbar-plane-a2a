@@ -29,6 +29,13 @@ use busbar_kernel::{
     plane_routes::ListenerScheme,
 };
 
+/// The plane's private facts and the protobuf words this leg sends and reads, restated as data
+/// (the crate's unit test `door_facts` holds each to the item it restates). This leg is compiled
+/// into the composition root's binary and reaches the plane through its door alone.
+#[path = "../support/root_facts.rs"]
+#[allow(dead_code)]
+mod root_facts;
+
 use super::planes_tests::{Published, PUBLISHING};
 use super::{compose_planes, door_routes};
 use crate::root::loader::dispatch::kinds::plane::Plane;
@@ -1023,13 +1030,10 @@ fn served_core(
     if let Some(ca) = push_ca {
         let mut push = serde_yaml::Mapping::new();
         push.insert(
-            busbar_plane_a2a::door_statement::PUSH_CA_KEY.into(),
+            root_facts::PUSH_CA_KEY.into(),
             serde_yaml::Value::String(ca),
         );
-        sections.insert(
-            busbar_plane_a2a::door_statement::PUSH_SECTION,
-            serde_yaml::Value::Mapping(push),
-        );
+        sections.insert(root_facts::PUSH_SECTION, serde_yaml::Value::Mapping(push));
     }
     // THE EGRESS, AS PRODUCTION SEALS IT: no provider (an agent is reached at its own `url`),
     // the process's connector, the node's journal.
@@ -6384,9 +6388,7 @@ async fn an_agent_whose_card_names_only_grpc_is_dialled_over_grpc() {
 /// unloaded: the door's grpc need is served by no transport, so the hop never reaches the far end.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_a2a_hop_rides_the_hosts_grpc_need_to_an_in_process_grpc_agent() {
-    use busbar_plane_a2a::door_statement::{NEED_AGENT, NEED_GRPC};
-    use busbar_plane_a2a::proto::pb;
-    use prost::Message as _;
+    use root_facts::{NEED_AGENT, NEED_GRPC};
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-grpc-need";
     let _published = Published(instance);
@@ -6406,28 +6408,20 @@ async fn an_a2a_hop_rides_the_hosts_grpc_need_to_an_in_process_grpc_agent() {
         .heard
         .try_recv()
         .unwrap_or_else(|_| panic!("the hop never reached the gRPC agent ({status}): {body}"));
-    assert_eq!(
-        path,
-        format!("/{}/SendMessage", busbar_plane_a2a::proto::SERVICE_NAME)
-    );
+    assert_eq!(path, format!("/{}/SendMessage", root_facts::SERVICE_NAME));
     assert!(sent.len() > 5, "a length-prefixed message: {sent:?}");
     assert_eq!(sent[0], 0, "no compression");
     let len = u32::from_be_bytes([sent[1], sent[2], sent[3], sent[4]]) as usize;
     assert_eq!(sent.len(), 5 + len, "exactly one length-prefixed message");
-    let request = pb::SendMessageRequest::decode(&sent[5..])
+    let message = root_facts::read_send_message_request(&sent[5..])
         .unwrap_or_else(|e| panic!("the far end reads a SendMessageRequest: {e}"));
-    let message = request.message.expect("the request carries the message");
     assert_eq!(message.message_id, "m-174");
-    assert_eq!(message.role, pb::Role::User as i32);
-    let texts: Vec<&str> = message
-        .parts
-        .iter()
-        .filter_map(|p| match &p.content {
-            Some(pb::part::Content::Text(t)) => Some(t.as_str()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(texts, ["ROUTE THE ROW"], "the caller's one text part");
+    assert_eq!(message.role, root_facts::ROLE_USER);
+    assert_eq!(
+        message.texts,
+        ["ROUTE THE ROW"],
+        "the caller's one text part"
+    );
 
     // THE CALLER got the far end's answer: its working task, as the JSON-RPC result.
     assert_eq!(status, StatusCode::OK, "{body}");
@@ -6455,7 +6449,7 @@ async fn an_a2a_hop_rides_the_hosts_grpc_need_to_an_in_process_grpc_agent() {
         .inner
         .declared_spec(owner, need)
         .expect("the door declared its gRPC need on the connector");
-    assert_eq!(spec.transport, busbar_plane_a2a::claims::FRAMED_TRANSPORT);
+    assert_eq!(spec.transport, root_facts::FRAMED_TRANSPORT);
     assert!(
         s.riding.inner.framer_for(&spec.transport).is_some(),
         "a loaded transport serves the gRPC need's scheme"
@@ -6470,7 +6464,6 @@ async fn an_a2a_hop_rides_the_hosts_grpc_need_to_an_in_process_grpc_agent() {
 /// (the a2a TCK's subject leg: every gRPC requirement failed on it).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_grpc_callers_send_message_is_answered_ok_with_its_status_in_the_trailers() {
-    use busbar_plane_a2a::framed::{request_message, response_result, Rpc};
     use http_body_util::BodyExt as _;
     use tower::ServiceExt as _;
     let _one = PUBLISHING.lock().await;
@@ -6484,9 +6477,7 @@ async fn a_grpc_callers_send_message_is_answered_ok_with_its_status_in_the_trail
     .await;
     let s = served(instance, &agent.entry("planner", "1h"), false, None);
     approve(&s, "planner").await;
-    let params = serde_json::json!({ "message": {
-        "messageId": "m-1", "role": "ROLE_USER", "parts": [{ "text": "PLAN THE MIGRATION" }] } });
-    let message = request_message(Rpc::SendMessage, &params).expect("a SendMessageRequest");
+    let message = root_facts::send_message_request("m-1", "PLAN THE MIGRATION");
     let mut body = vec![0u8];
     body.extend_from_slice(&u32::try_from(message.len()).expect("small").to_be_bytes());
     body.extend_from_slice(&message);
@@ -6535,10 +6526,12 @@ async fn a_grpc_callers_send_message_is_answered_ok_with_its_status_in_the_trail
     );
     let len = u32::from_be_bytes([bytes[1], bytes[2], bytes[3], bytes[4]]) as usize;
     assert_eq!(bytes.len(), 5 + len, "exactly one message");
-    let result = response_result(Rpc::SendMessage, &bytes[5..]).expect("a SendMessageResponse");
+    let state = root_facts::send_message_response_task_state(&bytes[5..])
+        .expect("a SendMessageResponse carrying a task");
     assert_eq!(
-        result["task"]["status"]["state"], "TASK_STATE_WORKING",
-        "the agent's answer reaches the caller: {result}"
+        state,
+        root_facts::TASK_STATE_WORKING,
+        "the agent's answer reaches the caller: {bytes:?}"
     );
     assert!(agent.relayed(), "the agent was reached");
 }
@@ -6551,7 +6544,6 @@ async fn a_grpc_callers_send_message_is_answered_ok_with_its_status_in_the_trail
 /// `INTERNAL` "busbar answered HTTP 400".
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_grpc_call_naming_a_version_this_endpoint_does_not_speak_is_unimplemented() {
-    use busbar_plane_a2a::framed::{request_message, Rpc};
     use http_body_util::BodyExt as _;
     use tower::ServiceExt as _;
     let _one = PUBLISHING.lock().await;
@@ -6560,9 +6552,7 @@ async fn a_grpc_call_naming_a_version_this_endpoint_does_not_speak_is_unimplemen
     let mut agent = Agent::start(200, ANSWER).await;
     let s = served(instance, &agent.entry("planner", "1h"), false, None);
     approve(&s, "planner").await;
-    let params = serde_json::json!({ "message": {
-        "messageId": "m-1", "role": "ROLE_USER", "parts": [{ "text": "PLAN THE MIGRATION" }] } });
-    let message = request_message(Rpc::SendMessage, &params).expect("a SendMessageRequest");
+    let message = root_facts::send_message_request("m-1", "PLAN THE MIGRATION");
     let mut body = vec![0u8];
     body.extend_from_slice(&u32::try_from(message.len()).expect("small").to_be_bytes());
     body.extend_from_slice(&message);
@@ -6615,7 +6605,6 @@ async fn a_grpc_call_naming_a_version_this_endpoint_does_not_speak_is_unimplemen
 /// answer's shape is the same trailers-only block.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_grpc_call_refused_before_any_message_closes_trailers_only_as_predev() {
-    use busbar_plane_a2a::framed::{request_message, Rpc};
     use http_body_util::BodyExt as _;
     use tower::ServiceExt as _;
     let _one = PUBLISHING.lock().await;
@@ -6630,8 +6619,7 @@ async fn a_grpc_call_refused_before_any_message_closes_trailers_only_as_predev()
     .await;
     let s = served(instance, &agent.entry("planner", "1h"), false, None);
     approve(&s, "planner").await;
-    let message = request_message(Rpc::GetTask, &serde_json::json!({ "id": "no-such-task" }))
-        .expect("a GetTaskRequest");
+    let message = root_facts::get_task_request("no-such-task");
     let mut body = vec![0u8];
     body.extend_from_slice(&u32::try_from(message.len()).expect("small").to_be_bytes());
     body.extend_from_slice(&message);
@@ -7173,7 +7161,7 @@ async fn an_apply_carrying_a_malformed_agent_push_ca_is_refused_and_deliveries_k
     let deploy = busbar_kernel::config::deploy_from_yaml_str(&text).expect("the config parses");
     let cfg = busbar_kernel::config::resolve(&deploy, &Default::default()).expect("resolves");
     let rules = Arc::new(crate::root::door_steps::Rules::default());
-    rules.hold_owned_anchors(&[busbar_plane_a2a::door_statement::PUSH_TRUST_FROM]);
+    rules.hold_owned_anchors(&[root_facts::PUSH_TRUST_FROM]);
     let built = busbar_kernel::build_app_from_config(
         cfg,
         busbar_kernel::config::PluginsCfg::default(),
@@ -9305,7 +9293,6 @@ async fn a_pinned_refusal_answers_the_pinned_members_own_wait() {
 mod diagnostics_page {
     use busbar_contract::diagnostic::Diagnostic;
     use busbar_kernel::diagnostics::{render_json_for, render_markdown_for};
-    use busbar_plane_a2a::diagnostics::DIAGNOSTICS;
 
     /// The committed per-plane markdown snapshot.
     const COMMITTED_MD: &str =
@@ -9316,7 +9303,54 @@ mod diagnostics_page {
         "/../../docs/diagnostics-a2a.json"
     );
 
-    /// THIS PLANE'S OWN PAGE: every code of [`DIAGNOSTICS`] except those the HOST page publishes (the
+    /// THE CODES THE PLANE DECLARES: the `diagnostics` of its own `declares.json`, the document its
+    /// door's Statement carries and from which the host installs the plane's catalogue (read here
+    /// field for field, as the composition root's own `catalogue_tests` reads a linked plugin's).
+    /// The crate's unit test `the_declares_file_states_the_catalogue` holds that document equal to
+    /// the plane's `DIAGNOSTICS`, so the page rendered from it is the plane's catalogue's.
+    fn declared() -> Vec<&'static Diagnostic> {
+        use busbar_contract::diagnostic::{Class, Severity};
+        let leak = |v: &serde_json::Value| -> &'static str {
+            Box::leak(
+                v.as_str()
+                    .expect("a string field")
+                    .to_string()
+                    .into_boxed_str(),
+            )
+        };
+        let document: serde_json::Value = serde_json::from_str(include_str!("../../declares.json"))
+            .expect("declares.json is JSON");
+        let mut out = Vec::new();
+        for d in document["diagnostics"].as_array().into_iter().flatten() {
+            let code = u16::try_from(d["code"].as_u64().expect("a code")).expect("a u16 code");
+            let severity = [
+                Severity::BenignRecurring,
+                Severity::Actionable,
+                Severity::Fatal,
+            ]
+            .into_iter()
+            .find(|s| s.as_str() == d["severity"])
+            .expect("a severity token");
+            let class = Class::ALL
+                .into_iter()
+                .find(|c| c.ordinal() == code / 1000)
+                .expect("a class");
+            out.push(&*Box::leak(Box::new(Diagnostic {
+                code,
+                class,
+                slug: leak(&d["slug"]),
+                title: leak(&d["title"]),
+                severity,
+                summary: leak(&d["summary"]),
+                action: leak(&d["action"]),
+                since: leak(&d["since"]),
+                retired: false,
+            })));
+        }
+        out
+    }
+
+    /// THIS PLANE'S OWN PAGE: every code of [`declared`] except those the HOST page publishes (the
     /// codes the plane took out of the host registry together with the code that emits them, whose
     /// page and number are frozen there). One code, one page.
     fn own_page() -> Vec<&'static Diagnostic> {
@@ -9324,9 +9358,8 @@ mod diagnostics_page {
         let text = std::fs::read_to_string(host).expect("docs/diagnostics.json is readable");
         let entries: Vec<serde_json::Value> =
             serde_json::from_str(&text).expect("docs/diagnostics.json is a JSON array");
-        DIAGNOSTICS
-            .iter()
-            .copied()
+        declared()
+            .into_iter()
             .filter(|d| !entries.iter().any(|e| e["number"] == u64::from(d.code)))
             .collect()
     }

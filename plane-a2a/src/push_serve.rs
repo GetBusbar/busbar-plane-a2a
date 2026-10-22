@@ -17,7 +17,8 @@
 //!    refusal: whether a task exists or has ended is not told here);
 //! 5. the body is JSON, or `400`;
 //! 6. the state it reports is recorded on the task's own chain through the one transition table
-//!    (a re-reported state is a retry, not a move; a move that cannot be recorded is still `202`);
+//!    (a push reporting no state this build can read, or the state already held, is `202` and moves
+//!    nothing, queuing no notification; a move that cannot be recorded is still `202`);
 //! 7. the caller's own delivery is queued from busbar's own row, never from the pushed body.
 
 use std::task::Poll;
@@ -30,7 +31,7 @@ use busbar_contract::abi::plane::{ServeIn, ServeOut, AUDIT_NONE};
 use busbar_contract::abi::sdk::{Instance, Lent, Out};
 use serde_json::{json, Value};
 
-use crate::a2a::task::Task;
+use crate::a2a::task::{Task, TaskState};
 use crate::agent_door::A2aDoor;
 use crate::tasks::{self, Halt, Stamp, Write};
 
@@ -155,6 +156,13 @@ fn signature(
     Some(sig.signature.to_vec())
 }
 
+/// THE MOVE A PUSHED `document` ASKS OF A TASK IN `held`: the state it reports, when it reports one
+/// this build can read and the task is not already in it. `None` is no move: an artifact update or
+/// a message reports no state, and a retried push re-reports the one already recorded.
+pub(crate) fn push_move(held: TaskState, document: &Value) -> Option<TaskState> {
+    crate::task_identity::reported_task_state(document).filter(|reported| *reported != held)
+}
+
 /// `serve` of the push route.
 pub(crate) fn serve(
     plane: &A2aDoor,
@@ -167,11 +175,11 @@ pub(crate) fn serve(
     let authorization = fields
         .iter()
         .find(|f| {
-            f.field(|f| &f.name)
+            f.name()
                 .as_str()
                 .is_ok_and(|n| n.eq_ignore_ascii_case("authorization"))
         })
-        .and_then(|f| f.field(|f| &f.value).as_str().ok())
+        .and_then(|f| f.value().as_str().ok())
         .unwrap_or_default();
     // 1. THE CAPABILITY: a token this instance minted, signed again by the host and compared in
     //    constant time.
@@ -204,7 +212,7 @@ pub(crate) fn serve(
         );
     }
     // 3. THE BODY'S CEILING.
-    let body = input.field(|i| &i.body).bytes();
+    let body = input.body().bytes();
     if body.len() > MAX_PUSH_BODY {
         return refused(
             &input,
@@ -244,24 +252,24 @@ pub(crate) fn serve(
             &[],
         );
     };
-    // 6. THE MOVE, through the one transition table, read by the one reader of a task's state.
-    let reported = crate::task_identity::reported_task_state(&document);
+    // 6. THE MOVE, through the one transition table, read by the one reader of a task's state. A
+    //    push that reports no state, or the state the task holds, moves nothing: `202`, nothing
+    //    recorded and no notification queued.
+    let Some(reported) = push_move(task.state, &document) else {
+        return accepted(&input, &mut out, &[]);
+    };
     let mut writes = Vec::new();
-    let moved = if reported == task.state {
-        held.row
-    } else {
-        let at = Stamp {
-            caller: &caller,
-            request_id: "",
-            now,
-        };
-        match tasks::transition(&mut via, &at, &task_id, reported, &mut writes) {
-            Err(Halt::Pending) => return pend(),
-            // A move that cannot be recorded (commonly a push about a task already terminal) is
-            // the agent being redundant: `202` stops its retry loop.
-            Err(Halt::Failed(_)) | Ok(None) => return accepted(&input, &mut out, &[]),
-            Ok(Some(row)) => row,
-        }
+    let at = Stamp {
+        caller: &caller,
+        request_id: "",
+        now,
+    };
+    let moved = match tasks::transition(&mut via, &at, &task_id, reported, &mut writes) {
+        Err(Halt::Pending) => return pend(),
+        // A move that cannot be recorded (commonly a push about a task already terminal) is the
+        // agent being redundant: `202` stops its retry loop.
+        Err(Halt::Failed(_)) | Ok(None) => return accepted(&input, &mut out, &[]),
+        Ok(Some(row)) => row,
     };
     // 7. THE CALLER'S OWN DELIVERY, from busbar's row.
     match crate::push_door::queue_moved(&plane.deliveries, &mut via, &caller, &moved) {

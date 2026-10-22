@@ -28,10 +28,10 @@
 //! The transition table is a FUNCTION rather than a set of `if`s scattered across the relay, because
 //! the interesting failure is the transition nobody wrote a branch for.
 
-// PARTLY UNMOUNTED. `Task::submitted` and the store projection are driven by every inbound call.
-// The transition verbs beyond the opening one belong to the relay that watches a task to
-// completion, which this branch does not mount; the table they enforce is settled first on
-// purpose, because a state machine that changes after tasks exist invalidates the rows.
+// THE TABLE IS DRIVEN. `Task::submitted` and the row projection open every task, and each next
+// state move of a held task is planned through [`plan_transition`], which enforces the table. Some
+// items of the vocabulary are read only by the tests that pin it, so dead code is allowed outside
+// tests.
 #![cfg_attr(not(test), allow(dead_code))]
 
 use serde::{Deserialize, Serialize};

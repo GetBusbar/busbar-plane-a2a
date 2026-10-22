@@ -5,8 +5,9 @@
 //! `ListValue`, `NullValue`, `Timestamp`), with their protobuf JSON mapping.
 //!
 //! Ported from `pbjson-types` 0.9.0 (MIT OR Apache-2.0), whose mapping the engine's messages were
-//! written and read in, so the bytes are its bytes. The one thing not taken is `chrono`: the
-//! timestamp's RFC 3339 form is written and read here exactly as `chrono` 0.4 wrote
+//! written and read in, so the bytes are its bytes, but one: a timestamp is written Z-normalised,
+//! as the protobuf JSON mapping states, where `pbjson-types` wrote `+00:00`. The one thing not
+//! taken is `chrono`: the timestamp's RFC 3339 form is written and read here as `chrono` 0.4 wrote
 //! (`DateTime<Utc>::to_rfc3339`) and read (`DateTime::parse_from_rfc3339`) it for `pbjson-types`,
 //! because the calendar crate's clock half reaches the OS, and a plane's closure reaches nothing
 //! (the dependency wall; ARCHITECT ruling Q1 (C), 2026-10-04).
@@ -36,27 +37,27 @@ pub struct Value {
 
 /// `google.protobuf.Value`'s kinds.
 pub mod value {
-    /// The kind of a [`super::Value`].
+    /// The kind of a [`super::Value`]: the protobuf `oneof`, one variant per member by its tag.
     #[derive(Clone, PartialEq, prost::Oneof)]
     pub enum Kind {
         /// `null`.
         #[prost(enumeration = "super::NullValue", tag = "1")]
-        NullValue(i32),
+        Null(i32),
         /// A number.
         #[prost(double, tag = "2")]
-        NumberValue(f64),
+        Number(f64),
         /// A string.
         #[prost(string, tag = "3")]
-        StringValue(String),
+        String(String),
         /// A boolean.
         #[prost(bool, tag = "4")]
-        BoolValue(bool),
+        Bool(bool),
         /// An object.
         #[prost(message, tag = "5")]
-        StructValue(super::Struct),
+        Struct(super::Struct),
         /// An array.
         #[prost(message, tag = "6")]
-        ListValue(super::ListValue),
+        List(super::ListValue),
     }
 }
 
@@ -181,12 +182,12 @@ impl Serialize for value::Kind {
     fn serialize<S: Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
         use value::Kind;
         match self {
-            Kind::NullValue(_) => ().serialize(ser),
-            Kind::StringValue(v) => v.serialize(ser),
-            Kind::BoolValue(v) => v.serialize(ser),
-            Kind::StructValue(v) => v.serialize(ser),
-            Kind::ListValue(v) => v.serialize(ser),
-            Kind::NumberValue(v) => {
+            Kind::Null(_) => ().serialize(ser),
+            Kind::String(v) => v.serialize(ser),
+            Kind::Bool(v) => v.serialize(ser),
+            Kind::Struct(v) => v.serialize(ser),
+            Kind::List(v) => v.serialize(ser),
+            Kind::Number(v) => {
                 if v.is_nan() {
                     Err(ser::Error::custom(
                         "Cannot serialize NaN as google.protobuf.Value.number_value",
@@ -223,21 +224,21 @@ impl<'de> Visitor<'de> for KindVisitor {
         f.write_str("google.protobuf.Value")
     }
     fn visit_bool<E: de::Error>(self, v: bool) -> Result<value::Kind, E> {
-        Ok(value::Kind::BoolValue(v))
+        Ok(value::Kind::Bool(v))
     }
     fn visit_i8<E: de::Error>(self, v: i8) -> Result<value::Kind, E> {
-        Ok(value::Kind::NumberValue(v.into()))
+        Ok(value::Kind::Number(v.into()))
     }
     fn visit_i16<E: de::Error>(self, v: i16) -> Result<value::Kind, E> {
-        Ok(value::Kind::NumberValue(v.into()))
+        Ok(value::Kind::Number(v.into()))
     }
     fn visit_i32<E: de::Error>(self, v: i32) -> Result<value::Kind, E> {
-        Ok(value::Kind::NumberValue(v.into()))
+        Ok(value::Kind::Number(v.into()))
     }
     #[allow(clippy::cast_precision_loss)]
     fn visit_i64<E: de::Error>(self, v: i64) -> Result<value::Kind, E> {
         if v > -EXACT && v < EXACT {
-            return Ok(value::Kind::NumberValue(v as f64));
+            return Ok(value::Kind::Number(v as f64));
         }
         Err(de::Error::custom(OUT_OF_RANGE_INTEGRAL))
     }
@@ -245,18 +246,18 @@ impl<'de> Visitor<'de> for KindVisitor {
         self.visit_i64(v.try_into().map_err(de::Error::custom)?)
     }
     fn visit_u8<E: de::Error>(self, v: u8) -> Result<value::Kind, E> {
-        Ok(value::Kind::NumberValue(v.into()))
+        Ok(value::Kind::Number(v.into()))
     }
     fn visit_u16<E: de::Error>(self, v: u16) -> Result<value::Kind, E> {
-        Ok(value::Kind::NumberValue(v.into()))
+        Ok(value::Kind::Number(v.into()))
     }
     fn visit_u32<E: de::Error>(self, v: u32) -> Result<value::Kind, E> {
-        Ok(value::Kind::NumberValue(v.into()))
+        Ok(value::Kind::Number(v.into()))
     }
     #[allow(clippy::cast_precision_loss, clippy::cast_sign_loss)]
     fn visit_u64<E: de::Error>(self, v: u64) -> Result<value::Kind, E> {
         if v < EXACT as u64 {
-            return Ok(value::Kind::NumberValue(v as f64));
+            return Ok(value::Kind::Number(v as f64));
         }
         Err(de::Error::custom(OUT_OF_RANGE_INTEGRAL))
     }
@@ -264,45 +265,45 @@ impl<'de> Visitor<'de> for KindVisitor {
         self.visit_u64(v.try_into().map_err(de::Error::custom)?)
     }
     fn visit_f32<E: de::Error>(self, v: f32) -> Result<value::Kind, E> {
-        Ok(value::Kind::NumberValue(v.into()))
+        Ok(value::Kind::Number(v.into()))
     }
     fn visit_f64<E: de::Error>(self, v: f64) -> Result<value::Kind, E> {
-        Ok(value::Kind::NumberValue(v))
+        Ok(value::Kind::Number(v))
     }
     fn visit_char<E: de::Error>(self, v: char) -> Result<value::Kind, E> {
-        Ok(value::Kind::StringValue(v.into()))
+        Ok(value::Kind::String(v.into()))
     }
     fn visit_str<E: de::Error>(self, v: &str) -> Result<value::Kind, E> {
-        Ok(value::Kind::StringValue(v.into()))
+        Ok(value::Kind::String(v.into()))
     }
     fn visit_borrowed_str<E: de::Error>(self, v: &'de str) -> Result<value::Kind, E> {
-        Ok(value::Kind::StringValue(v.into()))
+        Ok(value::Kind::String(v.into()))
     }
     fn visit_string<E: de::Error>(self, v: String) -> Result<value::Kind, E> {
-        Ok(value::Kind::StringValue(v))
+        Ok(value::Kind::String(v))
     }
     fn visit_none<E: de::Error>(self) -> Result<value::Kind, E> {
-        Ok(value::Kind::NullValue(0))
+        Ok(value::Kind::Null(0))
     }
     fn visit_some<D: Deserializer<'de>>(self, de: D) -> Result<value::Kind, D::Error> {
         Deserialize::deserialize(de)
     }
     fn visit_unit<E: de::Error>(self) -> Result<value::Kind, E> {
-        Ok(value::Kind::NullValue(0))
+        Ok(value::Kind::Null(0))
     }
     fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<value::Kind, A::Error> {
         let mut values = Vec::new();
         while let Some(value) = seq.next_element()? {
             values.push(value);
         }
-        Ok(value::Kind::ListValue(ListValue { values }))
+        Ok(value::Kind::List(ListValue { values }))
     }
     fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<value::Kind, A::Error> {
         let mut fields = HashMap::new();
         while let Some((key, value)) = map.next_entry()? {
             fields.insert(key, value);
         }
-        Ok(value::Kind::StructValue(Struct { fields }))
+        Ok(value::Kind::Struct(Struct { fields }))
     }
 }
 
@@ -383,8 +384,9 @@ pub fn representable(seconds: i64, nanos: i32) -> bool {
 }
 
 impl Timestamp {
-    /// Its RFC 3339 form, as `chrono`'s `to_rfc3339` wrote a UTC time: four-digit years (signed
-    /// past `0..=9999`), the fraction in 0, 3, 6 or 9 digits, and `+00:00`.
+    /// Its RFC 3339 form, as `chrono`'s `to_rfc3339` wrote a UTC time (four-digit years, signed
+    /// past `0..=9999`; the fraction in 0, 3, 6 or 9 digits), Z-normalised as the protobuf JSON
+    /// mapping writes a `Timestamp` ("generated output will always be Z-normalized").
     fn rfc3339(self) -> Result<String, &'static str> {
         if self.nanos < 0 {
             return Err(OUT_OF_RANGE_INTEGRAL);
@@ -416,7 +418,7 @@ impl Timestamp {
         } else {
             let _ = write!(out, ".{nano:09}");
         }
-        out.push_str("+00:00");
+        out.push('Z');
         Ok(out)
     }
 }

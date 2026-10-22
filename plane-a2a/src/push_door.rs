@@ -34,10 +34,10 @@ use busbar_contract::abi::host::service::{
 use busbar_contract::abi::mechanism::call::{Outcome, Span};
 use busbar_contract::abi::mechanism::check::SPAN_ABSENT;
 use busbar_contract::abi::mechanism::ticket::{CompletionHandle, Ticket};
-use busbar_contract::abi::sdk::conn::Host;
+use busbar_contract::abi::sdk::conn::StaticHost;
 use busbar_contract::abi::sdk::exchange::{exchange, Exchange};
 use busbar_contract::abi::sdk::publish::Keyed;
-use busbar_contract::abi::sdk::{Instance, Services};
+use busbar_contract::abi::sdk::{Instance, StaticServices};
 
 use crate::a2a::task::Task;
 use crate::agent_door::A2aDoor;
@@ -161,8 +161,8 @@ struct Flight {
 /// The host calls one attempt makes, in their one order: the random byte (handle `0`), the judge
 /// (handle `1`), the exchange (from handle `2`).
 struct Calls<'h> {
-    host: &'h Host,
-    services: Services,
+    host: &'h StaticHost,
+    services: StaticServices,
     ticket: Ticket,
 }
 
@@ -322,13 +322,15 @@ impl Attempting {
 /// three-attempt rule (spec l.391-393).
 const DELIVERY_TIMEOUT_NS: u64 = crate::push::ATTEMPT_TIMEOUT_MS * 1_000_000;
 
-/// When the lifecycle tick is next wanted: the earliest waiting delivery, or the moment a held
-/// attempt is abandoned; `0` = neither.
+/// When the lifecycle tick is next wanted: while an attempt is held, ONLY the moment it is
+/// abandoned; else the earliest waiting delivery; `0` = neither. A held attempt's tick starts no
+/// other attempt and its start forgets the held exchange's answers (a tick is the driver ticket's
+/// cycle boundary, [`Deliveries::wake`]), so a delivery due meanwhile asks for no tick: the held
+/// attempt's own completion wake (its `drive`, then the tick after it) attempts it.
 pub(crate) fn next_tick_ns(deliveries: &Deliveries, attempting: &Attempting) -> u64 {
-    match (deliveries.next_tick_ns(), attempting.deadline_ns()) {
-        (0, b) => b,
-        (a, 0) => a,
-        (a, b) => a.min(b),
+    match attempting.deadline_ns() {
+        0 => deliveries.next_tick_ns(),
+        deadline => deadline,
     }
 }
 

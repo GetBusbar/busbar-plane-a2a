@@ -5,12 +5,26 @@
 //! half): the door's `project`, entered as the dispatcher enters it and checked as the loader checks
 //! every answer, writes the caller's `contextId` into the hook view's opaque session.
 
-use busbar_contract::abi::mechanism::call::Outcome;
-use busbar_contract::abi::plane::{ProjectIn, ProjectOut};
-use busbar_contract::abi::sdk::Safe;
-use busbar_plane_a2a::agent_door::Project;
-use busbar_plane_a2a::door_statement;
+// A door-driven test crate: it reaches the plane only through `door`, the crate's one public item,
+// and enters `project` through the door's own table as the dispatcher does, so reading that raw
+// table happens here, outside the plugin crate (whose root keeps the literal
+// `#![forbid(unsafe_code)]`). The claim it names is `door_facts`', held to the crate's own route
+// table by the crate's unit test `door_facts`.
+
+#[path = "support/door_facts.rs"]
+#[allow(dead_code)] // this test reads the route table alone
+mod door_facts;
+
+use busbar_contract::abi::mechanism::call::{InHead, OutHead, Outcome};
+use busbar_contract::abi::mechanism::ticket::Ticket;
+use busbar_contract::abi::plane::{slot, Ops, ProjectIn, ProjectOut};
 use serde_json::json;
+
+/// The door's plane ops, as the dispatcher reads them off the door.
+fn ops() -> &'static Ops {
+    // SAFETY: the door is a `'static` table whose ops are the plane kind's.
+    unsafe { &*(*busbar_plane_a2a::door()).ops.cast::<Ops>() }
+}
 
 /// One `project` of `body` arriving on claim `claim` at `target`, through the door's own entry,
 /// checked as the loader checks every answer (`check_project`): the outcome and the session the
@@ -18,7 +32,7 @@ use serde_json::json;
 fn project_session(claim: usize, target: &str, body: &[u8]) -> (Outcome, Option<String>) {
     use busbar_contract::abi::hook::SignalEntry;
     use busbar_contract::abi::mechanism::call::{AbiStr, Blob, BLOB_OCTETS};
-    use busbar_contract::abi::sdk::door::{blank_in, blank_out, Entry};
+    use busbar_contract::abi::sdk::door::{blank_in, blank_out};
     let mut signals = [SignalEntry {
         id: 0,
         tag: 0,
@@ -26,40 +40,43 @@ fn project_session(claim: usize, target: &str, body: &[u8]) -> (Outcome, Option<
     }; 4];
     let mut arena = vec![0u8; 4096];
     let mut messages = [busbar_contract::abi::hook::MessageView {
-        role: AbiStr::over(b""),
-        text: AbiStr::over(b""),
+        role: AbiStr::of_bytes(b""),
+        text: AbiStr::of_bytes(b""),
     }; 4];
     let input = ProjectIn {
         claim: u32::try_from(claim).unwrap(),
-        target: AbiStr {
-            ptr: target.as_ptr(),
-            len: target.len(),
-        },
-        body: Blob {
-            ptr: body.as_ptr(),
-            len: body.len(),
-            fmt: BLOB_OCTETS,
-            flags: 0,
-        },
+        // SAFETY: `target` and `body` outlive `input`, which is read only inside this function.
+        target: unsafe { AbiStr::from_raw_parts(target.as_ptr(), target.len()) },
+        // SAFETY: as `target`.
+        body: unsafe { Blob::from_raw_parts(body.as_ptr(), body.len(), BLOB_OCTETS, 0) },
         signals_buf: signals.as_mut_ptr(),
         signals_cap: signals.len(),
         arena_buf: arena.as_mut_ptr(),
         arena_cap: arena.len(),
         messages_buf: messages.as_mut_ptr(),
         messages_cap: messages.len(),
+        head: InHead {
+            size: std::mem::size_of::<ProjectIn>() as u32,
+            op: slot::PROJECT,
+            ticket: Ticket::NONE,
+            ..blank_in()
+        },
         ..blank_in()
     };
     let mut out: ProjectOut = blank_out();
-    // SAFETY: `input`'s pointers name the live buffers above for the call; the door's `project`
-    // reads no instance.
-    let outcome = unsafe {
-        <Safe<Project> as Entry>::enter(
-            std::ptr::null_mut(),
-            busbar_contract::abi::plane::slot::PROJECT,
-            &input,
-            &mut out,
-        )
+    out.head = OutHead {
+        size: std::mem::size_of::<ProjectOut>() as u32,
+        ..blank_out()
     };
+    // `input`'s pointers name the live buffers above for the call; the door's `project` reads no
+    // instance.
+    let project = ops().project.expect("the door states project");
+    let outcome = project(
+        std::ptr::null_mut(),
+        std::ptr::from_ref(&input).cast(),
+        std::ptr::from_mut(&mut out).cast(),
+    )
+    .outcome();
     busbar_contract::abi::plane::check::check_project(
         outcome,
         &out,
@@ -74,20 +91,17 @@ fn project_session(claim: usize, target: &str, body: &[u8]) -> (Outcome, Option<
     )
     .expect("the answer passes the loader's check");
     let s = out.view.session;
-    let session = (!s.ptr.is_null()).then(|| {
+    let session = (!s.ptr().is_null()).then(|| {
         assert_eq!(s.fmt, BLOB_OCTETS);
-        let at = s.ptr as usize - arena.as_ptr() as usize;
-        String::from_utf8(arena[at..at + s.len].to_vec()).unwrap()
+        let at = s.ptr() as usize - arena.as_ptr() as usize;
+        String::from_utf8(arena[at..at + s.len()].to_vec()).unwrap()
     });
     (outcome, session)
 }
 
 /// The claim the door states for `verb target`.
 fn claim_of(verb: &str, target: &str) -> usize {
-    door_statement::ROUTES
-        .iter()
-        .position(|r| r.verb == verb && r.target == target)
-        .expect("a stated route")
+    door_facts::claim(verb, target) as usize
 }
 
 /// THE SESSION ON THE DOOR PATH (ARCHITECT RULING 2026-10-03, Q-FOLD-A2A-2-PROJECT-POOL session

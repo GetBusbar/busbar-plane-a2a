@@ -16,67 +16,48 @@
 //! which order that is so a change to the serializer's configuration is a red here rather than a
 //! silent reshaping of every answer this node gives.
 //!
-//! An answer's result arrives here as the bytes the agent sent, and it is parsed and written again
-//! rather than copied through. That is what the codec does today — it reads the agent's answer into
-//! a document and serializes the envelope around it — so copying the bytes through verbatim would
-//! be the change, not the fidelity.
+//! An agent's answer is not written here. The relay copies the agent's bytes through and splices
+//! only busbar's own identity into them ([`crate::answer_bytes`]); this module writes the envelopes
+//! busbar answers itself.
 
+#[cfg(test)]
 use busbar_contract::bounded::Span;
+#[cfg(test)]
 use busbar_contract::wire::{Decode, Encode};
 
 /// The version string every envelope of this protocol carries.
+#[cfg(test)]
 pub const VERSION: &str = "2.0";
 
 /// The member carrying the protocol version.
+#[cfg(test)]
 pub const PTR_VERSION: &str = "/jsonrpc";
 
 /// The member carrying the method name.
+#[cfg(test)]
 pub const PTR_METHOD: &str = "/method";
 
 /// The member carrying the request identifier.
+#[cfg(test)]
 pub const PTR_ID: &str = "/id";
 
 /// The member carrying the parameters.
+#[cfg(test)]
 pub const PTR_PARAMS: &str = "/params";
-
-/// The member carrying the task identifier, where the parameters name one.
-pub const PTR_PARAMS_ID: &str = "/params/id";
-
-/// The member carrying the result of an answer.
-pub const PTR_RESULT: &str = "/result";
-
-/// The member carrying the error of an answer.
-pub const PTR_ERROR: &str = "/error";
-
-/// The member carrying an error's code.
-pub const PTR_ERROR_CODE: &str = "/error/code";
 
 // THE ERROR BAND AND ITS DETAIL TAGS ARE THE DIALECT'S, AND THERE IS ONE OF EACH.
 //
-// Until the codec fold these lived in a crate this one could only READ, so they were restated here
-// and pinned to the originals by construction. The dialect came home (#39), and a value restated
-// inside the crate that defines it is a second name for one value — the shape a divergence hides
-// in, and one a re-export cannot grow. The engine's own `A2aError` is still pinned against the
-// table row for row, in the crate that owns that enum.
-pub use crate::{ERRORS, ERROR_INFO_DOMAIN, ERROR_INFO_TYPE};
-
-/// The request was not well formed.
-pub const CODE_INVALID_REQUEST: i64 = -32600;
-
-/// The method named is not one this node answers.
-pub const CODE_METHOD_NOT_FOUND: i64 = -32601;
-
-/// The parameters were not admissible.
-pub const CODE_INVALID_PARAMS: i64 = -32602;
+// They are the crate root's ([`crate::ERRORS`]), read here and never restated: a value restated
+// inside the crate that defines it is a second name for one value, the shape a divergence hides in.
+#[cfg(test)]
+use crate::{ERRORS, ERROR_INFO_DOMAIN, ERROR_INFO_TYPE};
 
 /// Something on this side failed.
 pub const CODE_INTERNAL: i64 = -32603;
 
-/// The caller is not permitted to perform this operation.
-pub const CODE_UNSUPPORTED_OPERATION: i64 = -32004;
-
 /// What kind of scalar the identifier member held.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub enum IdShape {
     /// A quoted string.
     Str,
@@ -86,6 +67,7 @@ pub enum IdShape {
 
 /// One envelope, as the reader found it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub struct Envelope {
     /// Where the method name is, quotes included.
     pub method: Span,
@@ -95,6 +77,7 @@ pub struct Envelope {
     pub params: Option<Span>,
 }
 
+#[cfg(test)]
 impl Envelope {
     /// The method name, with its quotes stripped.
     #[must_use]
@@ -114,52 +97,13 @@ impl Envelope {
     }
 }
 
-/// Every pointer this plane declares over a REQUEST body, in one table.
-///
-/// The table is what the unit's span view is built from: the plane resolves these once, at the one
-/// step entitled to read the bytes, and the loop reads the spans off the draft rather than scanning
-/// the body again. A pointer named here that the body does not carry is simply absent from the
-/// view, which is how "not sent" stays distinguishable from "sent empty".
-pub const REQUEST_PTRS: &[&str] = &[PTR_VERSION, PTR_METHOD, PTR_ID, PTR_PARAMS, PTR_PARAMS_ID];
-
-/// Every pointer this plane declares over a RESPONSE body, in one table.
-pub const RESPONSE_PTRS: &[&str] = &[
-    PTR_ID,
-    PTR_RESULT,
-    PTR_ERROR,
-    PTR_ERROR_CODE,
-    PTR_RESULT_STATE,
-    PTR_RESULT_ID,
-    PTR_RESULT_CONTEXT_ID,
-    PTR_RESULT_FINAL,
-    PTR_RESULT_KIND,
-    PTR_TASK_ID,
-];
-
-/// Where an answer reports the task's state.
-pub const PTR_RESULT_STATE: &str = "/result/status/state";
-
-/// Where an answer names the task it is about.
-pub const PTR_RESULT_ID: &str = "/result/id";
-
-/// Where an answer names the conversation the task belongs to.
-pub const PTR_RESULT_CONTEXT_ID: &str = "/result/contextId";
-
-/// Where a streamed answer says it is the last one.
-pub const PTR_RESULT_FINAL: &str = "/result/final";
-
-/// Where a streamed answer says what kind of event it is.
-pub const PTR_RESULT_KIND: &str = "/result/kind";
-
-/// Where an agent's own pushed event names its task.
-pub const PTR_TASK_ID: &str = "/taskId";
-
 /// Read one envelope out of a request body.
 ///
 /// # Errors
 /// Returns a decode error when the bytes are not this protocol's shape: no version member or the
 /// wrong one, no method member or a method that is not a string, or an identifier that is present
 /// and is neither a string nor a number.
+#[cfg(test)]
 pub fn read(body: &[u8]) -> Result<Envelope, Decode> {
     let at = |ptr: &str| match busbar_contract::spans::resolve_pointer(body, ptr) {
         busbar_contract::spans::Resolved::Found(span) => Some(span),
@@ -207,6 +151,7 @@ pub fn read(body: &[u8]) -> Result<Envelope, Decode> {
 
 /// What shape an identifier's raw bytes are, or nothing when they are neither shape.
 #[must_use]
+#[cfg(test)]
 fn id_shape(raw: &[u8]) -> Option<IdShape> {
     match raw.first()? {
         b'"' if raw.len() >= 2 && raw.ends_with(b"\"") => Some(IdShape::Str),
@@ -225,6 +170,7 @@ fn id_shape(raw: &[u8]) -> Option<IdShape> {
 /// whose every possible reply, success or refusal, failed to encode: the caller was told nothing at
 /// all, which is the one outcome this protocol has no spelling for. Reading it the way it will be
 /// written is what keeps the two ends agreeing.
+#[cfg(test)]
 fn is_number(raw: &[u8]) -> bool {
     let mut i = 0;
     if raw.first() == Some(&b'-') {
@@ -275,6 +221,7 @@ fn is_number(raw: &[u8]) -> bool {
 ///
 /// # Errors
 /// Returns an encode error when the bytes are not a value.
+#[cfg(test)]
 pub fn id_value(raw: &[u8]) -> Result<serde_json::Value, Encode> {
     serde_json::from_slice(raw).map_err(|_| Encode::Unrepresentable)
 }
@@ -283,6 +230,7 @@ pub fn id_value(raw: &[u8]) -> Result<serde_json::Value, Encode> {
 ///
 /// # Errors
 /// Returns an encode error when the result bytes are not a document.
+#[cfg(test)]
 pub fn success(id: &serde_json::Value, result_bytes: &[u8]) -> Result<Vec<u8>, Encode> {
     let result: serde_json::Value =
         serde_json::from_slice(result_bytes).map_err(|_| Encode::Unrepresentable)?;
@@ -298,6 +246,7 @@ pub fn success(id: &serde_json::Value, result_bytes: &[u8]) -> Result<Vec<u8>, E
 ///
 /// # Errors
 /// Returns an encode error when the value cannot be written.
+#[cfg(test)]
 pub fn error(id: &serde_json::Value, code: i64, message: &str) -> Result<Vec<u8>, Encode> {
     let mut err = serde_json::json!({ "code": code, "message": message });
     if let Some((_, reason)) = ERRORS.iter().find(|(c, _)| *c == code) {
