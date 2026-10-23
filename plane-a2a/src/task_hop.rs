@@ -6,13 +6,28 @@
 //! unary hop (`busbar-a2a` `receive`: `addressed_task`, `resumable_task`, the mint, the submit and
 //! `record_dispatch`, `record_state`, `end_task`), in its order and with its answers.
 //!
-//! * ADDRESSED: the request's `params` name a task the caller holds ([`task_identity::named_tasks`]):
-//!   the hop reuses its identity and opens nothing.
+//! * ADDRESSED: the request's `params`, or its message's `taskId` (a second turn), name a task the
+//!   caller holds ([`task_identity::translatable`]): the hop reuses its identity and opens nothing.
+//! * UNNAMED: a task verb (`GetTask`, `CancelTask` or `SubscribeToTask`, either spelling) is always
+//!   ADDRESSED to a task, and one whose `params` name none as a string is refused `400`, invalid
+//!   params (`-32602`, the gRPC line's `INVALID_ARGUMENT`) before anything is read or opened: a task
+//!   verb never opens a task.
+//! * NOT HELD: a request ADDRESSED to a task (a task verb, or a message whose `taskId` names one)
+//!   that the caller does not hold is refused `404`,
+//!   A2A's `TaskNotFoundError` (`-32001`) in the local verbs' words ([`local::NO_SUCH_TASK`]):
+//!   nothing is opened and nothing is relayed. Another caller's task, a retired one and one that
+//!   never was read alike, so the refusal is no existence oracle.
+//! * HELD AS TERMINAL: a `CancelTask` of a task the caller holds as terminal is refused `409`, A2A's
+//!   `TaskNotCancelableError` (`-32002`, [`TASK_NOT_CANCELABLE`]): busbar's own row answers it, as
+//!   a subscribe to a terminal task is answered, and nothing is relayed.
 //! * RESUMED: the caller's message names a `contextId` under which one of its tasks on this agent
 //!   is interrupted: the newest moves back to `working` (refused `409` when it cannot).
 //! * FRESH: busbar mints the id from eight random bytes ([`task_identity::mint`]), the `contextId` is the
 //!   caller's or the id, and the task is submitted and dispatched to the agent before the hop
-//!   (refused `503` when it cannot be recorded).
+//!   (refused `503` when it cannot be recorded). The submit carries the task store's RETENTION
+//!   SWEEP ([`tasks::retention_sweep`], at most [`tasks::SWEEP_BUDGET`] settled tasks retired in
+//!   its own writes): the sweep runs from a submit, never from a read or a timer, and one that
+//!   fails retires nothing and fails no submit.
 //!
 //! Task ids the caller holds and whose far-end id busbar learnt are sent on as the far end's
 //! ([`task_identity::translate_request`]). On the answer, the reported state is recorded (nothing for
@@ -22,8 +37,10 @@
 //! [`CALLBACK_CONFIG_POINTERS`] names) is judged before anything is opened, by the same floor the
 //! push-config verbs use ([`local::judge_callback`]), and a callback or a credential busbar cannot
 //! honour refuses the request `400` in the engine's words. One that passes is the task's
-//! `push_callback`, on the row it opens, resumes or addresses, and its credential rides back to the
-//! door ([`Callback`]), which holds it in plane memory as the engine's delivery does.
+//! `push_callback`, on the row it opens or resumes (in that change's own claimed write); on a task
+//! it addresses it is the task's push config, put as the push-config verbs put one, the later set
+//! winning. Its credential rides back to the door ([`Callback`]), which holds it in plane memory as
+//! the engine's delivery does.
 
 use std::collections::BTreeMap;
 
@@ -34,26 +51,38 @@ use crate::a2a::task::{plan_transition, Direction, Task, TaskState};
 use crate::agent_arrival::{AgentRefusal, JSON_MEDIA_TYPE};
 use crate::local::{self, Reach};
 use crate::push::DeliveryAuth;
+use crate::records::KIND_PUSH_CONFIG;
 use crate::relay::{RelayReply, TaskHop, TaskSettled};
 use crate::skill::CALLBACK_CONFIG_POINTERS;
 use crate::task_identity::{self, MINT_BYTES};
 use crate::tasks::{self, Halt, Planned, Records, Stamp, Write};
 use crate::TaskRow;
 
+/// `-32001`: no such task for this caller (A2A `TaskNotFoundError`).
+const CODE_TASK_NOT_FOUND: i64 = -32001;
 /// `-32002`: the task cannot be moved.
 const CODE_TASK_NOT_CANCELABLE: i64 = -32002;
 /// `-32603`: busbar failed.
 const CODE_INTERNAL: i64 = -32603;
 /// `-32602`: the params are wrong.
 const CODE_INVALID_PARAMS: i64 = -32602;
-/// The status a callback busbar cannot honour answers with: the caller's fault.
+/// The status a callback busbar cannot honour, or a task verb naming no task, answers with: the
+/// caller's fault.
 const STATUS_BAD_REQUEST: u32 = 400;
+/// The plane's words for a task verb whose `params` name no task id as a string.
+pub const TASK_UNNAMED: &str = "a task verb must name its task: `params.id` is required, a string";
 /// The status a task that cannot be recorded answers with.
 const STATUS_UNAVAILABLE: u32 = 503;
+/// The status a task the caller does not hold answers with (A2A section 5.4, `TaskNotFoundError`).
+const STATUS_NOT_FOUND: u32 = 404;
 /// The status an interrupted task that cannot resume answers with.
 const STATUS_CONFLICT: u32 = 409;
 /// The engine's words for a task it could not record (`busbar-a2a` `receive.rs:2032-2049`).
 pub const TASK_UNRECORDED: &str = "the task could not be recorded";
+/// The plane's words for a cancel of a task it holds as terminal (in the style of the subscribe
+/// refusal, `local::subscribe_refusal`).
+pub const TASK_NOT_CANCELABLE: &str =
+    "this task has reached a terminal state, so it cannot be canceled";
 /// The engine's words for an interrupted task it could not move back to `working`
 /// (`busbar-a2a` `receive.rs:1985-2001`).
 pub const TASK_UNRESUMED: &str = "this task cannot be resumed";
@@ -76,6 +105,10 @@ pub struct Request<'a> {
     /// The envelope a request-stage rewrite left, when one did: the request relayed (its task ids
     /// translated over it). The task is opened from [`Request::envelope`].
     pub relayed: Option<&'a Value>,
+    /// The bytes the hop relays, when the hop kept them (a request naming a task, or one a
+    /// request-stage rewrite or a minted message id rewrote): its task ids are translated in place
+    /// in these (Law 5), every other byte as the caller wrote it.
+    pub relayed_bytes: Option<&'a [u8]>,
     /// The caller's reference: the task store's key prefix.
     pub caller: &'a str,
     /// The agent the kernel picked.
@@ -104,8 +137,8 @@ pub enum Opened {
     /// The hop goes ahead for this task, sending `instead` in place of the caller's bytes when a
     /// task id was translated.
     Hop {
-        /// The task.
-        task: TaskHop,
+        /// The task, boxed: the hop's answer is the larger arm by far.
+        task: Box<TaskHop>,
         /// The translated request, if any id was.
         instead: Option<Vec<u8>>,
         /// The push callback the request carried inline, registered on the task.
@@ -168,7 +201,7 @@ fn resumable(rows: Vec<TaskRow>, context_id: &str, member: &str) -> Option<TaskR
 
 /// THE MEMBER HOLDING THE TASK a request to a failover pool is about (predev `receive.rs:1858-1868`
 /// and `route.rs` `select_member`), read off the caller's task records: the `agent_id` of the task
-/// the request names and the caller holds, else of the newest of the caller's interrupted tasks
+/// the request names (in its `params` or its message) and the caller holds, else of the newest of the caller's interrupted tasks
 /// under the `contextId` it names held by ANY of the pool's `members` (it resumes AT that member).
 /// `None` = the request is a fresh submission, which the pool's walk places. A read that failed
 /// reads as nothing, as [`open`]'s lookups read it.
@@ -182,7 +215,7 @@ pub fn holder(
     now: u64,
     members: &[String],
 ) -> Result<Option<String>, Halt> {
-    for named in task_identity::named_tasks(envelope) {
+    for named in task_identity::translatable(envelope) {
         if let Some(held) = or_absent(tasks::get(reach, caller, named, now), None)? {
             return Ok(Some(held.row.agent_id));
         }
@@ -215,6 +248,14 @@ pub fn open(
     backends: &dyn Fn(&str) -> Option<String>,
     out: &mut Vec<Write>,
 ) -> Result<Opened, Halt> {
+    if is_task_verb(req.envelope) && task_identity::named_tasks(req.envelope).is_empty() {
+        return Ok(refused(
+            STATUS_BAD_REQUEST,
+            rpc_id,
+            CODE_INVALID_PARAMS,
+            TASK_UNNAMED,
+        ));
+    }
     let callback = match inline_callback(reach, req.envelope)? {
         Ok(callback) => callback,
         Err(message) => {
@@ -227,12 +268,28 @@ pub fn open(
         }
     };
     let url = callback.as_ref().map(|c| c.url.as_str());
+    // The version the callback is registered under: the one the request's method is spelled in.
+    let version = local::Dialect::of_method(
+        req.envelope
+            .get("method")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+    )
+    .version();
     let mut addressed = None;
-    for named in task_identity::named_tasks(req.envelope) {
+    for named in task_identity::translatable(req.envelope) {
         if let Some(held) = or_absent(tasks::get(reach, req.caller, named, req.now), None)? {
             addressed = Some(held.row);
             break;
         }
+    }
+    if addressed.is_none() && addresses_a_task(req.envelope) {
+        return Ok(refused(
+            STATUS_NOT_FOUND,
+            rpc_id,
+            CODE_TASK_NOT_FOUND,
+            local::NO_SUCH_TASK,
+        ));
     }
     let context = task_identity::context_of(req.envelope);
     let resumed = match (&addressed, context.is_empty()) {
@@ -244,17 +301,39 @@ pub fn open(
         _ => None,
     };
     let (task, unrecorded) = match (addressed, resumed) {
+        (Some(row), _)
+            if is_cancel(req.envelope)
+                && TaskState::parse(&row.state).is_ok_and(TaskState::is_terminal) =>
+        {
+            return Ok(refused(
+                STATUS_CONFLICT,
+                rpc_id,
+                CODE_TASK_NOT_CANCELABLE,
+                TASK_NOT_CANCELABLE,
+            ));
+        }
         (Some(row), _) => {
-            if let Some(url) = url {
-                let at = Stamp {
-                    caller: req.caller,
-                    request_id: &row.task_id,
-                    now: req.now,
+            // An addressed task's callback is a PUSH-CONFIG SET, replace semantics, last writer
+            // wins: a put of the task's push_config record, never a write of its row, so no other
+            // writer's move of the task is undone.
+            if let Some(callback) = callback.as_ref() {
+                let stored = local::PushConfig {
+                    id: inline_config(req.envelope)
+                        .and_then(|c| c.get("id"))
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                    url: callback.url.clone(),
+                    authentication: callback.auth.clone(),
+                    version: version.to_string(),
                 };
                 // A callback that cannot be registered leaves the task as it was: the hop goes on.
-                if let Err(Halt::Pending) = tasks::set_callback(reach, &at, &row.task_id, url, out)
-                {
-                    return Err(Halt::Pending);
+                if let Ok(value) = serde_json::to_vec(&stored) {
+                    out.push(Write {
+                        kind: KIND_PUSH_CONFIG,
+                        key: tasks::task_key(req.caller, &row.task_id),
+                        value,
+                    });
                 }
             }
             let task = TaskHop {
@@ -262,6 +341,7 @@ pub fn open(
                 context_id: row.context_id,
                 addressed: true,
                 skill: None,
+                references: Vec::new(),
             };
             (task, None)
         }
@@ -275,6 +355,7 @@ pub fn open(
                 plan_transition(TaskState::Working, at.now)(held).map(|(mut next, kind)| {
                     if let Some(url) = url {
                         next.push_callback = url.to_string();
+                        next.push_version = version.to_string();
                     }
                     Some((next, kind))
                 })
@@ -296,6 +377,7 @@ pub fn open(
                 context_id: row.context_id,
                 addressed: false,
                 skill: None,
+                references: Vec::new(),
             };
             let unresumed = refusal(
                 STATUS_CONFLICT,
@@ -329,6 +411,9 @@ pub fn open(
             .map_err(|e| Halt::Failed(e.to_string()))
             .and_then(|mut t| {
                 t.push_callback = url.map(str::to_string);
+                if url.is_some() {
+                    t.push_version = version.to_string();
+                }
                 tasks::open(reach, &at, t.to_row(), req.member, out)
             });
             match opened {
@@ -343,23 +428,57 @@ pub fn open(
                 }
                 Ok(_) => {}
             }
+            // THE SUBMIT'S RETENTION SWEEP, in the submit's own writes: a sweep that fails leaves
+            // nothing behind (it writes only once its read is whole) and fails no submit.
+            if let Err(Halt::Pending) =
+                tasks::retention_sweep(reach, req.now, tasks::SWEEP_BUDGET, out)
+            {
+                return Err(Halt::Pending);
+            }
             let task = TaskHop {
                 task_id,
                 context_id,
                 addressed: false,
                 skill: None,
+                references: Vec::new(),
             };
             let unrecorded = refusal(STATUS_UNAVAILABLE, rpc_id, CODE_INTERNAL, TASK_UNRECORDED);
             (task, Some(unrecorded))
         }
     };
-    let instead = translated(reach, req, backends)?;
+    let (instead, references) = translated(reach, req, backends)?;
     Ok(Opened::Hop {
-        task,
+        task: Box::new(TaskHop { references, ..task }),
         instead,
         callback,
         unrecorded,
     })
+}
+
+/// Whether `envelope` is ADDRESSED to a task, so that a task the caller does not hold refuses it:
+/// every task verb ([`is_task_verb`]), or a message naming one in its `taskId`.
+fn addresses_a_task(envelope: &Value) -> bool {
+    is_task_verb(envelope) || !task_identity::message_tasks(envelope).is_empty()
+}
+
+/// Whether `envelope` is a task verb (`GetTask`, `CancelTask`, `SubscribeToTask`, either
+/// spelling): a request about one task, which it must name.
+fn is_task_verb(envelope: &Value) -> bool {
+    use crate::ops::{row_for, OP_TASK_CANCEL, OP_TASK_GET, OP_TASK_SUBSCRIBE};
+    envelope
+        .get("method")
+        .and_then(Value::as_str)
+        .and_then(row_for)
+        .is_some_and(|row| [OP_TASK_GET, OP_TASK_CANCEL, OP_TASK_SUBSCRIBE].contains(&row.op))
+}
+
+/// Whether `envelope` is a `CancelTask`, in either spelling.
+fn is_cancel(envelope: &Value) -> bool {
+    envelope
+        .get("method")
+        .and_then(Value::as_str)
+        .and_then(crate::ops::row_for)
+        .is_some_and(|row| row.op == crate::ops::OP_TASK_CANCEL)
 }
 
 /// THE INLINE CONFIG OBJECT whose `url` is the callback: the first of the three spellings that
@@ -404,10 +523,12 @@ fn translated(
     reach: &mut dyn Mint,
     req: &Request<'_>,
     backends: &dyn Fn(&str) -> Option<String>,
-) -> Result<Option<Vec<u8>>, Halt> {
+) -> Result<Translated, Halt> {
     let mut owned = BTreeMap::new();
     let relayed = req.relayed.unwrap_or(req.envelope);
-    for id in task_identity::translatable(relayed) {
+    let mut ids = task_identity::translatable(relayed);
+    ids.extend(task_identity::referenced_tasks(relayed));
+    for id in ids {
         if owned.contains_key(id) {
             continue;
         }
@@ -419,12 +540,27 @@ fn translated(
         }
     }
     if owned.is_empty() {
-        return Ok(None);
+        return Ok((None, Vec::new()));
     }
-    Ok(task_identity::translate_request(relayed, &|id| {
-        owned.get(id).cloned()
-    }))
+    let printed;
+    let bytes = match req.relayed_bytes {
+        Some(bytes) => bytes,
+        None => {
+            printed = serde_json::to_vec(relayed).map_err(|e| Halt::Failed(e.to_string()))?;
+            printed.as_slice()
+        }
+    };
+    let instead = task_identity::translate_request(bytes, &|id| owned.get(id).cloned());
+    let references = owned
+        .into_iter()
+        .map(|(ours, theirs)| (theirs, ours))
+        .collect();
+    Ok((instead, references))
 }
+
+/// What [`translated`] answers: the request to send in place of the caller's bytes, when an id was
+/// translated, and each translated task as the far end's id then busbar's, for the answer.
+type Translated = (Option<Vec<u8>>, Vec<(String, String)>);
 
 /// The error-once latches of the refused record writes, one per condition as predev held them
 /// (`receive.rs` `RELAYED_OUTCOME_UNRECORDED_WARNED`, `STREAM_OUTCOME_UNRECORDED_WARNED`,

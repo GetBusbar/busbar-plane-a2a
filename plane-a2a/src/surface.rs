@@ -210,8 +210,8 @@ const D_TASK_LIST: &[Dispatch] = &[
 /// Ask for one task to stop.
 ///
 /// The target row is a POST to the task itself: the collection binding spells a verb on a resource
-/// as a post to that resource, which is why this path and [`D_TASK_GET`]'s are one template told
-/// apart by the method alone.
+/// as a post to that resource with the verb as a suffix (`/tasks/{id}:cancel`), which is why this
+/// path and [`D_TASK_GET`]'s are one template.
 const D_TASK_CANCEL: &[Dispatch] = &[
     target(T_TASK, POST),
     document("tasks/cancel", "CancelTask")[0],
@@ -221,9 +221,9 @@ const D_TASK_CANCEL: &[Dispatch] = &[
 
 /// Re-attach to a task's event stream.
 ///
-/// No target row. The collection binding has no spelling for re-attaching to a stream, so this
-/// operation is reachable on the document and framed bindings only — declared as an absence rather
-/// than as a route that would answer nothing.
+/// No target row of its own. The collection binding spells it `GET /tasks/{id}:subscribe`, a verb
+/// suffix inside the `{id}` segment, so it arrives on [`D_TASK_GET`]'s template and the HTTP+JSON
+/// line's composer (`rest.rs`) tells the two apart by that suffix.
 const D_TASK_SUBSCRIBE: &[Dispatch] = &[
     document("tasks/resubscribe", "SubscribeToTask")[0],
     document("tasks/resubscribe", "SubscribeToTask")[1],

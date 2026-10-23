@@ -290,7 +290,10 @@ pub fn read_answer(status: u32, body: &[u8], id: &Value) -> Result<Value, HopRef
     if body.len() > MAX_REPLY_BYTES {
         return Err(HopRefusal::BodyTooLarge);
     }
-    let envelope: Value = serde_json::from_slice(body).map_err(|_| HopRefusal::NotJson)?;
+    // Read through the reading copy: a number past `f64`'s range is still JSON
+    // ([`crate::answer_bytes::readable`]); the caller's bytes keep its spelling.
+    let envelope: Value = serde_json::from_slice(&crate::answer_bytes::readable(body))
+        .map_err(|_| HopRefusal::NotJson)?;
     match read_response(&envelope, id) {
         Ok(RpcReply::Result(result)) => Ok(result),
         Ok(RpcReply::Error { .. }) => Err(HopRefusal::BackendError),
@@ -314,7 +317,9 @@ fn read_rest_answer(status: u32, body: &[u8], id: &Value) -> Option<Result<Value
     Some(read_answer(status, &envelope, id))
 }
 
-/// The caller's answer to a relayed `result`, VERBATIM, under the caller's own `id`.
+/// The caller's answer to a relayed `result` as the reading holds it, under the caller's own `id`:
+/// written again from the value, so only where the far end's own bytes could not be cut out
+/// ([`relayed_bytes`] otherwise).
 #[must_use]
 pub fn relayed(id: &Value, result: Value) -> RelayReply {
     RelayReply {
@@ -322,6 +327,17 @@ pub fn relayed(id: &Value, result: Value) -> RelayReply {
         content_type: JSON_MEDIA_TYPE,
         body: serde_json::to_vec(&json!({ "jsonrpc": "2.0", "id": id, "result": result }))
             .unwrap_or_default(),
+    }
+}
+
+/// The caller's answer to a relayed `result` given as the far end's own bytes (spliced, never
+/// re-serialised; Law 5), under the caller's own `id`.
+#[must_use]
+pub fn relayed_bytes(id: &Value, result: &[u8]) -> RelayReply {
+    RelayReply {
+        status: STATUS_OK,
+        content_type: JSON_MEDIA_TYPE,
+        body: crate::answer_bytes::result_reply(id, result),
     }
 }
 
@@ -513,7 +529,14 @@ pub struct TaskHop {
     pub addressed: bool,
     /// The skill the arrival matched, annotated on the answer.
     pub skill: Option<String>,
+    /// The tasks the request referred to that busbar translated, each as the far end's id then
+    /// busbar's: an answer referring to one names busbar's.
+    pub references: Vec<(String, String)>,
 }
+
+/// What reading a 2xx far-end piece's events answers: `None` while no event is framed; else the
+/// events for the caller, or the refusal they earn with the events read before it.
+type EventsRead = Option<Result<Vec<u8>, (HopRefusal, Vec<u8>)>>;
 
 /// WHAT A TASK HOP'S ANSWER SAYS ABOUT ITS TASK, for the door to record.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1035,9 +1058,24 @@ impl HopRelay {
     /// One 2xx far-end piece of a hop expecting events: `None` while the far end has framed no
     /// event (its bytes kept, as one document's are), else what the events it finished answer.
     fn events_piece(&mut self, piece: &Piece<'_>) -> Option<PieceAnswer> {
+        Some(match self.events_read(piece.bytes)? {
+            Ok(body) => {
+                if piece.last {
+                    self.answered = true;
+                }
+                self.part(body, piece.last)
+            }
+            Err((refusal, body)) => self.events_refused(refusal, body),
+        })
+    }
+
+    /// The events a 2xx far-end piece's `bytes` finish, read ([`EventsRead`]): `None` while the far end has framed
+    /// no event (its bytes kept, as one document's are); else the events for the caller, or the
+    /// refusal they earn with the events read before it.
+    fn events_read(&mut self, bytes: &[u8]) -> EventsRead {
         let (frames, pending, framed) = {
             let events = self.events.as_mut()?;
-            let frames = events.reader.feed(piece.bytes);
+            let frames = events.reader.feed(bytes);
             (frames, events.reader.pending(), events.framed)
         };
         if !framed {
@@ -1045,7 +1083,7 @@ impl HopRelay {
             // A first frame that is no event (a document with a blank line in it) settles it.
             let document = frames.first().is_some_and(|f| !is_event(f));
             if frames.is_empty() || document {
-                self.keep(piece.bytes);
+                self.keep(bytes);
                 if let Some(events) = self.events.as_mut() {
                     events.document = document || pending > MAX_REPLY_BYTES;
                 }
@@ -1059,10 +1097,16 @@ impl HopRelay {
             }
             events.framed = true;
         }
-        let (task_id, context_id, skill) = match &self.task {
-            Some(t) => (t.task_id.clone(), t.context_id.clone(), t.skill.clone()),
-            None => (String::new(), String::new(), None),
+        let (task_id, context_id, skill, references) = match &self.task {
+            Some(t) => (
+                t.task_id.clone(),
+                t.context_id.clone(),
+                t.skill.clone(),
+                t.references.clone(),
+            ),
+            None => (String::new(), String::new(), None, Vec::new()),
         };
+        let opened = self.task.as_ref().is_some_and(|t| !t.addressed);
         let rest = self.binding == Binding::HttpJson;
         let id = self.id.clone();
         let mut body = Vec::new();
@@ -1072,30 +1116,40 @@ impl HopRelay {
             } else {
                 frame
             };
-            match events::read_event(&frame, &id, &task_id, &context_id, skill.as_deref()) {
+            let read = events::read_event(
+                &frame,
+                &id,
+                &task_id,
+                &context_id,
+                skill.as_deref(),
+                &references,
+            );
+            match read {
                 Ok(event) => {
                     body.extend_from_slice(&event.sse);
-                    let said =
-                        event.state.is_some() || event.artifact || event.backend_task_id.is_some();
+                    // A message naming no task ends the task this hop opened, as the unary answer.
+                    let state = if opened && event.names_no_task {
+                        Some(TaskState::Completed)
+                    } else {
+                        event.state
+                    };
+                    let said = state.is_some() || event.artifact || event.backend_task_id.is_some();
                     if self.task.is_some() && said {
                         self.settled.push(TaskSettled::Event {
-                            state: event.state,
+                            state,
                             artifact: event.artifact,
                             backend_id: event.backend_task_id,
                         });
                     }
                 }
-                Err(_) => return Some(self.events_refused(HopRefusal::Uncorrelated, body)),
+                Err(refusal) => return Some(Err((refusal, body))),
             }
         }
         // The ceiling holds what is unterminated, not the stream's length over time.
         if pending > MAX_REPLY_BYTES {
-            return Some(self.events_refused(HopRefusal::BodyTooLarge, body));
+            return Some(Err((HopRefusal::BodyTooLarge, body)));
         }
-        if piece.last {
-            self.answered = true;
-        }
-        Some(self.part(body, piece.last))
+        Some(Ok(body))
     }
 
     /// Part of the caller's answer in events: the first one starts it.
@@ -1167,25 +1221,37 @@ impl HopRelay {
     /// own; each message length-prefixed; then the trailers, [`Self::on_far_fields`]). A unary
     /// answer is kept whole and read at its end ([`Self::grpc_envelope`]); an answer in events has
     /// each whole message read as the `StreamResponse` it is and answered as the JSON-RPC event it
-    /// re-frames to (the engine's `GrpcFrameReader`), through the one event reader.
+    /// re-frames to (the engine's `GrpcFrameReader`), through the one event reader. A message that
+    /// cannot be read refuses the hop; a call whose trailers end it with an error status after its
+    /// events began answers that error as its last event, and its task fails.
     fn grpc_piece(&mut self, piece: &Piece<'_>) -> PieceAnswer {
         if let Some(status) = piece.status {
             self.status = Some(status);
         }
         self.received = self.received.saturating_add(piece.bytes.len() as u64);
         if self.events.is_some() {
-            let framed = self.grpc_events(piece.bytes);
+            let (framed, unread) = self.grpc_events(piece.bytes);
             if self.grpc.pending.len() > MAX_REPLY_BYTES {
                 return self.events_refused(HopRefusal::BodyTooLarge, Vec::new());
             }
-            let as_events = Piece {
-                from: From::FarEnd,
-                bytes: &framed,
-                status: None,
-                last: piece.last,
-            };
-            if let Some(answer) = self.events_piece(&as_events) {
-                return answer;
+            match self.events_read(&framed) {
+                None if unread => return self.events_refused(HopRefusal::NotJson, Vec::new()),
+                None => {}
+                Some(Err((refusal, body))) => return self.events_refused(refusal, body),
+                Some(Ok(body)) if unread => return self.events_refused(HopRefusal::NotJson, body),
+                Some(Ok(mut body)) => {
+                    if piece.last {
+                        // THE CALL'S END, read off its trailers (THE DESIGN section 2 a2a: a gRPC
+                        // binding reads `grpc-status` from the trailers): an error status is the
+                        // far end's error, relayed as one more event, and the answer ends failed.
+                        if let Some(error) = self.grpc_error() {
+                            body.extend_from_slice(format!("data: {error}\n\n").as_bytes());
+                            return self.events_refused(HopRefusal::BackendError, body);
+                        }
+                        self.answered = true;
+                    }
+                    return self.part(body, piece.last);
+                }
             }
         } else {
             self.keep(piece.bytes);
@@ -1200,29 +1266,47 @@ impl HopRelay {
     }
 
     /// The whole messages `bytes` completes, each as one event-stream frame carrying the JSON-RPC
-    /// response its `StreamResponse` is. A message that does not read is stepped over; a compressed
-    /// one stops the reading (where the next message starts is no longer known).
-    fn grpc_events(&mut self, bytes: &[u8]) -> Vec<u8> {
+    /// response its `StreamResponse` is, and whether the reading stopped at a message it cannot
+    /// read: a length prefix the reader refuses (a compressed message, a length past the ceiling)
+    /// or a message that does not decode, which refuses the hop.
+    fn grpc_events(&mut self, bytes: &[u8]) -> (Vec<u8>, bool) {
         self.grpc.pending.extend_from_slice(bytes);
         let Some(rpc) = crate::framed::Rpc::of_method(&self.method) else {
-            return Vec::new();
+            return (Vec::new(), false);
         };
         let mut out = Vec::new();
         let mut cursor = 0;
-        while let Ok(Some((len, took))) = crate::framed::take_message(&self.grpc.pending[cursor..])
-        {
+        let unread = loop {
+            let (len, took) = match crate::framed::take_message(&self.grpc.pending[cursor..]) {
+                Ok(Some(message)) => message,
+                Ok(None) => break false,
+                Err(_) => break true,
+            };
             let start = cursor + crate::framed::MESSAGE_PREFIX;
-            cursor += took;
             let Ok(result) =
                 crate::framed::response_result(rpc, &self.grpc.pending[start..start + len])
             else {
-                continue;
+                break true;
             };
+            cursor += took;
             let envelope = json!({ "jsonrpc": "2.0", "id": self.id, "result": result });
             out.extend_from_slice(format!("data: {envelope}\n\n").as_bytes());
-        }
+        };
         self.grpc.pending.drain(..cursor);
-        out
+        (out, unread)
+    }
+
+    /// The JSON-RPC error a gRPC call that ended with an error status answers: its A2A code, where
+    /// its reason or its status names one, else JSON-RPC's own internal error, as a JSON-RPC
+    /// agent's internal error reads. `None` while the trailers have not said, or said `OK`.
+    fn grpc_error(&self) -> Option<Value> {
+        let ended = self.grpc.ended.as_ref().filter(|e| !e.ok())?;
+        let code = ended.a2a_code().unwrap_or(CODE_INTERNAL_ERROR);
+        Some(json!({
+            "jsonrpc": "2.0",
+            "id": self.id,
+            "error": { "code": code, "message": format!("grpc-status {}", ended.code) },
+        }))
     }
 
     /// A gRPC far end's whole answer, as the JSON-RPC envelope the one reader reads: a call that
@@ -1234,15 +1318,7 @@ impl HopRelay {
         if self.far.len() > MAX_REPLY_BYTES {
             return Some(self.far.clone());
         }
-        if let Some(ended) = self.grpc.ended.as_ref().filter(|e| !e.ok()) {
-            // A status no A2A code is bound to reads as JSON-RPC's own internal error, as a
-            // JSON-RPC agent's internal error reads.
-            let code = ended.a2a_code().unwrap_or(CODE_INTERNAL_ERROR);
-            let envelope = json!({
-                "jsonrpc": "2.0",
-                "id": self.id,
-                "error": { "code": code, "message": format!("grpc-status {}", ended.code) },
-            });
+        if let Some(envelope) = self.grpc_error() {
             return serde_json::to_vec(&envelope).ok();
         }
         let rpc = crate::framed::Rpc::of_method(&self.method)?;
@@ -1288,10 +1364,22 @@ impl HopRelay {
                 self.reading = Some(Reading::Hard);
             }
         }
+        // THE ENVELOPE THE ANSWER IS READ FROM, as bytes: the far end's own, or an HTTP+JSON
+        // body re-framed around its own bytes. The caller's `result` is spliced out of it.
+        let rewrapped = match self.binding {
+            Binding::HttpJson
+                if (200..300).contains(&status) && self.far.len() <= MAX_REPLY_BYTES =>
+            {
+                binding::rewrap(&self.far, &self.id).ok()
+            }
+            _ => None,
+        };
         let answer = match self.binding {
             Binding::JsonRpc | Binding::Grpc => read_answer(status, &self.far, &self.id),
-            Binding::HttpJson => match read_rest_answer(status, &self.far, &self.id) {
-                Some(answer) => answer,
+            Binding::HttpJson => match &rewrapped {
+                Some(envelope) => read_answer(status, envelope, &self.id),
+                None if !(200..300).contains(&status) => Err(HopRefusal::Status),
+                None if self.far.len() > MAX_REPLY_BYTES => Err(HopRefusal::BodyTooLarge),
                 None => return self.unframable(),
             },
         };
@@ -1299,25 +1387,69 @@ impl HopRelay {
         if let Err(refusal) = &answer {
             self.journal(*refusal, false);
         }
+        let envelope: &[u8] = rewrapped.as_deref().unwrap_or(&self.far);
+        let result_bytes = crate::answer_bytes::result_span(envelope).map(|r| &envelope[r]);
         let Some(task) = &self.task else {
             return PieceAnswer::ToCaller(match answer {
-                Ok(result) => relayed(&self.id, result),
+                Ok(result) => match result_bytes {
+                    Some(bytes) => relayed_bytes(&self.id, bytes),
+                    None => relayed(&self.id, result),
+                },
                 Err(refusal) => refusal.reply(&self.id),
             });
         };
         PieceAnswer::ToCaller(match answer {
+            // A result that is no object is no answer about a task: the plane cannot read it, and
+            // refuses it as it refuses an answer that is not JSON, never inventing one.
+            Ok(result) if !result.is_object() => {
+                self.journal(HopRefusal::NotJson, false);
+                let (reply, failed) = task_refusal(None, task, &self.id);
+                if failed {
+                    self.settled.push(TaskSettled::Failed);
+                }
+                reply
+            }
             Ok(mut result) => {
+                // A message naming no task ends the task this hop opened: there is no other. A
+                // result that reports no state this build can read leaves the task working: a
+                // relay that guessed `completed` from an unread token would close a running task.
+                let state = if !task.addressed && task_identity::names_no_task(&result) {
+                    TaskState::Completed
+                } else {
+                    task_identity::reported_task_state(&result).unwrap_or(TaskState::Working)
+                };
                 self.settled.push(TaskSettled::Reported {
-                    state: task_identity::reported_task_state(&result),
+                    state,
                     backend_id: task_identity::backend_task_id(&result),
                 });
-                task_identity::rewrite_identity(
-                    &mut result,
-                    &task.task_id,
-                    &task.context_id,
-                    task.skill.as_deref(),
-                );
-                relayed(&self.id, result)
+                // The far end's bytes with busbar's identity spliced in; the value path only should
+                // the bytes not be sliced where the reading found an object.
+                let spliced = result_bytes.and_then(|bytes| {
+                    crate::answer_bytes::rewrite_identity(
+                        bytes,
+                        (&task_identity::WRAPPERS, &task_identity::KINDS),
+                        &task.task_id,
+                        &task.context_id,
+                        task.skill
+                            .as_deref()
+                            .map(|s| (task_identity::SKILL_METADATA_KEY, s)),
+                        &task.references,
+                    )
+                });
+                match spliced {
+                    Some(bytes) => relayed_bytes(&self.id, &bytes),
+                    None => {
+                        // The result is an object (refused above otherwise): it takes the identity.
+                        let _ = task_identity::rewrite_identity(
+                            &mut result,
+                            &task.task_id,
+                            &task.context_id,
+                            task.skill.as_deref(),
+                            &task.references,
+                        );
+                        relayed(&self.id, result)
+                    }
+                }
             }
             Err(refusal) => {
                 let code = (refusal == HopRefusal::BackendError)

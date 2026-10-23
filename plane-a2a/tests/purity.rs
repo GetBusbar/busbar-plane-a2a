@@ -21,6 +21,11 @@ fn walk(dir: &Path, f: &mut impl FnMut(&Path, &str)) {
         .flatten()
     {
         let path = entry.path();
+        // The crate's test modules (`src/tests`, `src/a2a/tests`) are not the plane: they read
+        // fixtures and the environment, as tests do.
+        if path.is_dir() && path.file_name().is_some_and(|n| n == "tests") {
+            continue;
+        }
         if path.is_dir() {
             walk(&path, f);
         } else if path.extension().is_some_and(|e| e == "rs") {
@@ -33,7 +38,7 @@ fn walk(dir: &Path, f: &mut impl FnMut(&Path, &str)) {
 /// THE GENERATED MESSAGES (`build.rs`, the gRPC line's `lf.a2a.v1` package): the plane's source
 /// includes them from the build's output directory, so the scans read them as the plane's own
 /// source and read the include line itself as what it is, a compile-time inclusion.
-const GENERATED: &[&str] = &["lf.a2a.v1.rs", "lf.a2a.v1.serde.rs"];
+const GENERATED: &[&str] = &["lf.a2a.v1.rs", "lf.a2a.v1.serde.rs", "method_inventory.rs"];
 
 /// Every source file of the plane: its own, then the generated messages it includes.
 fn each_source(f: &mut impl FnMut(&Path, &str)) {
@@ -61,13 +66,15 @@ fn is_comment(line: &str) -> bool {
     t.starts_with("//") || t.starts_with("*") || t.starts_with("/*")
 }
 
-/// The plane keeps no state of its own between calls.
+/// The plane's source spells no interior-mutability primitive of its own.
 ///
-/// The only place cross-frame codec state may live is the kernel-held per-connection state, which
-/// the kernel hands in and takes back. A plane holding a cell, a lock, an atomic or a global is a
-/// plane that could answer differently the second time for a reason no caller can see.
+/// What this checks is the spelling, not the absence of state: the plane DOES keep state across
+/// calls (its units, held cards, trust, flights and deliveries), and all of it lives in the SDK's
+/// `Keyed` maps on the door's instance, which this scan does not and cannot see. What it holds the
+/// plane to is that no cell, lock, atomic or global of its own sits beside those maps, where state
+/// could change an answer outside the one keyed store the instance owns.
 #[test]
-fn the_plane_holds_no_interior_state() {
+fn the_plane_spells_no_interior_mutability_of_its_own() {
     let forbidden = [
         "Cell<",
         "RefCell",
@@ -100,7 +107,7 @@ fn the_plane_holds_no_interior_state() {
     });
     assert!(
         offenders.is_empty(),
-        "the plane holds interior state: {offenders:?}"
+        "the plane spells interior mutability of its own: {offenders:?}"
     );
 }
 
