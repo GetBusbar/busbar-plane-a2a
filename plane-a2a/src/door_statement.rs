@@ -26,8 +26,7 @@ use busbar_contract::abi::mechanism::call::{AbiStr, Blob, BLOB_ABSENT};
 use busbar_contract::abi::mechanism::door::{KindTailHead, Section, SECTION_DECLARING};
 use busbar_contract::abi::plane::{
     AdminRoute, BillableClass, OpClass, PinMechanism, PlaneTail, RecordChain, RecordRetention,
-    TrustKey,
-    ANSWER_LAYOUT, CHAIN_DIGESTS_SCOPE, CHAIN_LENGTH_PREFIXED, INGRESS_REQUEST_RESPONSE,
+    TrustKey, ANSWER_LAYOUT, CHAIN_DIGESTS_SCOPE, CHAIN_LENGTH_PREFIXED, INGRESS_REQUEST_RESPONSE,
     INGRESS_RESPONSE_STREAM, MECHANISM_PEER_KEY, MECHANISM_ROOT, PIN_FINGERPRINT, SHAPE_PIECEWISE,
     TAIL_HOOKS_GATED, TAIL_REFUSED_PIECE, TRUST_PIN, TRUST_PRIVATE_REACH, TRUST_RECOVERY_BACKOFF,
     TRUST_REVERIFY_TTL,
@@ -485,8 +484,6 @@ pub const TAIL: &PlaneTail = &PlaneTail {
     // most `RELAY_STREAM_TIMEOUT` (predev transport.rs:94-98), and a caller that stopped reading
     // released it there (receive.rs `send_or_expire`, :2829-2850, :3000-3012).
     stream_ceiling_secs: STREAM_CEILING_SECS,
-    record_retentions: RECORD_RETENTIONS.as_ptr(),
-    record_retentions_len: RECORD_RETENTIONS.len(),
 };
 
 /// How long a unit whose answer streams may run (predev `RELAY_STREAM_TIMEOUT`, 600 s,
