@@ -576,3 +576,59 @@ fn a_tripped_agent_rejects_fresh_submissions_on_every_binding() {
     assert_eq!(reply.code, crate::framed::refusal(&rpc.body, 503).code);
     assert!(String::from_utf8_lossy(&reply.body).contains("breaker_open"));
 }
+
+/// P-ITEM: REFUSAL-REASON COLLAPSE (spec DONE item 2, "All P-item behaviours match 1.5.5"; drive
+/// log P1, commit 470351a480; TODO L-ENG9). 1.5.5's one surface gave every limit reason its own
+/// status and kind and answered none of them as an internal error (v1.5.5
+/// `crates/busbar/src/ingress/mod.rs:237-305`). On this plane: a kernel refusal renders as the
+/// internal code exactly when its class is a node fault, and every reason of one class renders the
+/// same answer on every line, so the reason-to-family decision is the one classification's
+/// (`busbar_contract::abi::plane::RefusalCode::class`) and never this plane's own. RED before the
+/// fix: the door rendered every kernel refusal under `-32004`, a node fault included.
+#[test]
+fn p_item_refusal_reason_collapse_only_a_node_fault_is_internal_and_one_class_one_answer() {
+    use busbar_contract::abi::plane::{RefusalClass, RefusalCode};
+    let words = "the kernel's words";
+    let mut answers: Vec<(RefusalClass, Vec<(u32, serde_json::Value)>)> = Vec::new();
+    for &code in RefusalCode::ALL {
+        let class = code.class();
+        let refusal = kernel_refusal_of(code.code(), 500, words);
+        let lines: Vec<(u32, serde_json::Value)> =
+            [Dialect::JsonRpc, Dialect::RestJson, Dialect::Framed]
+                .into_iter()
+                .map(|dialect| {
+                    let out = render(dialect, &refusal, false);
+                    let doc = serde_json::from_slice(&out.body).expect("a JSON document");
+                    (out.status, doc)
+                })
+                .collect();
+        let rpc = &lines[0].1;
+        assert_eq!(lines[0].0, 0, "{code:?}: the kernel's status stands");
+        assert_eq!(
+            rpc["error"]["message"], words,
+            "{code:?}: the kernel's words"
+        );
+        assert_eq!(
+            rpc["error"]["code"] == crate::jsonrpc::CODE_INTERNAL,
+            class.is_node_fault(),
+            "{code:?} (class {class:?}) renders {rpc}"
+        );
+        match answers.iter().find(|(c, _)| *c == class) {
+            Some((_, first)) => assert_eq!(
+                *first, lines,
+                "{code:?} answers differently from the rest of {class:?}"
+            ),
+            None => answers.push((class, lines)),
+        }
+    }
+    assert_eq!(
+        answers.len(),
+        RefusalClass::ALL.len(),
+        "every class is some reason's"
+    );
+    // A number the wire table does not hold is the engine's admission refusal, never internal.
+    assert_eq!(
+        kernel_refusal_of(u32::MAX, 500, words),
+        kernel_refusal(500, words)
+    );
+}
