@@ -10,14 +10,13 @@
 //! kernel's reserved sub-keys already read and stripped (`BUSBAR-1.6.0.md` THE DESIGN, "Config"): the
 //! hook bindings and `upstream_credentials` never reach the plane, and neither do the kernel-owned
 //! trust keys each entry carries ([`crate::a2a::config::TRUST_KEYS`]), which the kernel parses and
-//! judges first. The plane judges the rest with the same grammar the engine uses,
+//! judges first. The plane judges the rest with its one grammar,
 //! [`crate::a2a::config::AgentsCfg`] and [`crate::a2a::config::validate_agent`].
 //!
-//! ## What is written down here and pinned elsewhere
+//! ## What is written down here
 //!
-//! The tail's strings, the route table and the admin routes are stated here as constants. The
-//! engine that still serves A2A states the same facts in its own declaration and router, and a
-//! test on the engine's side pins the two equal, entry by entry, until the engine is gone.
+//! The tail's strings, the route table and the admin routes are stated here as constants, once;
+//! the door's tests read the Statement back and hold it to them.
 
 use busbar_contract::abi::host::conn::connector::{
     Need, DIRECTION_OUTBOUND, EGRESS_OPEN_WEB, EGRESS_PROVIDER, KEEP_NAMED,
@@ -66,6 +65,49 @@ const NONE: AbiStr = AbiStr {
     ptr: std::ptr::null(),
     len: 0,
 };
+
+/// THE PUSH QUEUE'S COUNTERS, the Statement's metric families (THE DESIGN, a2a: a per-task ordered
+/// bounded queue, "drop-oldest, counted"; A2A-PUSH: "drop-oldest + metric"): the notifications a
+/// full queue dropped, and the delivery outcomes a full book dropped before a piece of their
+/// caller filed them. Each is reported as the increment since the last report, on the tick.
+pub const FAMILIES: &[busbar_contract::abi::mechanism::door::MetricFamily] = &[
+    counter(
+        METRIC_PUSH_DROPPED,
+        "A2A push notifications dropped, oldest first, from a full per-task queue",
+    ),
+    counter(
+        METRIC_PUSH_UNFILED,
+        "A2A push delivery outcomes dropped unfiled from a full book of owed outcomes",
+    ),
+];
+
+/// [`FAMILIES`]' name for the push notifications a full queue dropped.
+pub const METRIC_PUSH_DROPPED: &str = "busbar_a2a_push_notifications_dropped_total";
+
+/// [`FAMILIES`]' name for the delivery outcomes dropped unfiled.
+pub const METRIC_PUSH_UNFILED: &str = "busbar_a2a_push_outcomes_unfiled_total";
+
+/// [`METRIC_PUSH_DROPPED`]'s index in [`FAMILIES`].
+pub const FAMILY_PUSH_DROPPED: u32 = 0;
+
+/// [`METRIC_PUSH_UNFILED`]'s index in [`FAMILIES`].
+pub const FAMILY_PUSH_UNFILED: u32 = 1;
+
+/// One unlabelled counter family.
+const fn counter(
+    name: &'static str,
+    help: &'static str,
+) -> busbar_contract::abi::mechanism::door::MetricFamily {
+    busbar_contract::abi::mechanism::door::MetricFamily {
+        name: abi_str(name),
+        help: abi_str(help),
+        unit: NONE,
+        label_keys: std::ptr::null(),
+        label_keys_len: 0,
+        kind: busbar_contract::abi::mechanism::door::FAMILY_COUNTER,
+        _reserved: [0; 7],
+    }
+}
 
 /// The plane's settings sections, as its Statement states them: `agents:` is the one it declares;
 /// `agent_push:` ([`PUSH_SECTION`]) is its own beside it, handed as written at `open`.
@@ -207,6 +249,7 @@ const RECORD_KINDS: &[AbiStr] = &[
     abi_str(crate::records::HELD_KINDS[1]),
     abi_str(crate::records::HELD_KINDS[2]),
     abi_str(crate::records::HELD_KINDS[3]),
+    abi_str(crate::records::HELD_KINDS[4]),
 ];
 
 /// THE TASK CHAIN (ARCHITECT ruling B1, 2026-10-07; `BUSBAR-1.6.0.md` Part 3, the chain section, and THE

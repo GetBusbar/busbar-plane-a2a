@@ -16,10 +16,9 @@
 //! which order that is so a change to the serializer's configuration is a red here rather than a
 //! silent reshaping of every answer this node gives.
 //!
-//! An answer's result arrives here as the bytes the agent sent, and it is parsed and written again
-//! rather than copied through. That is what the codec does today — it reads the agent's answer into
-//! a document and serializes the envelope around it — so copying the bytes through verbatim would
-//! be the change, not the fidelity.
+//! An agent's answer is not written here. The relay copies the agent's bytes through and splices
+//! only busbar's own identity into them ([`crate::answer_bytes`]); this module writes the envelopes
+//! busbar answers itself.
 
 use busbar_contract::bounded::Span;
 use busbar_contract::wire::{Decode, Encode};

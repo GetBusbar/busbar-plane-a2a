@@ -10,8 +10,8 @@
 # `.busbar-ref`; no sibling-checkout path dependency ships in any manifest.
 #
 # THIRD-PARTY VERSIONS ARE THE FLEET'S, NOT THIS REPO'S. The table below is busbar's own root
-# `[workspace.dependencies]` (third-party rows) at busbar 804aced00db2e2e891f8746cace448601b6c0064, followed by the plugin-only rows
-# of busbar's `.github/fleet/deps.toml` at 804aced00db2e2e891f8746cace448601b6c0064. A member takes a crate with
+# `[workspace.dependencies]` (third-party rows) at busbar af89c8fcf19cc243ddd9925d9331df9f05519329, followed by the plugin-only rows
+# of busbar's `.github/fleet/deps.toml` at af89c8fcf19cc243ddd9925d9331df9f05519329. A member takes a crate with
 # `{ workspace = true }` (adding features if it needs them); a crate in neither table is a new
 # `deps.toml` row in busbar first. CI holds this repo's Cargo.lock to busbar's lock at the pin.
 [workspace]
@@ -28,11 +28,23 @@ license = "Apache-2.0"
 publish = false
 repository = "https://github.com/GetBusbar/busbar-plane-a2a"
 
+# The ONE fleet clippy allowance (coordinator ruling (a), 2026-10-19): every plugin-built ABI literal
+# spreads `..Type::ZERO` (the zero-spread guard, busbar #1207), which a literal naming every field
+# today trips as needless_update. Members take it with `[lints] workspace = true`.
+[workspace.lints.clippy]
+needless_update = "allow"
+
 [workspace.dependencies]
-busbar-contract = { git = "https://github.com/GetBusbar/busbar", rev = "6bd0a7ad2f3f7956515290b4318d28eeee2c9886" }
-busbar-plugin-loader = { git = "https://github.com/GetBusbar/busbar", rev = "6bd0a7ad2f3f7956515290b4318d28eeee2c9886" }
-# busbar's root [workspace.dependencies], third-party rows, at 804aced00db2e2e891f8746cace448601b6c0064
-aes = { version = "0.8", default-features = false }
+busbar-contract = { git = "https://github.com/GetBusbar/busbar", rev = "af89c8fcf19cc243ddd9925d9331df9f05519329" }
+busbar-plugin-loader = { git = "https://github.com/GetBusbar/busbar", rev = "af89c8fcf19cc243ddd9925d9331df9f05519329" }
+# THE SUITE'S HOST CONNECTOR (dev-only; plane-a2a-plugin/tests/support/conformance_host.rs,
+# rendered because the declares file states network needs): busbar's connector and its TLS
+# test kit at the pin, and the transport framers those needs name, at the revs busbar links.
+busbar-core-connector = { git = "https://github.com/GetBusbar/busbar", rev = "af89c8fcf19cc243ddd9925d9331df9f05519329", features = ["test-support"] }
+busbar-transport-grpc = { git = "https://github.com/GetBusbar/busbar-transport-grpc", rev = "f1b5d4d75f5cdaa46eff23cfef44e0a675d2fbb4" }
+busbar-transport-http = { git = "https://github.com/GetBusbar/busbar-transport-http", rev = "12b078389496d4c1fd81b730f5d9d0887537c3b0" }
+busbar-transport-tcp = { git = "https://github.com/GetBusbar/busbar-transport-tcp", rev = "223ec3f02000de94089a1752635b9e206f7492e5" }
+# busbar's root [workspace.dependencies], third-party rows, at af89c8fcf19cc243ddd9925d9331df9f05519329
 arc-swap = "1"
 async-trait = "0.1"
 axum = "0.8"
@@ -68,13 +80,8 @@ metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
 metrics-util = { version = "0.20.4", default-features = false }
 oauth-as = { version = "1.0.0", features = ["http", "jwt", "consent", "resource-metadata", "par", "dpop", "client-assertion"] }
 opentelemetry-proto = { version = "0.32", default-features = false, features = ["gen-tonic-messages", "trace"] }
-pbjson = "0.9"
-pbjson-build = "0.9"
 proc-macro2 = { version = "1", features = ["span-locations"] }
-proptest = "1"
 prost = { version = "0.14", default-features = false, features = ["std"] }
-prost-build = "0.14"
-protoc-bin-vendored = "3"
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 ring = "0.17"
@@ -89,7 +96,6 @@ sha2 = "0.10"
 smallvec = "1"
 socket2 = { version = "0.6", features = ["all"] }
 sonic-rs = "0.5"
-str0m = { version = "=0.24.1", default-features = false }
 syn = { version = "2", features = ["full", "visit", "parsing", "printing"] }
 tar = { version = "0.4", default-features = false }
 tikv-jemalloc-ctl = "0.6"
@@ -108,15 +114,26 @@ url = "2"
 webpki = { package = "rustls-webpki", version = "0.103", default-features = false, features = ["std", "ring"] }
 webpki-roots = "1"
 zeroize = "1"
-# busbar .github/fleet/deps.toml [plugin-deps], at 804aced00db2e2e891f8746cace448601b6c0064
+# busbar .github/fleet/deps.toml [plugin-deps], at af89c8fcf19cc243ddd9925d9331df9f05519329
 fallible-iterator = "0.2"
 ldap3 = { version = "0.12", default-features = false, features = ["sync"] }
 mysql = { version = "28", default-features = false, features = ["minimal-rust"] }
 mysql_common = { version = "0.35", default-features = false }
+pbjson = "0.9"
+pbjson-build = "0.9"
 percent-encoding = "2"
 postgres = "0.19"
 postgres-protocol = "0.6.11"
 postgres-types = "0.2"
+prost-build = { version = "0.14", default-features = false }
+protoc-bin-vendored = "3"
 redis = { version = "1", default-features = false, features = ["script"] }
 rusqlite = { version = "0.40", features = ["bundled"] }
 ulid = "1"
+
+# ONE busbar-contract (the suite's host connector): the transport framers above name
+# busbar-contract at their own revs of busbar; this repo's pin serves them all, as busbar
+# patches them to its own tree. The source is busbar spelled through www.github.com: Cargo
+# refuses a patch that names the source it patches.
+[patch."https://github.com/GetBusbar/busbar"]
+busbar-contract = { git = "https://www.github.com/GetBusbar/busbar", rev = "af89c8fcf19cc243ddd9925d9331df9f05519329" }
