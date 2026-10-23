@@ -168,22 +168,16 @@ fn a_required_protocol_capability_the_card_does_not_declare_excludes_the_agent()
     );
 }
 
-/// The caller must be able to send what the agent accepts AND read what it produces: an input-mode
-/// mismatch and an output-mode mismatch each exclude it, and modes compatible both ways fit.
+/// The caller must be able to read what the agent produces: an output-mode mismatch excludes it,
+/// and a compatible output mode fits. A request states no input modes, so the shape carries none.
 #[test]
-fn modes_must_be_compatible_in_both_directions() {
-    let sends_audio = TaskShape {
-        input_modes: vec!["audio/wav".to_string()],
-        ..Default::default()
-    };
-    assert_eq!(fit(&planner(), &sends_audio), Err(Unfit::ModesIncompatible));
+fn output_modes_must_be_compatible() {
     let wants_pdf = TaskShape {
         output_modes: vec!["application/pdf".to_string()],
         ..Default::default()
     };
     assert_eq!(fit(&planner(), &wants_pdf), Err(Unfit::ModesIncompatible));
     let json_both_ways = TaskShape {
-        input_modes: vec!["application/json".to_string()],
         output_modes: vec!["application/json".to_string()],
         ..Default::default()
     };
@@ -199,12 +193,11 @@ fn the_task_shape_carries_no_channel_for_prose() {
         skill,
         requires_stream,
         requires_push_notifications,
-        input_modes,
         output_modes,
     } = TaskShape::default();
     assert!(skill.is_none());
     assert!(!requires_stream && !requires_push_notifications);
-    assert!(input_modes.is_empty() && output_modes.is_empty());
+    assert!(output_modes.is_empty());
 }
 
 /// A JSON `null` MEMBER OF A HELD CARD READS AS ABSENT, as the gRPC line's messages read it

@@ -411,6 +411,7 @@ fn task(addressed: bool) -> TaskHop {
         context_id: "ctx-1".into(),
         addressed,
         skill: None,
+        references: Vec::new(),
     }
 }
 
@@ -734,7 +735,7 @@ fn an_events_attempt_accepts_an_event_stream_or_one_document() {
 fn events_are_answered_as_they_come_and_settled_as_they_pass() {
     let (mut r, _) = events_sent();
     let first = event(
-        json!({ "kind": "status-update", "id": "far-1", "contextId": "far-c",
+        json!({ "kind": "status-update", "taskId": "far-1", "contextId": "far-c",
         "status": { "state": "working" } }),
     );
     let (head, tail) = first.split_at(10);
@@ -747,7 +748,7 @@ fn events_are_answered_as_they_come_and_settled_as_they_pass() {
     assert!(one.head && !one.last);
     let got = datas(&one.body);
     assert_eq!(got.len(), 1);
-    assert_eq!(got[0]["result"]["id"], "a2a-p-0102030405060708");
+    assert_eq!(got[0]["result"]["taskId"], "a2a-p-0102030405060708");
     assert_eq!(got[0]["result"]["contextId"], "ctx-1");
     assert_eq!(
         r.take_settled(),
@@ -908,7 +909,7 @@ fn an_http_json_far_ends_bare_events_are_read_as_results() {
     let one = part(r.on_piece(far(Some(200), bare, true)));
     let got = datas(&one.body);
     assert_eq!(got[0]["id"], 7);
-    assert_eq!(got[0]["result"]["id"], "a2a-p-0102030405060708");
+    assert_eq!(got[0]["result"]["taskId"], "a2a-p-0102030405060708");
 }
 
 /// THE BREAKER'S READING (ARCHITECT ruling: the engine's `classify_hop` table, stated by the plane;
@@ -1355,4 +1356,35 @@ fn a_relayed_result_is_the_far_ends_bytes_with_busbars_identity_spliced_in() {
         String::from_utf8(reply.body).unwrap(),
         r#"{"jsonrpc":"2.0","id":7,"result":{"z":1,"a":12345678901234567890123}}"#
     );
+}
+
+/// A RESULT THAT IS NO OBJECT IS NO ANSWER ABOUT A TASK (Law 11: no invented answer): the plane
+/// cannot read it and refuses it as it refuses an answer that is not JSON. The task the hop opened
+/// fails; a task the caller addressed is a failed request. RED: the result was replaced by
+/// `{"kind":"task"}` under busbar's identity and relayed as the agent's answer.
+#[test]
+fn a_task_hops_result_that_is_no_object_is_refused_not_invented() {
+    for result in ["\"done\"", "[1]", "7", "null"] {
+        let far = format!(r#"{{"jsonrpc":"2.0","id":7,"result":{result}}}"#);
+        let mut opened = task_sent(false);
+        let reply = answered(&mut opened, 200, far.as_bytes());
+        assert_eq!(reply.status, 502, "{result}");
+        assert_eq!(body(&reply)["error"]["code"], -32006, "{result}");
+        assert!(
+            !String::from_utf8_lossy(&reply.body).contains("\"kind\":\"task\""),
+            "{result}"
+        );
+        assert_eq!(opened.take_settled(), vec![TaskSettled::Failed], "{result}");
+
+        let mut held = task_sent(true);
+        assert_eq!(answered(&mut held, 200, far.as_bytes()).status, 502);
+        assert_eq!(held.take_settled(), Vec::new(), "{result}");
+    }
+    let (mut r, _) = events_sent();
+    let end = r.on_piece(far(Some(200), &event(json!("done")), true));
+    let PieceAnswer::ToCaller(reply) = end else {
+        panic!("refused before the answer: {end:?}");
+    };
+    assert_eq!(reply.status, 502);
+    assert_eq!(r.take_settled(), vec![TaskSettled::Failed]);
 }

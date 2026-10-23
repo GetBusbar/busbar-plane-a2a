@@ -1,46 +1,22 @@
-//! The plane's durable state, expressed as record legs rather than as a store this crate holds.
+//! The plane's durable state: the HOST record kinds it keeps, by name.
 //!
-//! A plane performs no input and no output. Everything it needs to remember across units is a
-//! KERNEL-HELD record, reached only through a leg of the route plan, verified by the trust unit and
-//! journaled like any other reach. So this module declares the schemas and the operations, and the
-//! routing method turns each of the codec's present-day direct store touches into one of them.
+//! A plane performs no input and no output of its own. What it must remember across a restart is
+//! a host record of one of the kinds below ([`HELD_KINDS`], the kinds the door's tail states): read
+//! through the host's records service ([`crate::tasks::Records`]) and written as writes on the
+//! unit's answer ([`crate::tasks::Write`]), never a store this crate holds. What lives only between
+//! two calls is the door instance's maps, rebuilt from these records when it opens.
 //!
-//! ## The conversion table
-//!
-//! The existing codec reaches durable and process-local state in nine places. Each becomes a leg
-//! here, or a fact, or it belongs to a unit and leaves the plane entirely. Written out in full,
-//! because "the store reads became legs" is the kind of sentence that is true of eight out of nine.
-//!
-//! | what the codec does today | what it becomes |
+//! | kind | what it holds |
 //! |---|---|
-//! | writes a task row when a message opens one | a `tasks` leg, operation `put` |
-//! | writes a task row when the task changes state | a `tasks` leg, operation `put` |
-//! | reads one task row back, scoped to the caller | a `tasks` leg, operation `get` |
-//! | lists the task rows a caller may see | a `tasks` leg, operation `scan` |
-//! | appends an event row as a task advances | a `task_event` leg, operation `append` |
-//! | reads a task's event rows back | a `task_event` leg, operation `scan` |
-//! | sets or clears a task's callback address | a `push_config` leg, operation `put` or `delete` |
-//! | keeps the caller's push configurations in a process-local map | a `push_config` leg, so a restart no longer forgets them |
-//! | keeps a callback's pinned address in a process-local map | a `pin` leg, for the same reason |
-//! | keeps a mapping from the identifier this node minted to the one the agent minted | a `tasks` `get`; the mapping is a member of the row, not a second store |
-//! | authorises a callback token | a `push_config` leg, operation `verify_live`, and a `revoke` leg once the task is terminal |
+//! | `task` | one row per task this node tracks, scoped to its caller |
+//! | `task_event` | the task's hash-linked chain of state moves, the kind the door declares chained |
+//! | `push_config` | a task's push-notification config, its credential a sealed field |
+//! | `card` | an agent's verified card, as `connect` recorded it |
+//! | `card_approval` | the skills of the card the operator approved |
 //!
-//! And the five reaches that are NOT records, because they were never this plane's to hold:
-//!
-//! | what the codec does today | where it goes |
-//! |---|---|
-//! | charges a meter | the metering step's locators |
-//! | writes an audit row | the audit step's facts |
-//! | asks a breaker whether to proceed | the breaker unit |
-//! | asks governance whether the caller may spend | the admission unit |
-//! | resolves a credential for an outbound hop | the egress-auth unit; the plane names the scheme and never sees the secret |
-//!
-//! ## Two of the four schemas are the codec's own names
-//!
-//! The task and task-event schemas take their identifiers from the codec's own record kinds, so
-//! there is one answer to "what is this record called" rather than two that agree today. The other
-//! two name state the codec keeps in memory today and therefore forgets on restart; declaring them
-//! here is what makes that forgetting visible.
+//! What is not a record, because it was never this plane's to hold: a charge (the plane reports
+//! units), an audit row, a breaker's verdict, an admission and an outbound credential are the
+//! kernel's.
 
 use busbar_contract::ids::RecordSchemaId;
 

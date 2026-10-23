@@ -867,3 +867,39 @@ fn the_whole_attempt_is_abandoned_at_ten_seconds_as_a_transport_error() {
         "its retry is asked for"
     );
 }
+
+/// WHILE AN ATTEMPT IS HELD THE TICK IS ASKED FOR ONLY AT ITS ABANDONMENT, never at once for a
+/// delivery that came due meanwhile: such a tick starts no attempt (the held one is `drive`'s), and
+/// its start is the driver ticket's cycle boundary, which forgets the held exchange's answers. The
+/// held attempt's own completion wake attempts what waits. RED against a tick asked for at the
+/// earliest of the due delivery and the deadline (the instance ticks at once, over and over).
+#[test]
+fn a_held_attempt_asks_for_no_tick_before_its_deadline() {
+    let d = queued("https://hook.caller.test/notify");
+    let attempting = Attempting::default();
+    let mut host = TestHost::answering(vec![Some((DEST_ALLOWED, &[AT_REGISTRATION][..]))], 200);
+    host.pends = 1;
+    let start = 1_000;
+    assert_eq!(
+        tick_over(&mut host, &d, &attempting, start),
+        Outcome::Pending
+    );
+    d.enqueue(
+        Delivery {
+            task_id: "t2".into(),
+            caller: ALICE.into(),
+            url: "https://other.caller.test/notify".into(),
+            body: Vec::new(),
+            terminal: false,
+        },
+        start,
+    );
+    assert_eq!(
+        next_tick_ns(&d, &attempting),
+        start + DELIVERY_TIMEOUT_NS,
+        "a due delivery asked for a tick while an attempt is held"
+    );
+    // The held attempt's completion: the tick after its wake is asked for the waiting delivery.
+    assert_eq!(drive_over(&mut host, &d, &attempting), Outcome::Ready);
+    assert_eq!(next_tick_ns(&d, &attempting), start);
+}

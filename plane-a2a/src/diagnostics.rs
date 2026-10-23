@@ -7,8 +7,11 @@
 //! diagnostic. Each keeps its stable `BUSBAR-NNNN` number and slug: codes are REGISTERED, never
 //! renumbered or collapsed.
 //!
-//! [`DIAGNOSTICS`] is the slice the composition root hands to the host's `install_diagnostics`, so
-//! these codes join the runtime catalog (`REGISTRY ∪ installed`) and resolve through `by_code`.
+//! [`DIAGNOSTICS`] is every code the plane raises, and the plane's `declares.json` states exactly
+//! those entries (a test holds the two equal): the declares document rides the door's Statement, and
+//! the host installs a plane's codes from it, in a build that links the plane and in one that loads
+//! it dropped in alike. [`RESERVED`] holds the codes the plane's predecessor registered and the
+//! plane no longer raises: never declared, and never reissued to another meaning.
 
 use busbar_contract::diagnostic::{Class, Diagnostic, Severity};
 
@@ -20,16 +23,17 @@ pub const A2A_TASK_CHAIN_VERIFY_FAILED: Diagnostic = Diagnostic {
     slug: "a2a-task-chain-verify-failed",
     title: "A2A per-task provenance chain failed verification on restore (tamper evidence)",
     severity: Severity::Actionable,
-    summary:
-        "A persisted A2A task row was read back at boot but its per-task provenance chain does NOT \
-              verify against its own hashes, so the task is NOT resumed. This is distinct from a row \
-              that merely could not be read (BUSBAR-7024): the bytes were read and the chain does not \
-              add up, which is tamper evidence — the durable task state was altered out from under \
-              busbar, or its store is corrupt. Emitted once per affected task at boot.",
-    action:
-        "Treat the durable A2A task store as compromised until explained: capture it for forensic \
-             review before it is overwritten, and restore it from a trusted backup once the cause is \
-             understood. The named task is not resumed; other in-flight tasks continue.",
+    summary: "When the plane restored its task records after its instance opened, an in-flight \
+              task's per-task provenance chain did NOT verify: the host reported a break on that \
+              task's chain. This is distinct from a row that merely could not be read \
+              (BUSBAR-7024): the bytes were read and the chain does not add up, which is tamper \
+              evidence — the durable task state was altered out from under busbar, or its store is \
+              corrupt. The task is still held and served: a break is reported, never a deletion, \
+              because deleting on a break would let anyone able to write the store erase a \
+              caller's task. Emitted once per affected in-flight task on each restore.",
+    action: "Treat the durable A2A task store as compromised until explained: capture it for \
+             forensic review before it is overwritten, and restore it from a trusted backup once \
+             the cause is understood. The named task stays held; other tasks are unaffected.",
     since: "1.6.0",
     retired: false,
 };
@@ -439,12 +443,12 @@ pub const A2A_TASK_ROWS_UNREADABLE: Diagnostic = Diagnostic {
     slug: "a2a-task-rows-unreadable",
     title: "Persisted A2A task rows could not be read back (not resumable)",
     severity: Severity::Actionable,
-    summary: "At boot, some persisted A2A task rows could not be read back and are therefore NOT \
-              resumable — they were most likely written by a different engine version. Reported \
-              separately from the restored count and at warn, because folding an unreadable in-flight \
-              task into the restored total is how a task that silently ceased to exist across a \
-              deploy stays invisible.",
-    action: "Expected once after an engine-version change; the named rows cannot be resumed by this \
+    summary: "When the plane restored its task records after its instance opened, some persisted \
+              A2A task rows could not be read back and are therefore NOT resumable — most likely \
+              written by a different busbar version. Reported separately from the restored count \
+              and at warn, because folding an unreadable in-flight task into the restored total is \
+              how a task that silently ceased to exist across a deploy stays invisible.",
+    action: "Expected once after a version change; the counted rows cannot be resumed by this \
              binary. If it recurs without a version change, inspect the durable task store for \
              corruption. Callers of the affected tasks may re-submit.",
     since: "1.6.0",
@@ -456,14 +460,16 @@ pub const A2A_TASK_STATE_UNREAD: Diagnostic = Diagnostic {
     code: 7025,
     class: Class::Plane,
     slug: "a2a-task-state-unread",
-    title: "Durable A2A task state could not be read at boot (in-flight tasks start empty)",
+    title: "Durable A2A task state could not be read on restore (nothing counted or chain-checked)",
     severity: Severity::Actionable,
-    summary: "At boot, the durable A2A task state could not be read at all, so busbar starts with NO \
-              in-flight tasks restored rather than block boot on the store. Any task that was in \
-              flight before restart is invisible to this process until the store answers. Typically \
-              a durable-store outage.",
-    action: "Investigate the durable governance/task store outage and restart once it is reachable so \
-             in-flight tasks are restored. Until then, busbar serves with an empty in-flight set.",
+    summary: "When the plane restored its task records after its instance opened, the durable A2A \
+              task records could not be listed at all, so nothing was counted and no in-flight \
+              task's provenance chain was checked. Serving does not wait on the restore: each task \
+              is still read from its own record when a request names it, and a request the store \
+              cannot answer is refused. Typically a durable-store outage.",
+    action:
+        "Investigate the durable task store outage. Once it answers, requests read their tasks \
+             again; restart to have the restore count the tasks and check their chains.",
     since: "1.6.0",
     retired: false,
 };
@@ -655,16 +661,30 @@ pub const PLANE_SSE_FRAME_NOT_UTF8: Diagnostic = Diagnostic {
     retired: false,
 };
 
-/// A2A'S PLANE-CONTRIBUTED DIAGNOSTICS — the `&'static [&'static Diagnostic]` the composition
-/// root installs via `install_diagnostics`. Ascending by code, mirroring the neutral `REGISTRY`.
-/// The last, `BUSBAR-7104`, came out of the host registry with the relay's frame reader that emits
-/// it (#83a O4): the plane defines it and the composition root installs it, and it stays published
-/// on the host page, under its frozen number, rather than this plane's own.
+/// THE CODES THE PLANE RAISES, ascending by code: every entry its source reports through
+/// `diag_*!`, and exactly the `diagnostics` its `declares.json` states (a test holds the three
+/// equal), from which the host installs them in either build. `BUSBAR-7104` came out of the host
+/// registry with the relay's frame reader that emits it, under its frozen number.
 pub static DIAGNOSTICS: &[&Diagnostic] = &[
     &A2A_TASK_CHAIN_VERIFY_FAILED,
+    &A2A_POOL_NOT_INTERCHANGEABLE,
+    &A2A_OUTBOUND_CRED_UNLEASED,
+    &A2A_RELAYED_STREAM_REFUSED,
+    &A2A_RELAYED_OUTCOME_UNRECORDED,
+    &A2A_RELAYED_SUBMISSION_FAILED,
+    &A2A_FAILURE_UNRECORDED,
+    &A2A_TASK_ROWS_UNREADABLE,
+    &A2A_TASK_STATE_UNREAD,
+    &PLANE_SSE_FRAME_NOT_UTF8,
+];
+
+/// THE CODES THE PLANE'S PREDECESSOR REGISTERED AND THE PLANE NO LONGER RAISES, ascending by code:
+/// never declared, held here so no code is reissued to another meaning (a test holds every code
+/// here and in [`DIAGNOSTICS`] unique).
+#[cfg(test)]
+pub const RESERVED: &[&Diagnostic] = &[
     &A2A_EXTENDED_CARD_AGENT_OMITTED,
     &A2A_PUSH_CONFIG_UNRECORDED,
-    &A2A_POOL_NOT_INTERCHANGEABLE,
     &A2A_PIN_REFUSAL_UNRECORDED,
     &A2A_EXTENDED_CARD_BUILD_FAILED,
     &A2A_NO_CSPRNG_CALLBACK,
@@ -674,19 +694,12 @@ pub static DIAGNOSTICS: &[&Diagnostic] = &[
     &A2A_INTERRUPTED_TASK_UNRESUMED,
     &A2A_INBOUND_TASK_UNOPENED,
     &A2A_INBOUND_TASK_UNRECORDED,
-    &A2A_OUTBOUND_CRED_UNLEASED,
     &A2A_AGENT_BINDING_UNSPEAKABLE,
     &A2A_RELAY_THREAD_INCOMPLETE,
     &A2A_PUSH_NOTIFY_UNDELIVERED,
     &A2A_STREAM_EMPTY,
-    &A2A_RELAYED_STREAM_REFUSED,
     &A2A_STREAM_RELAY_INCOMPLETE,
-    &A2A_RELAYED_OUTCOME_UNRECORDED,
-    &A2A_RELAYED_SUBMISSION_FAILED,
     &A2A_BREAKER_REFUSAL_UNRECORDED,
-    &A2A_FAILURE_UNRECORDED,
-    &A2A_TASK_ROWS_UNREADABLE,
-    &A2A_TASK_STATE_UNREAD,
     &A2A_CARD_FETCH_PANICKED,
     &A2A_REVERIFY_CADENCE_UNPARSED,
     &A2A_CARD_CERT_NO_KEY_PIN,
@@ -694,9 +707,8 @@ pub static DIAGNOSTICS: &[&Diagnostic] = &[
     &A2A_DISPATCH_UNRECORDED,
     &A2A_PUSH_CALLBACK_UNPERSISTED,
     &A2A_PUSH_CONFIG_UNDELETED,
-    &A2A_PUSH_QUEUE_DROPPED,
     &A2A_PUSH_REARM_FAILED,
-    &PLANE_SSE_FRAME_NOT_UTF8,
+    &A2A_PUSH_QUEUE_DROPPED,
 ];
 
 #[cfg(test)]
