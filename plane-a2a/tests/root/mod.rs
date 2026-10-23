@@ -1137,7 +1137,8 @@ fn served_core(
     busbar_kernel::preflight::install_linked_auth(
         crate::LINKED.auths,
         crate::root::auth_bindings::operator_words(),
-    );
+    )
+    .expect("the root's one table and words");
     busbar_kernel::preflight::install_auth_axis(crate::root::dispatch::auth_axis);
     let mut builder = busbar_kernel::test_support::TestApp::new()
         .keys_chain()
@@ -4041,8 +4042,9 @@ async fn the_legacy_well_known_path_is_tried_only_when_the_canonical_one_served_
 /// its row states the manifest needs a dropped-in hook's signed manifest does, and the hook
 /// port answers it in process through the frame the kernel built.
 fn hook_env() -> busbar_kernel::hooks::HookEnv {
-    use crate::root::loader::sign::{HookNeeds, NeedLevel};
-    busbar_kernel::test_support::test_hook_env(
+    use busbar_contract::plugin_rows::NeedLevel;
+    use busbar_kernel::test_support::{test_hook_env, HookNeeds};
+    test_hook_env(
         &["test-hook"],
         HookNeeds {
             prompt: NeedLevel::Rw,
