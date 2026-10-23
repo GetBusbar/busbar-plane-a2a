@@ -126,6 +126,8 @@ fn a_message_is_taken_whole_off_its_length_prefix() {
     assert_eq!(take_message(&[0, 0, 0]), Ok(None));
     assert_eq!(take_message(&[0, 0, 0, 0, 0]), Ok(Some((0, 5))));
     assert!(take_message(&[1, 0, 0, 0, 0]).is_err());
+    // A declared length past the reply ceiling is refused at once, not waited for.
+    assert!(take_message(&[0, 0xff, 0xff, 0xff, 0xff]).is_err());
 }
 
 /// The trailers' field block, `name: value` per line, as the grpc transport renders it.

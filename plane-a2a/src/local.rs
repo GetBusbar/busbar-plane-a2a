@@ -34,6 +34,29 @@ pub enum Dialect {
     V10,
 }
 
+impl Dialect {
+    /// The version a JSON-RPC method name is spelled in: v0.3's are slash paths
+    /// (`message/send`, `tasks/pushNotificationConfig/set`), v1.0's are PascalCase
+    /// (`SendMessage`, `CreateTaskPushNotificationConfig`).
+    #[must_use]
+    pub fn of_method(method: &str) -> Self {
+        if method.contains('/') {
+            Dialect::V03
+        } else {
+            Dialect::V10
+        }
+    }
+
+    /// The version token a callback is registered under ([`PushConfig::version`]).
+    #[must_use]
+    pub const fn version(self) -> &'static str {
+        match self {
+            Dialect::V03 => "0.3",
+            Dialect::V10 => "1.0",
+        }
+    }
+}
+
 /// A verb this plane answers WITHOUT a backend hop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LocalVerb {
@@ -242,8 +265,9 @@ pub fn task_json(task: &Task) -> Value {
 
 /// The page size a caller that asks for none gets.
 pub const DEFAULT_PAGE_SIZE: usize = 50;
-/// The largest page size.
-pub const MAX_PAGE_SIZE: usize = 200;
+/// The largest page size: `ListTasksRequest.page_size` "The maximum value is 100" (a2a.proto); a
+/// caller asking for more gets this many.
+pub const MAX_PAGE_SIZE: usize = 100;
 
 /// An integer that arrives as a number or, per the schema's `anyOf`, as a decimal string.
 fn as_int(v: Option<&Value>) -> Option<i64> {
@@ -344,6 +368,10 @@ pub struct PushConfig {
     /// before the field existed reads as `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authentication: Option<DeliveryAuth>,
+    /// The A2A version the config was registered under (`0.3` or `1.0`): the shape its
+    /// notifications take. A record written before the field existed reads empty, as `1.0`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub version: String,
 }
 
 /// The config as `dialect` spells it; never with `authentication`.
@@ -453,7 +481,14 @@ pub fn judge_callback(reach: &mut dyn Reach, url: &str) -> Result<Result<(), Str
         DEST_SCHEME, DEST_UNRESOLVABLE,
     };
     use busbar_contract::net::{parse_url, UrlRefusal};
-    let malformed = || Ok(Err(format!("push callback URL is malformed: `{url}`")));
+    // The refusal repeats the URL as predev did, but never a userinfo it carried: a credential in
+    // the URL is not echoed into an error body.
+    let malformed = || {
+        Ok(Err(format!(
+            "push callback URL is malformed: `{}`",
+            crate::a2a::config::without_userinfo(url)
+        )))
+    };
     let Some((scheme, _)) = url.split_once("://") else {
         return malformed();
     };
@@ -494,23 +529,28 @@ pub fn judge_callback(reach: &mut dyn Reach, url: &str) -> Result<Result<(), Str
     })
 }
 
-/// THE TASK a push-config request names, through the same scoped read every verb uses.
+/// THE TASK a push-config request names, through the same scoped read every verb uses: its
+/// FIRST task member present, and that one only. On v1.0 `id` is the CONFIG ([`config_id_wanted`]),
+/// never the task; on v0.3 a get or delete names the task by `id`. A named task the caller does
+/// not hold is no task, whatever other member the request also carries.
 pub(crate) fn addressed(
     rec: &mut dyn Records,
+    dialect: Dialect,
     params: &Value,
     caller: &str,
     now: u64,
 ) -> Result<Option<Task>, Halt> {
-    for name in ["taskId", "task_id", "id"] {
-        if let Some(id) = params.get(name).and_then(Value::as_str) {
-            if let Some(held) = tasks::get(rec, caller, id, now)? {
-                if let Ok(task) = Task::from_row(&held.row) {
-                    return Ok(Some(task));
-                }
-            }
-        }
-    }
-    Ok(None)
+    let members: &[&str] = match dialect {
+        Dialect::V10 => &["taskId", "task_id"],
+        Dialect::V03 => &["taskId", "id"],
+    };
+    let Some(named) = members.iter().find_map(|m| params.get(*m)) else {
+        return Ok(None);
+    };
+    let Some(id) = named.as_str() else {
+        return Ok(None);
+    };
+    Ok(tasks::get(rec, caller, id, now)?.and_then(|held| Task::from_row(&held.row).ok()))
 }
 
 /// The config held for `caller`'s task `task_id`, if any.
@@ -534,7 +574,7 @@ fn create_push_config(
     now: u64,
     out: &mut Vec<Write>,
 ) -> Result<LocalAnswer, Halt> {
-    let Some(task) = addressed(reach, params, caller, now)? else {
+    let Some(task) = addressed(reach, dialect, params, caller, now)? else {
         return Ok(err(rpc_id, TASK_NOT_FOUND, NO_SUCH_TASK));
     };
     let cfg = config_params(params);
@@ -581,6 +621,7 @@ fn create_push_config(
         id,
         url: url.to_string(),
         authentication,
+        version: dialect.version().to_string(),
     };
     out.push(Write {
         kind: KIND_PUSH_CONFIG,
@@ -599,7 +640,7 @@ fn get_push_config(
     caller: &str,
     now: u64,
 ) -> Result<LocalAnswer, Halt> {
-    let Some(task) = addressed(rec, params, caller, now)? else {
+    let Some(task) = addressed(rec, dialect, params, caller, now)? else {
         return Ok(err(rpc_id, TASK_NOT_FOUND, NO_SUCH_TASK));
     };
     let wanted = config_id_wanted(dialect, params);
@@ -624,7 +665,7 @@ fn list_push_configs(
     caller: &str,
     now: u64,
 ) -> Result<LocalAnswer, Halt> {
-    let Some(task) = addressed(rec, params, caller, now)? else {
+    let Some(task) = addressed(rec, dialect, params, caller, now)? else {
         return Ok(err(rpc_id, TASK_NOT_FOUND, NO_SUCH_TASK));
     };
     let held: Vec<Value> = held_config(rec, caller, &task.task_id)?
@@ -647,7 +688,7 @@ fn delete_push_config(
     now: u64,
     out: &mut Vec<Write>,
 ) -> Result<LocalAnswer, Halt> {
-    let Some(task) = addressed(rec, params, caller, now)? else {
+    let Some(task) = addressed(rec, dialect, params, caller, now)? else {
         return Ok(err(rpc_id, TASK_NOT_FOUND, NO_SUCH_TASK));
     };
     let wanted = config_id_wanted(dialect, params);

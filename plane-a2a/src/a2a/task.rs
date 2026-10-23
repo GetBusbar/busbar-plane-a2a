@@ -28,10 +28,10 @@
 //! The transition table is a FUNCTION rather than a set of `if`s scattered across the relay, because
 //! the interesting failure is the transition nobody wrote a branch for.
 
-// PARTLY UNMOUNTED. `Task::submitted` and the store projection are driven by every inbound call.
-// The transition verbs beyond the opening one belong to the relay that watches a task to
-// completion, which this branch does not mount; the table they enforce is settled first on
-// purpose, because a state machine that changes after tasks exist invalidates the rows.
+// THE TABLE IS DRIVEN. `Task::submitted` and the row projection open every task, and each next
+// state move of a held task is planned through [`plan_transition`], which enforces the table. Some
+// items of the vocabulary are read only by the tests that pin it, so dead code is allowed outside
+// tests.
 #![cfg_attr(not(test), allow(dead_code))]
 
 use serde::{Deserialize, Serialize};
@@ -252,6 +252,9 @@ pub struct Task {
     /// when it was registered (see the plane's push-notification guard); it is re-validated before
     /// delivery, because the row can outlive the DNS answer that was checked when it was written.
     pub push_callback: Option<String>,
+    /// The A2A version `push_callback` was registered under (`0.3` or `1.0`; empty reads as
+    /// `1.0`): the shape every notification to it takes.
+    pub push_version: String,
     /// When the task was submitted, in whole seconds since the Unix epoch.
     pub created_at: u64,
     /// When the task last changed, in whole seconds since the Unix epoch.
@@ -277,6 +280,7 @@ impl Task {
             agent_id: String::new(),
             artifact_cursor: 0,
             push_callback: None,
+            push_version: String::new(),
             created_at: now,
             updated_at: now,
         };
@@ -322,6 +326,7 @@ impl Task {
             agent_id: self.agent_id.clone(),
             artifact_cursor: self.artifact_cursor,
             push_callback: self.push_callback.clone().unwrap_or_default(),
+            push_version: self.push_version.clone(),
             created_at: self.created_at,
             updated_at: self.updated_at,
         }
@@ -345,6 +350,7 @@ impl Task {
             } else {
                 Some(row.push_callback.clone())
             },
+            push_version: row.push_version.clone(),
             created_at: row.created_at,
             updated_at: row.updated_at,
         };
