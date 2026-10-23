@@ -67,6 +67,10 @@ pub struct TaskRow {
     pub artifact_cursor: u64,
     /// The push-notification callback URL registered for this task, or empty for none.
     pub push_callback: String,
+    /// The A2A version the callback was registered under (`0.3` or `1.0`): the shape its
+    /// notifications take. Empty on a row written before the field existed, read as `1.0`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub push_version: String,
     /// Unix seconds the task was first recorded.
     pub created_at: u64,
     /// Unix seconds of the most recent state change. The retention sweep's age key.

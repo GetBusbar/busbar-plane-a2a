@@ -10,6 +10,8 @@ use busbar_contract::abi::host::service::{
 };
 
 use super::*;
+
+include!(concat!(env!("OUT_DIR"), "/method_inventory.rs"));
 use crate::tasks::tests::{step, submitted, Book, ALICE, BOB};
 
 /// The host records, the destination judge's one verdict, and every destination it was asked.
@@ -531,16 +533,14 @@ fn the_v0_3_spelling_is_answered_in_the_v0_3_shape() {
 /// name: the local verb it is, the class it is relayed as, and whether its answer is events.
 #[test]
 fn every_a2a_method_is_read_identically_under_both_of_its_live_json_rpc_names() {
-    // busbar's generated inventory at the pin this repo names (`BUSBAR_CHECKOUT`, a checkout of
-    // GetBusbar/busbar at `.busbar-ref`, which plugin CI exports). Unset is a failure, never a skip.
-    let busbar = std::env::var_os("BUSBAR_CHECKOUT").expect(
-        "BUSBAR_CHECKOUT is unset: the inventory is busbar's qa/method-inventory.json at .busbar-ref \
-         (plugin CI exports it; locally, point it at a busbar checkout)",
+    // busbar's generated inventory at the pin this repo names, read by `build.rs` from the busbar
+    // checkout plugin CI exports (`BUSBAR_CHECKOUT`) and included as generated source. A build
+    // with no checkout is a failure, never a skip.
+    let inventory = METHOD_INVENTORY.expect(
+        "the build had no BUSBAR_CHECKOUT: the inventory is busbar's qa/method-inventory.json at \
+         .busbar-ref (plugin CI exports it; locally, point it at a busbar checkout and rebuild)",
     );
-    let inventory =
-        std::fs::read_to_string(std::path::PathBuf::from(busbar).join("qa/method-inventory.json"))
-            .expect("the inventory is readable");
-    let doc: Value = serde_json::from_str(&inventory).expect("the inventory parses");
+    let doc: Value = serde_json::from_str(inventory).expect("the inventory parses");
     let methods = doc["methods"].as_array().expect("a methods array");
     fn how_busbar_reads(method: &str) -> (Option<&'static str>, String, Option<bool>) {
         let verb = verb_of(method).map(|v| match v {

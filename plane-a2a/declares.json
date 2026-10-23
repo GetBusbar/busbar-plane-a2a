@@ -1,5 +1,9 @@
 {
   "breaker": {
     "bench_below_trip_threshold": false
-  }
+  },
+  "needs": [
+    "grpc",
+    "http"
+  ]
 }

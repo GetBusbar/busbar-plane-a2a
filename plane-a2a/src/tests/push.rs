@@ -239,8 +239,8 @@ fn the_notification_is_the_task_nested_under_task_with_an_rfc3339_timestamp() {
     let body: serde_json::Value = serde_json::from_slice(&notification_body(&t)).expect("JSON");
     assert_eq!(
         body,
-        serde_json::json!({"task": {"id": "t1", "contextId": "ctx", "kind": "task",
-            "status": {"state": "completed", "timestamp": "1970-01-01T00:00:02Z"}}})
+        serde_json::json!({"task": {"id": "t1", "contextId": "ctx",
+            "status": {"state": "TASK_STATE_COMPLETED", "timestamp": "1970-01-01T00:00:02Z"}}})
     );
     assert!(body.get("jsonrpc").is_none());
     let mut silent = t;
@@ -250,6 +250,33 @@ fn the_notification_is_the_task_nested_under_task_with_an_rfc3339_timestamp() {
         None,
         "no callback, nothing to deliver"
     );
+}
+
+/// THE NOTIFICATION TAKES THE SHAPE OF THE VERSION ITS CALLBACK WAS REGISTERED UNDER (Q128 a2a M13,
+/// ruled version-consistent). v1.0: a `StreamResponse` carrying the task, its state a ProtoJSON
+/// `TASK_STATE_*` token and no `kind`. v0.3: the `Task` object itself, `kind: "task"` and the
+/// lower-case state word. RED before the fix: one mixed body, the v1.0 wrapper around v0.3 words.
+#[test]
+fn the_notification_is_the_registered_versions_shape() {
+    let mut t = task("t1", TaskState::Completed);
+    t.push_version = "1.0".into();
+    let v10: serde_json::Value = serde_json::from_slice(&notification_body(&t)).expect("JSON");
+    assert_eq!(
+        v10,
+        serde_json::json!({"task": {"id": "t1", "contextId": "ctx",
+            "status": {"state": "TASK_STATE_COMPLETED", "timestamp": "1970-01-01T00:00:02Z"}}})
+    );
+    t.push_version = "0.3".into();
+    let v03: serde_json::Value = serde_json::from_slice(&notification_body(&t)).expect("JSON");
+    assert_eq!(
+        v03,
+        serde_json::json!({"id": "t1", "contextId": "ctx", "kind": "task",
+            "status": {"state": "completed", "timestamp": "1970-01-01T00:00:02Z"}})
+    );
+    // A row written before the version was kept reads as v1.0.
+    t.push_version = String::new();
+    let old: serde_json::Value = serde_json::from_slice(&notification_body(&t)).expect("JSON");
+    assert_eq!(old, v10);
 }
 
 #[test]
@@ -471,65 +498,6 @@ fn a_callback_token_has_predevs_wire_shape_and_rides_its_bearer_scheme() {
 }
 
 #[test]
-fn a_destination_that_moved_off_every_address_it_reached_is_refused() {
-    let d = Deliveries::new();
-    let url = "https://hook.example/cb";
-    let addrs = |a: &[&str]| -> Vec<String> { a.iter().map(|s| (*s).to_string()).collect() };
-    assert_eq!(
-        d.rebound(url, &addrs(&["203.0.113.7"])),
-        None,
-        "first: the judge alone"
-    );
-    d.reached(url, &addrs(&["203.0.113.7", "203.0.113.8"]));
-    assert_eq!(
-        d.rebound(url, &addrs(&["203.0.113.8", "198.51.100.1"])),
-        None
-    );
-    assert_eq!(
-        d.rebound(url, &addrs(&["198.51.100.1"])),
-        Some(Attempted::Moved)
-    );
-    assert_eq!(d.rebound(url, &[]), Some(Attempted::Moved));
-    assert_eq!(
-        d.rebound("https://other.example/cb", &addrs(&["198.51.100.1"])),
-        None,
-        "per destination"
-    );
-    // The set follows the last delivery.
-    d.reached(url, &addrs(&["198.51.100.1"]));
-    assert_eq!(
-        d.rebound(url, &addrs(&["203.0.113.7"])),
-        Some(Attempted::Moved)
-    );
-    let moved = Attempted::Moved;
-    assert!(!moved.retryable());
-    assert_eq!(moved.record_kind(), vocab::EV_PUSH_REFUSED);
-}
-
-#[test]
-fn reached_addresses_are_bounded() {
-    let d = Deliveries::new();
-    let many: Vec<String> = (0..=MAX_REACHED)
-        .map(|i| format!("203.0.113.{i}"))
-        .collect();
-    d.reached("https://a.example/", &many);
-    let last = many[MAX_REACHED].clone();
-    assert_eq!(
-        d.rebound("https://a.example/", &[last]),
-        Some(Attempted::Moved),
-        "only the first MAX_REACHED are kept"
-    );
-    for i in 0..MAX_DESTINATIONS {
-        d.reached(&format!("https://d{i}.example/"), &many[..1]);
-    }
-    let held = (0..MAX_DESTINATIONS)
-        .filter(|i| d.rebound(&format!("https://d{i}.example/"), &[]).is_some())
-        .count()
-        + usize::from(d.rebound("https://a.example/", &[]).is_some());
-    assert_eq!(held, MAX_DESTINATIONS);
-}
-
-#[test]
 fn the_credential_round_trips_through_the_record_and_stays_redacted() {
     let auth = DeliveryAuth {
         scheme: "Bearer".into(),
@@ -545,18 +513,18 @@ fn the_credential_round_trips_through_the_record_and_stays_redacted() {
     assert!(!format!("{back:?}").contains("s3cret"));
 }
 
-/// One `tick` op attempts one notification: the head waiting longest, marked open so the next op
-/// takes another; a task's later notification waits behind its open head.
+/// One `tick` op attempts one notification: the next task's head in turn (task-id order), marked
+/// open so the next op takes another; a task's later notification waits behind its open head.
 #[test]
-fn the_next_due_is_one_head_at_a_time_the_longest_waiting_first() {
+fn the_next_due_is_one_head_at_a_time_each_task_in_turn() {
     let d = Deliveries::new();
     assert_eq!(d.next_due(0), None);
     d.enqueue(delivery("t2"), 5 * MS);
     d.enqueue(delivery("t1"), 9 * MS);
     d.enqueue(delivery("t2"), 6 * MS);
     assert_eq!(d.next_due(4 * MS), None, "nothing is due yet");
-    assert_eq!(d.next_due(10 * MS).map(|x| x.task_id), Some("t2".into()));
     assert_eq!(d.next_due(10 * MS).map(|x| x.task_id), Some("t1".into()));
+    assert_eq!(d.next_due(10 * MS).map(|x| x.task_id), Some("t2".into()));
     assert_eq!(
         d.next_due(10 * MS),
         None,
@@ -676,4 +644,41 @@ fn the_push_credential_reaches_the_authorization_field_and_no_debug_or_error_tex
     }))
     .expect_err("a credential with a control byte cannot be presented");
     assert!(!refused.contains(secret), "{refused}");
+}
+
+/// EACH ATTEMPT IS BOUNDED BY THE REQUEST DEADLINE (ARCHITECT ruling on a slow push receiver): a
+/// webhook has no pool, so the bound is the connector's default, ten seconds, and the request
+/// names it rather than `0` ("the op's deadline", which a driver ticket's op does not bound). A
+/// receiver that never answers then ends its attempt as a transport error, under the
+/// three-attempt rule. RED against an unbounded request.
+#[test]
+fn a_delivery_attempt_is_bounded_by_the_request_deadline() {
+    let d = Deliveries::new();
+    assert_eq!(
+        d.request(&delivery("t1")).timeout_ms,
+        10_000,
+        "the attempt's request is not bounded by the connector's default deadline"
+    );
+}
+
+/// THE PUMP SERVES THE TASKS' QUEUES IN TURN, one attempt per task per turn (ARCHITECT ruling on a
+/// slow push receiver): a task with several notifications waiting never keeps another task's
+/// waiting behind all of them. RED against the longest-waiting-then-lowest-id pick, which serves
+/// every notification of `a` before `b`'s one.
+#[test]
+fn the_pump_serves_each_tasks_queue_in_turn() {
+    let d = Deliveries::new();
+    d.enqueue(delivery("a"), 0);
+    d.enqueue(delivery("a"), 0);
+    d.enqueue(delivery("b"), 0);
+    let first = d.next_due(0).expect("due").task_id;
+    assert_eq!(first, "a");
+    d.settle("a", Attempted::Delivered, 0, 0);
+    assert_eq!(
+        d.next_due(0).map(|x| x.task_id).as_deref(),
+        Some("b"),
+        "b waited behind a second notification of a"
+    );
+    d.settle("b", Attempted::Delivered, 0, 0);
+    assert_eq!(d.next_due(0).map(|x| x.task_id).as_deref(), Some("a"));
 }

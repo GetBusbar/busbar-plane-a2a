@@ -59,6 +59,7 @@ pub mod a2a {
 pub const DECLARES: &str = include_str!("../declares.json");
 pub mod agent_arrival;
 pub mod agent_door;
+pub mod answer_bytes;
 pub mod binding;
 pub mod card_trust;
 pub mod cards;
@@ -84,6 +85,7 @@ pub mod relay;
 pub mod rest;
 pub mod served_card;
 pub mod skill;
+pub mod split_record;
 pub mod sse;
 pub mod surface;
 pub mod task_door;

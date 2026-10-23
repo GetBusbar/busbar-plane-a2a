@@ -19,8 +19,9 @@
 //! Busbar's own card points at the plane's mount, where the JSON-RPC envelope, the HTTP+JSON paths
 //! and (at the gRPC service path) the gRPC binding answer ([`SERVABLE_BINDINGS`]). A fronted agent's
 //! card points at `/a2a/agents/{id}`, where only the JSON-RPC envelope is mounted
-//! ([`AGENT_ADDRESS_BINDINGS`]); an entry whose binding busbar cannot serve there is dropped, and a
-//! card left with no interface at all is refused.
+//! ([`AGENT_ADDRESS_BINDINGS`]); an entry whose binding busbar cannot serve there is dropped (in
+//! `supportedInterfaces` and in v0.3's `additionalInterfaces`, whose `preferredTransport` becomes
+//! the JSON-RPC envelope), and a card left with no interface at all is refused.
 //!
 //! ## The vendor's signature is REMOVED, and BUSBAR'S REPLACES IT; its schemes are REPLACED
 //!
@@ -277,6 +278,27 @@ pub fn rewrite_card(
                 }
             }
         }
+    }
+    // THE v0.3 SPELLING of the same list (`additionalInterfaces`, `{url, transport}`) and of the
+    // binding its `url` speaks (`preferredTransport`): an entry busbar cannot serve at the agent's
+    // address is dropped, every other one points at busbar whatever host it named, and the
+    // preferred binding is the one busbar serves there.
+    if let Some(Value::Array(interfaces)) = out.get_mut("additionalInterfaces") {
+        interfaces.retain(|iface| match iface.get("transport") {
+            Some(Value::String(t)) => can_serve(t),
+            _ => true,
+        });
+        for iface in interfaces.iter_mut().filter_map(Value::as_object_mut) {
+            if iface.contains_key("url") {
+                iface.insert("url".to_string(), Value::String(endpoint.clone()));
+            }
+        }
+    }
+    if out.contains_key("preferredTransport") {
+        out.insert(
+            "preferredTransport".to_string(),
+            Value::String(AGENT_ADDRESS_BINDINGS[0].to_string()),
+        );
     }
     if out.contains_key("url") {
         out.insert("url".to_string(), Value::String(endpoint.clone()));
