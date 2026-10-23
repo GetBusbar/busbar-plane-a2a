@@ -38,6 +38,7 @@ fn config(url: &str, auth: Option<DeliveryAuth>) -> PushConfig {
         id: "cfg".into(),
         url: url.into(),
         authentication: auth,
+        version: String::new(),
     }
 }
 
@@ -62,7 +63,7 @@ fn a_moved_task_with_a_registered_config_queues_its_notification_to_that_config(
     assert_eq!(due.caller, ALICE);
     assert_eq!(due.task_id, "t1");
     let body: serde_json::Value = serde_json::from_slice(&due.body).unwrap();
-    assert_eq!(body["task"]["status"]["state"], "working");
+    assert_eq!(body["task"]["status"]["state"], "TASK_STATE_WORKING");
     let request = d.request(&due);
     assert!(request
         .fields
@@ -182,6 +183,8 @@ struct TestHost {
     pends: u32,
     /// How many attempts were abandoned (their connection closed).
     abandoned: u32,
+    /// A receiver that never answers: its exchange ends at the request's deadline, a failed one.
+    silent: Option<String>,
 }
 
 impl TestHost {
@@ -199,6 +202,7 @@ impl TestHost {
             framed: Vec::new(),
             pends: 0,
             abandoned: 0,
+            silent: None,
         }
     }
 }
@@ -211,10 +215,7 @@ impl Line for TestHost {
         } else {
             self.verdicts[0].clone()
         };
-        Poll::Ready(next.map(|(verdict, addrs)| {
-            let within = addrs.join(",");
-            (verdict, addrs, within)
-        }))
+        Poll::Ready(next.map(|(verdict, addrs)| (verdict, addrs.join(","))))
     }
 
     fn send(&mut self, ex: &mut Exchange, url: &str) -> Poll<Option<u16>> {
@@ -223,6 +224,9 @@ impl Line for TestHost {
             return Poll::Pending;
         }
         self.sent.push(url.to_string());
+        if self.silent.as_deref() == Some(url) {
+            return Poll::Ready(None);
+        }
         let fields = ex
             .framed_fields()
             .into_iter()
@@ -262,16 +266,15 @@ fn tick_once(d: &Deliveries, host: &mut TestHost, now_ns: u64) -> (Attempted, De
         delivery,
         exchange: None,
     };
-    let Poll::Ready((end, reached)) = attempt(host, d, &mut flight) else {
+    let Poll::Ready(end) = attempt(host, d, &mut flight) else {
         panic!("the test's host never pends");
     };
-    d.reached(&flight.delivery.url, &reached);
     d.owe(&flight.delivery, end);
     (end, d.settle(&flight.delivery.task_id, end, now_ns, 128))
 }
 
-/// The base case: a completed task with a callback is POSTed to it once, on the addresses the judge
-/// just judged, and its delivered record is owed; its last delivery drops the credential.
+/// The base case: a completed task with a callback is POSTed to it once, and its delivered record is
+/// owed; its last delivery drops the credential.
 #[test]
 fn a_completed_task_with_a_callback_is_delivered() {
     let callback = "https://hook.caller.test/notify";
@@ -281,11 +284,6 @@ fn a_completed_task_with_a_callback_is_delivered() {
     assert_eq!(end, Attempted::Delivered);
     assert_eq!(settled, DeliverySettled::Done(EV_PUSH_DELIVERED));
     assert_eq!(host.sent, vec![callback.to_string()]);
-    assert_eq!(
-        d.rebound(callback, &["198.51.100.9".to_string()]),
-        Some(Attempted::Moved),
-        "the addresses the delivery reached are the ones the judge judged"
-    );
     assert_eq!(d.take_owed(ALICE, None)[0].kind, EV_PUSH_DELIVERED);
 }
 
@@ -356,13 +354,12 @@ fn the_callers_own_webhook_credential_is_presented_on_the_delivery() {
     );
 }
 
-/// Across a restart no reached address survives, so the anti-rebinding rule has nothing to compare
-/// with: the judge alone still refuses the internal answer.
+/// A callback that now resolves to an internal address (a rebinding) is refused by the judge,
+/// which runs on every attempt, and nothing is sent.
 #[test]
 fn the_rebind_is_still_refused_when_no_pin_survives_the_restart() {
     let callback = "https://hook.caller.test/notify";
     let d = queued(callback);
-    assert_eq!(d.rebound(callback, &[]), None, "nothing reached: a restart");
     let mut host = TestHost::answering(vec![Some((DEST_INTERNAL, &[][..]))], 200);
     let (end, _) = tick_once(&d, &mut host, 0);
     assert_eq!(end, Attempted::Judged(DEST_INTERNAL));
@@ -539,8 +536,8 @@ fn a_pending_attempt_is_delivered_once_whether_tick_or_drive_runs_first() {
 }
 
 /// A lost wake still ends in exactly one delivery (R-PUSH, coordinator option (b)): an attempt left
-/// held with no `drive` is abandoned by the first tick past predev's delivery timeout (60 s,
-/// `transport.rs:92`), which is asked for at that moment, and its delivery is requeued under the
+/// held with no `drive` is abandoned by the first tick past the whole attempt's deadline (ten
+/// seconds), which is asked for at that moment, and its delivery is requeued under the
 /// retry rules and then sent once. RED against round 2's behaviour (a held attempt is never given
 /// up): nothing is ever sent.
 #[test]
@@ -620,4 +617,289 @@ fn an_abandoned_attempt_never_also_completes() {
         "reached exactly once"
     );
     assert_eq!(host.abandoned, 1);
+}
+
+/// A RETRY'S WAIT IS COUNTED FROM WHEN THE ATTEMPT ENDED (spec l.391-392: three attempts, two
+/// delays of 250/500 ms ±20 %). An attempt whose exchange pends, and whose `503` arrives two
+/// seconds after the tick that began it, is not retried on the tick that follows its `drive`: the
+/// retry waits out its 250 ms from then. RED against a wait counted from the attempt's start (the
+/// delay is already spent when the failure lands, so the retry goes out at once).
+#[test]
+fn a_retry_waits_from_when_a_pended_attempt_ended() {
+    let callback = "https://hook.caller.test/notify";
+    let d = queued(callback);
+    let attempting = Attempting::default();
+    let mut host = TestHost::answering(vec![Some((DEST_ALLOWED, &[AT_REGISTRATION][..]))], 503);
+    host.pends = 1;
+    assert_eq!(tick_over(&mut host, &d, &attempting, 0), Outcome::Pending);
+    // The receiver's 503 lands: the wake runs `drive`, which settles the attempt.
+    assert_eq!(drive_over(&mut host, &d, &attempting), Outcome::Ready);
+    assert_eq!(host.sent.len(), 1, "the first attempt reached the receiver");
+    // The re-poll tick after that wake, two seconds after the attempt began.
+    let ended = 2_000_000_000;
+    assert_eq!(tick_over(&mut host, &d, &attempting, ended), Outcome::Ready);
+    assert_eq!(
+        host.sent.len(),
+        1,
+        "the retry went out at once, with no delay after the failure"
+    );
+    let again = next_tick_ns(&d, &attempting);
+    assert!(
+        again >= ended + 200_000_000 && again <= ended + 300_000_000,
+        "the retry is asked for 250 ms ±20 % after the attempt ended: {again}"
+    );
+    assert_eq!(tick_over(&mut host, &d, &attempting, again), Outcome::Ready);
+    assert_eq!(
+        host.sent.len(),
+        2,
+        "the retry goes out once its wait is over"
+    );
+}
+
+/// A RECEIVER WHOSE ADDRESSES CHANGED IS STILL DELIVERED TO: the destination judge runs on every
+/// attempt and the dial lands only within what it judged (spec l.392-393, "re-runs the destination
+/// judge on every attempt"; THE DESIGN, its connections section: the connector judges every open),
+/// so a fresh, allowed resolution that shares no address with an earlier delivery's is reached. RED
+/// against a plane-side rule that refuses it (`Moved`) for as long as the instance lives.
+#[test]
+fn a_receiver_whose_addresses_changed_is_still_delivered() {
+    let callback = "https://hook.caller.test/notify";
+    let d = queued(callback);
+    let mut host = TestHost::answering(
+        vec![
+            Some((DEST_ALLOWED, &[AT_REGISTRATION][..])),
+            Some((DEST_ALLOWED, &["198.51.100.9"][..])),
+        ],
+        200,
+    );
+    let (first, _) = tick_once(&d, &mut host, 0);
+    assert_eq!(first, Attempted::Delivered);
+    d.enqueue(
+        Delivery {
+            task_id: "t2".into(),
+            caller: ALICE.into(),
+            url: callback.into(),
+            body: Vec::new(),
+            terminal: false,
+        },
+        0,
+    );
+    let (second, settled) = tick_once(&d, &mut host, 0);
+    assert_eq!(
+        second,
+        Attempted::Delivered,
+        "the judged, allowed new address was refused"
+    );
+    assert_eq!(settled, DeliverySettled::Done(EV_PUSH_DELIVERED));
+    assert_eq!(
+        host.sent.len(),
+        2,
+        "both notifications reached the receiver"
+    );
+}
+
+/// A TASK THAT ENDS WITH NOTHING TO DELIVER DROPS ITS WEBHOOK CREDENTIAL: a terminal move that
+/// queues no notification leaves no credential in plane memory, since no delivery is left to
+/// present it. RED against a credential released only by a terminal delivery's settle.
+#[test]
+fn a_task_that_ends_with_nothing_to_deliver_drops_its_credential() {
+    let mut book = Book::default();
+    let mut row = moved(&mut book, "");
+    row.state = "completed".into();
+    let d = Deliveries::new();
+    d.remember_auth(
+        "t1",
+        Some(DeliveryAuth {
+            scheme: "Bearer".into(),
+            credentials: crate::push::PushCredential::new("tok".into()),
+        }),
+    );
+    assert!(!queue(&d, &row, None), "nothing to deliver");
+    let probe = Delivery {
+        task_id: "t1".into(),
+        caller: ALICE.into(),
+        url: "https://hook.caller.test/notify".into(),
+        body: Vec::new(),
+        terminal: true,
+    };
+    assert!(
+        !d.request(&probe)
+            .fields
+            .iter()
+            .any(|(n, _)| n == b"authorization"),
+        "the ended task's credential is still held"
+    );
+}
+
+/// AN ENDED TASK SPENDS ITS CALLBACK TOKEN, whichever move ended it: the token busbar registered
+/// with the agent is released when the move is terminal, so tasks that end through the relayed
+/// answer or a refresh never pile up against `MAX_TOKENS`; a live task keeps its token.
+#[test]
+fn an_ended_task_spends_its_callback_token() {
+    let mut book = Book::default();
+    let mut row = moved(&mut book, "");
+    let tokens = crate::push::Tokens::new();
+    let token = tokens.mint(ALICE, "t1", &[7u8; 32]).expect("minted");
+    ended(&tokens, &row);
+    assert!(
+        tokens.claim(&token).is_some(),
+        "a working task keeps its token"
+    );
+    row.state = "completed".into();
+    ended(&tokens, &row);
+    assert!(
+        tokens.claim(&token).is_none(),
+        "the ended task's token is spent"
+    );
+}
+
+/// A NOTIFICATION QUEUED WHILE AN ATTEMPT IS HELD DOES NOT WAKE THE DRIVER TICKET: the wake would
+/// make the kernel tick, and a tick's start is the driver ticket's cycle boundary, which forgets
+/// the held attempt's pending exchange (its completion lost, the attempt ended only by its
+/// deadline's abandonment, a replay dialling again). The queued notification waits; the held attempt's own
+/// completion wake carries it, and the held attempt ends with its own result, sent once. RED
+/// against a queue that wakes while an attempt is held.
+#[test]
+fn a_notification_queued_during_a_held_attempt_waits_for_that_attempts_own_wake() {
+    let callback = "https://hook.caller.test/notify";
+    let mut book = Book::default();
+    let row = moved(&mut book, callback);
+    let d = Deliveries::new();
+    let (told, woken) = std::sync::mpsc::channel::<()>();
+    d.arm(|| {
+        Box::new(move || {
+            let _ = told.send(());
+        })
+    });
+    assert!(queue(&d, &row, None));
+    assert_eq!(woken.try_iter().count(), 1, "nothing held: the queue wakes");
+    let attempting = Attempting::default();
+    let mut host = TestHost::answering(vec![Some((DEST_ALLOWED, &[AT_REGISTRATION][..]))], 200);
+    host.pends = 1;
+    assert_eq!(tick_over(&mut host, &d, &attempting, 0), Outcome::Pending);
+    let mut other = row.clone();
+    other.task_id = "t2".into();
+    assert!(queue(&d, &other, None), "the notification is recorded");
+    assert_eq!(
+        woken.try_iter().count(),
+        0,
+        "a queue during a held attempt woke the driver ticket"
+    );
+    // The held attempt's own completion wake: `drive` ends it with its own result.
+    assert_eq!(drive_over(&mut host, &d, &attempting), Outcome::Ready);
+    assert_eq!(host.sent, vec![callback.to_string()], "sent once");
+    assert_eq!(d.take_owed(ALICE, None).len(), 1, "its own result is owed");
+    // The tick that follows the wake attempts what was queued meanwhile.
+    assert_eq!(tick_over(&mut host, &d, &attempting, 1), Outcome::Ready);
+    assert_eq!(host.sent.len(), 2, "the queued notification goes next");
+}
+
+/// ONE RECEIVER THAT NEVER ANSWERS HOLDS THE PUMP FOR ONE ATTEMPT'S DEADLINE AT MOST (ARCHITECT
+/// ruling on a slow push receiver): its attempt ends at the request's deadline as a transport error
+/// and waits for its retry, and a second task's delivery goes out on the tick that follows, within
+/// one deadline of the first attempt's start.
+#[test]
+fn a_silent_receiver_delays_another_tasks_delivery_by_one_deadline_at_most() {
+    let silent = "https://silent.caller.test/notify";
+    let prompt = "https://prompt.caller.test/notify";
+    let d = Deliveries::new();
+    for (task, url) in [("a", silent), ("b", prompt)] {
+        d.enqueue(
+            Delivery {
+                task_id: task.into(),
+                caller: ALICE.into(),
+                url: url.into(),
+                body: Vec::new(),
+                terminal: false,
+            },
+            0,
+        );
+    }
+    let attempting = Attempting::default();
+    let mut host = TestHost::answering(vec![Some((DEST_ALLOWED, &[AT_REGISTRATION][..]))], 200);
+    host.silent = Some(silent.to_string());
+    host.pends = 1;
+    assert_eq!(tick_over(&mut host, &d, &attempting, 0), Outcome::Pending);
+    // The connector ends the silent receiver's exchange at the request's deadline.
+    assert_eq!(drive_over(&mut host, &d, &attempting), Outcome::Ready);
+    let deadline = crate::push::ATTEMPT_TIMEOUT_MS * 1_000_000;
+    assert_eq!(
+        tick_over(&mut host, &d, &attempting, deadline),
+        Outcome::Ready
+    );
+    assert_eq!(
+        host.sent,
+        vec![silent.to_string(), prompt.to_string()],
+        "the second task's delivery lands within one deadline"
+    );
+}
+
+/// THE DEADLINE BOUNDS THE WHOLE ATTEMPT, ten seconds from the tick that began it (ARCHITECT ruling
+/// on a slow push receiver: open, write and response together; 1.5.5 had no A2A push client, so no
+/// value of its own). An attempt still held then is abandoned (its connection closed) and counts as
+/// a transport error under the three-attempt rule; the tick is asked for at that moment. RED against
+/// a held attempt kept for sixty seconds.
+#[test]
+fn the_whole_attempt_is_abandoned_at_ten_seconds_as_a_transport_error() {
+    let d = queued("https://hook.caller.test/notify");
+    let attempting = Attempting::default();
+    let mut host = TestHost::answering(vec![Some((DEST_ALLOWED, &[AT_REGISTRATION][..]))], 200);
+    host.pends = 1;
+    assert_eq!(tick_over(&mut host, &d, &attempting, 0), Outcome::Pending);
+    let ten_s = 10_000_000_000;
+    assert_eq!(
+        next_tick_ns(&d, &attempting),
+        ten_s,
+        "the tick is not asked for at the whole attempt's ten-second deadline"
+    );
+    assert_eq!(tick_over(&mut host, &d, &attempting, ten_s), Outcome::Ready);
+    assert_eq!(
+        host.abandoned, 1,
+        "the attempt was not abandoned at ten seconds"
+    );
+    assert_eq!(
+        d.take_owed(ALICE, None)[0].kind,
+        EV_PUSH_FAILED,
+        "the abandoned attempt is a transport error"
+    );
+    assert!(
+        next_tick_ns(&d, &attempting) > ten_s,
+        "its retry is asked for"
+    );
+}
+
+/// WHILE AN ATTEMPT IS HELD THE TICK IS ASKED FOR ONLY AT ITS ABANDONMENT, never at once for a
+/// delivery that came due meanwhile: such a tick starts no attempt (the held one is `drive`'s), and
+/// its start is the driver ticket's cycle boundary, which forgets the held exchange's answers. The
+/// held attempt's own completion wake attempts what waits. RED against a tick asked for at the
+/// earliest of the due delivery and the deadline (the instance ticks at once, over and over).
+#[test]
+fn a_held_attempt_asks_for_no_tick_before_its_deadline() {
+    let d = queued("https://hook.caller.test/notify");
+    let attempting = Attempting::default();
+    let mut host = TestHost::answering(vec![Some((DEST_ALLOWED, &[AT_REGISTRATION][..]))], 200);
+    host.pends = 1;
+    let start = 1_000;
+    assert_eq!(
+        tick_over(&mut host, &d, &attempting, start),
+        Outcome::Pending
+    );
+    d.enqueue(
+        Delivery {
+            task_id: "t2".into(),
+            caller: ALICE.into(),
+            url: "https://other.caller.test/notify".into(),
+            body: Vec::new(),
+            terminal: false,
+        },
+        start,
+    );
+    assert_eq!(
+        next_tick_ns(&d, &attempting),
+        start + DELIVERY_TIMEOUT_NS,
+        "a due delivery asked for a tick while an attempt is held"
+    );
+    // The held attempt's completion: the tick after its wake is asked for the waiting delivery.
+    assert_eq!(drive_over(&mut host, &d, &attempting), Outcome::Ready);
+    assert_eq!(next_tick_ns(&d, &attempting), start);
 }

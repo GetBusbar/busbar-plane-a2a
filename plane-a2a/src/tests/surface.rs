@@ -236,6 +236,9 @@ fn pattern_matches_template(segs: &[busbar_contract::grammar::PathSeg], template
         // claim that grew one would not be describing a template segment for segment, so the honest
         // answer is that this comparison does not apply rather than that it passed.
         PathSeg::Tail => false,
+        // A one-or-more segment (busbar dev's `PathSeg::Plus`) spans a count of segments no
+        // template states, so it too is no segment-for-segment description.
+        PathSeg::Plus => false,
     })
 }
 

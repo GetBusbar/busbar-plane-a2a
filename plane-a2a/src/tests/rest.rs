@@ -247,6 +247,19 @@ fn an_answer_is_reframed_by_what_it_is() {
     assert_eq!(reframe(502, b"not json"), b"not json".to_vec());
 }
 
+/// THE RESULT IS THE ANSWER'S OWN BYTES (Law 5): member order, an integer past 64 bits and a
+/// number past `f64`'s range reach the HTTP+JSON caller as the far end wrote them. RED: the result
+/// was re-serialised through a JSON value (members re-sorted, the long integer rounded), and a
+/// number past `f64`'s range failed the reading, so the caller got the whole JSON-RPC envelope.
+#[test]
+fn a_result_is_the_answers_own_bytes() {
+    let answer = br#"{"jsonrpc":"2.0","id":"a2a-http-json","result":{"z":1, "id":"a2a-p-1","n":123456789012345678901234567890,"big":1e400}}"#;
+    assert_eq!(
+        String::from_utf8(reframe(200, answer)).unwrap(),
+        r#"{"z":1, "id":"a2a-p-1","n":123456789012345678901234567890,"big":1e400}"#
+    );
+}
+
 /// Ported from busbar-a2a a2a/tests/rest_tests.rs::a_string_coded_refusal_re_frames_from_its_http_status.
 /// A refusal whose `code` is not a JSON-RPC integer (a deployment with no governance answers a
 /// plain document with a string one) still re-frames: the status name falls back to the HTTP
@@ -262,4 +275,83 @@ fn a_string_coded_refusal_re_frames_from_its_http_status() {
     );
     assert_eq!(body["error"]["status"], "UNAVAILABLE");
     assert_eq!(body["error"]["message"], "no card yet");
+}
+
+/// SUBSCRIBE IS A GET (proto `SubscribeToTask`: `get: "/tasks/{id=*}:subscribe"`). The verb suffix
+/// sits inside the `{id}` segment, so a GET of `/tasks/{id}:subscribe` is the subscribe, never a
+/// read of a task whose id ends in `:subscribe`; a GET with no verb suffix stays the read.
+#[test]
+fn a_get_of_a_tasks_subscribe_suffix_is_subscribe_to_task() {
+    let task = "/a2a/tasks/{id}";
+    assert_eq!(
+        composed("GET", task, "/a2a/tasks/abc:subscribe", b""),
+        envelope(method::SUBSCRIBE_TO_TASK, json!({"id": "abc"}))
+    );
+    assert_eq!(
+        composed("GET", task, "/a2a/tasks/a:b:subscribe", b""),
+        envelope(method::SUBSCRIBE_TO_TASK, json!({"id": "a:b"}))
+    );
+    assert_eq!(
+        composed("GET", task, "/a2a/tasks/abc", b""),
+        envelope(method::GET_TASK, json!({"id": "abc"}))
+    );
+}
+
+/// A CANCEL'S BODY IS ITS PARAMS (proto `CancelTask`: `post: "/tasks/{id=*}:cancel" body: "*"`), so
+/// the caller's `metadata` reaches the operation; the path's id wins over a posted one.
+#[test]
+fn a_posted_cancel_body_reaches_the_params_and_the_path_wins() {
+    assert_eq!(
+        composed(
+            "POST",
+            "/a2a/tasks/{id}",
+            "/a2a/tasks/t-1:cancel",
+            br#"{"id":"somebody-elses","metadata":{"why":"done"}}"#
+        ),
+        envelope(
+            method::CANCEL_TASK,
+            json!({"id": "t-1", "metadata": {"why": "done"}})
+        )
+    );
+}
+
+/// ONLY THE PROTO'S NON-STRING QUERY MEMBERS ARE TYPED. `contextId`, `pageToken`, `status` and
+/// `statusTimestampAfter` are strings in the proto (`ListTasksRequest`,
+/// `ListTaskPushNotificationConfigsRequest`), so an all-digit or `true`-spelled value stays the
+/// string it was; `pageSize`, `historyLength` and `includeArtifacts` are typed.
+#[test]
+fn only_the_protos_non_string_query_members_are_typed() {
+    assert_eq!(
+        composed(
+            "GET",
+            "/a2a/tasks",
+            "/a2a/tasks?contextId=12345&pageToken=007&status=true&statusTimestampAfter=1\
+             &pageSize=5&historyLength=2&includeArtifacts=false",
+            b""
+        ),
+        envelope(
+            method::LIST_TASKS,
+            json!({
+                "contextId": "12345",
+                "pageToken": "007",
+                "status": "true",
+                "statusTimestampAfter": "1",
+                "pageSize": 5,
+                "historyLength": 2,
+                "includeArtifacts": false,
+            })
+        )
+    );
+    assert_eq!(
+        composed(
+            "GET",
+            "/a2a/tasks/{id}/pushNotificationConfigs",
+            "/a2a/tasks/t-1/pushNotificationConfigs?pageToken=42&pageSize=3",
+            b""
+        ),
+        envelope(
+            method::LIST_PUSH_CONFIGS,
+            json!({"taskId": "t-1", "pageToken": "42", "pageSize": 3})
+        )
+    );
 }
