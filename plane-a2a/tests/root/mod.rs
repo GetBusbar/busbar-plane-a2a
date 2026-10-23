@@ -1179,6 +1179,13 @@ fn served_core(
     let routes = doors.iter().map(|r| r.path.clone()).collect();
     let (router, admin, handle) =
         busbar_kernel::build_split_routers_serving(Arc::clone(&app), doors, 1 << 20, 0, false);
+    // THE LISTENER'S SCHEME, stated on every request the data router serves, as busbar's plain
+    // listener states it (`listener_scheme(false)`): a framed claim's stream begins with it, and a
+    // begin that declares none is refused (BeginIn.scheme). The rig drives the router with no
+    // listener, so it states the plain one's.
+    let router = router.layer(axum::Extension(
+        busbar_kernel::plane_routes::ListenerScheme(busbar_contract::abi::host::service::SCHEME_PLAIN),
+    ));
     // THE NODE'S ADMIN SURFACE OVER IT, as boot mounts it (`units_admin::mount_node`, the one
     // function both call): the generic trust verbs over the kernel's trust book among it
     // (ruling (d), coordinator 2026-10-07).
