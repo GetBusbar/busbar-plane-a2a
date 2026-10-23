@@ -24,7 +24,10 @@ use busbar_contract::conn::DeclaredConns;
 use busbar_kernel::cost::CostModel;
 use busbar_kernel::governance::signing::{TokenSigner, DEFAULT_KID};
 use busbar_kernel::governance::{GovState, NewKeySpec};
-use busbar_kernel::plane_driver::{EndPost, PlaneMoney};
+use busbar_kernel::{
+    plane_driver::{EndPost, PlaneMoney},
+    plane_routes::ListenerScheme,
+};
 
 use super::planes_tests::{Published, PUBLISHING};
 use super::{compose_planes, door_routes};
@@ -1183,9 +1186,9 @@ fn served_core(
     // listener states it (`listener_scheme(false)`): a framed claim's stream begins with it, and a
     // begin that declares none is refused (BeginIn.scheme). The rig drives the router with no
     // listener, so it states the plain one's.
-    let router = router.layer(axum::Extension(
-        busbar_kernel::plane_routes::ListenerScheme(busbar_contract::abi::host::service::SCHEME_PLAIN),
-    ));
+    let router = router.layer(axum::Extension(ListenerScheme(
+        busbar_contract::abi::host::service::SCHEME_PLAIN,
+    )));
     // THE NODE'S ADMIN SURFACE OVER IT, as boot mounts it (`units_admin::mount_node`, the one
     // function both call): the generic trust verbs over the kernel's trust book among it
     // (ruling (d), coordinator 2026-10-07).
