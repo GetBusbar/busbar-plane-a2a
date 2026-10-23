@@ -180,6 +180,38 @@ fn a_url_without_a_scheme_fails_at_parse() {
     );
 }
 
+/// THE REGISTRATION URL IS PARSED, NOT PREFIX-TESTED: one with no host is refused, and one whose
+/// authority carries a userinfo is refused without the refusal repeating it.
+#[test]
+fn a_registration_url_is_parsed_and_its_userinfo_never_repeated() {
+    let d = def("https://", PinMechanism::Unpinned);
+    let err = validate_agent("planner", &d).expect_err("a URL with no host is refused");
+    assert!(err.contains("`url:`"), "got: {err}");
+    for url in [
+        "https://alice:s3cret@a2a.vendor/planner",
+        "https://s3cret@a2a.vendor/planner",
+    ] {
+        let d = def(url, PinMechanism::Unpinned);
+        let err = validate_agent("planner", &d).expect_err(&format!("`{url}` must be refused"));
+        assert!(err.contains("userinfo"), "got: {err}");
+        assert!(
+            !err.contains("s3cret"),
+            "the refusal repeats the credential: {err}"
+        );
+    }
+    let err = validate_agent(
+        "planner",
+        &def("ftp://alice:s3cret@a2a.vendor/", PinMechanism::Unpinned),
+    )
+    .expect_err("a non-http scheme is refused");
+    assert!(!err.contains("s3cret"), "got: {err}");
+    assert_eq!(
+        without_userinfo("https://alice:s3cret@a2a.vendor/p@th?q=@"),
+        "https://***@a2a.vendor/p@th?q=@"
+    );
+    assert_eq!(without_userinfo("not a url"), "not a url");
+}
+
 /// An agent may not be NAMED by a reserved word: every word in the one declaration is refused here.
 /// Ported from busbar-a2a a2a/tests/config_tests.rs::an_agent_may_not_be_named_by_a_reserved_word.
 #[test]

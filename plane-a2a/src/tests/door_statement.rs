@@ -689,3 +689,24 @@ fn the_plane_declares_its_published_identity_and_its_claims_speak_its_wire_forma
     // A generation with no public base (a delegation-only plane) claims nothing.
     assert!(agents_snapshot_spec(None, true).claims.is_empty());
 }
+
+/// THE PUSH QUEUE IS DROP-OLDEST, COUNTED (THE DESIGN, a2a; A2A-PUSH "drop-oldest + metric"): the
+/// Statement declares the two unlabelled counters the door's tick reports their increments on.
+#[test]
+fn the_statement_declares_the_push_queue_counters() {
+    let st = crate::agent_door::STATEMENT;
+    assert_eq!(st.families_len, FAMILIES.len());
+    assert_eq!(FAMILIES.len(), 2);
+    for (index, name) in [
+        (FAMILY_PUSH_DROPPED, METRIC_PUSH_DROPPED),
+        (FAMILY_PUSH_UNFILED, METRIC_PUSH_UNFILED),
+    ] {
+        let family = &FAMILIES[index as usize];
+        assert_eq!(family.name.len, name.len(), "{name}");
+        assert_eq!(
+            family.kind,
+            busbar_contract::abi::mechanism::door::FAMILY_COUNTER
+        );
+        assert_eq!(family.label_keys_len, 0);
+    }
+}

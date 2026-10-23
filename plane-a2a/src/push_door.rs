@@ -322,13 +322,15 @@ impl Attempting {
 /// three-attempt rule (spec l.391-393).
 const DELIVERY_TIMEOUT_NS: u64 = crate::push::ATTEMPT_TIMEOUT_MS * 1_000_000;
 
-/// When the lifecycle tick is next wanted: the earliest waiting delivery, or the moment a held
-/// attempt is abandoned; `0` = neither.
+/// When the lifecycle tick is next wanted: while an attempt is held, ONLY the moment it is
+/// abandoned; else the earliest waiting delivery; `0` = neither. A held attempt's tick starts no
+/// other attempt and its start forgets the held exchange's answers (a tick is the driver ticket's
+/// cycle boundary, [`Deliveries::wake`]), so a delivery due meanwhile asks for no tick: the held
+/// attempt's own completion wake (its `drive`, then the tick after it) attempts it.
 pub(crate) fn next_tick_ns(deliveries: &Deliveries, attempting: &Attempting) -> u64 {
-    match (deliveries.next_tick_ns(), attempting.deadline_ns()) {
-        (0, b) => b,
-        (a, 0) => a,
-        (a, b) => a.min(b),
+    match attempting.deadline_ns() {
+        0 => deliveries.next_tick_ns(),
+        deadline => deadline,
     }
 }
 
