@@ -24,16 +24,17 @@ use busbar_contract::abi::host::conn::connector::{
 use busbar_contract::abi::mechanism::call::{AbiStr, Blob, BLOB_ABSENT};
 use busbar_contract::abi::mechanism::door::{KindTailHead, Section, SECTION_DECLARING};
 use busbar_contract::abi::plane::{
-    AdminRoute, BillableClass, OpClass, PinMechanism, PlaneTail, RecordChain, TrustKey,
-    ANSWER_LAYOUT, CHAIN_DIGESTS_SCOPE, CHAIN_LENGTH_PREFIXED, INGRESS_REQUEST_RESPONSE,
+    AdminRoute, BillableClass, OpClass, PinMechanism, PlaneTail, RecordChain, RecordRetention,
+    TrustKey, ANSWER_LAYOUT, CHAIN_DIGESTS_SCOPE, CHAIN_LENGTH_PREFIXED, INGRESS_REQUEST_RESPONSE,
     INGRESS_RESPONSE_STREAM, MECHANISM_PEER_KEY, MECHANISM_ROOT, PIN_FINGERPRINT, SHAPE_PIECEWISE,
     TAIL_HOOKS_GATED, TAIL_REFUSED_PIECE, TRUST_PIN, TRUST_PRIVATE_REACH, TRUST_RECOVERY_BACKOFF,
     TRUST_REVERIFY_TTL,
 };
 use busbar_contract::abi::sdk::door::abi_str;
 use busbar_contract::abi::sdk::publish::{
-    admin_route, AdminRouteSpec, ClaimSpec, ServedRoute, SnapshotSpec,
+    admin_route, record_retention, AdminRouteSpec, ClaimSpec, ServedRoute, SnapshotSpec,
 };
+use busbar_contract::records::Retention;
 
 use crate::a2a::config::{
     AgentsCfg, DEFAULT_REVERIFY_TTL, REFUSE_PASSTHROUGH_SECTION, SUBJECT_NOUN,
@@ -251,6 +252,12 @@ const RECORD_KINDS: &[AbiStr] = &[
     abi_str(crate::records::HELD_KINDS[3]),
     abi_str(crate::records::HELD_KINDS[4]),
 ];
+
+/// The retention rule of each held kind that is not purged by age: a task row is kept while it is
+/// active (working or interrupted), so a purge drops only the terminal ones. `task_event` rows are
+/// always written active (they are the task's chain), so they list no rule and go by age, as do
+/// the push configs and cards.
+const RECORD_RETENTIONS: &[RecordRetention] = &[record_retention(0, Retention::TerminalOnly)];
 
 /// THE TASK CHAIN (ARCHITECT ruling B1, 2026-10-07; `BUSBAR-1.6.0.md` Part 3, the chain section, and THE
 /// DESIGN's route pump): the task-event kind is chained, LENGTH-PREFIXED with its scope in the
@@ -493,6 +500,8 @@ pub const TAIL: &PlaneTail = &PlaneTail {
     fee_units_len: FEE_UNITS.len(),
     record_kinds: RECORD_KINDS.as_ptr(),
     record_kinds_len: RECORD_KINDS.len(),
+    record_retentions: RECORD_RETENTIONS.as_ptr(),
+    record_retentions_len: RECORD_RETENTIONS.len(),
     egress_targets: std::ptr::null(),
     egress_targets_len: 0,
     record_chains: RECORD_CHAINS.as_ptr(),
