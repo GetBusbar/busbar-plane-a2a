@@ -580,8 +580,10 @@ pub const ROUTES: &[Route] = &[
     keyed("GET", "/a2a/extendedAgentCard"),
     open("GET", "/.well-known/oauth-protected-resource/a2a"),
     open("GET", "/.well-known/agent-card.json"),
+    keyed("GET", "/a2a/agents/{agent_id}/.well-known/agent-card.json"),
     keyed("GET", "/a2a/agents/{agent_id}"),
     keyed("POST", "/a2a/agents/{agent_id}"),
+    keyed("POST", "/a2a/agents/{agent_id}/"),
     keyed("POST", "/a2a"),
     keyed("POST", "/a2a/"),
     Route {
@@ -626,10 +628,21 @@ pub fn line_of(route: &Route) -> Line {
     if route.carrier == FRAMED_TRANSPORT {
         return Line::Framed;
     }
-    if route.open || (route.verb == "GET" && route.target == "/a2a/agents/{agent_id}") {
+    if route.open
+        || (route.verb == "GET"
+            && matches!(
+                route.target,
+                "/a2a/agents/{agent_id}" | "/a2a/agents/{agent_id}/.well-known/agent-card.json"
+            ))
+    {
         return Line::Open;
     }
-    if route.verb == "POST" && matches!(route.target, "/a2a" | "/a2a/" | "/a2a/agents/{agent_id}") {
+    if route.verb == "POST"
+        && matches!(
+            route.target,
+            "/a2a" | "/a2a/" | "/a2a/agents/{agent_id}" | "/a2a/agents/{agent_id}/"
+        )
+    {
         return Line::Document;
     }
     Line::Target

@@ -84,11 +84,19 @@
       ],
       [
         "GET",
+        "/a2a/agents/{agent_id}/.well-known/agent-card.json"
+      ],
+      [
+        "GET",
         "/a2a/agents/{agent_id}"
       ],
       [
         "POST",
         "/a2a/agents/{agent_id}"
+      ],
+      [
+        "POST",
+        "/a2a/agents/{agent_id}/"
       ],
       [
         "POST",
@@ -154,11 +162,19 @@
       ],
       [
         "GET",
+        "/a2a/agents/{agent_id}/.well-known/agent-card.json"
+      ],
+      [
+        "GET",
         "/a2a/agents/{agent_id}"
       ],
       [
         "POST",
         "/a2a/agents/{agent_id}"
+      ],
+      [
+        "POST",
+        "/a2a/agents/{agent_id}/"
       ],
       [
         "POST",
