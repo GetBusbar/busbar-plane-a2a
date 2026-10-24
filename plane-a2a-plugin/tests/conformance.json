@@ -96,10 +96,6 @@
       ],
       [
         "POST",
-        "/a2a/agents/{agent_id}/"
-      ],
-      [
-        "POST",
         "/a2a"
       ],
       [
@@ -171,10 +167,6 @@
       [
         "POST",
         "/a2a/agents/{agent_id}"
-      ],
-      [
-        "POST",
-        "/a2a/agents/{agent_id}/"
       ],
       [
         "POST",

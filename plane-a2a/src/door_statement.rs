@@ -583,7 +583,6 @@ pub const ROUTES: &[Route] = &[
     keyed("GET", "/a2a/agents/{agent_id}/.well-known/agent-card.json"),
     keyed("GET", "/a2a/agents/{agent_id}"),
     keyed("POST", "/a2a/agents/{agent_id}"),
-    keyed("POST", "/a2a/agents/{agent_id}/"),
     keyed("POST", "/a2a"),
     keyed("POST", "/a2a/"),
     Route {
@@ -637,12 +636,7 @@ pub fn line_of(route: &Route) -> Line {
     {
         return Line::Open;
     }
-    if route.verb == "POST"
-        && matches!(
-            route.target,
-            "/a2a" | "/a2a/" | "/a2a/agents/{agent_id}" | "/a2a/agents/{agent_id}/"
-        )
-    {
+    if route.verb == "POST" && matches!(route.target, "/a2a" | "/a2a/" | "/a2a/agents/{agent_id}") {
         return Line::Document;
     }
     Line::Target

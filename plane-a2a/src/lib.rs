@@ -157,10 +157,6 @@ pub const ROUTE_EXTENDED_AGENT_CARD: &str = "/extendedAgentCard";
 /// One FRONTED agent's endpoint, derived from the agent id so a caller's endpoint is stable and
 /// says which agent it reaches.
 pub const ROUTE_AGENT: &str = "/agents/{agent_id}";
-/// The same agent endpoint written with the trailing separator a client joining a relative path to
-/// the card's `url` sends (architect ruling 2026-10-23, R-15: each fronted agent is reached at its
-/// own endpoint, as the protocol's clients reach it).
-pub const ROUTE_AGENT_SLASH: &str = "/agents/{agent_id}/";
 /// One FRONTED agent's own card, at the protocol's well-known discovery path under the agent's
 /// endpoint (R-15): a client handed the agent's endpoint discovers its card there, and the card's
 /// `url` names that endpoint.
@@ -178,7 +174,6 @@ pub const MOUNTED_ROUTE_SUFFIXES: &[&str] = &[
     ROUTE_EXTENDED_AGENT_CARD,
     ROUTE_AGENT_CARD,
     ROUTE_AGENT,
-    ROUTE_AGENT_SLASH,
 ];
 
 /// THE PROTOCOL'S CANONICAL CARD DISCOVERY PATH, from protocol v0.3 onward. Absolute, not under

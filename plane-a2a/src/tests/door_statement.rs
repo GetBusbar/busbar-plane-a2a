@@ -427,7 +427,7 @@ fn every_route_is_one_line_of_the_dialect_in_mount_order() {
         lines,
         [
             Target, Target, Target, Target, Target, Target, Target, Target, Target, Target, Open,
-            Open, Open, Document, Document, Document, Framed,
+            Open, Open, Open, Document, Document, Document, Framed,
         ]
     );
     // Each line's refusals speak the binding its dialect index names.
