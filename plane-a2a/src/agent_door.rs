@@ -922,7 +922,9 @@ fn agent_of(target: &str) -> Option<String> {
     let path = target.split(['?', '#']).next().unwrap_or(target);
     let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
     match segments.as_slice() {
-        ["a2a", "agents", id] => Some((*id).to_string()),
+        ["a2a", "agents", id] | ["a2a", "agents", id, ".well-known", "agent-card.json"] => {
+            Some((*id).to_string())
+        }
         _ => None,
     }
 }
@@ -1580,7 +1582,10 @@ fn arrive_card(
     let generation = plane.newest();
     let (ask, agent) = if route.verb == "GET" && route.target == crate::WELL_KNOWN_CARD_PATH {
         (agent_arrival::CardAsk::Own, None)
-    } else if route.verb == "GET" && route.target == crate::mounted_route(crate::ROUTE_AGENT) {
+    } else if route.verb == "GET"
+        && (route.target == crate::mounted_route(crate::ROUTE_AGENT)
+            || route.target == crate::mounted_route(crate::ROUTE_AGENT_CARD))
+    {
         let Some(agent) = agent_of(target) else {
             return unserved(out);
         };

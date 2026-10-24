@@ -455,6 +455,38 @@ mod both_ways {
         // STREAM-CEILING): a message streamed, and a resubscribe to a task, on the plane's own endpoint.
         t.push(arrive(p, 11, document, MOUNT_PATH, STREAM, &[]).0);
         t.push(arrive(p, 12, document, MOUNT_PATH, RESUBSCRIBE, &[]).0);
+        // ONE FRONTED AGENT'S OWN ENDPOINT AND CARD (architect ruling 2026-10-23, R-15): the
+        // endpoint with the trailing separator a client joining a relative path to the card's `url`
+        // sends, and the agent's card at the protocol's discovery path under its endpoint.
+        let agent_slash = mounted(busbar_plane_a2a::ROUTE_AGENT_SLASH);
+        let slash_target = mounted("/agents/vendor/");
+        t.push(
+            arrive(
+                p,
+                13,
+                ("POST", agent_slash.as_str()),
+                &slash_target,
+                SEND,
+                &[],
+            )
+            .0,
+        );
+        let agent_card = mounted(busbar_plane_a2a::ROUTE_AGENT_CARD);
+        let card_target = mounted("/agents/vendor/.well-known/agent-card.json");
+        t.push(arrive(p, 14, ("GET", agent_card.as_str()), &card_target, b"", &[]).0);
+        let agent_get = mounted(busbar_plane_a2a::ROUTE_AGENT);
+        let agent_get_target = mounted("/agents/vendor");
+        t.push(
+            arrive(
+                p,
+                15,
+                ("GET", agent_get.as_str()),
+                &agent_get_target,
+                b"",
+                &[],
+            )
+            .0,
+        );
 
         // THE HOOK VIEW.
         t.push(project(p, 2, agent, &agent_target, SEND, None));
@@ -635,6 +667,28 @@ mod both_ways {
                 "{l}"
             );
         }
+        // R-15: the agent's endpoint answers its trailing-separator spelling as it answers its own
+        // (the same disposition, op, dialect, principal and route as unit 2), and its own card is
+        // served at the discovery path under it.
+        let after = |l: &str, target: &str| {
+            l.split_once(&format!(" {target} "))
+                .map(|(_, r)| r.to_string())
+        };
+        assert_eq!(
+            after(line(&t, "arrive 13 "), &mounted("/agents/vendor/")),
+            after(line(&t, "arrive 2 "), &mounted("/agents/vendor")),
+            "the agent's endpoint with a trailing separator: {}",
+            line(&t, "arrive 13 ")
+        );
+        assert_eq!(
+            after(
+                line(&t, "arrive 14 "),
+                &mounted("/agents/vendor/.well-known/agent-card.json")
+            ),
+            after(line(&t, "arrive 15 "), &mounted("/agents/vendor")),
+            "the agent's own card at its discovery path is the agent's card: {}",
+            line(&t, "arrive 14 ")
+        );
         assert!(
             line(&t, "arrive 7 ").contains(&format!("{:?}", Outcome::Refused)),
             "a media type the line does not read is refused: {}",
