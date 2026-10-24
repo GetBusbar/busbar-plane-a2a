@@ -858,9 +858,10 @@ pub fn agents_snapshot_spec(public_url: Option<&str>, agents: &[&str]) -> Snapsh
 /// THE TRAILING-SEPARATOR SPELLING OF EACH FRONTED AGENT'S ENDPOINT (architect ruling 2026-10-24,
 /// R-16): an A2A client joins its relative calls to the card's `url` and so arrives at
 /// `/a2a/agents/<id>/`. The contract refuses a pattern claim that ends in a separator, so each
-/// configured agent's spelling is claimed EXACTLY, after [`ROUTES`], in the order the section's agents
-/// are read, and restated with every generation's snapshot; each is served as [`AGENT_ENDPOINT`] ([`route_of`]). A name that is not
-/// one plain path segment claims nothing.
+/// configured agent's spelling is claimed EXACTLY, after [`ROUTES`], in the order the section's
+/// agents are read, and restated with every generation's snapshot; each is served as
+/// [`AGENT_ENDPOINT`] ([`route_of_claim`]). A name that is not one plain path segment claims
+/// nothing.
 #[must_use]
 pub fn agent_slash_claims(agents: &[&str]) -> Vec<ClaimSpec> {
     agents
@@ -900,7 +901,7 @@ fn plain_segment(name: &str) -> bool {
 /// asked only for an index past the table, so a routed arrival allocates nothing for it), served as
 /// [`AGENT_ENDPOINT`]. Any other index names no claim of this plane (an unclaimed request, a 404).
 #[must_use]
-pub fn route_of(claim: u32, agent_claims: impl FnOnce() -> usize) -> Option<&'static Route> {
+pub fn route_of_claim(claim: u32, agent_claims: impl FnOnce() -> usize) -> Option<&'static Route> {
     let i = usize::try_from(claim).ok()?;
     ROUTES
         .get(i)

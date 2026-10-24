@@ -1336,7 +1336,7 @@ slot!(
         if !room_for(&plane.units, given.unit) {
             return refused(&mut out, &agent_arrival::units_full());
         }
-        let Some(route) = door_statement::route_of(given.claim, || agent_claims(plane)) else {
+        let Some(route) = door_statement::route_of_claim(given.claim, || agent_claims(plane)) else {
             return unserved(&mut out);
         };
         let target = input.field(|i| &i.target).as_str().unwrap_or_default();
@@ -4493,7 +4493,7 @@ slot!(
     Project, ProjectIn, ProjectOut, |instance, input, mut out| {
         let plane = instance.get();
         let agents = || plane.map_or(0, agent_claims);
-        let Some(route) = door_statement::route_of(input.get().claim, agents) else {
+        let Some(route) = door_statement::route_of_claim(input.get().claim, agents) else {
             return Outcome::Refused;
         };
         let target = input.field(|i| &i.target).as_str().unwrap_or_default();
