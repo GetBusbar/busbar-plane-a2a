@@ -1336,7 +1336,7 @@ slot!(
         if !room_for(&plane.units, given.unit) {
             return refused(&mut out, &agent_arrival::units_full());
         }
-        let Some(route) = door_statement::route_of(given.claim, agent_claims(&plane)) else {
+        let Some(route) = door_statement::route_of(given.claim, agent_claims(plane)) else {
             return unserved(&mut out);
         };
         let target = input.field(|i| &i.target).as_str().unwrap_or_default();
@@ -4491,7 +4491,7 @@ slot!(
     /// (the envelope on the JSON-RPC line, the params where the HTTP+JSON line's body is the params).
     /// Any other line, or a body that is no envelope, projects nothing (REFUSED).
     Project, ProjectIn, ProjectOut, |instance, input, mut out| {
-        let agents = instance.get().map_or(0, |p| agent_claims(&p));
+        let agents = instance.get().map_or(0, agent_claims);
         let Some(route) = door_statement::route_of(input.get().claim, agents) else {
             return Outcome::Refused;
         };
