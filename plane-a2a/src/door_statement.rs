@@ -561,6 +561,10 @@ const fn open(verb: &'static str, target: &'static str) -> Route {
     }
 }
 
+/// ONE FRONTED AGENT'S JSON-RPC ENDPOINT, `POST /a2a/agents/{agent_id}`: a row of [`ROUTES`], and
+/// the route every agent's trailing-separator claim ([`agent_slash_claims`]) is served as.
+pub const AGENT_ENDPOINT: Route = keyed("POST", "/a2a/agents/{agent_id}");
+
 /// EVERY ROUTE THE PLANE SERVES, in the order the engine mounts them: the document binding's
 /// named operations, then the two discovery documents, the catalogue entry, the JSON-RPC
 /// endpoint in both spellings, the push callback and the framed binding's service.
@@ -582,7 +586,7 @@ pub const ROUTES: &[Route] = &[
     open("GET", "/.well-known/agent-card.json"),
     keyed("GET", "/a2a/agents/{agent_id}/.well-known/agent-card.json"),
     keyed("GET", "/a2a/agents/{agent_id}"),
-    keyed("POST", "/a2a/agents/{agent_id}"),
+    AGENT_ENDPOINT,
     keyed("POST", "/a2a"),
     keyed("POST", "/a2a/"),
     Route {
@@ -808,7 +812,8 @@ pub fn dealt_section(settings: &[u8]) -> std::borrow::Cow<'_, [u8]> {
 /// coordinator ruling Q1(b), 2026-10-07); the kernel still loads the plane, its section being
 /// present (LAW 7). Its trust verbs stay stated, and answer every name `404`: none is registered.
 #[must_use]
-pub fn agents_snapshot_spec(public_url: Option<&str>, fronts: bool) -> SnapshotSpec {
+pub fn agents_snapshot_spec(public_url: Option<&str>, agents: &[&str]) -> SnapshotSpec {
+    let fronts = !agents.is_empty();
     let admitted = public_url.filter(|_| fronts).and_then(|p| {
         Some((
             crate::a2a::public::absolute(p, crate::MOUNT_PATH)?,
@@ -816,7 +821,15 @@ pub fn agents_snapshot_spec(public_url: Option<&str>, fronts: bool) -> SnapshotS
         ))
     });
     let (audience, resource_metadata, claims) = match admitted {
-        Some((a, m)) => (Some(a), Some(m), ROUTES.iter().map(dialect_claim).collect()),
+        Some((a, m)) => (
+            Some(a),
+            Some(m),
+            ROUTES
+                .iter()
+                .map(dialect_claim)
+                .chain(agent_slash_claims(agents))
+                .collect(),
+        ),
         None => (None, None, Vec::new()),
     };
     SnapshotSpec {
@@ -840,6 +853,65 @@ pub fn agents_snapshot_spec(public_url: Option<&str>, fronts: bool) -> SnapshotS
         resource_facts: None,
         listed: Vec::new(),
     }
+}
+
+/// THE TRAILING-SEPARATOR SPELLING OF EACH FRONTED AGENT'S ENDPOINT (architect ruling 2026-10-24,
+/// R-16): an A2A client joins its relative calls to the card's `url` and so arrives at
+/// `/a2a/agents/<id>/`. The contract refuses a pattern claim that ends in a separator, so each
+/// configured agent's spelling is claimed EXACTLY, after [`ROUTES`], in the order the section's
+/// agents are read, and restated with every generation's snapshot; each is served as
+/// [`AGENT_ENDPOINT`] ([`route_of_claim`]). A name that is not one plain path segment claims
+/// nothing.
+#[must_use]
+pub fn agent_slash_claims(agents: &[&str]) -> Vec<ClaimSpec> {
+    agents
+        .iter()
+        .filter_map(|agent| agent_slash_target(agent))
+        .map(|target| {
+            let mut spec = ClaimSpec::new(
+                AGENT_ENDPOINT.verb,
+                &target,
+                AGENT_ENDPOINT.carrier,
+                busbar_contract::abi::plane::CLAIM_EXACT,
+            );
+            spec.refusal_dialect = u16::try_from(DIALECT_DOCUMENT).unwrap_or_default();
+            spec
+        })
+        .collect()
+}
+
+/// `/a2a/agents/<agent>/`, or `None` for a name that is not one plain path segment.
+#[must_use]
+pub fn agent_slash_target(agent: &str) -> Option<String> {
+    plain_segment(agent).then(|| format!("{}/agents/{agent}/", crate::MOUNT_PATH))
+}
+
+/// Whether `name` is one plain path segment (unreserved characters only, not `.` or `..`).
+fn plain_segment(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '~'))
+}
+
+/// The route the kernel's claim index `claim` names: a row of [`ROUTES`], or past them one of the
+/// generation's trailing-separator claims ([`agent_slash_claims`]; `agent_claims` counts them and is
+/// asked only for an index past the table, so a routed arrival allocates nothing for it), served as
+/// [`AGENT_ENDPOINT`]. Any other index names no claim of this plane (an unclaimed request, a 404).
+#[must_use]
+pub fn route_of_claim(claim: u32, agent_claims: impl FnOnce() -> usize) -> Option<&'static Route> {
+    let i = usize::try_from(claim).ok()?;
+    ROUTES
+        .get(i)
+        .or_else(|| (i < ROUTES.len().saturating_add(agent_claims())).then_some(&AGENT_ENDPOINT))
+}
+
+/// How many trailing-separator claims ([`agent_slash_claims`]) the agents named `agents` state.
+#[must_use]
+pub fn agent_claim_count<'a>(agents: impl IntoIterator<Item = &'a str>) -> usize {
+    agents.into_iter().filter(|a| plain_segment(a)).count()
 }
 
 /// A route as the snapshot's claim ([`ServedRoute::claim_spec`]: an open route takes no inbound
