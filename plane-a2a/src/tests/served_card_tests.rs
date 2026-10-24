@@ -213,7 +213,7 @@ fn the_served_endpoint_and_the_mounted_path_are_one_derivation() {
     for verb in ["GET", "POST"] {
         let claimed = crate::door_statement::ROUTES
             .iter()
-            .find(|r| r.verb == verb && r.target.contains("{agent_id}"))
+            .find(|r| r.verb == verb && r.target == crate::mounted_route(crate::ROUTE_AGENT))
             .unwrap_or_else(|| panic!("a claimed {verb} route names an agent"));
         assert_eq!(
             claimed.target.replace("{agent_id}", "planner"),

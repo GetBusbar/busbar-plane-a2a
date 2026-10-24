@@ -455,6 +455,24 @@ mod both_ways {
         // STREAM-CEILING): a message streamed, and a resubscribe to a task, on the plane's own endpoint.
         t.push(arrive(p, 11, document, MOUNT_PATH, STREAM, &[]).0);
         t.push(arrive(p, 12, document, MOUNT_PATH, RESUBSCRIBE, &[]).0);
+        // ONE FRONTED AGENT'S OWN CARD (architect ruling 2026-10-23, R-15): at the protocol's
+        // discovery path under the agent's endpoint.
+        let agent_card = mounted(busbar_plane_a2a::ROUTE_AGENT_CARD);
+        let card_target = mounted("/agents/vendor/.well-known/agent-card.json");
+        t.push(arrive(p, 14, ("GET", agent_card.as_str()), &card_target, b"", &[]).0);
+        let agent_get = mounted(busbar_plane_a2a::ROUTE_AGENT);
+        let agent_get_target = mounted("/agents/vendor");
+        t.push(
+            arrive(
+                p,
+                15,
+                ("GET", agent_get.as_str()),
+                &agent_get_target,
+                b"",
+                &[],
+            )
+            .0,
+        );
 
         // THE HOOK VIEW.
         t.push(project(p, 2, agent, &agent_target, SEND, None));
@@ -635,6 +653,21 @@ mod both_ways {
                 "{l}"
             );
         }
+        // R-15: the agent's own card is served at the protocol's discovery path under its
+        // endpoint, the same answer as the agent's card at its endpoint.
+        let after = |l: &str, target: &str| {
+            l.split_once(&format!(" {target} "))
+                .map(|(_, r)| r.to_string())
+        };
+        assert_eq!(
+            after(
+                line(&t, "arrive 14 "),
+                &mounted("/agents/vendor/.well-known/agent-card.json")
+            ),
+            after(line(&t, "arrive 15 "), &mounted("/agents/vendor")),
+            "the agent's own card at its discovery path is the agent's card: {}",
+            line(&t, "arrive 14 ")
+        );
         assert!(
             line(&t, "arrive 7 ").contains(&format!("{:?}", Outcome::Refused)),
             "a media type the line does not read is refused: {}",
