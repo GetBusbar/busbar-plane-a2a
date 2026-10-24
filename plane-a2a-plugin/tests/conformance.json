@@ -186,11 +186,11 @@
       ],
       [
         "POST",
-        "/a2a/agents/vendor/"
+        "/a2a/agents/other/"
       ],
       [
         "POST",
-        "/a2a/agents/other/"
+        "/a2a/agents/vendor/"
       ]
     ],
     "member": "vendor",
