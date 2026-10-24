@@ -40,8 +40,10 @@ use crate::a2a::config::{AgentDefCfg, AgentPinCfg, PinMechanism};
 /// The well-known card path an agent pinned to an older protocol revision still serves.
 pub const WELL_KNOWN_CARD_PATH_LEGACY: &str = "/.well-known/agent.json";
 
-/// The largest card body accepted: a card is a small JSON document, and an unbounded read is an
-/// allocation the upstream chooses the size of.
+/// The largest card body accepted: a card is a small JSON document. This bounds what is PARSED; the
+/// read itself is bounded by the SDK exchange's own reply ceiling
+/// (`busbar_contract::abi::sdk::exchange::REPLY_MAX`), which a plane cannot lower, so a far end can
+/// still make the exchange buffer up to that ceiling before this check refuses the card.
 pub const MAX_CARD_BYTES: usize = 512 * 1024;
 
 /// How long one card fetch may take: ten seconds.
@@ -118,7 +120,8 @@ fn sighted_skills(sighting: &Sighting) -> usize {
 pub use busbar_contract::abi::sdk::trust::State;
 
 /// ONE REGISTRATION'S TRUST, as the plane holds it in memory: the last sighting, the
-/// re-verification ledger verify-on-call keeps, and the skills of the card `approve` held.
+/// re-verification ledger verify-on-call keeps, and the skills of the card `approve` held (also
+/// its `card_approval` host record, so a restart keeps them).
 /// What the registration is trusted to SERVE is not here: it is the kernel's trust book.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct TrustStanding {

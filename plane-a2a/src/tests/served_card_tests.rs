@@ -213,7 +213,7 @@ fn the_served_endpoint_and_the_mounted_path_are_one_derivation() {
     for verb in ["GET", "POST"] {
         let claimed = crate::door_statement::ROUTES
             .iter()
-            .find(|r| r.verb == verb && r.target.contains("{agent_id}"))
+            .find(|r| r.verb == verb && r.target == crate::mounted_route(crate::ROUTE_AGENT))
             .unwrap_or_else(|| panic!("a claimed {verb} route names an agent"));
         assert_eq!(
             claimed.target.replace("{agent_id}", "planner"),
@@ -709,4 +709,96 @@ fn the_card_signing_domain_derives_the_exact_pinned_bytes() {
         "a2a/agent-card-signing/v1"
     );
     assert_eq!(crate::door_statement::CARD_KID_PREFIX, "busbar-a2a-card-");
+}
+
+/// A v0.3 CARD'S `additionalInterfaces` AND `preferredTransport` name only what busbar serves at
+/// the agent's address (the JSON-RPC envelope): an entry on another binding is dropped, the rest
+/// point at busbar, and an entry on a host other than the registration's is never published.
+#[test]
+fn a_v03_cards_additional_interfaces_and_preferred_transport_name_only_what_busbar_serves_there() {
+    let backend = json!({
+        "name": "Planner",
+        "url": "https://a.example.com/a2a",
+        "preferredTransport": "GRPC",
+        "additionalInterfaces": [
+            { "url": "https://a.example.com/a2a", "transport": "JSONRPC" },
+            { "url": "https://grpc-a.example.net", "transport": "GRPC" },
+            { "url": "https://a.example.com/rest", "transport": "HTTP+JSON" },
+            { "url": "https://jsonrpc-a.example.net/rpc", "transport": "JSONRPC" },
+        ],
+    });
+    let served =
+        rewrite_card(&backend, "https://a.example.com/a2a", PUBLIC, "planner").expect("served");
+    let endpoint = "https://gw.example/a2a/agents/planner";
+    assert_eq!(served["url"], endpoint);
+    assert_eq!(served["preferredTransport"], "JSONRPC");
+    assert_eq!(
+        served["additionalInterfaces"],
+        json!([{ "url": endpoint, "transport": "JSONRPC" }]),
+        "two entries pointed at busbar's one address are one interface"
+    );
+    let text = served.to_string();
+    assert!(!text.contains("example.net"), "{text}");
+    assert!(!text.contains("a.example.com"), "{text}");
+}
+
+/// ONE SERVABLE-BINDING RULE IN BOTH VERSIONS: a v0.3 card that prefers gRPC and offers no
+/// JSON-RPC entry is refused exactly as a v1.0 card offering only gRPC is, never served as a
+/// JSON-RPC card its agent does not speak.
+#[test]
+fn a_v03_card_offering_no_binding_busbar_serves_is_refused_like_a_v10_one() {
+    let grpc_only = json!({
+        "name": "Planner",
+        "url": "https://a.example.com/a2a",
+        "preferredTransport": "GRPC",
+        "additionalInterfaces": [
+            { "url": "https://a.example.com/rest", "transport": "HTTP+JSON" },
+        ],
+    });
+    assert_eq!(
+        rewrite_card(&grpc_only, "https://a.example.com/a2a", PUBLIC, "planner"),
+        Err(ServeError::NoServableBinding)
+    );
+    let preferred_only = json!({
+        "name": "Planner",
+        "url": "https://a.example.com/a2a",
+        "preferredTransport": "GRPC",
+    });
+    assert_eq!(
+        rewrite_card(
+            &preferred_only,
+            "https://a.example.com/a2a",
+            PUBLIC,
+            "planner"
+        ),
+        Err(ServeError::NoServableBinding)
+    );
+    let unstated = json!({ "name": "Planner", "url": "https://a.example.com/a2a" });
+    assert!(
+        rewrite_card(&unstated, "https://a.example.com/a2a", PUBLIC, "planner").is_ok(),
+        "a v0.3 card's url speaks JSON-RPC when its preferredTransport is unstated"
+    );
+}
+
+/// A v1.0 card's interfaces the rewrite points at the same address on the same binding are
+/// published once.
+#[test]
+fn a_v10_cards_duplicate_interfaces_are_published_once() {
+    let mut card = backend_card();
+    card["supportedInterfaces"] = json!([
+        { "url": "https://internal.corp.example/a2a", "protocolBinding": "JSONRPC" },
+        { "url": "https://internal.corp.example/a2a/v2", "protocolBinding": "JSONRPC" },
+    ]);
+    let served = rewrite_card(
+        &card,
+        "https://internal.corp.example/a2a",
+        PUBLIC,
+        "planner",
+    )
+    .expect("served");
+    assert_eq!(
+        served["supportedInterfaces"].as_array().map(Vec::len),
+        Some(1),
+        "{served}"
+    );
 }

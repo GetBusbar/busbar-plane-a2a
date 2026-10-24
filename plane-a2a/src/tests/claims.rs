@@ -145,6 +145,9 @@ fn pattern_matches(pattern: &[busbar_contract::grammar::PathSeg], path: &str) ->
                 Some(s) if s.starts_with('{') && s.ends_with('}') => {}
                 _ => return false,
             },
+            // No claim of this plane spells a one-or-more segment (busbar dev's `PathSeg::Plus`);
+            // a claim that grew one is a claim this matcher does not read, never a silent pass.
+            PathSeg::Plus => panic!("this plane's claims spell no `+` segment"),
         }
     }
     segments.next().is_none()
@@ -188,6 +191,9 @@ fn concrete_matches(pattern: &[busbar_contract::grammar::PathSeg], path: &str) -
                     return false;
                 }
             }
+            // No claim of this plane spells a one-or-more segment (busbar dev's `PathSeg::Plus`);
+            // a claim that grew one is a claim this matcher does not read, never a silent pass.
+            PathSeg::Plus => panic!("this plane's claims spell no `+` segment"),
         }
     }
     segments.next().is_none()
