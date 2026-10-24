@@ -858,8 +858,8 @@ pub fn agents_snapshot_spec(public_url: Option<&str>, agents: &[&str]) -> Snapsh
 /// THE TRAILING-SEPARATOR SPELLING OF EACH FRONTED AGENT'S ENDPOINT (architect ruling 2026-10-24,
 /// R-16): an A2A client joins its relative calls to the card's `url` and so arrives at
 /// `/a2a/agents/<id>/`. The contract refuses a pattern claim that ends in a separator, so each
-/// configured agent's spelling is claimed EXACTLY, after [`ROUTES`], and restated with every
-/// generation's snapshot; each is served as [`AGENT_ENDPOINT`] ([`route_of`]). A name that is not
+/// configured agent's spelling is claimed EXACTLY, after [`ROUTES`], in the order the section's agents
+/// are read, and restated with every generation's snapshot; each is served as [`AGENT_ENDPOINT`] ([`route_of`]). A name that is not
 /// one plain path segment claims nothing.
 #[must_use]
 pub fn agent_slash_claims(agents: &[&str]) -> Vec<ClaimSpec> {
