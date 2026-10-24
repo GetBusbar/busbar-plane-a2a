@@ -891,14 +891,24 @@ pub fn agent_slash_target(agent: &str) -> Option<String> {
     plain.then(|| format!("{}/agents/{agent}/", crate::MOUNT_PATH))
 }
 
-/// The route the kernel's claim index `claim` names: a row of [`ROUTES`], or past them one agent's
-/// trailing-separator claim ([`agent_slash_claims`]), served as [`AGENT_ENDPOINT`].
+/// The route the kernel's claim index `claim` names: a row of [`ROUTES`], or past them one of the
+/// generation's `agent_claims` trailing-separator claims ([`agent_slash_claims`]), served as
+/// [`AGENT_ENDPOINT`]. Any other index names no claim of this plane (an unclaimed request, a 404).
 #[must_use]
-pub fn route_of(claim: u32) -> Option<&'static Route> {
+pub fn route_of(claim: u32, agent_claims: usize) -> Option<&'static Route> {
     let i = usize::try_from(claim).ok()?;
     ROUTES
         .get(i)
-        .or_else(|| (i >= ROUTES.len()).then_some(&AGENT_ENDPOINT))
+        .or_else(|| (i < ROUTES.len().saturating_add(agent_claims)).then_some(&AGENT_ENDPOINT))
+}
+
+/// How many trailing-separator claims ([`agent_slash_claims`]) the agents named `agents` state.
+#[must_use]
+pub fn agent_claim_count<'a>(agents: impl IntoIterator<Item = &'a str>) -> usize {
+    agents
+        .into_iter()
+        .filter(|a| agent_slash_target(a).is_some())
+        .count()
 }
 
 /// A route as the snapshot's claim ([`ServedRoute::claim_spec`]: an open route takes no inbound
