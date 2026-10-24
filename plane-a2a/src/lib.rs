@@ -157,6 +157,10 @@ pub const ROUTE_EXTENDED_AGENT_CARD: &str = "/extendedAgentCard";
 /// One FRONTED agent's endpoint, derived from the agent id so a caller's endpoint is stable and
 /// says which agent it reaches.
 pub const ROUTE_AGENT: &str = "/agents/{agent_id}";
+/// One FRONTED agent's own card, at the protocol's well-known discovery path under the agent's
+/// endpoint (R-15): a client handed the agent's endpoint discovers its card there, and the card's
+/// `url` names that endpoint.
+pub const ROUTE_AGENT_CARD: &str = "/agents/{agent_id}/.well-known/agent-card.json";
 
 /// EVERY SUFFIX ABOVE, as one list. The plane asserts its claim for each is [`MOUNT_PATH`] joined to
 /// it, so a route added on the server side with no claim behind it is a red test.
@@ -168,6 +172,7 @@ pub const MOUNTED_ROUTE_SUFFIXES: &[&str] = &[
     ROUTE_PUSH_CONFIGS,
     ROUTE_PUSH_CONFIG,
     ROUTE_EXTENDED_AGENT_CARD,
+    ROUTE_AGENT_CARD,
     ROUTE_AGENT,
 ];
 
