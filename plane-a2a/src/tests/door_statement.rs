@@ -747,19 +747,19 @@ fn each_fronted_agent_claims_its_endpoint_with_a_trailing_separator() {
         assert_eq!(u32::from(c.refusal_dialect), DIALECT_DOCUMENT);
     }
     let n = u32::try_from(ROUTES.len()).expect("a small table");
-    assert_eq!(route_of(n, 2), Some(&AGENT_ENDPOINT));
-    assert_eq!(route_of(n + 1, 2), Some(&AGENT_ENDPOINT));
+    assert_eq!(route_of(n, || 2), Some(&AGENT_ENDPOINT));
+    assert_eq!(route_of(n + 1, || 2), Some(&AGENT_ENDPOINT));
     assert_eq!(
-        route_of(n + 2, 2),
+        route_of(n + 2, || 2),
         None,
         "past the generation's claims: unclaimed"
     );
     assert_eq!(
-        route_of(n, 0),
+        route_of(n, || 0),
         None,
         "a generation fronting no agent states none"
     );
-    assert_eq!(line_of(route_of(n, 1).expect("a route")), Line::Document);
+    assert_eq!(line_of(route_of(n, || 1).expect("a route")), Line::Document);
     assert_eq!(agent_claim_count(["vendor", "a/b", "other"]), 2);
     assert_eq!(agent_slash_target("a/b"), None);
     assert_eq!(agent_slash_target(".."), None);
