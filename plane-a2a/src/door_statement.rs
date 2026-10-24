@@ -882,33 +882,35 @@ pub fn agent_slash_claims(agents: &[&str]) -> Vec<ClaimSpec> {
 /// `/a2a/agents/<agent>/`, or `None` for a name that is not one plain path segment.
 #[must_use]
 pub fn agent_slash_target(agent: &str) -> Option<String> {
-    let plain = !agent.is_empty()
-        && agent != "."
-        && agent != ".."
-        && agent
+    plain_segment(agent).then(|| format!("{}/agents/{agent}/", crate::MOUNT_PATH))
+}
+
+/// Whether `name` is one plain path segment (unreserved characters only, not `.` or `..`).
+fn plain_segment(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && name
             .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '~'));
-    plain.then(|| format!("{}/agents/{agent}/", crate::MOUNT_PATH))
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '~'))
 }
 
 /// The route the kernel's claim index `claim` names: a row of [`ROUTES`], or past them one of the
-/// generation's `agent_claims` trailing-separator claims ([`agent_slash_claims`]), served as
+/// generation's trailing-separator claims ([`agent_slash_claims`]; `agent_claims` counts them and is
+/// asked only for an index past the table, so a routed arrival allocates nothing for it), served as
 /// [`AGENT_ENDPOINT`]. Any other index names no claim of this plane (an unclaimed request, a 404).
 #[must_use]
-pub fn route_of(claim: u32, agent_claims: usize) -> Option<&'static Route> {
+pub fn route_of(claim: u32, agent_claims: impl FnOnce() -> usize) -> Option<&'static Route> {
     let i = usize::try_from(claim).ok()?;
     ROUTES
         .get(i)
-        .or_else(|| (i < ROUTES.len().saturating_add(agent_claims)).then_some(&AGENT_ENDPOINT))
+        .or_else(|| (i < ROUTES.len().saturating_add(agent_claims())).then_some(&AGENT_ENDPOINT))
 }
 
 /// How many trailing-separator claims ([`agent_slash_claims`]) the agents named `agents` state.
 #[must_use]
 pub fn agent_claim_count<'a>(agents: impl IntoIterator<Item = &'a str>) -> usize {
-    agents
-        .into_iter()
-        .filter(|a| agent_slash_target(a).is_some())
-        .count()
+    agents.into_iter().filter(|a| plain_segment(a)).count()
 }
 
 /// A route as the snapshot's claim ([`ServedRoute::claim_spec`]: an open route takes no inbound
