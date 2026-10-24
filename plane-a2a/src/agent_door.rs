@@ -1057,7 +1057,8 @@ slot!(
             trust: Keyed::new(),
         };
         plane.published(generation);
-        let spec = door_statement::agents_snapshot_spec(plane.public_url.as_deref(), !cfg.agents.is_empty());
+        let names: Vec<&str> = cfg.agents.keys().map(String::as_str).collect();
+        let spec = door_statement::agents_snapshot_spec(plane.public_url.as_deref(), &names);
         out.publish_with(|o| &o.snapshot, &plane.generations, generation, &spec, cfg);
         instance.open(plane);
         Outcome::Ready
@@ -1086,7 +1087,8 @@ slot!(
         if let Err(words) = door_statement::read_push_section(owned) {
             return out.fail(Refusal::refused(words));
         }
-        let spec = door_statement::agents_snapshot_spec(plane.public_url.as_deref(), !cfg.agents.is_empty());
+        let names: Vec<&str> = cfg.agents.keys().map(String::as_str).collect();
+        let spec = door_statement::agents_snapshot_spec(plane.public_url.as_deref(), &names);
         let generation = input.get().generation;
         // THE CARDS A KEPT REGISTRATION HOLDS are held under the new generation too: the apply
         // keeps the operator's approval (it is the kernel's trust book's, ARCHITECT
@@ -1327,7 +1329,7 @@ slot!(
         if !room_for(&plane.units, given.unit) {
             return refused(&mut out, &agent_arrival::units_full());
         }
-        let Some(route) = door_statement::ROUTES.get(given.claim as usize) else {
+        let Some(route) = door_statement::route_of(given.claim) else {
             return unserved(&mut out);
         };
         let target = input.field(|i| &i.target).as_str().unwrap_or_default();
@@ -4482,7 +4484,7 @@ slot!(
     /// (the envelope on the JSON-RPC line, the params where the HTTP+JSON line's body is the params).
     /// Any other line, or a body that is no envelope, projects nothing (REFUSED).
     Project, ProjectIn, ProjectOut, |instance, input, mut out| {
-        let Some(route) = door_statement::ROUTES.get(input.get().claim as usize) else {
+        let Some(route) = door_statement::route_of(input.get().claim) else {
             return Outcome::Refused;
         };
         let target = input.field(|i| &i.target).as_str().unwrap_or_default();

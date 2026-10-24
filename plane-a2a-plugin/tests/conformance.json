@@ -105,6 +105,10 @@
       [
         "POST",
         "/lf.a2a.v1.A2AService/{method}"
+      ],
+      [
+        "POST",
+        "/a2a/agents/vendor/"
       ]
     ],
     "refresh_claims": [
@@ -179,6 +183,14 @@
       [
         "POST",
         "/lf.a2a.v1.A2AService/{method}"
+      ],
+      [
+        "POST",
+        "/a2a/agents/vendor/"
+      ],
+      [
+        "POST",
+        "/a2a/agents/other/"
       ]
     ],
     "member": "vendor",
