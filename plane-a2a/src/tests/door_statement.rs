@@ -21,6 +21,21 @@ fn one_agent(name: &str, url: &str) -> Vec<u8> {
     format!(r#"{{"{name}": {{"url": "{url}", "pin": {{"mechanism": "unpinned"}}}}}}"#).into_bytes()
 }
 
+/// The tail declares exactly the task kind as TerminalOnly: every other kind is purged by age.
+#[test]
+fn the_tail_declares_the_task_kind_as_terminal_only() {
+    let retentions: Vec<(&str, u32)> = RECORD_RETENTIONS
+        .iter()
+        .map(|r| (s(RECORD_KINDS[r.kind as usize]), r.rule))
+        .collect();
+    assert_eq!(
+        retentions,
+        [(crate::records::KIND_TASK, Retention::TerminalOnly.code())]
+    );
+    assert_eq!(TAIL.record_retentions, RECORD_RETENTIONS.as_ptr());
+    assert_eq!(TAIL.record_retentions_len, RECORD_RETENTIONS.len());
+}
+
 fn s(a: AbiStr) -> &'static str {
     if a.ptr.is_null() {
         return "";
@@ -54,6 +69,7 @@ fn known_bytes(a: AbiStr) -> &'static [u8] {
         crate::records::KIND_TASK_EVENT,
         crate::records::KIND_PUSH_CONFIG,
         crate::records::KIND_CARD,
+        crate::records::KIND_CARD_APPROVAL,
     ]
     .into_iter()
     .find(|c| c.as_ptr() == a.ptr && c.len() == a.len)
@@ -152,7 +168,7 @@ fn the_abi_trust_keys_are_the_grammars_trust_keys() {
 
 #[test]
 fn an_open_route_claims_open_and_a_templated_target_claims_a_pattern() {
-    let spec = agents_snapshot_spec(Some(&endpoint("gw", "")), true);
+    let spec = agents_snapshot_spec(Some(&endpoint("gw", "")), &["vendor"]);
     for (c, r) in spec.claims.iter().zip(ROUTES) {
         let templated = r.target.contains('{');
         assert_eq!((c.verb.as_str(), c.target.as_str()), (r.verb, r.target));
@@ -178,8 +194,12 @@ fn the_tail_states_the_sentence_that_refuses_a_forwarded_caller_credential() {
 
 #[test]
 fn an_admitted_generation_claims_every_route_and_states_its_audience() {
-    let spec = agents_snapshot_spec(Some(&endpoint("gw", "/base?x=1")), true);
-    assert_eq!(spec.claims.len(), ROUTES.len());
+    let spec = agents_snapshot_spec(Some(&endpoint("gw", "/base?x=1")), &["vendor", "other"]);
+    assert_eq!(
+        spec.claims.len(),
+        ROUTES.len() + 2,
+        "every route, then each agent's slash"
+    );
     assert_eq!(spec.audience, Some(endpoint("gw", "/a2a")));
     assert_eq!(
         spec.resource_metadata,
@@ -195,7 +215,7 @@ fn an_admitted_generation_claims_every_route_and_states_its_audience() {
 #[test]
 fn a_generation_with_no_readable_public_base_claims_nothing() {
     for public in [None, Some("not a url")] {
-        let spec = agents_snapshot_spec(public, true);
+        let spec = agents_snapshot_spec(public, &["vendor"]);
         assert!(spec.claims.is_empty());
         assert_eq!((spec.audience, spec.resource_metadata), (None, None));
         assert_eq!(spec.admin_routes.len(), ADMIN_ROUTES.len());
@@ -215,7 +235,8 @@ fn a_section_carrying_only_the_reserved_keys_states_no_route_and_no_card() {
     let cfg = read_agents_section(br#"{"hooks": ["audit"], "upstream_credentials": "own"}"#)
         .expect("the reserved keys alone are a section");
     assert!(cfg.agents.is_empty(), "it registers no agent");
-    let spec = agents_snapshot_spec(Some(&endpoint("gw", "")), !cfg.agents.is_empty());
+    let names: Vec<&str> = cfg.agents.keys().map(String::as_str).collect();
+    let spec = agents_snapshot_spec(Some(&endpoint("gw", "")), &names);
     assert!(
         spec.claims.is_empty(),
         "it claims no route: {:?}",
@@ -411,7 +432,7 @@ fn every_route_is_one_line_of_the_dialect_in_mount_order() {
         lines,
         [
             Target, Target, Target, Target, Target, Target, Target, Target, Target, Target, Open,
-            Open, Open, Document, Document, Document, Framed,
+            Open, Open, Open, Document, Document, Document, Framed,
         ]
     );
     // Each line's refusals speak the binding its dialect index names.
@@ -653,7 +674,7 @@ fn the_plane_declares_its_published_identity_and_its_claims_speak_its_wire_forma
     assert_eq!(TAIL.dialects_len, 3);
 
     // Its claims: an admitted generation claims doors at exactly the plane's two mounts.
-    let spec = agents_snapshot_spec(Some(&endpoint("gw", "")), true);
+    let spec = agents_snapshot_spec(Some(&endpoint("gw", "")), &["vendor"]);
     assert!(!spec.claims.is_empty());
     for c in &spec.claims {
         assert!(
@@ -671,5 +692,80 @@ fn the_plane_declares_its_published_identity_and_its_claims_speak_its_wire_forma
         );
     }
     // A generation with no public base (a delegation-only plane) claims nothing.
-    assert!(agents_snapshot_spec(None, true).claims.is_empty());
+    assert!(agents_snapshot_spec(None, &["vendor"]).claims.is_empty());
+}
+
+/// THE PUSH QUEUE IS DROP-OLDEST, COUNTED (THE DESIGN, a2a; A2A-PUSH "drop-oldest + metric"): the
+/// Statement declares the two unlabelled counters the door's tick reports their increments on.
+#[test]
+fn the_statement_declares_the_push_queue_counters() {
+    let st = crate::agent_door::STATEMENT;
+    assert_eq!(st.families_len, FAMILIES.len());
+    assert_eq!(FAMILIES.len(), 2);
+    for (index, name) in [
+        (FAMILY_PUSH_DROPPED, METRIC_PUSH_DROPPED),
+        (FAMILY_PUSH_UNFILED, METRIC_PUSH_UNFILED),
+    ] {
+        let family = &FAMILIES[index as usize];
+        assert_eq!(family.name.len, name.len(), "{name}");
+        assert_eq!(
+            family.kind,
+            busbar_contract::abi::mechanism::door::FAMILY_COUNTER
+        );
+        assert_eq!(family.label_keys_len, 0);
+    }
+}
+
+/// RED before R-16 (architect ruling 2026-10-24): each configured agent's endpoint is claimed in
+/// the trailing-separator spelling an A2A client sends, EXACTLY (the contract refuses a pattern
+/// that ends in a separator), after every route, in the section's order, restated per generation;
+/// each is served as the agent's JSON-RPC endpoint. A name that is not one plain path segment
+/// claims nothing.
+#[test]
+fn each_fronted_agent_claims_its_endpoint_with_a_trailing_separator() {
+    let spec = agents_snapshot_spec(Some(&endpoint("gw", "")), &["vendor", "other"]);
+    let slash: Vec<(&str, &str)> = spec.claims[ROUTES.len()..]
+        .iter()
+        .map(|c| (c.verb.as_str(), c.target.as_str()))
+        .collect();
+    assert_eq!(
+        slash,
+        [
+            ("POST", "/a2a/agents/vendor/"),
+            ("POST", "/a2a/agents/other/")
+        ]
+    );
+    for c in &spec.claims[ROUTES.len()..] {
+        assert_eq!(c.flags & CLAIM_EXACT, CLAIM_EXACT, "{}", c.target);
+        assert_eq!(c.flags & (CLAIM_PATTERN | CLAIM_OPEN), 0, "{}", c.target);
+        assert_eq!(
+            busbar_contract::abi::plane::check::check_claim_target(&c.target, c.flags),
+            Ok(()),
+            "{}",
+            c.target
+        );
+        assert_eq!(u32::from(c.refusal_dialect), DIALECT_DOCUMENT);
+    }
+    let n = u32::try_from(ROUTES.len()).expect("a small table");
+    assert_eq!(route_of_claim(n, || 2), Some(&AGENT_ENDPOINT));
+    assert_eq!(route_of_claim(n + 1, || 2), Some(&AGENT_ENDPOINT));
+    assert_eq!(
+        route_of_claim(n + 2, || 2),
+        None,
+        "past the generation's claims: unclaimed"
+    );
+    assert_eq!(
+        route_of_claim(n, || 0),
+        None,
+        "a generation fronting no agent states none"
+    );
+    assert_eq!(
+        line_of(route_of_claim(n, || 1).expect("a route")),
+        Line::Document
+    );
+    assert_eq!(agent_claim_count(["vendor", "a/b", "other"]), 2);
+    assert_eq!(agent_slash_target("a/b"), None);
+    assert_eq!(agent_slash_target(".."), None);
+    assert_eq!(agent_slash_target(""), None);
+    assert!(agent_slash_claims(&["a b", "ok"]).len() == 1);
 }

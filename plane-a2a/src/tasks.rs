@@ -24,22 +24,25 @@
 //!   seals, keeps and verifies the chain. The task record carries the chain's next sequence, which
 //!   a change claims to stay race-safe.
 //! * RESTORE ([`restore`]) is the engine's boot rehydrate over the records: the tasks counted
-//!   active, terminal or unreadable, and every active task's chain read back verified by the host,
-//!   a break named so the door reports it.
+//!   active, terminal or unreadable, and each active task's chain, and only those, read back
+//!   verified by the host, a break named so the door reports it.
 //! * A DELETE IS A TOMBSTONE: a put with an empty value, which the kernel's reads treat as absent;
 //!   on the chained kind it drops the whole chain.
 //! * RETENTION bounds only SETTLED handles ([`TERMINAL_TTL_SECS`], [`MAX_RETAINED`]; spec
 //!   docs/design/BUSBAR-1.6.0.md :198-203, Q128 K2-H5, coordinator 2026-10-07): a read never answers
-//!   a terminal task past its window, and [`retention_sweep`] tombstones it and holds the cap over terminal
-//!   tasks. An active task is never evicted however long it sits idle; live tasks are bounded at
-//!   admission by the kernel's `work.max_live`.
+//!   a terminal task past its window, and [`retention_sweep`] tombstones it and holds the cap over
+//!   terminal tasks. THE SWEEP RUNS FROM A SUBMIT, never from a read or a timer (the spec's "the
+//!   sweep runs from a submit"): the task-opening write ([`crate::task_hop::open`]'s fresh task)
+//!   carries it, at most [`SWEEP_BUDGET`] tasks per submit, so the settled tasks a submit leaves
+//!   are retired faster than submits make them. An active task is never evicted however long it
+//!   sits idle; live tasks are bounded at admission by the kernel's `work.max_live`.
 
 use busbar_contract::vocab::{EV_ARTIFACT, EV_DELEGATED, EV_SUBMITTED};
 use serde::{Deserialize, Serialize};
 
 use crate::a2a::task::{plan_transition, readable_row, TaskState};
 use crate::record::DIGEST_VERSION_LEN_PREFIXED;
-use crate::records::{KIND_PUSH_CONFIG, KIND_TASK, KIND_TASK_EVENT};
+use crate::records::{retention_of, KIND_PUSH_CONFIG, KIND_TASK, KIND_TASK_EVENT};
 use crate::{TaskEventRow, TaskRow};
 
 /// How long a terminal task stays readable after its terminal transition, in seconds.
@@ -52,6 +55,10 @@ pub const MAX_RETAINED: usize = 4096;
 pub const CLAIM_TTL_MS: u64 = 60_000;
 /// How many times a change re-reads after losing its sequence to another writer.
 const TRIES: usize = 3;
+/// The most settled tasks one submit's [`retention_sweep`] retires: a submit opens one task, so a
+/// sweep that may retire this many keeps the settled tasks bounded under any mix of submits, the
+/// rest waiting for the next submit's.
+pub const SWEEP_BUDGET: usize = 32;
 
 /// Why a step on the records did not finish.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -196,11 +203,18 @@ fn terminal(state: &str) -> bool {
     TaskState::parse(state).is_ok_and(TaskState::is_terminal)
 }
 
-/// Whether a held task is past its window at `now`: terminal and unchanged for longer than
-/// [`TERMINAL_TTL_SECS`].
+/// The cutoff of the task kind's purge at `now`: a row unchanged since before it is past its
+/// window.
+fn cutoff(now: u64) -> u64 {
+    now.saturating_sub(TERMINAL_TTL_SECS)
+}
+
+/// Whether a held task is past its window at `now`: the task kind's rule
+/// ([`retention_of`]`(KIND_TASK)`, terminal-only) drops it against the cutoff, so it is terminal and
+/// unchanged for longer than [`TERMINAL_TTL_SECS`]. An active task is never past its window.
 #[must_use]
 pub fn expired(row: &TaskRow, now: u64) -> bool {
-    terminal(&row.state) && now.saturating_sub(row.updated_at) > TERMINAL_TTL_SECS
+    retention_of(KIND_TASK).drops(row.updated_at, cutoff(now), terminal(&row.state))
 }
 
 fn decode(bytes: &[u8]) -> Option<HeldTask> {
@@ -306,8 +320,8 @@ pub fn list(rec: &mut dyn Records, caller: &str, now: u64) -> Result<Vec<TaskRow
 pub struct Restored {
     /// Tasks in flight: their chains were read back verified.
     pub active: usize,
-    /// Terminal tasks: counted, deliberately not read further (nothing resumes them, and their
-    /// rows stay for the provenance window).
+    /// Terminal tasks: counted, their chains not read back (nothing resumes them, and their rows
+    /// stay for the provenance window).
     pub terminal: usize,
     /// Task rows this build cannot read back: counted, never skipped silently.
     pub unreadable: usize,
@@ -318,15 +332,15 @@ pub struct Restored {
 }
 
 /// THE RESTORE (the engine's `restore_from_store`, over host records): every task row read and
-/// counted active, terminal or unreadable; then every chain read back through the host, which
-/// verifies each, and a break the host announces on an in-flight task's chain is named. Nothing is
-/// written.
+/// counted active, terminal or unreadable; then each in-flight task's chain, and no other, read
+/// back through the host, which verifies the chains it lists, and a break it announces on that
+/// task's chain is named. Nothing is written.
 ///
 /// # Errors
 /// [`Halt`].
 pub fn restore(rec: &mut dyn Records) -> Result<Restored, Halt> {
     let mut out = Restored::default();
-    let mut active = std::collections::BTreeSet::new();
+    let mut active = Vec::new();
     for (key, bytes) in rec.list(KIND_TASK, "")? {
         let Some(held) = decode(&bytes).filter(|h| readable_row(&h.row).is_ok()) else {
             out.unreadable += 1;
@@ -336,17 +350,20 @@ pub fn restore(rec: &mut dyn Records) -> Result<Restored, Halt> {
             out.terminal += 1;
         } else {
             out.active += 1;
-            active.insert(key);
+            active.push(key);
         }
     }
-    for (key, words) in rec.list(KIND_TASK_EVENT, "")? {
-        // A record's key ends in its sequence; a span keyed by a bare scope announces that chain's
-        // break.
-        if busbar_contract::services::chain_key_parts(key.as_bytes()).is_none()
-            && active.contains(&key)
-        {
+    for scope in active {
+        // The chain's own scope is its records' key prefix. A record's key ends in its sequence; a
+        // span keyed by the bare scope announces the chain's break. Another chain the prefix also
+        // reaches (`t1` reaches `t10`) is named on its own task's read, if it is in flight.
+        let found = rec
+            .list(KIND_TASK_EVENT, &scope)?
+            .into_iter()
+            .find(|(key, _)| *key == scope);
+        if let Some((_, words)) = found {
             out.chain_breaks
-                .push((key, String::from_utf8_lossy(&words).into_owned()));
+                .push((scope, String::from_utf8_lossy(&words).into_owned()));
         }
     }
     Ok(out)
@@ -541,32 +558,6 @@ pub fn dispatch(
     change(rec, at, task, &mut plan, out)
 }
 
-/// REGISTER `callback` as task `task`'s push callback (the engine's `set_push_callback`): the row
-/// changes and no event is chained, so the chain's position is kept. `None` when the caller holds
-/// no such task.
-///
-/// # Errors
-/// [`Halt`].
-pub fn set_callback(
-    rec: &mut dyn Records,
-    at: &Stamp<'_>,
-    task: &str,
-    callback: &str,
-    out: &mut Vec<Write>,
-) -> Result<Option<TaskRow>, Halt> {
-    let Some(mut held) = get(rec, at.caller, task, at.now)? else {
-        return Ok(None);
-    };
-    held.row.push_callback = callback.to_string();
-    held.row.updated_at = at.now;
-    out.push(Write {
-        kind: KIND_TASK,
-        key: task_key(at.caller, task),
-        value: encode(&held)?,
-    });
-    Ok(Some(held.row))
-}
-
 /// ADVANCE the artifact cursor to `cursor`, monotonic, with a `task.artifact` event; nothing when it
 /// would not move forward.
 ///
@@ -627,11 +618,14 @@ pub fn record_push_delivery(
     change(rec, at, task, &mut plan, out).map(|_| ())
 }
 
-/// THE RETENTION SWEEP at `now`, over the TERMINAL tasks this instance holds and no others: one
-/// past its window is tombstoned with its events and its push config; while [`MAX_RETAINED`] or
-/// more terminal ones are held, the oldest go too. An active task is never touched, however long
-/// it has been idle (Q128 K2-H5, coordinator 2026-10-07; spec :198-203). At most `budget` tasks are
-/// touched; the rest wait for the next sweep.
+/// THE RETENTION SWEEP at `now`, the plane's own purge of the task kind under its rule
+/// ([`retention_of`]`(KIND_TASK)`, [`crate::records::Retention::TerminalOnly`]: busbar dev's tail
+/// declares no retention, so the plane holds it), over the TERMINAL tasks this instance holds and
+/// no others: one past its window is tombstoned with its events and its push config; while
+/// [`MAX_RETAINED`] or more terminal ones are held, the oldest go too. An active task is never
+/// touched, however long it has been idle (Q128 K2-H5, coordinator 2026-10-07; spec :198-203). At
+/// most `budget` tasks are touched; the rest wait for the next sweep. Its one caller is a submit
+/// ([`crate::task_hop::open`]), never a read or a timer.
 ///
 /// # Errors
 /// [`Halt`].
@@ -641,11 +635,12 @@ pub fn retention_sweep(
     budget: usize,
     out: &mut Vec<Write>,
 ) -> Result<(), Halt> {
+    let rule = retention_of(KIND_TASK);
     let mut held: Vec<(String, TaskRow)> = rec
         .list(KIND_TASK, "")?
         .into_iter()
         .filter_map(|(k, b)| Some((k.split_once('/')?.0.to_string(), decode(&b)?.row)))
-        .filter(|(_, row)| terminal(&row.state))
+        .filter(|(_, row)| rule.reaches(terminal(&row.state)))
         .collect();
     held.sort_by(|a, b| (a.1.updated_at, &a.1.task_id).cmp(&(b.1.updated_at, &b.1.task_id)));
     let mut touched = 0usize;

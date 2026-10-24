@@ -1,39 +1,36 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! PUSH DELIVERY, IN PLANE MEMORY (`BUSBAR-1.6.0.md`, the a2a plane rulings: push delivery retries
-//! at most three times, 250/500 ms ±20 %, on a transport error, 5xx or 429 only, on an async timer,
-//! holding no slot, re-running the destination judge on every attempt; event-stream sink delivery
-//! through a per-task ordered bounded queue, 64, drop-oldest, counted).
+//! PUSH DELIVERY, IN PLANE MEMORY (`BUSBAR-1.6.0.md`, the a2a plane rulings: push delivery makes
+//! three attempts, two delays of 250/500 ms ±20 %, on a transport error, 5xx or 429 only, on an
+//! async timer, holding no slot, re-running the destination judge on every attempt; event-stream
+//! sink delivery through a per-task ordered bounded queue, 64, drop-oldest, counted).
 //!
 //! Everything here is sans I/O. The instance holds one [`Deliveries`] and one [`Tokens`]:
 //!
 //! * [`Deliveries::enqueue`] files a notification behind its task's earlier ones; past
 //!   [`QUEUE_CAPACITY`] the oldest waiting one is dropped and counted.
-//! * [`Deliveries::due`] hands out, per task, only the HEAD of its queue, once its time has come and
-//!   while no attempt on it is open, so a task's notifications reach the receiver in the order its
-//!   state changed.
+//! * [`Deliveries::next_due`] hands out the ONE delivery the door's `tick` attempts on one op: only
+//!   the HEAD of a task's queue, once its time has come and while no attempt on it is open (so a
+//!   task's notifications reach the receiver in the order its state changed), the tasks served in
+//!   turn.
 //! * Each attempt re-runs the destination judge, then dials the plane's outbound `open-web` need
 //!   ([`crate::door_statement::NEED_OPEN_WEB`]) with [`request`]; its end is [`Attempted`].
 //! * [`Deliveries::settle`] pops the head, or puts it back with its next time when the end is
 //!   retryable and attempts remain. [`Deliveries::next_tick_ns`] is the lifecycle tick's
-//!   `next_tick_ns`: nothing waits on a slot or a thread between attempts.
-//! * [`Deliveries::next_due`] is the one head the door's `tick` attempts on one op.
+//!   `next_tick_ns` while no attempt is held: nothing waits on a slot or a thread between attempts.
 //! * Every attempt's end is OWED to its task's chain ([`Deliveries::owe`]): a `tick` answer carries
 //!   no record write, so the outcome waits in plane memory, bounded, until a piece of its caller's
 //!   files it ([`Deliveries::take_owed`]).
 //!
-//! Before each dial, [`Deliveries::rebound`] keeps predev's anti-rebinding rule: the destination's
-//! fresh addresses must overlap those an earlier delivery to it reached ([`Deliveries::reached`]),
-//! a bounded set in plane memory.
-//!
 //! The caller's webhook credential ([`DeliveryAuth`]) has its home in the push_config host record
-//! (a sealed field of it, `PushConfig::authentication`). It is held here, in plane memory, only
-//! while a delivery is in flight, never logged or printed, and joins the request only after the
-//! judge has passed. busbar's own callback token
-//! ([`Tokens`]) is a capability for one task, `<task-id>.<signature>`, minted through the host's
-//! signing service (the plane never holds the key) and verified by signing again and comparing in
-//! constant time; it is never logged or audited. [`PushLimiter`] bounds how often one task's token
+//! (a sealed field of it, `PushConfig::authentication`). It is held here, in plane memory, from
+//! when the task's config (or its inline callback) names it until the task ends (its terminal
+//! delivery settles, or it ends with nothing to deliver) or the config is deleted; it is never
+//! logged or printed, and joins the request only after the judge has passed. busbar's own callback
+//! token ([`Tokens`]) is a capability for one task, `<task-id>.<signature>`, minted through the
+//! host's signing service (the plane never holds the key) and verified by signing again and
+//! comparing in constant time; it is never logged or audited. [`PushLimiter`] bounds how often one task's token
 //! may be spent, exactly as 1.5.5 bounded it.
 
 use std::collections::{BTreeMap, VecDeque};
@@ -75,16 +72,16 @@ pub const PUSH_RATE_LIMIT: u32 = 60;
 /// `Authorization: Bearer <token>`.
 pub const TOKEN_SCHEME: &str = "Bearer";
 
-/// The most destinations whose reached addresses one instance holds; past it, the oldest-keyed one
-/// is dropped, and its next delivery is judged as a first one (never unjudged).
-pub const MAX_DESTINATIONS: usize = 4096;
-
-/// The most reached addresses held for one destination.
-pub const MAX_REACHED: usize = 16;
-
 /// The most attempt outcomes held for their chains at once; past it, the oldest is dropped and
 /// counted.
 pub const MAX_OWED: usize = 4096;
+
+/// THE BOUND ON ONE ATTEMPT'S REQUEST, milliseconds (ARCHITECT ruling on a slow push receiver: each
+/// attempt is bounded by the destination's request deadline, the connector's default when none is
+/// set). A webhook names no pool, so it is the connector's default bound, ten seconds
+/// (`busbar-core-connector` `DEFAULT_OPEN_TIMEOUT`). A receiver that has not answered by then ends
+/// the attempt as a transport error, under the three-attempt rule.
+pub const ATTEMPT_TIMEOUT_MS: u64 = 10_000;
 
 /// The field every delivery carries, and its value.
 pub const CONTENT_TYPE: (&str, &str) = ("content-type", "application/json");
@@ -92,29 +89,43 @@ pub const CONTENT_TYPE: (&str, &str) = ("content-type", "application/json");
 /// The field a webhook credential is presented on.
 pub const AUTHORIZATION: &str = "authorization";
 
-/// THE A2A PUSH NOTIFICATION BODY: a `StreamResponse` with the task nested under `"task"`, under
-/// busbar's ids. Not a JSON-RPC envelope: the receiver is not a JSON-RPC peer and correlates on
-/// the task id (A2A 4.3.3). `status.timestamp` is RFC 3339, as every revision types it.
+/// THE A2A PUSH NOTIFICATION BODY, in the shape of the version its callback was registered under
+/// ([`Task::push_version`]; Q128 a2a M13, ruled version-consistent), under busbar's ids. Not a
+/// JSON-RPC envelope: the receiver is not a JSON-RPC peer and correlates on the task id.
+/// `status.timestamp` is RFC 3339, as every revision types it.
+///
+/// * v1.0 (and a row written before the version was kept): a `StreamResponse` with the task nested
+///   under `"task"` (A2A 4.3.3), its state the ProtoJSON `TASK_STATE_*` token, no `kind`.
+/// * v0.3: the `Task` object itself, `kind: "task"` and the lower-case state word.
 #[must_use]
 pub fn notification_body(task: &Task) -> Vec<u8> {
-    let doc = serde_json::json!({
-        "task": {
+    let timestamp = busbar_contract::civil::rfc3339_from_secs(task.updated_at);
+    let doc = if task.push_version == crate::local::Dialect::V03.version() {
+        serde_json::json!({
             "id": task.task_id,
             "contextId": task.context_id,
             "kind": "task",
-            "status": {
-                "state": task.state.as_str(),
-                "timestamp": busbar_contract::civil::rfc3339_from_secs(task.updated_at),
-            },
-        }
-    });
+            "status": { "state": task.state.as_str(), "timestamp": timestamp },
+        })
+    } else {
+        serde_json::json!({
+            "task": {
+                "id": task.task_id,
+                "contextId": task.context_id,
+                "status": {
+                    "state": crate::local::wire_state(task.state),
+                    "timestamp": timestamp,
+                },
+            }
+        })
+    };
     serde_json::to_vec(&doc).unwrap_or_default()
 }
 
 /// THE CREDENTIAL THE CALLER ASKED BUSBAR TO PRESENT AT ITS WEBHOOK. The caller's own secret for
 /// the caller's own receiver. Its home is the push_config host record (a sealed field of it); plane
-/// memory holds it only while a delivery is in flight; it is never logged, printed, or echoed on a
-/// read verb.
+/// memory holds it until the task ends or its config is deleted; it is never logged, printed, or
+/// echoed on a read verb.
 #[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct DeliveryAuth {
     /// The HTTP authentication scheme, as the caller wrote it.
@@ -206,9 +217,6 @@ pub enum Attempted {
     Delivered,
     /// The destination judge refused (its `DEST_*` verdict); nothing went out.
     Judged(u64),
-    /// The destination now resolves only to addresses no earlier delivery reached (a rebinding);
-    /// nothing went out.
-    Moved,
     /// The connection or the exchange failed.
     Transport,
     /// The receiver answered this non-2xx status.
@@ -232,7 +240,7 @@ impl Attempted {
         match self {
             Self::Transport | Self::Status(429) => true,
             Self::Status(s) => matches!(s, 500..=599),
-            Self::Delivered | Self::Judged(_) | Self::Moved => false,
+            Self::Delivered | Self::Judged(_) => false,
         }
     }
 
@@ -242,7 +250,7 @@ impl Attempted {
     pub const fn record_kind(self) -> &'static str {
         match self {
             Self::Delivered => vocab::EV_PUSH_DELIVERED,
-            Self::Judged(_) | Self::Moved => vocab::EV_PUSH_REFUSED,
+            Self::Judged(_) => vocab::EV_PUSH_REFUSED,
             Self::Transport | Self::Status(_) => vocab::EV_PUSH_FAILED,
         }
     }
@@ -291,6 +299,9 @@ struct Waiting {
     delivery: Delivery,
     attempts: u32,
     not_before_ns: u64,
+    /// A retry's wait not yet counted from a clock reading: the attempt ended where no clock is
+    /// read (`drive`), so the next `tick` counts it from its own `now` ([`Deliveries::anchor`]).
+    wait_ns: Option<u64>,
     open: bool,
 }
 
@@ -311,9 +322,14 @@ struct Book {
     queues: BTreeMap<String, VecDeque<Waiting>>,
     dropped: u64,
     auths: BTreeMap<String, DeliveryAuth>,
-    reached: BTreeMap<String, Vec<String>>,
     owed: VecDeque<Owed>,
     unfiled: u64,
+    /// The [`Book::dropped`] and [`Book::unfiled`] counts already reported as metrics.
+    reported: (u64, u64),
+    /// The task the pump attempted last: the next turn starts after it.
+    last_served: Option<String>,
+    /// An attempt is held across `drive` entries: no wake is raised for a queued notification.
+    holding: bool,
 }
 
 /// What [`Deliveries::settle`] did with the head of a task's queue.
@@ -359,13 +375,26 @@ impl Deliveries {
     }
 
     /// Wake the driver ticket so the kernel ticks now; a no-op until armed (the first `tick` runs
-    /// at boot and finds what is queued). The host's wake never blocks and never reaches back here.
+    /// at boot and finds what is queued), and a no-op while an attempt is HELD
+    /// ([`Deliveries::holding`]): the tick a wake causes starts the driver ticket's next cycle,
+    /// which forgets the held attempt's pending exchange, so what is queued meanwhile waits for the
+    /// held attempt's own completion wake (its `drive`, then the tick after it). The host's wake
+    /// never blocks and never reaches back here.
     pub fn wake(&self) {
+        if self.with(|b| b.holding) {
+            return;
+        }
         self.wake.with(&(), |armed| {
             if let Some(wake) = armed {
                 wake();
             }
         });
+    }
+
+    /// Whether an attempt is held across `drive` entries (set while its exchange pends, cleared when
+    /// it ends or is abandoned).
+    pub fn holding(&self, held: bool) {
+        self.with(|b| b.holding = held);
     }
 
     /// File `delivery` behind its task's earlier ones. Answers whether the oldest waiting one was
@@ -383,6 +412,7 @@ impl Deliveries {
                 delivery,
                 attempts: 0,
                 not_before_ns: now_ns,
+                wait_ns: None,
                 open: false,
             });
             dropped
@@ -419,24 +449,31 @@ impl Deliveries {
         })
     }
 
-    /// THE ONE DELIVERY TO ATTEMPT NOW, for one `tick` op: of the heads whose time has come and no
-    /// attempt is open on, the one waiting longest (then the lowest task id). Marked open until
-    /// [`Deliveries::settle`]; `None` when none is due.
+    /// THE ONE DELIVERY TO ATTEMPT NOW, for one `tick` op: the tasks' queues are served IN TURN,
+    /// one attempt per task per turn (ARCHITECT ruling on a slow push receiver), so a slow receiver
+    /// delays another task's delivery by at most one attempt's deadline: of the heads whose time
+    /// has come and no attempt is open on, the first after the task attempted last, in task-id
+    /// order, wrapping round. Marked open until [`Deliveries::settle`]; `None` when none is due.
     #[must_use]
     pub fn next_due(&self, now_ns: u64) -> Option<Delivery> {
         self.with(|b| {
-            let head = b
+            let due = |w: &Waiting| !w.open && w.not_before_ns <= now_ns;
+            let after = b.last_served.clone().unwrap_or_default();
+            let id = b
                 .queues
-                .values_mut()
-                .filter_map(VecDeque::front_mut)
-                .filter(|w| !w.open && w.not_before_ns <= now_ns)
-                .min_by(|x, y| {
-                    (x.not_before_ns, &x.delivery.task_id)
-                        .cmp(&(y.not_before_ns, &y.delivery.task_id))
-                })?;
+                .iter()
+                .filter(|(id, q)| {
+                    (b.last_served.is_none() || **id > after) && q.front().is_some_and(due)
+                })
+                .chain(b.queues.iter().filter(|(_, q)| q.front().is_some_and(due)))
+                .map(|(id, _)| id.clone())
+                .next()?;
+            let head = b.queues.get_mut(&id)?.front_mut()?;
             head.open = true;
             head.attempts += 1;
-            Some(head.delivery.clone())
+            let delivery = head.delivery.clone();
+            b.last_served = Some(id);
+            Some(delivery)
         })
     }
 
@@ -485,14 +522,57 @@ impl Deliveries {
         self.with(|b| b.unfiled)
     }
 
-    /// Settle the open attempt on `task_id`'s head: done, or back in the queue for its next
-    /// attempt (`jitter` is a random byte, [`jittered_ms`]). A terminal task's last delivery
-    /// forgets its credential.
+    /// The notifications dropped and the outcomes dropped unfiled SINCE THE LAST CALL: the
+    /// increments the door reports on its counters
+    /// ([`crate::door_statement::FAMILY_PUSH_DROPPED`], [`crate::door_statement::FAMILY_PUSH_UNFILED`]).
+    pub fn take_counted(&self) -> (u64, u64) {
+        self.with(|b| {
+            let counted = (
+                b.dropped.saturating_sub(b.reported.0),
+                b.unfiled.saturating_sub(b.reported.1),
+            );
+            b.reported = (b.dropped, b.unfiled);
+            counted
+        })
+    }
+
+    /// Settle the open attempt on `task_id`'s head, the attempt having ENDED at `now_ns`: done, or
+    /// back in the queue for its next attempt, its wait counted from `now_ns` (`jitter` is a
+    /// random byte, [`jittered_ms`]). A terminal task's last delivery forgets its credential.
     pub fn settle(
         &self,
         task_id: &str,
         end: Attempted,
         now_ns: u64,
+        jitter: u8,
+    ) -> DeliverySettled {
+        self.settle_at(task_id, end, Some(now_ns), jitter)
+    }
+
+    /// [`Deliveries::settle`] for an attempt that ended where no clock is read (`drive`): a retry's
+    /// wait is counted from the next [`Deliveries::anchor`] (the `tick` the kernel runs after the
+    /// wake), never from when the attempt began. Its `Retry` time is `u64::MAX` until then.
+    pub fn settle_ended(&self, task_id: &str, end: Attempted, jitter: u8) -> DeliverySettled {
+        self.settle_at(task_id, end, None, jitter)
+    }
+
+    /// COUNT every wait [`Deliveries::settle_ended`] left from `now_ns`, the clock of the `tick`
+    /// that follows the attempt's end.
+    pub fn anchor(&self, now_ns: u64) {
+        self.with(|b| {
+            for w in b.queues.values_mut().filter_map(VecDeque::front_mut) {
+                if let Some(wait) = w.wait_ns.take() {
+                    w.not_before_ns = now_ns.saturating_add(wait);
+                }
+            }
+        });
+    }
+
+    fn settle_at(
+        &self,
+        task_id: &str,
+        end: Attempted,
+        ended_ns: Option<u64>,
         jitter: u8,
     ) -> DeliverySettled {
         self.with(|b| {
@@ -504,8 +584,15 @@ impl Deliveries {
             };
             head.open = false;
             if end.retryable() && head.attempts < MAX_ATTEMPTS {
-                let wait = jittered_ms(RETRY_DELAYS_MS[(head.attempts - 1) as usize], jitter);
-                head.not_before_ns = now_ns.saturating_add(wait.saturating_mul(1_000_000));
+                let wait = jittered_ms(RETRY_DELAYS_MS[(head.attempts - 1) as usize], jitter)
+                    .saturating_mul(1_000_000);
+                match ended_ns {
+                    Some(ended) => head.not_before_ns = ended.saturating_add(wait),
+                    None => {
+                        head.not_before_ns = u64::MAX;
+                        head.wait_ns = Some(wait);
+                    }
+                }
                 return DeliverySettled::Retry(head.not_before_ns);
             }
             let terminal = queue.pop_front().is_some_and(|w| w.delivery.terminal);
@@ -519,8 +606,8 @@ impl Deliveries {
         })
     }
 
-    /// When the lifecycle tick is next wanted: the earliest head no attempt is open on; `0` when
-    /// none waits.
+    /// When the lifecycle tick is next wanted: the earliest head no attempt is open on (at once
+    /// for a wait not yet counted, so a tick counts it); `0` when none waits.
     #[must_use]
     pub fn next_tick_ns(&self) -> u64 {
         self.with(|b| {
@@ -528,38 +615,16 @@ impl Deliveries {
                 .values()
                 .filter_map(VecDeque::front)
                 .filter(|w| !w.open)
-                .map(|w| w.not_before_ns.max(1))
+                .map(|w| {
+                    if w.wait_ns.is_some() {
+                        1
+                    } else {
+                        w.not_before_ns.max(1)
+                    }
+                })
                 .min()
                 .unwrap_or(0)
         })
-    }
-
-    /// predev's anti-rebinding rule, before a dial: `fresh` (the addresses the destination `url`
-    /// resolves to now, each already judged) must share at least one address with those an earlier
-    /// delivery to `url` reached. `None` = nothing reached before (a first delivery, a restart, or a
-    /// dropped entry): the judge alone decides. `Some(Attempted::Moved)` = refused, nothing goes out.
-    #[must_use]
-    pub fn rebound(&self, url: &str, fresh: &[String]) -> Option<Attempted> {
-        self.with(|b| {
-            let before = b.reached.get(url)?;
-            (!fresh.iter().any(|a| before.contains(a))).then_some(Attempted::Moved)
-        })
-    }
-
-    /// Record the addresses a delivery to `url` reached (after its request went out), replacing the
-    /// earlier set, so the next delivery must overlap them. Bounded by [`MAX_REACHED`] per
-    /// destination and [`MAX_DESTINATIONS`] in all.
-    pub fn reached(&self, url: &str, addrs: &[String]) {
-        if addrs.is_empty() {
-            return;
-        }
-        self.with(|b| {
-            if !b.reached.contains_key(url) && b.reached.len() >= MAX_DESTINATIONS {
-                b.reached.pop_first();
-            }
-            let kept = addrs.iter().take(MAX_REACHED).cloned().collect();
-            b.reached.insert(url.to_string(), kept);
-        });
     }
 
     /// Hold the credential `task_id`'s receiver wants presented; `None` drops the one held (a
@@ -606,7 +671,7 @@ pub fn request(delivery: &Delivery, auth: Option<&DeliveryAuth>) -> Request {
         target: target.into_bytes(),
         fields,
         body: delivery.body.clone(),
-        timeout_ms: 0,
+        timeout_ms: ATTEMPT_TIMEOUT_MS,
     }
 }
 

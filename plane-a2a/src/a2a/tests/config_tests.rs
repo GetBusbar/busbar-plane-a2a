@@ -7,8 +7,15 @@
 use super::*;
 use crate::door_statement::read_agents_section;
 use busbar_contract::config::UpstreamCreds;
-use busbar_contract::secret_ref::{SecretRef, SECRET_MODULE_FILE};
+use busbar_contract::secret_ref::SecretRef;
 use serde_json::json;
+
+/// The reference config's sugar `{ word: value }` reads as, through the contract's own reading, so
+/// the expectation is whatever shape the pinned contract gives it (busbar step 2c reads sugar
+/// context-free).
+fn sugar(word: &str, value: &str) -> SecretRef {
+    serde_json::from_value(serde_json::json!({ word: value })).expect("a sugar reference")
+}
 
 /// One registration as the section reads it: unpinned, over `url`.
 fn def(url: &str, pin: PinMechanism) -> AgentDefCfg {
@@ -173,6 +180,38 @@ fn a_url_without_a_scheme_fails_at_parse() {
     );
 }
 
+/// THE REGISTRATION URL IS PARSED, NOT PREFIX-TESTED: one with no host is refused, and one whose
+/// authority carries a userinfo is refused without the refusal repeating it.
+#[test]
+fn a_registration_url_is_parsed_and_its_userinfo_never_repeated() {
+    let d = def("https://", PinMechanism::Unpinned);
+    let err = validate_agent("planner", &d).expect_err("a URL with no host is refused");
+    assert!(err.contains("`url:`"), "got: {err}");
+    for url in [
+        "https://alice:s3cret@a2a.vendor/planner",
+        "https://s3cret@a2a.vendor/planner",
+    ] {
+        let d = def(url, PinMechanism::Unpinned);
+        let err = validate_agent("planner", &d).expect_err(&format!("`{url}` must be refused"));
+        assert!(err.contains("userinfo"), "got: {err}");
+        assert!(
+            !err.contains("s3cret"),
+            "the refusal repeats the credential: {err}"
+        );
+    }
+    let err = validate_agent(
+        "planner",
+        &def("ftp://alice:s3cret@a2a.vendor/", PinMechanism::Unpinned),
+    )
+    .expect_err("a non-http scheme is refused");
+    assert!(!err.contains("s3cret"), "got: {err}");
+    assert_eq!(
+        without_userinfo("https://alice:s3cret@a2a.vendor/p@th?q=@"),
+        "https://***@a2a.vendor/p@th?q=@"
+    );
+    assert_eq!(without_userinfo("not a url"), "not a url");
+}
+
 /// An agent may not be NAMED by a reserved word: every word in the one declaration is refused here.
 /// Ported from busbar-a2a a2a/tests/config_tests.rs::an_agent_may_not_be_named_by_a_reserved_word.
 #[test]
@@ -263,7 +302,7 @@ fn an_entry_round_trips_through_its_document_form() {
         allow_private: true,
         upstream_credentials: Some(UpstreamCreds::Own),
         upstream_credential: Some(crate::a2a::creds::OutboundCredential {
-            secret: SecretRef::env("VENDOR_TOKEN"),
+            secret: sugar("env", "VENDOR_TOKEN"),
             placement: crate::a2a::creds::CredentialPlacement::Header("x-api-key".to_string()),
             lease_ttl_ms: 60_000,
         }),
@@ -271,8 +310,8 @@ fn an_entry_round_trips_through_its_document_form() {
         // BOTH HALVES OF THE CLIENT IDENTITY: a `client_identity:` an admin PATCH silently dropped
         // would leave a registration unable to complete a handshake it completed a moment earlier.
         client_identity: Some(ClientIdentityCfg {
-            cert: SecretRef::env("BUSBAR_CLIENT_CERT"),
-            key: SecretRef::env("BUSBAR_CLIENT_KEY"),
+            cert: sugar("env", "BUSBAR_CLIENT_CERT"),
+            key: sugar("env", "BUSBAR_CLIENT_KEY"),
         }),
         hooks: vec!["dispatch-order".to_string()],
     };
@@ -304,8 +343,8 @@ fn a_mutual_tls_registration_names_its_client_certificate_by_reference() {
         .client_identity
         .as_ref()
         .expect("the client identity is carried through");
-    assert_eq!(identity.cert.module, SECRET_MODULE_FILE);
-    assert_eq!(identity.key.module, SECRET_MODULE_FILE);
+    assert_eq!(identity.cert.module, "file");
+    assert_eq!(identity.key.module, "file");
     // The REFERENCE is what the config holds; nothing here is key material.
     assert!(!format!("{identity:?}").contains("BEGIN"));
 }
@@ -406,7 +445,7 @@ fn a_zero_lease_ttl_is_refused_at_parse() {
     let def = &cfg.agents["planner"];
     let cred = def.upstream_credential.as_ref().expect("the handle");
     assert_eq!(cred.lease_ttl_ms, 60_000);
-    assert_eq!(cred.secret.env_var(), Some("VENDOR_TOKEN"));
+    assert_eq!(cred.secret, sugar("env", "VENDOR_TOKEN"));
     assert_eq!(def.egress_scopes, vec!["orchestrator".to_string()]);
 }
 

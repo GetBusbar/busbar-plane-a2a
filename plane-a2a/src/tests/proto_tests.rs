@@ -173,3 +173,12 @@ fn a_null_repeated_member_reads_as_empty() {
             .expect("null history reads");
     assert!(task.history.is_empty());
 }
+
+/// A JSON `null` for a map member reads as empty (the generated serde's null-map patch): with no
+/// test of its own, a pbjson change that stops the patch matching would refuse a null map unseen.
+#[test]
+fn a_null_map_member_reads_as_empty() {
+    let req: pb::SecurityRequirement =
+        serde_json::from_value(serde_json::json!({ "schemes": null })).expect("null schemes reads");
+    assert!(req.schemes.is_empty());
+}

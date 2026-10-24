@@ -149,7 +149,8 @@ fn http_json_client_issues_send_stream_message() {
 }
 
 /// `http_json_client_issues_cancel_task`: a POST to the task's `:cancel`, naming the id it was
-/// handed (the far end's own, once the door translated it).
+/// handed (the far end's own, once the door translated it), the rest of the request as the body
+/// (proto `CancelTask`: `body: "*"`), here the empty object.
 #[test]
 fn http_json_client_issues_cancel_task() {
     let f = compose(
@@ -162,11 +163,12 @@ fn http_json_client_issues_cancel_task() {
         (f.verb, f.target.as_str()),
         ("POST", "/a2a/tasks/BACKEND-OWN-TASK-ID:cancel")
     );
-    assert!(f.body.is_empty() && !f.has_body);
+    assert!(f.has_body);
+    assert_eq!(f.body, b"{}");
 }
 
-/// `http_json_client_issues_subscribe_to_task` (and its v1.0 spelling, `task_id`): a POST to the
-/// task's `:subscribe`.
+/// `http_json_client_issues_subscribe_to_task` (and its v1.0 spelling, `task_id`): a GET of the
+/// task's `:subscribe` (proto `SubscribeToTask`: `get: "/tasks/{id=*}:subscribe"`).
 #[test]
 fn http_json_client_issues_subscribe_to_task() {
     for (method, member) in [("tasks/resubscribe", "id"), ("SubscribeToTask", "task_id")] {
@@ -175,7 +177,7 @@ fn http_json_client_issues_subscribe_to_task() {
         let f = compose(AGENT, method, &Value::Object(params)).unwrap();
         assert_eq!(
             (f.verb, f.target.as_str()),
-            ("POST", "/a2a/tasks/BACKEND-OWN-TASK-ID:subscribe"),
+            ("GET", "/a2a/tasks/BACKEND-OWN-TASK-ID:subscribe"),
             "{method}"
         );
     }
@@ -221,4 +223,54 @@ fn the_cards_interface_url_never_moves_the_hop() {
         "the card's address never reaches the request: {}",
         f.target
     );
+}
+
+/// SUBSCRIBE IS A GET on the HTTP+JSON binding (proto `SubscribeToTask`:
+/// `get: "/tasks/{id=*}:subscribe"`), with no body, in both dialects' spellings.
+#[test]
+fn http_json_client_subscribes_with_a_get() {
+    for (method, member) in [("tasks/resubscribe", "id"), ("SubscribeToTask", "id")] {
+        let f = compose(AGENT, method, &json!({ member: "BACKEND-OWN-TASK-ID" })).unwrap();
+        assert_eq!(
+            (f.verb, f.target.as_str()),
+            ("GET", "/a2a/tasks/BACKEND-OWN-TASK-ID:subscribe"),
+            "{method}"
+        );
+        assert!(f.body.is_empty() && !f.has_body, "{method}");
+    }
+}
+
+/// A CANCEL CARRIES ITS METADATA in the body (proto `CancelTask`:
+/// `post: "/tasks/{id=*}:cancel" body: "*"`; `CancelTaskRequest.metadata`), never refused as
+/// unframable.
+#[test]
+fn http_json_client_cancel_carries_its_metadata_in_the_body() {
+    let f = compose(
+        AGENT,
+        "CancelTask",
+        &json!({ "id": "BACKEND-OWN-TASK-ID", "metadata": { "why": "done" } }),
+    )
+    .expect("a cancel with metadata is framable");
+    assert_eq!(
+        (f.verb, f.target.as_str()),
+        ("POST", "/a2a/tasks/BACKEND-OWN-TASK-ID:cancel")
+    );
+    assert!(f.has_body);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&f.body).unwrap(),
+        json!({ "metadata": { "why": "done" } })
+    );
+}
+
+/// AN ID CANNOT RE-POINT THE REQUEST LINE: a dot segment (`.`, `..`), the one value the
+/// percent-encoding allowlist passes that still moves a path, is refused rather than composed.
+#[test]
+fn a_dot_segment_id_is_refused_rather_than_composed() {
+    for id in [".", ".."] {
+        let err = compose(BASE, "GetTask", &json!({ "id": id }))
+            .expect_err("a dot segment is not carried");
+        assert!(err.contains("dot segment"), "{err}");
+    }
+    let f = compose(BASE, "GetTask", &json!({ "id": "...", "historyLength": 1 })).unwrap();
+    assert!(f.target.contains("/tasks/..."), "{}", f.target);
 }

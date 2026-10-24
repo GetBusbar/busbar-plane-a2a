@@ -369,26 +369,35 @@ pub fn origin_refusal<'a>(field: impl Fn(&str) -> Option<&'a str>) -> Result<(),
 }
 
 /// DECIDE ONE ARRIVAL on the JSON-RPC line. `field` reads a request head field by its lower-case
-/// name (the first, as sent; one that is not UTF-8 reads as absent).
+/// name (the first, as sent; one that is not UTF-8 reads as absent). The conformance rig and the
+/// purity oracle decide arrivals through it.
 pub fn decide_arrival<'a>(
     body: &[u8],
     field: impl Fn(&str) -> Option<&'a str> + Copy,
 ) -> AgentDisposition {
+    decide_and_read(body, field).0
+}
+
+/// DECIDE ONE ARRIVAL on the JSON-RPC line, and hand back the body as the JSON it was read as
+/// (`None` when the head was refused before it, or it is not JSON): the door keeps that value as
+/// the unit's request, so the body is parsed once. `field` reads a request head field by its
+/// lower-case name (the first, as sent; one that is not UTF-8 reads as absent).
+pub fn decide_and_read<'a>(
+    body: &[u8],
+    field: impl Fn(&str) -> Option<&'a str> + Copy,
+) -> (AgentDisposition, Option<Value>) {
     if let Err(refusal) = origin_refusal(field) {
-        return AgentDisposition::Refused(refusal);
+        return (AgentDisposition::Refused(refusal), None);
     }
     let version = match head_refusal(field) {
         Ok(v) => v,
-        Err(refusal) => return AgentDisposition::Refused(refusal),
+        Err(refusal) => return (AgentDisposition::Refused(refusal), None),
     };
     let Ok(value) = serde_json::from_slice::<Value>(body) else {
-        return AgentDisposition::Refused(AgentRefusal::unnamed(
-            STATUS_BAD_REQUEST,
-            CODE_PARSE,
-            NOT_JSON,
-        ));
+        let refusal = AgentRefusal::unnamed(STATUS_BAD_REQUEST, CODE_PARSE, NOT_JSON);
+        return (AgentDisposition::Refused(refusal), None);
     };
-    match busbar_contract::jsonrpc::read(&value) {
+    let disposition = match busbar_contract::jsonrpc::read(&value) {
         Err(invalid) => AgentDisposition::Refused(AgentRefusal {
             status: STATUS_BAD_REQUEST,
             id: (!invalid.id.is_null()).then_some(invalid.id),
@@ -408,7 +417,8 @@ pub fn decide_arrival<'a>(
                 },
             }
         }
-    }
+    };
+    (disposition, Some(value))
 }
 
 /// THE RENDERED REFUSAL: a status (`0` keeps the kernel's), the body, and the one head field it
@@ -480,6 +490,42 @@ pub fn kernel_refusal(status: u32, text: &str) -> AgentRefusal {
     AgentRefusal::unnamed(status, CODE_UNSUPPORTED_OPERATION, text)
 }
 
+/// THE CLASS-TO-WIRE TABLE (the P-item "refusal-reason collapse"): the JSON-RPC code a kernel
+/// refusal of `class` is rendered under. Which class a reason is in is decided once, by the
+/// contract's one classification ([`busbar_contract::abi::plane::RefusalCode::class`]); this plane
+/// says only how each class reads on its wire. A node fault is this node breaking and is rendered
+/// as the internal error; every other class is a refusal the caller is owed by name, under the
+/// engine's admission code. The match has no `_` arm: a class with no row does not compile.
+#[must_use]
+pub const fn class_code(class: busbar_contract::abi::plane::RefusalClass) -> i64 {
+    use busbar_contract::abi::plane::RefusalClass as C;
+    match class {
+        C::PlaneFault | C::NodeFault => crate::jsonrpc::CODE_INTERNAL,
+        C::Unreadable
+        | C::Rejected
+        | C::Unauthenticated
+        | C::Forbidden
+        | C::TooLarge
+        | C::Throttled
+        | C::Busy
+        | C::QuotaExhausted
+        | C::NotFound
+        | C::Unreachable
+        | C::Unavailable
+        | C::Timeout => CODE_UNSUPPORTED_OPERATION,
+    }
+}
+
+/// A KERNEL REFUSAL OF WIRE REASON `reason` at `status` in the words `text`: [`kernel_refusal`]
+/// under its class's code ([`class_code`]). A number the wire table does not hold is rendered as
+/// the engine's admission refusal.
+#[must_use]
+pub fn kernel_refusal_of(reason: u32, status: u32, text: &str) -> AgentRefusal {
+    let code = busbar_contract::abi::plane::RefusalCode::of(reason)
+        .map_or(CODE_UNSUPPORTED_OPERATION, |c| class_code(c.class()));
+    AgentRefusal::unnamed(status, code, text)
+}
+
 /// THE UNGRANTED CALLER'S SENTENCE (1.5.5's `InboundRefusal::NotInScope`): the caller's grant does
 /// not reach `resource` (`agent:<id>`). 1.5.5 named the key's id where this says `this key`: the
 /// refusal the kernel hands a plane carries no principal.
@@ -507,6 +553,23 @@ pub const STATUS_NOT_LIVE: u32 = 401;
 #[must_use]
 pub fn not_live() -> AgentRefusal {
     kernel_refusal(STATUS_NOT_LIVE, "this key is not live")
+}
+
+/// The status an arrival is refused with while the instance holds as many live units as it keeps
+/// ([`crate::agent_door::MAX_UNITS`]): the caller may try again once one ends.
+pub const STATUS_TOO_MANY_REQUESTS: u32 = 429;
+
+/// THE FULL INSTANCE'S REFUSAL: every unit the instance keeps is live work, and none is ever pushed
+/// out for a new one (THE DESIGN section 1: admission bounds live work, nothing evicts it), so the
+/// arrival is refused, as the kernel refuses one past the calls it keeps in flight: the busy
+/// class's code (`-32004`, [`class_code`]), no id, at `429` (an `arrive` refusal is the caller's
+/// to act on, so it wears a `4xx` status, never the kernel's `503`).
+#[must_use]
+pub fn units_full() -> AgentRefusal {
+    kernel_refusal(
+        STATUS_TOO_MANY_REQUESTS,
+        "busbar is holding as many A2A calls as it admits at once; retry once one has ended",
+    )
 }
 
 /// The status a unit refused by its agent's open breaker answers with.
