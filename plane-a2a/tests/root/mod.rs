@@ -1863,7 +1863,7 @@ async fn a_failing_agent_trips_its_breaker_and_the_next_unit_is_refused_before_i
 }
 
 /// What one unit's audit record carries: what its plane reported, by class, and its fee count.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Counted {
     classes: BTreeMap<String, u64>,
     fee_count: u32,
@@ -2135,7 +2135,6 @@ impl Billed {
             .expect("a read")
             .expect("the key exists");
         let lanes = s.gov.bucket_model_tokens(
-            &s.app.cost,
             &s.key.id,
             busbar_kernel::governance::WINDOW_TOTAL,
             now,
@@ -8607,7 +8606,7 @@ async fn a_hop_pinned_to_a_member_the_caller_may_not_reach_keeps_no_fee() {
     let fees: u64 = ["planner-a", "planner-b"]
         .iter()
         .flat_map(|m| agent_counts(&s, m))
-        .map(|c| c.fee_count)
+        .map(|c| u64::from(c.fee_count))
         .sum();
     assert_eq!(
         fees, 2,
