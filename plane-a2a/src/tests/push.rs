@@ -7,6 +7,8 @@
 use super::*;
 use crate::a2a::task::{Direction, TaskState};
 use busbar_contract::abi::host::service::DEST_METADATA;
+use busbar_contract::abi::sdk::exchange::Exchange;
+use busbar_contract::abi::sdk::test_support::chip::{cred, framed_head, sealed_bytes};
 
 const MS: u64 = 1_000_000;
 
@@ -181,11 +183,55 @@ fn a_full_queue_drops_its_oldest_waiting_notification_and_counts_it() {
     assert_eq!(d.due(0)[0].body, b"3");
 }
 
+/// THE REQUEST AS IT WAS BEFORE THE CHIP (plane-a2a dev at 28bd001, `push::request` and
+/// `DeliveryAuth::header_value`), kept verbatim as the oracle the sealed request is held to.
+fn legacy_request(delivery: &Delivery, auth: Option<(&str, &str)>) -> Request {
+    let target = url::Url::parse(&delivery.url).map_or_else(
+        |_| "/".to_string(),
+        |u| match u.query() {
+            Some(q) => format!("{}?{q}", u.path()),
+            None => u.path().to_string(),
+        },
+    );
+    let mut fields = vec![(
+        CONTENT_TYPE.0.as_bytes().to_vec(),
+        CONTENT_TYPE.1.as_bytes().to_vec(),
+    )];
+    if let Some((scheme, credentials)) = auth {
+        let header_value = if credentials.is_empty() {
+            scheme.to_string()
+        } else {
+            format!("{scheme} {credentials}")
+        };
+        fields.push((AUTHORIZATION.as_bytes().to_vec(), header_value.into_bytes()));
+    }
+    Request {
+        method: b"POST".to_vec(),
+        target: target.into_bytes(),
+        fields,
+        body: delivery.body.clone(),
+        timeout_ms: ATTEMPT_TIMEOUT_MS,
+    }
+}
+
+/// The whole head the delivery's exchange frames, sealed values included.
+fn framed(d: &Deliveries, x: &Delivery) -> Vec<u8> {
+    let (request, sealed) = d.request(x);
+    framed_head(&Exchange::request_sealed(request, sealed).expect("the request frames"))
+}
+
+fn auth(scheme: &str, credentials: &str) -> DeliveryAuth {
+    DeliveryAuth {
+        scheme: scheme.into(),
+        credentials: cred(credentials),
+    }
+}
+
 #[test]
 fn the_request_is_a_post_to_the_callbacks_path_with_the_credential_only_once_held() {
     let d = Deliveries::new();
     let x = delivery("t1");
-    let bare = d.request(&x);
+    let (bare, sealed) = d.request(&x);
     assert_eq!(bare.method, b"POST");
     assert_eq!(bare.target, b"/cb/t1?k=v");
     assert_eq!(
@@ -193,50 +239,89 @@ fn the_request_is_a_post_to_the_callbacks_path_with_the_credential_only_once_hel
         [(b"content-type".to_vec(), b"application/json".to_vec())]
     );
     assert_eq!(bare.body, x.body);
-    d.remember_auth(
-        "t1",
-        Some(DeliveryAuth {
-            scheme: "Bearer".into(),
-            credentials: PushCredential::new("s3cret".into()),
-        }),
-    );
-    assert_eq!(
-        d.request(&x).fields[1],
-        (b"authorization".to_vec(), b"Bearer s3cret".to_vec())
-    );
+    assert!(sealed.is_empty());
+    d.remember_auth("t1", Some(auth("Bearer", "s3cret")));
+    let (with, sealed) = d.request(&x);
+    assert_eq!(with.fields.len(), 1, "the credential is no plain field");
+    assert_eq!(sealed.len(), 1);
+    assert_eq!((sealed[0].0, &sealed[0].1[..]), (1, &b"authorization"[..]));
+    assert_eq!(sealed_bytes(&sealed[0].2), b"Bearer s3cret");
     d.remember_auth("t1", None);
-    assert_eq!(
-        d.request(&x).fields.len(),
-        1,
+    assert!(
+        d.request(&x).1.is_empty(),
         "a withdrawn credential is not sent"
     );
+}
+
+/// THE WIRE IS THE ONE THE PLANE SENT BEFORE THE CHIP: for every shape of credential a caller
+/// registers (a scheme and a credential, a bare scheme, a credential with inner spaces, none), and
+/// a callback with and without a query, the sealed request frames exactly the head the plain
+/// request framed: the field order, the separator, every byte. RED against a sealed field placed
+/// anywhere but after the content type, or a recipe that writes the scheme its own way.
+#[test]
+fn the_sealed_request_frames_the_bytes_the_plain_one_did() {
+    let shapes: [Option<(&str, &str)>; 5] = [
+        None,
+        Some(("Bearer", "s3cret")),
+        Some(("Basic", "")),
+        Some(("Token", "a b  c")),
+        Some(("bEaReR", "x.y-z_~+/=")),
+    ];
+    for url in [
+        "https://hook.example/cb/t1?k=v",
+        "https://hook.example/",
+        "https://hook.example/a/b",
+    ] {
+        for shape in shapes {
+            let d = Deliveries::new();
+            let x = Delivery {
+                url: url.to_string(),
+                ..delivery("t1")
+            };
+            d.remember_auth("t1", shape.map(|(s, c)| auth(s, c)));
+            let old = Exchange::request(legacy_request(&x, shape)).expect("frames");
+            assert_eq!(
+                framed(&d, &x),
+                framed_head(&old),
+                "{url} {:?}",
+                shape.map(|(s, _)| s)
+            );
+            let (request, _) = d.request(&x);
+            let legacy = legacy_request(&x, shape);
+            assert_eq!(request.body, legacy.body);
+            assert_eq!(request.timeout_ms, legacy.timeout_ms);
+        }
+    }
+}
+
+/// An `https` callback's credential goes out only on a secured stream.
+#[test]
+fn the_sealed_credential_requires_the_secured_stream_its_https_callback_names() {
+    let a = auth("Bearer", "s3cret");
+    assert!(a.authorization("https://hook.example/cb").secure_required());
 }
 
 #[test]
 fn a_terminal_tasks_last_delivery_forgets_its_credential() {
     let d = Deliveries::new();
-    let auth = DeliveryAuth {
-        scheme: "Basic".into(),
-        credentials: PushCredential::new(String::new()),
-    };
-    d.remember_auth("t1", Some(auth));
+    d.remember_auth("t1", Some(auth("Basic", "")));
     let last = Delivery::of(&task("t1", TaskState::Completed)).expect("a callback");
     assert!(last.terminal);
     d.enqueue(last.clone(), 0);
-    assert_eq!(d.request(&last).fields[1].1, b"Basic");
+    assert_eq!(sealed_bytes(&d.request(&last).1[0].2), b"Basic");
     let _ = d.due(0);
     d.settle("t1", Attempted::Delivered, 0, 0);
-    assert_eq!(d.request(&last).fields.len(), 1);
+    assert!(d.request(&last).1.is_empty());
 }
 
 #[test]
 fn the_credential_never_prints() {
-    let auth = DeliveryAuth {
-        scheme: "Bearer".into(),
-        credentials: PushCredential::new("s3cret".into()),
-    };
-    assert!(!format!("{auth:?}").contains("s3cret"));
-    assert_eq!(auth.header_value(), "Bearer s3cret");
+    let a = auth("Bearer", "s3cret");
+    assert!(!format!("{a:?}").contains("s3cret"));
+    assert_eq!(
+        sealed_bytes(&a.authorization("https://hook.example/")),
+        b"Bearer s3cret"
+    );
 }
 
 #[test]
@@ -505,18 +590,25 @@ fn a_callback_token_has_predevs_wire_shape_and_rides_its_bearer_scheme() {
 
 #[test]
 fn the_credential_round_trips_through_the_record_and_stays_redacted() {
-    let auth = DeliveryAuth {
-        scheme: "Bearer".into(),
-        credentials: PushCredential::new("s3cret".into()),
-    };
-    let bytes = serde_json::to_vec(&auth).expect("serializes");
+    let a = auth("Bearer", "s3cret");
+    let bytes = record_value(&a).expect("serializes");
     assert_eq!(
         bytes, br#"{"scheme":"Bearer","credentials":"s3cret"}"#,
-        "the sealed field keeps the record's plain-string form"
+        "the record keeps the plain-string form it always held"
     );
     let back: DeliveryAuth = serde_json::from_slice(&bytes).expect("reads");
-    assert_eq!(back, auth);
+    assert_eq!(back, a);
     assert!(!format!("{back:?}").contains("s3cret"));
+}
+
+/// A `serde_json` line of the credential (a log line, an assert message) is refused and quotes
+/// nothing: only the SDK's record encoder writes it.
+#[test]
+fn the_credential_serializes_into_the_record_and_nowhere_else() {
+    let a = auth("Bearer", "s3cret");
+    let e = serde_json::to_string(&a).expect_err("a log line is no record");
+    assert!(!e.to_string().contains("s3cret"), "{e}");
+    assert!(serde_json::to_value(&a).is_err());
 }
 
 /// One `tick` op attempts one notification: the next task's head in turn (task-id order), marked
@@ -627,21 +719,20 @@ fn the_callback_mac_is_compared_in_constant_time() {
 
 /// RED (BUSBAR-1.6.0.md Locked Decision #54: logs, audit records, metrics and error text never
 /// carry a credential's value): the caller's webhook credential is caller payload the plane holds
-/// as a [`PushCredential`], and its bytes reach the `Authorization` field and nothing else. The
-/// credential's own `Debug`, a registered config's `Debug`, and the refusal of a credential busbar
-/// cannot present (the registration's error path) all leave the bytes out. A `PushCredential` whose
-/// `Debug` derived its field, or a refusal that quoted the value back, fails here.
+/// as a `Cred`, and its bytes reach the sealed `Authorization` field and nothing else. A
+/// registered config's `Debug` and the refusal of a credential busbar cannot present (the
+/// registration's error path) leave the bytes out (a `Cred` has no `Debug` at all). A refusal that
+/// quoted the value back fails here.
 #[test]
 fn the_push_credential_reaches_the_authorization_field_and_no_debug_or_error_text() {
     let secret = "s3cret-webhook-tok";
-    let auth = DeliveryAuth {
-        scheme: "Bearer".into(),
-        credentials: PushCredential::new(secret.into()),
-    };
-    assert_eq!(format!("{:?}", auth.credentials), "[redacted]");
+    let auth = auth("Bearer", secret);
     assert!(!format!("{auth:?}").contains(secret), "{auth:?}");
     assert!(!format!("{:?}", Some(&auth)).contains(secret));
-    assert_eq!(auth.header_value(), format!("Bearer {secret}"));
+    assert_eq!(
+        sealed_bytes(&auth.authorization("https://hook.example/")),
+        format!("Bearer {secret}").as_bytes()
+    );
 
     let registered = crate::local::delivery_auth(&serde_json::json!({
         "authentication": { "scheme": "Bearer", "credentials": secret }
@@ -667,7 +758,7 @@ fn the_push_credential_reaches_the_authorization_field_and_no_debug_or_error_tex
 fn a_delivery_attempt_is_bounded_by_the_request_deadline() {
     let d = Deliveries::new();
     assert_eq!(
-        d.request(&delivery("t1")).timeout_ms,
+        d.request(&delivery("t1")).0.timeout_ms,
         10_000,
         "the attempt's request is not bounded by the connector's default deadline"
     );

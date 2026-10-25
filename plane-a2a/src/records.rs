@@ -10,7 +10,7 @@
 //! |---|---|
 //! | `task` | one row per task this node tracks, scoped to its caller |
 //! | `task_event` | the task's hash-linked chain of state moves, the kind the door declares chained |
-//! | `push_config` | a task's push-notification config, its credential a sealed field |
+//! | `push_config` | a task's push-notification config, its credential a `Cred` |
 //! | `card` | an agent's verified card, as `connect` recorded it |
 //! | `card_approval` | the skills of the card the operator approved |
 //!
