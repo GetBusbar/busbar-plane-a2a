@@ -694,13 +694,9 @@ mod both_ways {
             line(&t, "arrive 14 ")
         );
         // R-16: the agent's endpoint with a trailing separator answers as the endpoint does (unit 2).
-        let rest = |l: &str, target: &str| {
-            l.split_once(&format!(" {target} "))
-                .map(|(_, r)| r.to_string())
-        };
         assert_eq!(
-            rest(line(&t, "arrive 16 "), &mounted("/agents/vendor/")),
-            rest(line(&t, "arrive 2 "), &mounted("/agents/vendor")),
+            after(line(&t, "arrive 16 "), &mounted("/agents/vendor/")),
+            after(line(&t, "arrive 2 "), &mounted("/agents/vendor")),
             "the agent's endpoint with a trailing separator: {}",
             line(&t, "arrive 16 ")
         );

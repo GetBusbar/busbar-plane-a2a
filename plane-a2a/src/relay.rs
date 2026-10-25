@@ -305,7 +305,7 @@ pub fn read_answer(status: u32, body: &[u8], id: &Value) -> Result<Value, HopRef
 }
 
 /// An HTTP+JSON far end's whole answer, read as the answer to `id` once re-wrapped into the
-/// JSON-RPC envelope ([`binding::rewrap`]); `None` when a 2xx body is not JSON (unframable).
+/// JSON-RPC envelope ([`crate::answer_bytes::rewrap`]); `None` when a 2xx body is not JSON (unframable).
 fn read_rest_answer(status: u32, body: &[u8], id: &Value) -> Option<Result<Value, HopRefusal>> {
     if !(200..300).contains(&status) {
         return Some(Err(HopRefusal::Status));
@@ -313,7 +313,7 @@ fn read_rest_answer(status: u32, body: &[u8], id: &Value) -> Option<Result<Value
     if body.len() > MAX_REPLY_BYTES {
         return Some(Err(HopRefusal::BodyTooLarge));
     }
-    let envelope = binding::rewrap(body, id).ok()?;
+    let envelope = crate::answer_bytes::rewrap(body, id).ok()?;
     Some(read_answer(status, &envelope, id))
 }
 
@@ -1371,7 +1371,7 @@ impl HopRelay {
             Binding::HttpJson
                 if (200..300).contains(&status) && self.far.len() <= MAX_REPLY_BYTES =>
             {
-                binding::rewrap(&self.far, &self.id).ok()
+                crate::answer_bytes::rewrap(&self.far, &self.id).ok()
             }
             _ => None,
         };

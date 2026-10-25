@@ -50,9 +50,6 @@ mod diagnostics;
 mod door_statement;
 mod events;
 mod facts;
-// The frame rewriter is held by its own tests (`src/tests/frame.rs`); the door does not call it.
-#[cfg(test)]
-mod frame;
 mod framed;
 mod jsonrpc;
 mod local;
@@ -324,8 +321,8 @@ mod tests {
         busbar_contract::alloc_counter::Counting::new();
 
     mod alloc_gate;
+    pub(crate) mod capture;
     mod conformance;
     mod door_facts;
-    mod frame;
     mod purity;
 }

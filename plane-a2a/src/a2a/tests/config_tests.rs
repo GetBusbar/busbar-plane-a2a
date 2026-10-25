@@ -64,7 +64,12 @@ fn the_declared_trust_keys_match_the_grammar() {
             .iter()
             .find(|d| d.token == m.token())
             .unwrap_or_else(|| panic!("`{}` is declared", m.token()));
-        assert_eq!(declared.root, m.is_a_root(), "{}", m.token());
+        assert_eq!(
+            declared.root,
+            !matches!(m, PinMechanism::Unpinned),
+            "{}",
+            m.token()
+        );
     }
     let ttl = TRUST_KEYS
         .iter()
@@ -76,7 +81,6 @@ fn the_declared_trust_keys_match_the_grammar() {
         .find(|k| k.key == "recovery_backoff")
         .expect("the recovery backoff is a declared trust key");
     assert_eq!(backoff.default, Some("15m"));
-    assert_eq!(DEFAULT_RECOVERY_BACKOFF_MS, 15 * 60 * 1_000);
 }
 
 /// Each mechanism's SERIALIZED token is the token its declared `TRUST_KEYS` spells, and the pin
@@ -99,7 +103,11 @@ fn every_serialized_pin_token_is_the_declared_trust_key_token() {
             .find(|d| d.token == token)
             .expect("declared")
             .root;
-        assert_eq!(declared_root, m.is_a_root(), "{token}");
+        assert_eq!(
+            declared_root,
+            !matches!(m, PinMechanism::Unpinned),
+            "{token}"
+        );
     }
 }
 

@@ -65,20 +65,6 @@ use serde::{Deserialize, Serialize};
 /// projects both under one `reverify_ttl` view field, so the concept is one across the two planes.)
 pub const DEFAULT_REVERIFY_TTL: &str = "5s";
 
-/// THE DEPLOYMENT-WIDE RECOVERY BACKOFF a registration gets when it spells no `recovery_backoff:`.
-///
-/// The RECOVERY half of the cadence, and the only half that has a default at all — there is
-/// deliberately no deployment-wide knob for detection or demotion, because both would be a window an
-/// upstream could open for itself by flapping. Fifteen minutes is long enough that an alternating
-/// upstream collapses into one persistent quarantine rather than a demotion storm, and short enough
-/// that a genuine recovery is believed within one operator's attention span.
-///
-/// Non-zero on purpose: zero is a legitimate PER-AGENT setting for an upstream an operator knows to
-/// be flaky for boring reasons, but the boring explanation and the hostile one look identical from
-/// here, so it is not what an unconfigured deployment gets.
-#[cfg(test)]
-pub const DEFAULT_RECOVERY_BACKOFF_MS: u64 = 15 * 60 * 1_000;
-
 /// THE KERNEL-OWNED TRUST KEYS of one `agents:` entry, declared for the kernel to parse and judge:
 /// the `pin:` object (with its optional `fingerprint`) over this plane's four mechanisms, and the two
 /// cadence durations with their defaults. Declaration order is judgement order.
@@ -123,8 +109,7 @@ pub const TRUST_KEYS: &[TrustKeyDecl] = &[
         key: "recovery_backoff",
         role: TrustRole::RecoveryBackoff,
         fingerprint: false,
-        // The same fifteen minutes as `DEFAULT_RECOVERY_BACKOFF_MS`.
-        default: Some("15m"),
+        default: Some(crate::door_statement::DEFAULT_RECOVERY_BACKOFF),
         mechanisms: &[],
     },
 ];
@@ -170,21 +155,6 @@ pub enum PinMechanism {
 }
 
 impl PinMechanism {
-    /// Is this mechanism an authenticity ROOT at all — and therefore, does it require
-    /// operator-supplied key material?
-    ///
-    /// This is the predicate that makes the object form worth having: three of the four mechanisms
-    /// are meaningless without material, and the fourth is meaningless WITH it.
-    ///
-    /// ONE predicate answers both questions on purpose. It is the boot-time rule below AND the one
-    /// question the kernel's trust reader asks of a mechanism, so the reader that builds the
-    /// artifact and the refusal that fires at boot cannot come to disagree about what "rooted"
-    /// means.
-    #[cfg(test)]
-    pub fn is_a_root(self) -> bool {
-        !matches!(self, PinMechanism::Unpinned)
-    }
-
     /// The config token, for diagnostics, pin renderings and audit rows. Deliberately the same
     /// string `serde` accepts, so every surface spells a mechanism one way.
     pub fn token(self) -> &'static str {

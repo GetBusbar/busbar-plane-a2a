@@ -211,7 +211,7 @@ pub fn drifted(binding: Binding, answered: Option<(u16, &[u8])>, config_id: &str
     }
     let id = Value::String(ORIGINATED_RPC_ID.into());
     let envelope = match binding {
-        Binding::HttpJson => crate::binding::rewrap(body, &id).ok(),
+        Binding::HttpJson => crate::answer_bytes::rewrap(body, &id).ok(),
         // A gRPC answer was transcoded to its JSON-RPC envelope as it arrived ([`answered`]).
         Binding::JsonRpc | Binding::Grpc => Some(body.to_vec()),
     };
@@ -363,7 +363,7 @@ pub fn listed_states(
     }
     let id = Value::String(ORIGINATED_RPC_ID.into());
     let envelope = match binding {
-        Binding::HttpJson => crate::binding::rewrap(body, &id).ok(),
+        Binding::HttpJson => crate::answer_bytes::rewrap(body, &id).ok(),
         // A gRPC answer was transcoded to its JSON-RPC envelope as it arrived ([`answered`]).
         Binding::JsonRpc | Binding::Grpc => Some(body.to_vec()),
     };

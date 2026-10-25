@@ -64,6 +64,7 @@ use crate::a2a::config::AgentsCfg;
 use crate::agent_arrival::{self, AgentDisposition, Dialect};
 use crate::door_statement::{self, Line};
 use crate::relay::{self, HopRelay, PieceAnswer, TaskSettled};
+use crate::rest::STATUS_NOT_FOUND;
 use crate::task_door::{kind_index, Via};
 use crate::task_hop::{self, Opened};
 use crate::tasks::{task_key, Halt, Write};
@@ -143,6 +144,32 @@ pub struct AgentUnit {
     /// `refusal` may still read it (the kernel judges the plane's last answer after it returns), and
     /// that refusal forgets it; until then it makes room when the instance is full ([`room_for`]).
     pub over: bool,
+}
+
+impl AgentUnit {
+    /// A unit arriving as `disposition` under `generation`: no hop, envelope, framed call or pool
+    /// yet, its pass fresh, its ticket unknown and the door not done with it.
+    fn new(
+        disposition: AgentDisposition,
+        agent: Option<String>,
+        section: Option<Arc<AgentsCfg>>,
+        generation: u64,
+    ) -> Self {
+        Self {
+            disposition,
+            agent,
+            section,
+            hop: None,
+            pass: crate::task_door::Pass::default(),
+            envelope: None,
+            framed: None,
+            generation,
+            unreadable_rewrite: false,
+            pool: None,
+            ticket: Ticket::NONE,
+            over: false,
+        }
+    }
 }
 
 /// One unit's unary hop, and the answer it is part way through writing.
@@ -799,7 +826,7 @@ fn kept_records(plane: &A2aDoor, kind: &'static str, agent: &str, value: &[u8]) 
 /// A trust verb's whole answer: `status`, the head `fields`, `body`, the `AUDIT_*` row, and the
 /// record `writes` it carries, every span in the one arena; a short buffer answers FAILED with
 /// what each needs.
-fn verb_answer(
+pub(crate) fn verb_answer(
     input: &Lent<'_, ServeIn>,
     out: &mut Out<'_, ServeOut>,
     (status, head, body): (u32, &[(&str, &str)], &[u8]),
@@ -951,9 +978,6 @@ pub const REFUSED_IN_OWN_WORDS: u32 = 1;
 
 /// [`ArriveOut::refusal`]: no line of this door serves the arrival (a 404).
 pub const UNSERVED: u32 = 2;
-
-/// The status of an arrival no line of this door serves.
-const STATUS_NOT_FOUND: u32 = 404;
 
 /// REFUSED in the plane's own words, at its own status: `refusal` renders them in the line's
 /// dialect.
@@ -1447,18 +1471,9 @@ slot!(
             plane.units.insert(
                 given.unit(),
                 AgentUnit {
-                    disposition,
-                    agent,
-                    section,
-                    hop: None,
-                    pass: crate::task_door::Pass::default(),
                     envelope,
                     framed,
-                    generation,
-                    unreadable_rewrite: false,
-                    pool: None,
-                    ticket: Ticket::NONE,
-                    over: false,
+                    ..AgentUnit::new(disposition, agent, section, generation)
                 },
             );
             return Outcome::Ready;
@@ -1553,18 +1568,11 @@ slot!(
             out.stream();
         }
         let unit = AgentUnit {
-            disposition,
-            agent,
-            section: plane.generations.current(),
             hop,
-            pass: crate::task_door::Pass::default(),
             envelope,
             framed,
-            generation,
-            unreadable_rewrite: false,
             pool,
-            ticket: Ticket::NONE,
-            over: false,
+            ..AgentUnit::new(disposition, agent, plane.generations.current(), generation)
         };
         plane.units.insert(given.unit(), unit);
         Outcome::Ready
@@ -1634,20 +1642,12 @@ fn arrive_card(
     }
     plane.units.insert(
         unit,
-        AgentUnit {
-            disposition: AgentDisposition::Card(ask),
+        AgentUnit::new(
+            AgentDisposition::Card(ask),
             agent,
-            section: plane.generations.current(),
-            hop: None,
-            pass: crate::task_door::Pass::default(),
-            envelope: None,
-            framed: None,
+            plane.generations.current(),
             generation,
-            unreadable_rewrite: false,
-            pool: None,
-            ticket: Ticket::NONE,
-            over: false,
-        },
+        ),
     );
     Outcome::Ready
 }
@@ -2342,12 +2342,13 @@ fn bind(reach: &Reach<'_>, hop: &mut Hop, member: &str, generation: u64) -> Opti
     let word = crate::binding::binding_of(card.as_deref());
     match crate::binding::speakable(&word) {
         Some(binding) => {
+            let null = serde_json::Value::Null;
             let envelope = hop
                 .rewritten
-                .clone()
-                .or_else(|| hop.request.clone())
-                .unwrap_or(serde_json::Value::Null);
-            hop.relay.bind(binding, &envelope);
+                .as_ref()
+                .or(hop.request.as_ref())
+                .unwrap_or(&null);
+            hop.relay.bind(binding, envelope);
             None
         }
         None => Some(hop.relay.refuse_unspeakable(&word)),

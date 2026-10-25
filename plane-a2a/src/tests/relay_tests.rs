@@ -6,12 +6,13 @@
 //! `receive::refuse_hop_early`).
 
 use super::*;
+use crate::tests::capture::Capture;
 use serde_json::json;
 
 const URL: &str = "https://vendor.example/a2a/v1?tenant=t1";
 const ASK: &[u8] = br#"{"jsonrpc":"2.0","id":7,"method":"GetExtendedAgentCard"}"#;
 
-fn kernel(url: Option<&str>) -> Piece<'_> {
+pub(super) fn kernel(url: Option<&str>) -> Piece<'_> {
     Piece {
         from: From::Kernel(url),
         bytes: &[],
@@ -20,7 +21,7 @@ fn kernel(url: Option<&str>) -> Piece<'_> {
     }
 }
 
-fn caller(bytes: &[u8]) -> Piece<'_> {
+pub(super) fn caller(bytes: &[u8]) -> Piece<'_> {
     Piece {
         from: From::Caller,
         bytes,
@@ -29,7 +30,7 @@ fn caller(bytes: &[u8]) -> Piece<'_> {
     }
 }
 
-fn far(status: Option<u32>, bytes: &[u8], last: bool) -> Piece<'_> {
+pub(super) fn far(status: Option<u32>, bytes: &[u8], last: bool) -> Piece<'_> {
     Piece {
         from: From::FarEnd,
         bytes,
@@ -427,7 +428,7 @@ fn task_sent(addressed: bool) -> HopRelay {
     r
 }
 
-fn body(reply: &RelayReply) -> serde_json::Value {
+pub(super) fn body(reply: &RelayReply) -> serde_json::Value {
     serde_json::from_slice(&reply.body).expect("json")
 }
 
@@ -703,7 +704,7 @@ fn event(result: serde_json::Value) -> Vec<u8> {
     .into_bytes()
 }
 
-fn part(answer: PieceAnswer) -> Part {
+pub(super) fn part(answer: PieceAnswer) -> Part {
     match answer {
         PieceAnswer::Part(part) => part,
         other => panic!("not a part: {other:?}"),
@@ -1165,37 +1166,6 @@ fn an_oversized_body_is_cut_one_byte_past_the_ceiling_so_the_driver_can_refuse_i
 }
 
 // ── the operator's journal names the backend; the caller's answer never does ───────────────────
-
-/// Every event's level and rendered fields (the plane holds no subscriber dependency, so the
-/// `tracing` trait is implemented by hand).
-struct Capture(std::sync::mpsc::Sender<(tracing::Level, String)>);
-
-struct Render<'a>(&'a mut String);
-
-impl tracing::field::Visit for Render<'_> {
-    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-        use std::fmt::Write as _;
-        let _ = write!(self.0, "{}={value:?} ", field.name());
-    }
-}
-
-impl tracing::Subscriber for Capture {
-    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
-        true
-    }
-    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
-        tracing::span::Id::from_u64(1)
-    }
-    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
-    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
-    fn event(&self, event: &tracing::Event<'_>) {
-        let mut line = String::new();
-        event.record(&mut Render(&mut line));
-        let _ = self.0.send((*event.metadata().level(), line));
-    }
-    fn enter(&self, _: &tracing::span::Id) {}
-    fn exit(&self, _: &tracing::span::Id) {}
-}
 
 /// What `run` answers the caller, and the lines it journaled.
 fn journaled(run: impl FnOnce() -> RelayReply) -> (RelayReply, Vec<(tracing::Level, String)>) {

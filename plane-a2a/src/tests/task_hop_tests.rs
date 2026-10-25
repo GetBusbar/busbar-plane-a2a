@@ -11,6 +11,7 @@ use super::*;
 use crate::records::{KIND_TASK, KIND_TASK_EVENT};
 use crate::tasks::tests::{submitted, Book, ALICE, BOB};
 use crate::tasks::{event_key, get};
+use crate::tests::capture::Capture;
 use crate::TaskEventRow;
 
 /// The host records, the random bytes the kernel hands out, and the destination judge's verdict.
@@ -893,13 +894,6 @@ fn a_streamed_artifact_advances_the_durable_resume_cursor() {
 
 // ── a hop that left and heard nothing back: its task end, racing another writer of the task ───
 
-/// End `task`, whose hop left and heard nothing back, failed, as the door ends it on the refused
-/// piece, on the unit's own ticket: [`settle_on_answer`] on `TaskSettled::Failed` over the host's records
-/// (`agent_door::settle_task`).
-fn ended_after_no_answer(d: &mut Desk, task: &TaskHop) -> Vec<Write> {
-    ended_on_refusal(d, task)
-}
-
 /// A HOP THAT LEFT AND HEARD NOTHING BACK ENDS THE TASK IT OPENED WITHOUT LOSING ANOTHER WRITER'S
 /// CHANGE (the engine's `refuse_hop` on `RelayRefusal::Transport`, origin/predev
 /// `crates/busbar-a2a/src/a2a/receive.rs:3325` and its `fail_task` arm `:3463-3471`, then
@@ -935,7 +929,7 @@ fn a_hop_that_heard_nothing_back_ends_its_task_keeping_a_concurrent_writers_chan
         .cloned()
         .expect("their event");
 
-    let ours = ended_after_no_answer(&mut d, &task);
+    let ours = ended_on_refusal(&mut d, &task);
     d.book.apply(&ours);
 
     assert_eq!(
@@ -955,38 +949,6 @@ fn a_hop_that_heard_nothing_back_ends_its_task_keeping_a_concurrent_writers_chan
 }
 
 // ── a record write the store refuses is reported, and the answer stands ────────────────────────
-
-/// Every event's level and rendered fields, sent down a channel (the plane holds no subscriber
-/// dependency, so the `tracing` trait is implemented by hand). Admits every level, so the
-/// assertion holds whichever side of the error-once latch this process is on.
-struct Capture(std::sync::mpsc::Sender<(tracing::Level, String)>);
-
-struct Render<'a>(&'a mut String);
-
-impl tracing::field::Visit for Render<'_> {
-    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-        use std::fmt::Write as _;
-        let _ = write!(self.0, "{}={value:?} ", field.name());
-    }
-}
-
-impl tracing::Subscriber for Capture {
-    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
-        true
-    }
-    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
-        tracing::span::Id::from_u64(1)
-    }
-    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
-    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
-    fn event(&self, event: &tracing::Event<'_>) {
-        let mut line = String::new();
-        event.record(&mut Render(&mut line));
-        let _ = self.0.send((*event.metadata().level(), line));
-    }
-    fn enter(&self, _: &tracing::span::Id) {}
-    fn exit(&self, _: &tracing::span::Id) {}
-}
 
 /// Settle `how` on Alice's task as BOB, who holds no such task: the store refuses the write.
 /// Answers what the call answered, the writes it staged, and the lines it logged.
