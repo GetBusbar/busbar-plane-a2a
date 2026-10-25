@@ -42,7 +42,7 @@ const BYTE_FAMILY: &str = "byte";
 /// two differently — the owner's ruling makes that the product: one class, both ways.
 #[cfg(test)]
 const METER_CLASSES: &[MeterClassDecl] = &[MeterClassDecl {
-    key: MeterClassId::new("bytes"),
+    key: CLASS_BYTES,
     family: BYTE_FAMILY,
     direction: ClassDirection::Response,
     // A byte is a byte: the class's own quantity is the quantity, so nothing is divided.

@@ -53,6 +53,7 @@ use crate::local::{self, Reach};
 use crate::push::DeliveryAuth;
 use crate::records::KIND_PUSH_CONFIG;
 use crate::relay::{RelayReply, TaskHop, TaskSettled};
+use crate::rest::STATUS_NOT_FOUND;
 use crate::skill::CALLBACK_CONFIG_POINTERS;
 use crate::task_identity::{self, MINT_BYTES};
 use crate::tasks::{self, Halt, Planned, Records, Stamp, Write};
@@ -73,8 +74,6 @@ const STATUS_BAD_REQUEST: u32 = 400;
 pub const TASK_UNNAMED: &str = "a task verb must name its task: `params.id` is required, a string";
 /// The status a task that cannot be recorded answers with.
 const STATUS_UNAVAILABLE: u32 = 503;
-/// The status a task the caller does not hold answers with (A2A section 5.4, `TaskNotFoundError`).
-const STATUS_NOT_FOUND: u32 = 404;
 /// The status an interrupted task that cannot resume answers with.
 const STATUS_CONFLICT: u32 = 409;
 /// The engine's words for a task it could not record (`busbar-a2a` `receive.rs:2032-2049`).

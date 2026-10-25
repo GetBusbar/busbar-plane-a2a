@@ -383,15 +383,8 @@ impl Reach for Via<'_> {
     fn judge(&mut self, dest: &str) -> Result<u64, Halt> {
         let services = self.services()?;
         let handle = self.next_handle();
-        let absent = Span {
-            offset: SPAN_ABSENT,
-            len: 0,
-        };
         let mut bytes = [0u8; JUDGED_BYTES];
-        let mut spans = [ItemSpan {
-            key: absent,
-            value: absent,
-        }; JUDGED_ADDRESSES];
+        let mut spans = [ABSENT_SPAN; JUDGED_ADDRESSES];
         // Private reach refused whatever the deployment's private-address setting (the engine's
         // callback guard had no knob that admitted one); the allow-list stands.
         match services.dest_judge_as(
@@ -1266,15 +1259,8 @@ impl HostSigner<'_> {
             _reserved: 0,
         };
         self.seq += 1;
-        let absent = Span {
-            offset: SPAN_ABSENT,
-            len: 0,
-        };
         let mut buf = vec![0u8; 1024];
-        let mut spans = [ItemSpan {
-            key: absent,
-            value: absent,
-        }; 2];
+        let mut spans = [ABSENT_SPAN; 2];
         let sig = services.sign(handle, data, &mut buf, &mut spans).ok()?;
         Some((sig.key_id.to_string(), sig.signature.to_vec()))
     }

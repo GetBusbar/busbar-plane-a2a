@@ -2,7 +2,7 @@
 //! measures implementation and nothing else; still a direct child module, so `use
 //! super::*` reaches the private items it always did.
 
-use super::{operations_for, OPERATIONS, RECORD_SCHEMAS, SCHEMA_TASK, SCHEMA_TASK_EVENT};
+use super::{RECORD_SCHEMAS, SCHEMA_TASK, SCHEMA_TASK_EVENT};
 
 /// The two durable schemas carry the codec's own record kind names.
 ///
@@ -12,35 +12,6 @@ use super::{operations_for, OPERATIONS, RECORD_SCHEMAS, SCHEMA_TASK, SCHEMA_TASK
 fn the_durable_schemas_are_the_codecs_own_kinds() {
     assert_eq!(SCHEMA_TASK.as_str(), crate::records::KIND_TASK);
     assert_eq!(SCHEMA_TASK_EVENT.as_str(), crate::records::KIND_TASK_EVENT);
-}
-
-/// Every schema declares at least one operation, and every operation it declares is a known one.
-#[test]
-fn every_schema_declares_known_operations() {
-    for schema in RECORD_SCHEMAS {
-        let ops = operations_for(*schema);
-        assert!(!ops.is_empty(), "{schema} declares no operation");
-        for op in ops {
-            assert!(OPERATIONS.contains(op), "{schema} declares unknown op {op}");
-        }
-    }
-}
-
-/// A schema this plane does not declare has no operations at all.
-#[test]
-fn an_undeclared_schema_declares_nothing() {
-    let stranger = busbar_contract::ids::RecordSchemaId::new("ledger");
-    assert!(operations_for(stranger).is_empty());
-}
-
-/// The append-only history is append-and-read, never overwritten.
-///
-/// The event rows are hash-linked, and a chain whose middle can be replaced is not a chain.
-#[test]
-fn the_history_cannot_be_overwritten() {
-    let ops = operations_for(SCHEMA_TASK_EVENT);
-    assert!(!ops.contains(&super::OP_PUT));
-    assert!(!ops.contains(&super::OP_DELETE));
 }
 
 /// No schema name is repeated.

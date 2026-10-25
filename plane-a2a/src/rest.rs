@@ -58,8 +58,10 @@ pub mod method {
 const VERB_CANCEL: &str = "cancel";
 const VERB_SUBSCRIBE: &str = "subscribe";
 
-/// The status of a `POST /tasks/…` naming no verb this binding defines.
-const STATUS_NOT_FOUND: u32 = 404;
+/// `404`: the status of a `POST /tasks/…` naming no verb this binding defines, of an arrival no
+/// line of the door serves, and of a task the caller does not hold (A2A section 5.4,
+/// `TaskNotFoundError`).
+pub(crate) const STATUS_NOT_FOUND: u32 = 404;
 
 /// JSON-RPC's `MethodNotFound`: the fault is in the request line, not the task.
 const CODE_METHOD_NOT_FOUND: i64 = -32601;
