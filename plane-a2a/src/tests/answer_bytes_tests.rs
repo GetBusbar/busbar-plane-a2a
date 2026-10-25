@@ -15,13 +15,26 @@ const WRAPPERS: [(&str, &str); 4] = [
     ("artifactUpdate", "taskId"),
 ];
 
+const KINDS: [(&str, &str); 4] = [
+    ("task", "id"),
+    ("message", "taskId"),
+    ("status-update", "taskId"),
+    ("artifact-update", "taskId"),
+];
+
+/// The far end's id `far-9` for a task the request referred to, busbar's `R`.
+fn references() -> Vec<(String, String)> {
+    vec![("far-9".to_string(), "R".to_string())]
+}
+
 fn spliced(result: &str, skill: Option<&str>) -> String {
     let out = rewrite_identity(
         result.as_bytes(),
-        &WRAPPERS,
+        (&WRAPPERS, &KINDS),
         "T",
         "C",
         skill.map(|s| ("busbar/skill", s)),
+        &references(),
     )
     .expect("an object");
     String::from_utf8(out).unwrap()
@@ -30,7 +43,13 @@ fn spliced(result: &str, skill: Option<&str>) -> String {
 /// The value path's answer for the same result (`task_identity::rewrite_identity`).
 fn valued(result: &str, skill: Option<&str>) -> Value {
     let mut v: Value = serde_json::from_str(result).unwrap();
-    crate::task_identity::rewrite_identity(&mut v, "T", "C", skill);
+    assert!(crate::task_identity::rewrite_identity(
+        &mut v,
+        "T",
+        "C",
+        skill,
+        &references()
+    ));
     v
 }
 
@@ -60,6 +79,13 @@ fn a_missing_identity_member_is_appended_and_a_skill_lands_in_metadata() {
         (r#"{"message":{"role":"agent","contextId":"far"}}"#, None),
         (r#"{"message":{"role":"agent","taskId":"far"}}"#, None),
         (r#"{"statusUpdate":{"status":{"state":"completed"}}}"#, None),
+        (r#"{"kind":"status-update","taskId":"far","id":"x"}"#, None),
+        (r#"{"kind":"artifact-update","artifact":{}}"#, Some("plan")),
+        (r#"{"kind":"message","messageId":"m"}"#, None),
+        (
+            r#"{"kind":"message","taskId":"far","referenceTaskIds":["far","far-9","z"]}"#,
+            None,
+        ),
     ] {
         let out = spliced(far, skill);
         assert_eq!(
@@ -75,9 +101,34 @@ fn a_missing_identity_member_is_appended_and_a_skill_lands_in_metadata() {
 }
 
 #[test]
-fn a_result_that_is_no_object_is_left_to_the_value_path() {
-    assert_eq!(rewrite_identity(b"[1]", &WRAPPERS, "T", "C", None), None);
-    assert_eq!(rewrite_identity(b"\"s\"", &WRAPPERS, "T", "C", None), None);
+fn a_result_that_is_no_object_takes_no_identity() {
+    for far in [&b"[1]"[..], &b"\"s\""[..], &b"7"[..], &b"null"[..]] {
+        assert_eq!(
+            rewrite_identity(far, (&WRAPPERS, &KINDS), "T", "C", None, &[]),
+            None
+        );
+    }
+}
+
+/// AN UNWRAPPED v0.3 UPDATE takes busbar's id in the `taskId` its `kind` names it by, at that
+/// member's own span, and gains no `id`. RED: busbar's id was appended as a new `id` and the far
+/// end's `taskId` reached the caller.
+#[test]
+fn an_unwrapped_update_takes_busbars_id_where_its_kind_names_its_task() {
+    assert_eq!(
+        spliced(
+            r#"{"kind":"status-update","taskId":"far","contextId":"far-c","status":{"state":"working"},"final":false}"#,
+            None
+        ),
+        r#"{"kind":"status-update","taskId":"T","contextId":"C","status":{"state":"working"},"final":false}"#
+    );
+    assert_eq!(
+        spliced(
+            r#"{"kind":"message","messageId":"m","referenceTaskIds":["far-9", "z"]}"#,
+            None
+        ),
+        r#"{"kind":"message","messageId":"m","referenceTaskIds":["R", "z"],"contextId":"C"}"#
+    );
 }
 
 #[test]
@@ -107,4 +158,26 @@ fn the_result_span_and_the_rewrap_keep_the_far_ends_bytes() {
     );
     assert!(rewrap(b"<html>", &json!(1)).is_err());
     assert!(rewrap(b"{} {}", &json!(1)).is_err());
+}
+
+/// THE CALLER'S REQUEST, TRANSLATED BY SPLICE: only the ids `to` answers for change, at their own
+/// spans; nothing translated is `None`.
+#[test]
+fn a_request_is_translated_at_its_ids_spans_only() {
+    let to = |id: &str| (id == "busbar-t").then(|| "far-t".to_string());
+    let req = br#"{"method":"x","params":{ "taskId" : "busbar-t", "id":"busbar-t", "n":1e400,
+        "message":{"taskId":"busbar-t","messageId":"busbar-t","referenceTaskIds":[ "busbar-t" ,"o"]}}}"#;
+    assert_eq!(
+        String::from_utf8(translate_ids(req, &["taskId"], &["taskId"], &to).unwrap()).unwrap(),
+        r#"{"method":"x","params":{ "taskId" : "far-t", "id":"busbar-t", "n":1e400,
+        "message":{"taskId":"far-t","messageId":"busbar-t","referenceTaskIds":[ "far-t" ,"o"]}}}"#
+    );
+    assert_eq!(
+        translate_ids(br#"{"params":{"taskId":"other"}}"#, &["taskId"], &[], &to),
+        None
+    );
+    assert_eq!(
+        translate_ids(br#"{"params":7}"#, &["taskId"], &[], &to),
+        None
+    );
 }

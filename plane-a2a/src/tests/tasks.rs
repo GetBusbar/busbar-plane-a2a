@@ -1147,3 +1147,44 @@ fn the_records_layer_declares_the_task_kind_as_terminal_only() {
         "a restarted sweep finds nothing more to drop"
     );
 }
+
+/// The host records, every `records.list` they answer logged as `(kind, prefix)`.
+struct Listed<'b> {
+    book: &'b mut Book,
+    lists: Vec<(String, String)>,
+}
+
+impl Records for Listed<'_> {
+    fn get(&mut self, kind: &str, key: &str) -> Result<Option<Vec<u8>>, Halt> {
+        self.book.get(kind, key)
+    }
+    fn list(&mut self, kind: &str, prefix: &str) -> Result<Vec<(String, Vec<u8>)>, Halt> {
+        self.lists.push((kind.to_string(), prefix.to_string()));
+        self.book.list(kind, prefix)
+    }
+    fn claim(&mut self, kind: &str, key: &str, ttl_ms: u64) -> Result<bool, Halt> {
+        self.book.claim(kind, key, ttl_ms)
+    }
+}
+
+/// THE RESTORE READS ONLY THE IN-FLIGHT TASKS' CHAINS: each one listed under its own scope, and a
+/// terminal task's chain never asked for. RED against a restore that listed every task event of
+/// every chain, terminal ones included.
+#[test]
+fn the_restore_reads_only_the_in_flight_tasks_chains() {
+    let mut book = process_one();
+    moved_to(&mut book, "t-work", TaskState::Completed, 110);
+    let mut listed = Listed {
+        book: &mut book,
+        lists: Vec::new(),
+    };
+    let out = restore(&mut listed).unwrap();
+    assert_eq!((out.active, out.terminal), (1, 1));
+    let chains: Vec<&str> = listed
+        .lists
+        .iter()
+        .filter(|(kind, _)| kind == KIND_TASK_EVENT)
+        .map(|(_, prefix)| prefix.as_str())
+        .collect();
+    assert_eq!(chains, [task_key(BOB, "t-paused").as_str()]);
+}

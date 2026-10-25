@@ -129,8 +129,18 @@ const PAT_TASK_PUSH_ONE: &[PathSeg] = &[
     PathSeg::Var,
 ];
 
-/// One agent of the catalogue, by identifier.
+/// One agent of the catalogue, by identifier (with or without the trailing separator: a pattern
+/// reads whole segments).
 const PAT_AGENT: &[PathSeg] = &[PathSeg::Lit("a2a"), PathSeg::Lit("agents"), PathSeg::Var];
+
+/// One agent's own card, at the protocol's discovery path under the agent's endpoint (R-15).
+const PAT_AGENT_CARD: &[PathSeg] = &[
+    PathSeg::Lit("a2a"),
+    PathSeg::Lit("agents"),
+    PathSeg::Var,
+    PathSeg::Lit(".well-known"),
+    PathSeg::Lit("agent-card.json"),
+];
 
 /// One method of the framed binding's one service.
 const PAT_GRPC: &[PathSeg] = &[PathSeg::Lit("lf.a2a.v1.A2AService"), PathSeg::Var];
@@ -156,7 +166,8 @@ pub const CLAIMS: &[Claim] = &[
     http(Selector::PathPattern(PAT_TASK_PUSH_ONE)),
     http(Selector::PathPattern(PAT_TASK_PUSH)),
     http(Selector::PathPattern(PAT_TASK)),
-    // One agent of the catalogue.
+    // One agent of the catalogue: its own card, then its endpoint.
+    http(Selector::PathPattern(PAT_AGENT_CARD)),
     http(Selector::PathPattern(PAT_AGENT)),
     // The plane's own request surface, both spellings, loosest of the document claims.
     http(Selector::ExactPath(P_ROOT)),

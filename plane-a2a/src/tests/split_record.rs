@@ -130,3 +130,18 @@ fn an_unreadable_head_is_refused() {
         );
     }
 }
+
+/// A STORED HEAD CANNOT SIZE AN ALLOCATION: one claiming more parts than the read answered is
+/// refused before any key list is built, however large the length it states.
+#[test]
+fn a_head_naming_more_parts_than_were_read_is_refused_before_it_allocates() {
+    let len = MAX_RECORD_BYTES * (1 << 40);
+    let count = len.div_ceil(MAX_RECORD_BYTES);
+    let head = format!("{HEAD_TAG}{count} {len} {}", "0".repeat(64));
+    let joined = rejoin(vec![("vendor".to_string(), head.into_bytes())]);
+    assert_eq!(
+        joined.refused,
+        vec![("vendor".to_string(), "a part is missing")]
+    );
+    assert!(joined.whole.is_empty());
+}
