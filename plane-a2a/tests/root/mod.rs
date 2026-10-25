@@ -938,12 +938,13 @@ fn served_core(
     // Its connection reads through a ticket (a trust verb's card fetch) wake on the dispatcher.
     let settings = busbar_contract::transport::TransportSettings::default();
     let connector = match root {
-        None => busbar_core_connector::process::build(
+        None => busbar_core_connector::process::build_with_secrets(
             || crate::root::connector::entries(crate::LINKED_TRANSPORT_DOORS, &settings),
             judge,
             &[],
             dispatcher.conn_waker(),
             crate::root::connector::pool_posture(&settings),
+            busbar_kernel::config::secret::resolve_linked_string_at_config,
         )
         .expect("the connector builds"),
         Some(root) => {
@@ -1073,7 +1074,7 @@ fn served_core(
                 host: {
                     let live = Arc::clone(&live);
                     Arc::new(move || {
-                        busbar_kernel::plane_host::engine_host(
+                        busbar_kernel::plane_driver::engine_host(
                             live.get().expect("the App is built before a unit runs"),
                         )
                     })
@@ -1139,7 +1140,7 @@ fn served_core(
         crate::LINKED.auths,
         crate::root::auth_bindings::operator_words(),
     );
-    busbar_kernel::preflight::install_auth_axis(crate::root::dispatch::auth_axis);
+    busbar_kernel::test_support::install_root_auth_axis(crate::root::dispatch::auth_axis);
     let mut builder = busbar_kernel::test_support::TestApp::new()
         .keys_chain()
         .admin_chain(vec![busbar_kernel::config::operator_provider().to_string()])
