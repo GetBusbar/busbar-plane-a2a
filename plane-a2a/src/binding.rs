@@ -240,6 +240,14 @@ pub fn compose(base: &str, method: &str, params: &Value) -> Result<Framed, Strin
         if value.is_empty() {
             return Err(format!("`{method}`'s `{name}` is empty"));
         }
+        // A DOT SEGMENT is the one value the allowlist passes that still moves the request line
+        // (`/tasks/..` resolves to `/`, and its percent-encoded spelling is read as a dot segment
+        // too): it addresses no task, so it is not carried.
+        if value == "." || value == ".." {
+            return Err(format!(
+                "`{method}`'s `{name}` is a dot segment, which would re-point the request line"
+            ));
+        }
         path.push_str(&percent(&value));
         rest = &rest[close + 1..];
     }
@@ -303,7 +311,8 @@ fn scalar(value: &Value) -> String {
         .map_or_else(|| value.to_string(), str::to_string)
 }
 
-/// Percent-encode one path segment against an allowlist, so an id cannot re-point the request line.
+/// Percent-encode one path segment against an allowlist, so no `/`, `?`, `#` or `%` in an id can
+/// re-point the request line ([`compose`] refuses the dot segments, which the allowlist passes).
 fn percent(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     for b in raw.bytes() {
