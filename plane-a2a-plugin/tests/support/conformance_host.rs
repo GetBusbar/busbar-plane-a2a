@@ -54,7 +54,7 @@ use busbar_contract::abi::host::conn::connector::{
 use busbar_contract::abi::mechanism::call::{Blob, Outcome};
 use busbar_contract::abi::mechanism::lifecycle::{slot as life, OpenIn, OpenOut};
 use busbar_contract::abi::mechanism::rendering::{ReadBlob, ReadNeed};
-use busbar_contract::abi::sdk::door::{blank_in, blank_out, MacroDoor};
+use busbar_contract::abi::sdk::door::{blank_in, blank_out};
 use busbar_contract::abi::transport::slot;
 use busbar_contract::conn::{
     ConnError, ConnId, DeclaredConns, InstanceId, NeedId, OpenDesc, PieceKind, NO_TICKET,
@@ -73,19 +73,30 @@ use busbar_plugin_loader::dispatch::{
 /// Where [`far_end`] listens: loopback, a port of this repo's own.
 pub const FAR_END: &str = "localhost:52722";
 
+/// A framer door's row, built where it is loaded.
+type DoorRow = fn() -> Result<LinkedRow, busbar_plugin_loader::dispatch::LoadError>;
+
 /// The framer doors the host serves, as the root links them: (claim, door). One row a line,
 /// whatever the claims' lengths (a `vec!` would be reflowed by rustfmt).
 #[allow(clippy::vec_init_then_push)]
-fn doors() -> Vec<(&'static str, MacroDoor)> {
-    use busbar_transport_grpc::door::MACRO_DOOR as grpc_door;
+fn doors() -> Vec<(&'static str, DoorRow)> {
+    use busbar_plugin_loader::dispatch::LoadedDoor;
+    use busbar_transport_grpc::door as grpc_door;
     use busbar_transport_http::door::MACRO_DOOR as http_door;
     use busbar_transport_tcp::door::MACRO_DOOR as tcp_door;
     // Each row is compiled against this repo's own pin of busbar-contract (the rendered `[patch]`),
     // as busbar compiles the rows it links.
-    let mut doors: Vec<(&'static str, MacroDoor)> = Vec::new();
-    doors.push(("tcp", tcp_door));
-    doors.push(("grpc", grpc_door));
-    doors.push(("http", http_door));
+    let mut doors: Vec<(&'static str, DoorRow)> = Vec::new();
+    doors.push(("tcp", || LinkedRow::of_macro(tcp_door)));
+    doors.push(("grpc", || {
+        // SAFETY: `from_raw` takes a busbar door function: one answering NULL or a `'static`,
+        // fully initialised door whose Statement lists point at their stated counts of `'static`
+        // entries. `grpc_door` is `busbar_transport_grpc::door`, the door the transport crate's own door macro
+        // builds, and the macro is what upholds that. The host adapter does not re-check it.
+        let door = unsafe { LoadedDoor::from_raw(grpc_door) };
+        LinkedRow::of_loaded(door)
+    }));
+    doors.push(("http", || LinkedRow::of_macro(http_door)));
     doors
 }
 
@@ -195,7 +206,7 @@ fn entries() -> Vec<Entry> {
                 // A transport door is a framer the connector drives: it declares no need.
                 conns: ConnTable::NoNeeds,
             };
-            let plugin = LinkedRow::of_macro(door)
+            let plugin = door()
                 .and_then(|row| load_linked::<Transport>(&row, bind))
                 .unwrap_or_else(|e| panic!("the host's transport `{claim}` does not load: {e}"));
             Entry {
