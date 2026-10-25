@@ -75,7 +75,8 @@ fn answer(out: *mut ServiceOut, outcome: Outcome, value: u64, len: u64) -> RawOu
             outcome: RawOutcome::of(outcome),
             value,
             len,
-            _reserved: [0; 3],
+            exited: 0,
+            _reserved: [0; 2],
             items: 0,
             needed_bytes: 0,
             needed_items: 0,
@@ -230,7 +231,8 @@ extern "C" fn records_list(_: HostCtx, input: *const c_void, out: *mut ServiceOu
             outcome: RawOutcome::of(Outcome::Ready),
             len: at as u64,
             items: rows.len() as u64,
-            _reserved: [0; 3],
+            exited: 0,
+            _reserved: [0; 2],
             value: 0,
             needed_bytes: 0,
             needed_items: 0,
@@ -272,6 +274,9 @@ static HOST_SLOTS: HostSlots = HostSlots {
     trust_decide: Some(decided),
     trust_state: None,
     session_emit: None,
+    auth_call: None,
+    unit_hand_in: None,
+    unit_refuse: None,
 };
 
 // ── the agent behind the connector: it serves its card to every exchange ───────────────────────
@@ -466,7 +471,7 @@ fn out_head<T>() -> OutHead {
 
 fn ops() -> &'static Ops {
     // SAFETY: the door is a `'static` table whose ops are the plane kind's.
-    unsafe { &*(*busbar_plane_a2a::door()).ops.cast::<Ops>() }
+    unsafe { &*(*busbar_plane_a2a::door()).ops().cast::<Ops>() }
 }
 
 fn lifecycle() -> &'static OpsHead {

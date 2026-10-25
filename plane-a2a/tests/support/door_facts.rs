@@ -42,6 +42,12 @@ pub const ROUTE_TASKS: &str = "/tasks";
 /// The crate root's `ROUTE_TASK`, under the mount.
 pub const ROUTE_TASK: &str = "/tasks/{id}";
 
+/// The crate root's `ROUTE_AGENT`, under the mount: one fronted agent's endpoint.
+pub const ROUTE_AGENT: &str = "/agents/{agent_id}";
+
+/// The crate root's `ROUTE_AGENT_CARD`, under the mount: one fronted agent's own card (R-15).
+pub const ROUTE_AGENT_CARD: &str = "/agents/{agent_id}/.well-known/agent-card.json";
+
 /// `framed::SERVICE_PATH`: the gRPC service every rpc of the framed line is a method of.
 pub const SERVICE_PATH: &str = "/lf.a2a.v1.A2AService";
 
@@ -87,6 +93,7 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("GET", "/a2a/extendedAgentCard"),
     ("GET", "/.well-known/oauth-protected-resource/a2a"),
     ("GET", "/.well-known/agent-card.json"),
+    ("GET", "/a2a/agents/{agent_id}/.well-known/agent-card.json"),
     ("GET", "/a2a/agents/{agent_id}"),
     ("POST", "/a2a/agents/{agent_id}"),
     ("POST", "/a2a"),

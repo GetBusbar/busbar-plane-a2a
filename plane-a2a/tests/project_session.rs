@@ -23,7 +23,7 @@ use serde_json::json;
 /// The door's plane ops, as the dispatcher reads them off the door.
 fn ops() -> &'static Ops {
     // SAFETY: the door is a `'static` table whose ops are the plane kind's.
-    unsafe { &*(*busbar_plane_a2a::door()).ops.cast::<Ops>() }
+    unsafe { &*(*busbar_plane_a2a::door()).ops().cast::<Ops>() }
 }
 
 /// One `project` of `body` arriving on claim `claim` at `target`, through the door's own entry,

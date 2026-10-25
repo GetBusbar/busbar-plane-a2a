@@ -24,16 +24,17 @@ use busbar_contract::abi::host::conn::connector::{
 use busbar_contract::abi::mechanism::call::{AbiStr, Blob};
 use busbar_contract::abi::mechanism::door::{Section, SECTION_DECLARING};
 use busbar_contract::abi::plane::{
-    AdminRoute, BillableClass, OpClass, PinMechanism, PlaneTail, RecordChain, TrustKey,
-    ANSWER_LAYOUT, CHAIN_DIGESTS_SCOPE, CHAIN_LENGTH_PREFIXED, INGRESS_REQUEST_RESPONSE,
+    AdminRoute, BillableClass, OpClass, PinMechanism, PlaneTail, RecordChain, RecordRetention,
+    TrustKey, ANSWER_LAYOUT, CHAIN_DIGESTS_SCOPE, CHAIN_LENGTH_PREFIXED, INGRESS_REQUEST_RESPONSE,
     INGRESS_RESPONSE_STREAM, MECHANISM_PEER_KEY, MECHANISM_ROOT, PIN_FINGERPRINT, SHAPE_PIECEWISE,
     TAIL_HOOKS_GATED, TAIL_REFUSED_PIECE, TRUST_PIN, TRUST_PRIVATE_REACH, TRUST_RECOVERY_BACKOFF,
     TRUST_REVERIFY_TTL,
 };
 use busbar_contract::abi::sdk::door::abi_str;
 use busbar_contract::abi::sdk::publish::{
-    admin_route, AdminRouteSpec, ClaimSpec, ServedRoute, SnapshotSpec,
+    admin_route, record_retention, AdminRouteSpec, ClaimSpec, ServedRoute, SnapshotSpec,
 };
+use busbar_contract::records::Retention;
 
 use crate::a2a::config::{
     AgentsCfg, DEFAULT_REVERIFY_TTL, REFUSE_PASSTHROUGH_SECTION, SUBJECT_NOUN,
@@ -246,6 +247,12 @@ const RECORD_KINDS: &[AbiStr] = &[
     abi_str(crate::records::HELD_KINDS[4]),
 ];
 
+/// The retention rule of each held kind that is not purged by age: a task row is kept while it is
+/// active (working or interrupted), so a purge drops only the terminal ones. `task_event` rows are
+/// always written active (they are the task's chain), so they list no rule and go by age, as do
+/// the push configs and cards.
+const RECORD_RETENTIONS: &[RecordRetention] = &[record_retention(0, Retention::TerminalOnly)];
+
 /// THE TASK CHAIN (ARCHITECT ruling B1, 2026-10-07; `BUSBAR-1.6.0.md` Part 3, the chain section, and THE
 /// DESIGN's route pump): the task-event kind is chained, LENGTH-PREFIXED with its scope in the
 /// digest (B1 ruling 1, coordinator 2026-10-07): the engine's own fields in the engine's order
@@ -449,6 +456,9 @@ pub const TAIL: &PlaneTail = &{
     t.cli_help = NONE;
     t.caller_credential_refusal = abi_str(REFUSE_PASSTHROUGH_SECTION);
     t.admin_openapi = Blob::json(ADMIN_OPENAPI.as_bytes());
+    // The kinds kept while active ([`RECORD_RETENTIONS`]).
+    t.record_retentions = RECORD_RETENTIONS.as_ptr();
+    t.record_retentions_len = RECORD_RETENTIONS.len();
     // THE STREAM CEILING (ARCHITECT ruling 2026-10-07, STREAM-CEILING): a streamed relay ran at
     // most `RELAY_STREAM_TIMEOUT` (predev transport.rs:94-98), and a caller that stopped reading
     // released it there (receive.rs `send_or_expire`, :2829-2850, :3000-3012).
@@ -488,6 +498,10 @@ const fn open(verb: &'static str, target: &'static str) -> Route {
     }
 }
 
+/// ONE FRONTED AGENT'S JSON-RPC ENDPOINT, `POST /a2a/agents/{agent_id}`: a row of [`ROUTES`], and
+/// the route every agent's trailing-separator claim ([`agent_slash_claims`]) is served as.
+pub const AGENT_ENDPOINT: Route = keyed("POST", "/a2a/agents/{agent_id}");
+
 /// EVERY ROUTE THE PLANE SERVES, in the order the engine mounts them: the document binding's
 /// named operations, then the two discovery documents, the catalogue entry, the JSON-RPC
 /// endpoint in both spellings, the push callback and the framed binding's service.
@@ -507,8 +521,9 @@ pub const ROUTES: &[Route] = &[
     keyed("GET", "/a2a/extendedAgentCard"),
     open("GET", "/.well-known/oauth-protected-resource/a2a"),
     open("GET", "/.well-known/agent-card.json"),
+    keyed("GET", "/a2a/agents/{agent_id}/.well-known/agent-card.json"),
     keyed("GET", "/a2a/agents/{agent_id}"),
-    keyed("POST", "/a2a/agents/{agent_id}"),
+    AGENT_ENDPOINT,
     keyed("POST", "/a2a"),
     keyed("POST", "/a2a/"),
     Route {
@@ -553,7 +568,13 @@ pub fn line_of(route: &Route) -> Line {
     if route.carrier == FRAMED_TRANSPORT {
         return Line::Framed;
     }
-    if route.open || (route.verb == "GET" && route.target == "/a2a/agents/{agent_id}") {
+    if route.open
+        || (route.verb == "GET"
+            && matches!(
+                route.target,
+                "/a2a/agents/{agent_id}" | "/a2a/agents/{agent_id}/.well-known/agent-card.json"
+            ))
+    {
         return Line::Open;
     }
     if route.verb == "POST" && matches!(route.target, "/a2a" | "/a2a/" | "/a2a/agents/{agent_id}") {
@@ -728,7 +749,8 @@ pub fn dealt_section(settings: &[u8]) -> std::borrow::Cow<'_, [u8]> {
 /// coordinator ruling Q1(b), 2026-10-07); the kernel still loads the plane, its section being
 /// present (LAW 7). Its trust verbs stay stated, and answer every name `404`: none is registered.
 #[must_use]
-pub fn agents_snapshot_spec(public_url: Option<&str>, fronts: bool) -> SnapshotSpec {
+pub fn agents_snapshot_spec(public_url: Option<&str>, agents: &[&str]) -> SnapshotSpec {
+    let fronts = !agents.is_empty();
     let admitted = public_url.filter(|_| fronts).and_then(|p| {
         Some((
             crate::a2a::public::absolute(p, crate::MOUNT_PATH)?,
@@ -736,7 +758,15 @@ pub fn agents_snapshot_spec(public_url: Option<&str>, fronts: bool) -> SnapshotS
         ))
     });
     let (audience, resource_metadata, claims) = match admitted {
-        Some((a, m)) => (Some(a), Some(m), ROUTES.iter().map(dialect_claim).collect()),
+        Some((a, m)) => (
+            Some(a),
+            Some(m),
+            ROUTES
+                .iter()
+                .map(dialect_claim)
+                .chain(agent_slash_claims(agents))
+                .collect(),
+        ),
         None => (None, None, Vec::new()),
     };
     SnapshotSpec {
@@ -760,6 +790,65 @@ pub fn agents_snapshot_spec(public_url: Option<&str>, fronts: bool) -> SnapshotS
         resource_facts: None,
         listed: Vec::new(),
     }
+}
+
+/// THE TRAILING-SEPARATOR SPELLING OF EACH FRONTED AGENT'S ENDPOINT (architect ruling 2026-10-24,
+/// R-16): an A2A client joins its relative calls to the card's `url` and so arrives at
+/// `/a2a/agents/<id>/`. The contract refuses a pattern claim that ends in a separator, so each
+/// configured agent's spelling is claimed EXACTLY, after [`ROUTES`], in the order the section's
+/// agents are read, and restated with every generation's snapshot; each is served as
+/// [`AGENT_ENDPOINT`] ([`route_of_claim`]). A name that is not one plain path segment claims
+/// nothing.
+#[must_use]
+pub fn agent_slash_claims(agents: &[&str]) -> Vec<ClaimSpec> {
+    agents
+        .iter()
+        .filter_map(|agent| agent_slash_target(agent))
+        .map(|target| {
+            let mut spec = ClaimSpec::new(
+                AGENT_ENDPOINT.verb,
+                &target,
+                AGENT_ENDPOINT.carrier,
+                busbar_contract::abi::plane::CLAIM_EXACT,
+            );
+            spec.refusal_dialect = u16::try_from(DIALECT_DOCUMENT).unwrap_or_default();
+            spec
+        })
+        .collect()
+}
+
+/// `/a2a/agents/<agent>/`, or `None` for a name that is not one plain path segment.
+#[must_use]
+pub fn agent_slash_target(agent: &str) -> Option<String> {
+    plain_segment(agent).then(|| format!("{}/agents/{agent}/", crate::MOUNT_PATH))
+}
+
+/// Whether `name` is one plain path segment (unreserved characters only, not `.` or `..`).
+fn plain_segment(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '~'))
+}
+
+/// The route the kernel's claim index `claim` names: a row of [`ROUTES`], or past them one of the
+/// generation's trailing-separator claims ([`agent_slash_claims`]; `agent_claims` counts them and is
+/// asked only for an index past the table, so a routed arrival allocates nothing for it), served as
+/// [`AGENT_ENDPOINT`]. Any other index names no claim of this plane (an unclaimed request, a 404).
+#[must_use]
+pub fn route_of_claim(claim: u32, agent_claims: impl FnOnce() -> usize) -> Option<&'static Route> {
+    let i = usize::try_from(claim).ok()?;
+    ROUTES
+        .get(i)
+        .or_else(|| (i < ROUTES.len().saturating_add(agent_claims())).then_some(&AGENT_ENDPOINT))
+}
+
+/// How many trailing-separator claims ([`agent_slash_claims`]) the agents named `agents` state.
+#[must_use]
+pub fn agent_claim_count<'a>(agents: impl IntoIterator<Item = &'a str>) -> usize {
+    agents.into_iter().filter(|a| plain_segment(a)).count()
 }
 
 /// A route as the snapshot's claim ([`ServedRoute::claim_spec`]: an open route takes no inbound

@@ -40,6 +40,8 @@ fn the_door_driven_tests_restate_the_doors_own_constants() {
     assert_eq!(stated::ROUTE_MESSAGE_SEND, crate::ROUTE_MESSAGE_SEND);
     assert_eq!(stated::ROUTE_TASKS, crate::ROUTE_TASKS);
     assert_eq!(stated::ROUTE_TASK, crate::ROUTE_TASK);
+    assert_eq!(stated::ROUTE_AGENT, crate::ROUTE_AGENT);
+    assert_eq!(stated::ROUTE_AGENT_CARD, crate::ROUTE_AGENT_CARD);
     assert_eq!(stated::SERVICE_PATH, crate::framed::SERVICE_PATH);
     assert_eq!(stated::NEED_OPEN_WEB, crate::door_statement::NEED_OPEN_WEB);
     assert_eq!(stated::NEED_AGENT, crate::door_statement::NEED_AGENT);

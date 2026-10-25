@@ -8,7 +8,7 @@
       "slug": "a2a-task-chain-verify-failed",
       "title": "A2A per-task provenance chain failed verification on restore (tamper evidence)",
       "severity": "actionable",
-      "summary": "When the plane restored its task records after its instance opened, an in-flight task's per-task provenance chain did NOT verify: the host reported a break on that task's chain. This is distinct from a row that merely could not be read (BUSBAR-7024): the bytes were read and the chain does not add up, which is tamper evidence — the durable task state was altered out from under busbar, or its store is corrupt. The task is still held and served: a break is reported, never a deletion, because deleting on a break would let anyone able to write the store erase a caller's task. Emitted once per affected in-flight task on each restore.",
+      "summary": "When the plane restored its task records after its instance opened, an in-flight task's per-task provenance chain did NOT verify: the host reported a break on that task's chain. This is distinct from a row that merely could not be read (BUSBAR-7024): the bytes were read and the chain does not add up, which is tamper evidence \u2014 the durable task state was altered out from under busbar, or its store is corrupt. The task is still held and served: a break is reported, never a deletion, because deleting on a break would let anyone able to write the store erase a caller's task. Emitted once per affected in-flight task on each restore.",
       "action": "Treat the durable A2A task store as compromised until explained: capture it for forensic review before it is overwritten, and restore it from a trusted backup once the cause is understood. The named task stays held; other tasks are unaffected.",
       "since": "1.6.0"
     },
@@ -18,7 +18,7 @@
       "title": "A2A submission not accepted (the pool's members are not interchangeable)",
       "severity": "benign_recurring",
       "summary": "A submission targeted an agent pool whose members are not interchangeable under the seam's rules, so it was not accepted. A routine per-request routing refusal, benign and expected under the configured pool policy; surfaced at debug so a busy caller cannot spam the log.",
-      "action": "None — self-heals. If submissions should route, configure the pool's members to be interchangeable (matching capabilities) so the seam can dispatch across them.",
+      "action": "None \u2014 self-heals. If submissions should route, configure the pool's members to be interchangeable (matching capabilities) so the seam can dispatch across them.",
       "since": "1.6.0"
     },
     {
@@ -36,7 +36,7 @@
       "title": "Relayed A2A stream ended in a refusal",
       "severity": "benign_recurring",
       "summary": "A relayed streaming task ended in a refusal from the backend rather than a normal completion. The refusal is recorded against the task and the caller's poll will find it. Per-request and expected under normal backend policy, so surfaced at debug.",
-      "action": "None — self-heals. A stream that ends in a refusal reflects the backend's own decision; the recorded refusal is what the caller reads.",
+      "action": "None \u2014 self-heals. A stream that ends in a refusal reflects the backend's own decision; the recorded refusal is what the caller reads.",
       "since": "1.6.0"
     },
     {
@@ -54,7 +54,7 @@
       "title": "Relayed A2A task submission failed",
       "severity": "benign_recurring",
       "summary": "A relayed task submission was refused by the backend. The refusal is recorded against the task and returned to the caller; busbar did not accept work it could not place. Per-request and expected under normal backend policy or load, so surfaced at debug.",
-      "action": "None — self-heals. A submission the backend refuses reflects the backend's own decision or capacity; the caller reads the recorded refusal and may re-submit.",
+      "action": "None \u2014 self-heals. A submission the backend refuses reflects the backend's own decision or capacity; the caller reads the recorded refusal and may re-submit.",
       "since": "1.6.0"
     },
     {
@@ -71,7 +71,7 @@
       "slug": "a2a-task-rows-unreadable",
       "title": "Persisted A2A task rows could not be read back (not resumable)",
       "severity": "actionable",
-      "summary": "When the plane restored its task records after its instance opened, some persisted A2A task rows could not be read back and are therefore NOT resumable — most likely written by a different busbar version. Reported separately from the restored count and at warn, because folding an unreadable in-flight task into the restored total is how a task that silently ceased to exist across a deploy stays invisible.",
+      "summary": "When the plane restored its task records after its instance opened, some persisted A2A task rows could not be read back and are therefore NOT resumable \u2014 most likely written by a different busbar version. Reported separately from the restored count and at warn, because folding an unreadable in-flight task into the restored total is how a task that silently ceased to exist across a deploy stays invisible.",
       "action": "Expected once after a version change; the counted rows cannot be resumed by this binary. If it recurs without a version change, inspect the durable task store for corruption. Callers of the affected tasks may re-submit.",
       "since": "1.6.0"
     },

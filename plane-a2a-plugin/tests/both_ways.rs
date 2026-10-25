@@ -20,12 +20,11 @@
 /// rewrite applied and re-projected). The two transcripts must be identical.
 /// This plugin's own door, named for the loader.
 fn loaded_door() -> busbar_plugin_loader::dispatch::LoadedDoor {
-    // SAFETY: `busbar_plane_a2a::door` is this crate's own door: it answers the `'static` door of
-    // this plugin.
-    #[allow(unused_unsafe)]
-    let loaded =
-        unsafe { busbar_plugin_loader::dispatch::LoadedDoor::from_raw(busbar_plane_a2a::door) };
-    loaded
+    // `busbar_plane_a2a::door` is a sealed door function (it answers a `&'static Door`), so the
+    // loader takes it as it is: no `unsafe` restatement.
+    busbar_plugin_loader::dispatch::LoadedDoor::from(
+        busbar_plane_a2a::door as busbar_contract::abi::mechanism::door::DoorFn,
+    )
 }
 
 /// The door's private facts this script names, restated as data in the logic crate's
@@ -62,7 +61,8 @@ mod both_ways {
     use super::door_facts::{
         claim, CLIENT_IDENTITY_FROM, DIALECT_DOCUMENT, DIALECT_FRAMED, DIALECT_TARGET,
         FRAMED_TRANSPORT, MEMBER_TARGET, MOUNT_PATH, NEED_AGENT, NEED_GRPC, NEED_OPEN_WEB,
-        PUSH_TRUST_FROM, ROUTE_MESSAGE_SEND, ROUTE_TASK, ROUTE_TASKS, SERVICE_PATH,
+        PUSH_TRUST_FROM, ROUTES, ROUTE_AGENT, ROUTE_AGENT_CARD, ROUTE_MESSAGE_SEND, ROUTE_TASK,
+        ROUTE_TASKS, SERVICE_PATH,
     };
 
     fn z<T>() -> T {
@@ -177,10 +177,24 @@ mod both_ways {
         body: &[u8],
         fields: &[Field],
     ) -> (String, Vec<u8>) {
+        arrive_on(p, unit, claim(verb, route), verb, target, body, fields)
+    }
+
+    /// `arrive` on the snapshot's claim `index`, which may be one past the route table (an agent's
+    /// trailing-separator claim, R-16).
+    fn arrive_on(
+        p: &Plugin<Plane>,
+        unit: u64,
+        index: u32,
+        verb: &str,
+        target: &str,
+        body: &[u8],
+        fields: &[Field],
+    ) -> (String, Vec<u8>) {
         let mut a: Frame<ArriveIn, ArriveOut> = Frame::new(z(), z());
         (a.input.head, a.out.head) = (in_head(), out_head());
         a.input.unit = unit;
-        a.input.claim = claim(verb, route);
+        a.input.claim = index;
         (a.input.method, a.input.target) = (text(verb.as_bytes()), text(target.as_bytes()));
         a.input.body = octets(body);
         (a.input.fields, a.input.fields_len) = (fields.as_ptr(), fields.len());
@@ -461,6 +475,30 @@ mod both_ways {
         // STREAM-CEILING): a message streamed, and a resubscribe to a task, on the plane's own endpoint.
         t.push(arrive(p, 11, document, MOUNT_PATH, STREAM, &[]).0);
         t.push(arrive(p, 12, document, MOUNT_PATH, RESUBSCRIBE, &[]).0);
+        // ONE FRONTED AGENT'S ENDPOINT IN ITS TRAILING-SEPARATOR SPELLING (architect ruling
+        // 2026-10-24, R-16): the snapshot's exact claim after the route table, served as the agent's
+        // JSON-RPC endpoint.
+        let slash_claim = u32::try_from(ROUTES.len()).expect("a small table");
+        let slash_target = mounted("/agents/vendor/");
+        t.push(arrive_on(p, 16, slash_claim, "POST", &slash_target, SEND, &[]).0);
+        // ONE FRONTED AGENT'S OWN CARD (architect ruling 2026-10-23, R-15): at the protocol's
+        // discovery path under the agent's endpoint.
+        let agent_card = mounted(ROUTE_AGENT_CARD);
+        let card_target = mounted("/agents/vendor/.well-known/agent-card.json");
+        t.push(arrive(p, 14, ("GET", agent_card.as_str()), &card_target, b"", &[]).0);
+        let agent_get = mounted(ROUTE_AGENT);
+        let agent_get_target = mounted("/agents/vendor");
+        t.push(
+            arrive(
+                p,
+                15,
+                ("GET", agent_get.as_str()),
+                &agent_get_target,
+                b"",
+                &[],
+            )
+            .0,
+        );
 
         // THE HOOK VIEW.
         t.push(project(p, 2, agent, &agent_target, SEND, None));
@@ -640,6 +678,32 @@ mod both_ways {
                 "{l}"
             );
         }
+        // R-15: the agent's own card is served at the protocol's discovery path under its
+        // endpoint, the same answer as the agent's card at its endpoint.
+        let after = |l: &str, target: &str| {
+            l.split_once(&format!(" {target} "))
+                .map(|(_, r)| r.to_string())
+        };
+        assert_eq!(
+            after(
+                line(&t, "arrive 14 "),
+                &mounted("/agents/vendor/.well-known/agent-card.json")
+            ),
+            after(line(&t, "arrive 15 "), &mounted("/agents/vendor")),
+            "the agent's own card at its discovery path is the agent's card: {}",
+            line(&t, "arrive 14 ")
+        );
+        // R-16: the agent's endpoint with a trailing separator answers as the endpoint does (unit 2).
+        let rest = |l: &str, target: &str| {
+            l.split_once(&format!(" {target} "))
+                .map(|(_, r)| r.to_string())
+        };
+        assert_eq!(
+            rest(line(&t, "arrive 16 "), &mounted("/agents/vendor/")),
+            rest(line(&t, "arrive 2 "), &mounted("/agents/vendor")),
+            "the agent's endpoint with a trailing separator: {}",
+            line(&t, "arrive 16 ")
+        );
         assert!(
             line(&t, "arrive 7 ").contains(&format!("{:?}", Outcome::Refused)),
             "a media type the line does not read is refused: {}",
