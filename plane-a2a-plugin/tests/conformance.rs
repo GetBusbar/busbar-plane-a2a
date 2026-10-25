@@ -12,12 +12,11 @@
 
 /// This plugin's own door, named for the loader.
 fn loaded_door() -> busbar_plugin_loader::dispatch::LoadedDoor {
-    // SAFETY: `busbar_plane_a2a::door` is this crate's own door: it answers the `'static` door of
-    // this plugin.
-    #[allow(unused_unsafe)]
-    let loaded =
-        unsafe { busbar_plugin_loader::dispatch::LoadedDoor::from_raw(busbar_plane_a2a::door) };
-    loaded
+    // `busbar_plane_a2a::door` is a sealed door function (it answers a `&'static Door`), so the
+    // loader takes it as it is: no `unsafe` restatement.
+    busbar_plugin_loader::dispatch::LoadedDoor::from(
+        busbar_plane_a2a::door as busbar_contract::abi::mechanism::door::DoorFn,
+    )
 }
 
 busbar_plugin_loader::conformance_suite! {
