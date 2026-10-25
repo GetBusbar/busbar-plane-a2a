@@ -206,7 +206,7 @@ struct Served {
     token: String,
     /// The handle a config apply swaps the serving generation on.
     handle: Arc<busbar_kernel::state::AppHandle>,
-    /// The node's book: every unit's one line.
+    /// The node's journal: every unit's one audit record, carrying what the plane reported.
     book: Arc<std::sync::Mutex<crate::root::durability::Durability>>,
     /// The node's end post: the units whose facts are still open.
     post: Arc<NodeEndPost>,
@@ -935,7 +935,7 @@ fn served_core(
         .expect("mint");
     gov.hydrate_budgets(&cost, 0).expect("hydrate");
     let node = Arc::new(Node::new());
-    let book = crate::root::durability::node_book_over(Box::new(|| CARD.pin()));
+    let book = crate::root::durability::node_book();
     node.bind_book(Arc::clone(&book.durability));
     let post = Arc::new(NodeEndPost::new(Arc::clone(&node)));
     let end = Arc::clone(&post);
@@ -1493,8 +1493,8 @@ fn chain() -> Vec<busbar_kernel::audit_ring::AuditEntry> {
 
 /// The root cells `audit-chain × a2a`, and the teller steps AUDIT, METER and EXIT over the
 /// agent door: one relayed unit lands exactly ONE audit row on the kernel's chain (its action
-/// the plane's, applied, naming the agent it reached), sealed to the row before it; posts
-/// exactly ONE line on the node's book under that agent's lane; and ends once, every fact of it
+/// the plane's, applied, naming the agent it reached), sealed to the row before it; seals
+/// exactly ONE record on the node's journal for the caller's unit; and ends once, every fact of it
 /// closed at its end.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_relayed_agent_unit_is_audited_on_the_chain_and_posts_one_line_once() {
@@ -1533,16 +1533,8 @@ async fn a_relayed_agent_unit_is_audited_on_the_chain_and_posts_one_line_once() 
             "the row is chained to the one before it"
         );
     }
-    let lines = s.book.lock().expect("unpoisoned").read_back();
-    let ours: Vec<_> = lines
-        .iter()
-        .filter(|l| {
-            l.counts
-                .as_ref()
-                .is_some_and(|c| c.lane.ends_with(resource.as_str()))
-        })
-        .collect();
-    assert_eq!(ours.len(), 1, "one line on the node's book: {lines:?}");
+    let ours = agent_counts(&s, "auditor");
+    assert_eq!(ours.len(), 1, "one record for the unit: {ours:?}");
     assert_eq!(s.post.open_units(), 0, "the unit's facts closed at its end");
     assert_eq!(admitted(&s), 1, "one admitted request");
 }
@@ -1870,21 +1862,38 @@ async fn a_failing_agent_trips_its_breaker_and_the_next_unit_is_refused_before_i
     assert!(!agent.relayed(), "the fast-failed unit never dialled");
 }
 
-/// The node's book lines whose counts name agent `agent`'s lane, in book order.
-fn agent_counts(s: &Served, agent: &str) -> Vec<crate::root::durability::UnitCounts> {
-    let resource = format!("{}:{agent}", surface("resource_kind"));
+/// What one unit's audit record carries: what its plane reported, by class, and its fee count.
+#[derive(Debug)]
+struct Counted {
+    classes: BTreeMap<String, u64>,
+    fee_count: u32,
+}
+
+/// Every unit the caller ran, oldest first, as its one audit record carries it: the node keeps no
+/// money line (busbar MONEY-DESIGN §3); a unit's counts are the governance ledger's, and its record
+/// names them. Each cell runs one agent, `_agent`.
+fn agent_counts(s: &Served, _agent: &str) -> Vec<Counted> {
+    let caller = busbar_kernel_audit::Subject::PrincipalId(s.key.id.clone());
     s.book
         .lock()
         .expect("unpoisoned")
-        .read_back()
-        .into_iter()
-        .filter_map(|l| l.counts)
-        .filter(|c| c.lane.ends_with(resource.as_str()))
+        .audit_records
+        .iter()
+        .filter(|r| r.subject == caller)
+        .map(|r| Counted {
+            classes: r
+                .usage
+                .lines
+                .iter()
+                .map(|l| (l.class.as_str().to_string(), l.quantity))
+                .collect(),
+            fee_count: r.usage.fee_count,
+        })
         .collect()
 }
 
-/// The count a line carries under `class`, `0` when it carries none.
-fn counted(counts: &crate::root::durability::UnitCounts, class: &str) -> u64 {
+/// The count a record carries under `class`, `0` when it carries none.
+fn counted(counts: &Counted, class: &str) -> u64 {
     counts.classes.get(class).copied().unwrap_or(0)
 }
 
@@ -1915,8 +1924,7 @@ async fn an_agent_hop_ledgers_the_bodies_it_moved_and_its_fee_unit_once() {
         (sent + ANSWER.len()) as u64,
         "the request body sent and the response body read: {lines:?}"
     );
-    // The fee unit rides the line as its billable count (`UnitCounts::fee_count`, priced as
-    // the card's fee line): a fee unit is no usage class (`report_of`).
+    // The fee unit rides the record as its fee count, not a usage class (`report_of`).
     assert_eq!(lines[0].fee_count, 1, "the fee unit, once: {lines:?}");
 }
 
@@ -4694,14 +4702,16 @@ async fn the_extended_card_is_metered_as_one_request_and_no_tokens() {
     // wrote it (its metering row's `model`, `busbar-a2a`
     // `a2a/tests/metered_verbs_tests.rs:104`, `rows[0].model == "agents"`), never an
     // `agent:<id>` member line.
+    s.gov.flush_metering();
     let lanes: Vec<String> = s
-        .book
-        .lock()
-        .expect("unpoisoned")
-        .read_back()
+        .gov
+        .metering_for(busbar_kernel::governance::metering_bucket(
+            busbar_kernel::store::now(),
+        ))
+        .expect("a metering read")
         .into_iter()
-        .filter_map(|l| l.counts)
-        .map(|c| c.lane)
+        .filter(|row| row.key_id == s.key.id)
+        .map(|row| row.model)
         .collect();
     assert_eq!(
         lanes,
