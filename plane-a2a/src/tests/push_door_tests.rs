@@ -50,7 +50,7 @@ fn a_moved_task_with_a_registered_config_queues_its_notification_to_that_config(
     let row = moved(&mut book, "");
     let auth = DeliveryAuth {
         scheme: "Bearer".into(),
-        credentials: crate::push::PushCredential::new("tok".into()),
+        credentials: busbar_contract::abi::sdk::test_support::chip::cred("tok"),
     };
     let d = Deliveries::new();
     assert!(queue(
@@ -64,11 +64,9 @@ fn a_moved_task_with_a_registered_config_queues_its_notification_to_that_config(
     assert_eq!(due.task_id, "t1");
     let body: serde_json::Value = serde_json::from_slice(&due.body).unwrap();
     assert_eq!(body["task"]["status"]["state"], "TASK_STATE_WORKING");
-    let request = d.request(&due);
-    assert!(request
-        .fields
-        .iter()
-        .any(|(n, v)| n == b"authorization" && v == b"Bearer tok"));
+    let (_, sealed) = d.request(&due);
+    assert!(sealed.iter().any(|(_, n, v)| n == b"authorization"
+        && busbar_contract::abi::sdk::test_support::chip::sealed_bytes(v) == b"Bearer tok"));
 }
 
 /// With no config held, the callback on the row (an inline config's) is the destination; with
@@ -177,8 +175,12 @@ struct TestHost {
     status: u16,
     judged: Vec<String>,
     sent: Vec<String>,
-    /// Each send's URL and the fields its exchange framed, in send order.
+    /// Each send's URL and the fields its exchange framed, in send order (a sealed value reads
+    /// `<sealed>`).
     framed: Vec<(String, Fields)>,
+    /// Each send's whole framed head, sealed values included, in send order: the bytes the far end
+    /// is handed.
+    heads: Vec<Vec<u8>>,
     /// How many sends answer PENDING before one reaches the receiver.
     pends: u32,
     /// How many attempts were abandoned (their connection closed).
@@ -200,6 +202,7 @@ impl TestHost {
             judged: Vec::new(),
             sent: Vec::new(),
             framed: Vec::new(),
+            heads: Vec::new(),
             pends: 0,
             abandoned: 0,
             silent: None,
@@ -233,6 +236,10 @@ impl Line for TestHost {
             .map(|(name, value)| (name.to_vec(), value.to_vec()))
             .collect();
         self.framed.push((url.to_string(), fields));
+        self.heads
+            .push(busbar_contract::abi::sdk::test_support::chip::framed_head(
+                ex,
+            ));
         Poll::Ready(Some(self.status))
     }
 
@@ -253,7 +260,7 @@ fn queued(callback: &str) -> Deliveries {
     let d = Deliveries::new();
     let auth = DeliveryAuth {
         scheme: "Bearer".into(),
-        credentials: crate::push::PushCredential::new("tok".into()),
+        credentials: busbar_contract::abi::sdk::test_support::chip::cred("tok"),
     };
     assert!(queue(&d, &row, Some(&config(callback, Some(auth)))));
     d
@@ -320,7 +327,7 @@ fn the_callers_own_webhook_credential_is_presented_on_the_delivery() {
     let d = Deliveries::new();
     let auth = DeliveryAuth {
         scheme: "Bearer".into(),
-        credentials: crate::push::PushCredential::new("receiver-issued-token".into()),
+        credentials: busbar_contract::abi::sdk::test_support::chip::cred("receiver-issued-token"),
     };
     assert!(queue(&d, &row, Some(&config(callback, Some(auth)))));
     let mut host = TestHost::answering(vec![Some((DEST_ALLOWED, &[AT_REGISTRATION][..]))], 200);
@@ -349,8 +356,17 @@ fn the_callers_own_webhook_credential_is_presented_on_the_delivery() {
         presented.len()
     );
     assert!(
-        presented[0] == b"Bearer receiver-issued-token".as_slice(),
-        "the sent exchange's authorization field is not the credential the caller registered"
+        presented[0] == b"<sealed>".as_slice(),
+        "the sent exchange's authorization field is not sealed"
+    );
+    let wanted = b"Bearer receiver-issued-token".as_slice();
+    assert_eq!(
+        host.heads[0]
+            .windows(wanted.len())
+            .filter(|w| *w == wanted)
+            .count(),
+        1,
+        "the sent head does not carry the credential the caller registered, once"
     );
 }
 
@@ -443,9 +459,9 @@ fn a_deleted_config_takes_its_credential_out_of_memory() {
     let due = d.next_due(0).expect("due");
     let presented = |d: &Deliveries| {
         d.request(&due)
-            .fields
+            .1
             .iter()
-            .any(|(n, _)| n == b"authorization")
+            .any(|(_, n, _)| n == b"authorization")
     };
     let tombstone = |caller: &str| Write {
         kind: KIND_PUSH_CONFIG,
@@ -711,7 +727,7 @@ fn a_task_that_ends_with_nothing_to_deliver_drops_its_credential() {
         "t1",
         Some(DeliveryAuth {
             scheme: "Bearer".into(),
-            credentials: crate::push::PushCredential::new("tok".into()),
+            credentials: busbar_contract::abi::sdk::test_support::chip::cred("tok"),
         }),
     );
     assert!(!queue(&d, &row, None), "nothing to deliver");
@@ -724,9 +740,9 @@ fn a_task_that_ends_with_nothing_to_deliver_drops_its_credential() {
     };
     assert!(
         !d.request(&probe)
-            .fields
+            .1
             .iter()
-            .any(|(n, _)| n == b"authorization"),
+            .any(|(_, n, _)| n == b"authorization"),
         "the ended task's credential is still held"
     );
 }

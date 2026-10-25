@@ -23,6 +23,8 @@ use crate::agent_arrival::AgentRefusal;
 use crate::push::DeliveryAuth;
 use crate::records::KIND_PUSH_CONFIG;
 use crate::tasks::{self, task_key, Halt, Records, Write};
+use busbar_contract::abi::sdk::cred::Cred;
+use zeroize::Zeroizing;
 
 /// WHICH SPELLING OF THE PUSH-CONFIG VERBS A CALLER USED: v0.3 nests the config under
 /// `pushNotificationConfig`, v1.0 flattens it, so the dialect decides the envelope.
@@ -356,8 +358,9 @@ fn list_tasks(
 // ══ PUSH-NOTIFICATION CONFIG CRUD ════════════════════════════════════════════════════════════════
 
 /// ONE registered push config: the push_config host record's value. A read verb answers with
-/// `id` and `url` only; the `authentication` credential is a sealed field of the record, never a
-/// member of any answer, and its `Debug` is redacted.
+/// `id` and `url` only; the `authentication` credential is a [`Cred`] the SDK's record encoder
+/// alone writes ([`crate::push::record_value`]), never a member of any answer, and its `Debug` is
+/// redacted.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PushConfig {
     /// The caller's id for it.
@@ -446,8 +449,7 @@ pub fn delivery_auth(cfg: &Value) -> Result<Option<DeliveryAuth>, String> {
         .get("credentials")
         .and_then(Value::as_str)
         .unwrap_or_default()
-        .trim()
-        .to_string();
+        .trim();
     if credentials
         .bytes()
         .any(|b| !b.is_ascii_graphic() && b != b' ')
@@ -460,7 +462,8 @@ pub fn delivery_auth(cfg: &Value) -> Result<Option<DeliveryAuth>, String> {
     }
     Ok(Some(DeliveryAuth {
         scheme,
-        credentials: crate::push::PushCredential::new(credentials),
+        // CAPTURED where the caller's body is read: the plane keeps no `String` of it.
+        credentials: Cred::captured(Zeroizing::new(credentials.as_bytes().to_vec())),
     }))
 }
 
@@ -561,7 +564,7 @@ pub(crate) fn held_config(
 ) -> Result<Option<PushConfig>, Halt> {
     Ok(rec
         .get(KIND_PUSH_CONFIG, &task_key(caller, task_id))?
-        .and_then(|b| serde_json::from_slice(&b).ok()))
+        .and_then(|b| serde_json::from_slice(&Zeroizing::new(b)).ok()))
 }
 
 /// `CreateTaskPushNotificationConfig` / `tasks/pushNotificationConfig/set`.
@@ -626,7 +629,7 @@ fn create_push_config(
     out.push(Write {
         kind: KIND_PUSH_CONFIG,
         key: task_key(caller, &task.task_id),
-        value: serde_json::to_vec(&stored).map_err(|e| Halt::Failed(e.to_string()))?,
+        value: crate::push::record_value(&stored).map_err(|e| Halt::Failed(e.to_string()))?,
     });
     Ok(ok(rpc_id, config_json(dialect, &task.task_id, &stored)))
 }

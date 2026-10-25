@@ -23,19 +23,21 @@
 //!   no record write, so the outcome waits in plane memory, bounded, until a piece of its caller's
 //!   files it ([`Deliveries::take_owed`]).
 //!
-//! The caller's webhook credential ([`DeliveryAuth`]) has its home in the push_config host record
-//! (a sealed field of it, `PushConfig::authentication`). It is held here, in plane memory, from
-//! when the task's config (or its inline callback) names it until the task ends (its terminal
-//! delivery settles, or it ends with nothing to deliver) or the config is deleted; it is never
-//! logged or printed, and joins the request only after the judge has passed. busbar's own callback
-//! token ([`Tokens`]) is a capability for one task, `<task-id>.<signature>`, minted through the
-//! host's signing service (the plane never holds the key) and verified by signing again and
-//! comparing in constant time; it is never logged or audited. [`PushLimiter`] bounds how often one task's token
-//! may be spent, exactly as 1.5.5 bounded it.
+//! The caller's webhook credential ([`DeliveryAuth`], a [`Cred`]) has its home in the push_config
+//! host record (`PushConfig::authentication`, written only through [`record_value`]). It is held
+//! here, in plane memory, from when the task's config (or its inline callback) names it until the
+//! task ends (its terminal delivery settles, or it ends with nothing to deliver) or the config is
+//! deleted; it is never logged or printed, and joins the request, sealed, only after the judge has
+//! passed. busbar's own callback token ([`Tokens`]) is a capability for one task,
+//! `<task-id>.<signature>`, minted through the host's signing service (the plane never holds the
+//! key) and verified by signing again and comparing in constant time; it is never logged or
+//! audited. [`PushLimiter`] bounds how often one task's token may be spent, exactly as 1.5.5
+//! bounded it.
 
 use std::collections::{BTreeMap, VecDeque};
 
-use busbar_contract::abi::sdk::exchange::Request;
+use busbar_contract::abi::sdk::cred::{Cred, Seal};
+use busbar_contract::abi::sdk::exchange::{Request, SealedField};
 use busbar_contract::abi::sdk::publish::Keyed;
 use busbar_contract::vocab;
 
@@ -123,80 +125,42 @@ pub fn notification_body(task: &Task) -> Vec<u8> {
 }
 
 /// THE CREDENTIAL THE CALLER ASKED BUSBAR TO PRESENT AT ITS WEBHOOK. The caller's own secret for
-/// the caller's own receiver. Its home is the push_config host record (a sealed field of it); plane
-/// memory holds it until the task ends or its config is deleted; it is never logged, printed, or
-/// echoed on a read verb.
+/// the caller's own receiver, captured as a [`Cred`] where the caller's body is read
+/// ([`crate::local::delivery_auth`]): the plane holds no getter for it, no `Display`, `Debug` or
+/// `Serialize` of it. Its one way onto the wire is the sealed `Authorization` field [`request`]
+/// hands the SDK ([`DeliveryAuth::authorization`]); its home is the push_config host record, which
+/// only the SDK's record encoder writes it into
+/// ([`busbar_contract::abi::sdk::cred::record::to_vec`], [`record_value`]). Plane memory holds it
+/// until the task ends or its config is deleted; it is never logged, printed, or echoed on a read
+/// verb.
 #[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct DeliveryAuth {
     /// The HTTP authentication scheme, as the caller wrote it.
     pub scheme: String,
-    /// The credential itself (predev `pushdeliver.rs:117` held it redacted in memory). Its one way
-    /// onto the wire is [`DeliveryAuth::header_value`]; the record's serde form carries it as the
-    /// plain string the sealed field always held.
-    #[serde(with = "sealed_credential")]
-    pub credentials: PushCredential,
-}
-
-/// THE CALLER'S WEBHOOK CREDENTIAL AS THE PLANE HOLDS IT: caller payload the A2A body carried, not
-/// secret material the kernel resolved, so it is the plane's own type and never the contract's
-/// `Secret` (whose sealed accessor no plane reaches, DECISIONS #40). Logs, audit records, metrics
-/// and error text never carry its value (BUSBAR-1.6.0.md Locked Decision #54, the secret's
-/// reference and never its value): no `Display`, no `Serialize`, and its `Debug` prints
-/// `[redacted]`. Its readers are [`DeliveryAuth::header_value`], the `Authorization` field
-/// [`request`] writes, and the push_config record's serde form.
-#[derive(Clone, PartialEq, Eq)]
-pub struct PushCredential(String);
-
-impl PushCredential {
-    /// Hold `value` as the caller's webhook credential.
-    #[must_use]
-    pub fn new(value: String) -> Self {
-        Self(value)
-    }
-
-    /// Whether the caller gave no credential bytes (a bare scheme).
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    /// The bytes, for this module's two readers alone.
-    fn reveal(&self) -> &str {
-        &self.0
-    }
-}
-
-impl std::fmt::Debug for PushCredential {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("[redacted]")
-    }
+    /// The credential itself; empty for a bare scheme.
+    #[serde(with = "busbar_contract::abi::sdk::cred::record")]
+    pub credentials: Cred,
 }
 
 impl DeliveryAuth {
-    /// The `Authorization` value: `<scheme> <credentials>`, or the bare scheme when there are none.
+    /// The sealed `Authorization` value for a delivery to `url`: `<scheme> <credentials>`, or the
+    /// bare scheme when there are none; required to go out secured when `url` is `https`.
     #[must_use]
-    pub fn header_value(&self) -> String {
-        if self.credentials.is_empty() {
-            self.scheme.clone()
-        } else {
-            format!("{} {}", self.scheme, self.credentials.reveal())
-        }
+    pub fn authorization(&self, url: &str) -> Seal {
+        self.credentials
+            .clone()
+            .secure_for(url)
+            .scheme(self.scheme.as_bytes())
     }
 }
 
-/// The push_config record's form of [`DeliveryAuth::credentials`]: the plain string, written into
-/// the sealed field and read straight back into a [`PushCredential`].
-mod sealed_credential {
-    use super::PushCredential;
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    pub fn serialize<S: Serializer>(value: &PushCredential, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(value.reveal())
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<PushCredential, D::Error> {
-        String::deserialize(d).map(PushCredential::new)
-    }
+/// A push_config record's value, through the SDK's record encoder: the one place a
+/// [`DeliveryAuth`]'s credential is written out. Serialized anywhere else (a log line) it refuses.
+///
+/// # Errors
+/// What the encoder answers; no error quotes the credential.
+pub fn record_value<T: serde::Serialize>(value: &T) -> Result<Vec<u8>, serde_json::Error> {
+    busbar_contract::abi::sdk::cred::record::to_vec(value).map(|mut v| std::mem::take(&mut *v))
 }
 
 /// Written, not derived: the credential never reaches a log line, an assert message or a panic.
@@ -636,19 +600,20 @@ impl Deliveries {
         });
     }
 
-    /// The request for `delivery`, its credential attached. Call it only once the destination
-    /// judge has passed: no refused destination ever sees the credential.
+    /// The request for `delivery`, its credential attached as a sealed field. Call it only once
+    /// the destination judge has passed: no refused destination ever sees the credential.
     #[must_use]
-    pub fn request(&self, delivery: &Delivery) -> Request {
+    pub fn request(&self, delivery: &Delivery) -> (Request, Vec<SealedField>) {
         let auth = self.with(|b| b.auths.get(&delivery.task_id).cloned());
         request(delivery, auth.as_ref())
     }
 }
 
 /// The POST one delivery sends: the callback's path and query as the target, the content type,
-/// the caller's credential when it gave one, and the body.
+/// the caller's credential when it gave one, and the body. The credential is the SEALED field
+/// after the content type (`Exchange::request_sealed`): the plane never holds its value.
 #[must_use]
-pub fn request(delivery: &Delivery, auth: Option<&DeliveryAuth>) -> Request {
+pub fn request(delivery: &Delivery, auth: Option<&DeliveryAuth>) -> (Request, Vec<SealedField>) {
     let target = url::Url::parse(&delivery.url).map_or_else(
         |_| "/".to_string(),
         |u| match u.query() {
@@ -656,23 +621,28 @@ pub fn request(delivery: &Delivery, auth: Option<&DeliveryAuth>) -> Request {
             None => u.path().to_string(),
         },
     );
-    let mut fields = vec![(
+    let fields = vec![(
         CONTENT_TYPE.0.as_bytes().to_vec(),
         CONTENT_TYPE.1.as_bytes().to_vec(),
     )];
-    if let Some(auth) = auth {
-        fields.push((
-            AUTHORIZATION.as_bytes().to_vec(),
-            auth.header_value().into_bytes(),
-        ));
-    }
-    Request {
+    let sealed = auth
+        .map(|auth| {
+            (
+                fields.len(),
+                AUTHORIZATION.as_bytes().to_vec(),
+                auth.authorization(&delivery.url),
+            )
+        })
+        .into_iter()
+        .collect();
+    let request = Request {
         method: b"POST".to_vec(),
         target: target.into_bytes(),
         fields,
         body: delivery.body.clone(),
         timeout_ms: ATTEMPT_TIMEOUT_MS,
-    }
+    };
+    (request, sealed)
 }
 
 /// What the host signs for `task_id`'s callback token ([`TOKEN_DOMAIN`], then the id).

@@ -271,7 +271,8 @@ fn attempt(line: &mut dyn Line, deliveries: &Deliveries, flight: &mut Flight) ->
     }
     // The credential joins the request only now, after the judge has passed.
     if flight.exchange.is_none() {
-        match Exchange::request(deliveries.request(&flight.delivery)) {
+        let (request, sealed) = deliveries.request(&flight.delivery);
+        match Exchange::request_sealed(request, sealed) {
             Ok(ex) => flight.exchange = Some(ex.landing_within(within)),
             // A request busbar cannot frame sends nothing.
             Err(_) => return Poll::Ready(Attempted::Judged(DEST_UNRESOLVABLE)),
