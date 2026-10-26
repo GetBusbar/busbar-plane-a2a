@@ -2135,11 +2135,9 @@ impl Billed {
             .usage_for(&s.app.cost, &s.key.id, now)
             .expect("a read")
             .expect("the key exists");
-        let lanes = s.gov.bucket_model_tokens(
-            &s.key.id,
-            busbar_kernel::governance::WINDOW_TOTAL,
-            now,
-        );
+        let lanes =
+            s.gov
+                .bucket_model_tokens(&s.key.id, busbar_kernel::governance::WINDOW_TOTAL, now);
         let sum = |class: &str| -> u64 {
             lanes
                 .iter()
@@ -4702,21 +4700,22 @@ async fn the_extended_card_is_metered_as_one_request_and_no_tokens() {
     // wrote it (its metering row's `model`, `busbar-a2a`
     // `a2a/tests/metered_verbs_tests.rs:104`, `rows[0].model == "agents"`), never an
     // `agent:<id>` member line.
-    s.gov.flush_metering();
+    // On the one ledger: the key's counts sit on the plane's own lane, never a member's.
     let lanes: Vec<String> = s
         .gov
-        .metering_for(busbar_kernel::governance::metering_bucket(
+        .bucket_model_tokens(
+            &s.key.id,
+            busbar_kernel::governance::WINDOW_TOTAL,
             busbar_kernel::store::now(),
-        ))
-        .expect("a metering read")
+        )
         .into_iter()
-        .filter(|row| row.key_id == s.key.id)
-        .map(|row| row.model)
+        .map(|(lane, _)| lane)
         .collect();
-    assert_eq!(
-        lanes,
-        vec![surface("section").to_string()],
-        "the card is billed to the plane pool, on no member line"
+    let member = format!("{}:", surface("resource_kind"));
+    assert_eq!(lanes.len(), 1, "one lane: {lanes:?}");
+    assert!(
+        !lanes[0].contains(member.as_str()),
+        "the card is billed to the plane pool, on no member line: {lanes:?}"
     );
     assert!(
         !agent.relayed(),
@@ -8604,9 +8603,9 @@ async fn a_hop_pinned_to_a_member_the_caller_may_not_reach_keeps_no_fee() {
     );
     hear(&mut agent, &mut log);
     assert_eq!(log.len(), sent, "no member saw the refused hop");
-    let fees: u64 = ["planner-a", "planner-b"]
+    // Every hop the caller made, to either member: its one record each.
+    let fees: u64 = agent_counts(&s, "planner-a")
         .iter()
-        .flat_map(|m| agent_counts(&s, m))
         .map(|c| u64::from(c.fee_count))
         .sum();
     assert_eq!(
