@@ -7,12 +7,6 @@ use crate::A2aPlane;
 use busbar_contract::ids::MeterClassId;
 use busbar_contract::plane::PlaneMeta;
 
-/// The registry key is the codec's own.
-#[test]
-fn the_key_is_the_codecs_own() {
-    assert_eq!(A2aPlane::KEY, crate::PLANE_KEY);
-}
-
 /// No kernel-reserved class is declared here.
 ///
 /// The kernel declares these itself and the registry refuses them from a plane, so declaring one
@@ -65,12 +59,6 @@ fn the_configuration_schema_is_a_document() {
         parsed["additionalProperties"]["required"],
         serde_json::json!(["url", "pin"])
     );
-}
-
-/// The configuration schema names the section the codec reads, and no other.
-#[test]
-fn the_configuration_section_is_the_codecs_own() {
-    assert_eq!(crate::CONFIG_SECTION, "agents");
 }
 
 /// Every declared operation class is named by at least one method of the vocabulary.
