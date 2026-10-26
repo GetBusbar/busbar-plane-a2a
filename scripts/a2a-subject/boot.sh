@@ -646,7 +646,10 @@ token to, and a made-up one would be refused."
   # `a` (audience) claim differs — so a second copy of it here would be a second thing to keep in
   # step with a wire format, which is precisely the duplication this release has already paid for
   # three times.
-  local minter="scripts/mcp-subject/mint-audience-token.mjs"
+  # This plane repo carries no `scripts/mcp-subject/`: the minter is busbar's, taken from the busbar
+  # checkout the subject was built from (`BUSBAR_CHECKOUT`, busbar at the `.busbar-ref` pin), so the
+  # token format it signs is the one that busbar verifies. In busbar's own tree it is local.
+  local minter="${BUSBAR_CHECKOUT:+$BUSBAR_CHECKOUT/}scripts/mcp-subject/mint-audience-token.mjs"
   [ -f "$minter" ] || die "$minter is missing; the A2A subject leg mints its credential with the \
 same helper the MCP leg does, because busbar's token format is one format across both planes."
   local bound wrong
