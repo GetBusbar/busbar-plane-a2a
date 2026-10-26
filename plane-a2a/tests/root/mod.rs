@@ -241,23 +241,6 @@ impl Refusing {
 }
 
 impl busbar_contract::store_calls::StoreCalls for Refusing {
-    fn reserve<'a>(
-        &'a self,
-        op: busbar_contract::abi::store::OpId,
-        epoch: u64,
-        cells: &'a [busbar_contract::abi::sdk::store::Cell<'a>],
-    ) -> busbar_contract::store_calls::StoreCall<'a, Vec<busbar_contract::abi::sdk::store::Grant>>
-    {
-        self.inner.reserve(op, epoch, cells)
-    }
-    fn slice_release<'a>(
-        &'a self,
-        op: busbar_contract::abi::store::OpId,
-        epoch: u64,
-        items: &'a [(u64, u64)],
-    ) -> busbar_contract::store_calls::StoreCall<'a, Vec<u64>> {
-        self.inner.slice_release(op, epoch, items)
-    }
     fn add_usage_batch<'a>(
         &'a self,
         op: busbar_contract::abi::store::OpId,
@@ -271,51 +254,6 @@ impl busbar_contract::store_calls::StoreCalls for Refusing {
         deltas: &'a [busbar_contract::records::MeteringDelta],
     ) -> busbar_contract::store_calls::StoreCall<'a, ()> {
         self.inner.add_metering_batch(op, deltas)
-    }
-    fn append_audit_batch<'a>(
-        &'a self,
-        op: busbar_contract::abi::store::OpId,
-        entries: &'a [busbar_contract::records::AuditRecord],
-    ) -> busbar_contract::store_calls::StoreCall<'a, ()> {
-        self.inner.append_audit_batch(op, entries)
-    }
-    fn window_caps<'a>(
-        &'a self,
-        op: busbar_contract::abi::store::OpId,
-        caps: &'a [busbar_contract::abi::sdk::store::Cap<'a>],
-    ) -> busbar_contract::store_calls::StoreCall<'a, ()> {
-        self.inner.window_caps(op, caps)
-    }
-    fn append_batch<'a>(
-        &'a self,
-        op: busbar_contract::abi::store::OpId,
-        stream: &'a str,
-        records: &'a [busbar_contract::kinds::RecordBytes],
-    ) -> busbar_contract::store_calls::StoreCall<'a, busbar_contract::kinds::Head> {
-        self.inner.append_batch(op, stream, records)
-    }
-    fn heads(
-        &self,
-    ) -> busbar_contract::store_calls::StoreCall<'_, Vec<(String, busbar_contract::kinds::Head)>>
-    {
-        self.inner.heads()
-    }
-    fn session_put<'a>(
-        &'a self,
-        session: u64,
-        node: &'a str,
-        principal: &'a str,
-    ) -> busbar_contract::store_calls::StoreCall<'a, ()> {
-        self.inner.session_put(session, node, principal)
-    }
-    fn session_remove(&self, session: u64) -> busbar_contract::store_calls::StoreCall<'_, ()> {
-        self.inner.session_remove(session)
-    }
-    fn sessions_for<'a>(
-        &'a self,
-        principal: &'a str,
-    ) -> busbar_contract::store_calls::StoreCall<'a, Vec<(u64, String)>> {
-        self.inner.sessions_for(principal)
     }
     fn record_put<'a>(
         &'a self,
