@@ -39,6 +39,11 @@ TCK_REF="$(sed -n '/^TCK_REF="/{s/^TCK_REF="\([0-9a-f]\{40\}\)".*/\1/p;q;}' test
 GO_VERSION=go1.26.10
 GO_SHA_AMD64=ccfe7ae822d2c2f41f4fe7c956199967a4dac22d0ee0d2b2bfdb440aab3b20c5
 GO_SHA_ARM64=3f4227ce7b206a513e794f1393adb473a07b46e94d18bd15d1c684bbb7319797
+# python-build-standalone cpython 3.12 (the TCK needs python >= 3.11; ModernCI's python3 is older).
+PY_TAG=20261026
+PY_VER=3.12.16
+PY_SHA_AMD64=6a79e922e50006b601f29e688407659da1c2b86ebcd4e9c7254cf234be8b89de
+PY_SHA_ARM64=a945427411dc6851a1393533b74a4a1ac434321ae397f2ec69897a9b4fde032b
 # github.com/a2aproject/a2a-python v1.1.2, by commit (the tag is mutable; the commit is not).
 A2A_PY_SAMPLES_SHA=3e6fa6a41d64f0581202df214a0515a0b0194832
 
@@ -121,6 +126,28 @@ ensure_go() {
   go version
 }
 
+ensure_python() {
+  [ "$(uname -s)" = Linux ] || return 0
+  local arch sha dir tgz
+  case "$(uname -m)" in
+    x86_64|amd64) arch=x86_64; sha="$PY_SHA_AMD64" ;;
+    aarch64|arm64) arch=aarch64; sha="$PY_SHA_ARM64" ;;
+    *) return 1 ;;
+  esac
+  dir="$CACHE/cpython-$PY_VER-$PY_TAG-$arch"
+  tgz="$CACHE/cpython-$PY_VER-$PY_TAG-$arch.tar.gz"
+  if [ ! -x "$dir/python/bin/python3" ]; then
+    if [ ! -f "$tgz" ] || [ "$(sha256_of "$tgz")" != "$sha" ]; then
+      curl -fsSL --retry 3 -o "$tgz.part" "https://github.com/astral-sh/python-build-standalone/releases/download/$PY_TAG/cpython-$PY_VER%2B$PY_TAG-$arch-unknown-linux-gnu-install_only.tar.gz" || return 1
+      [ "$(sha256_of "$tgz.part")" = "$sha" ] || { echo "python tarball sha256 mismatch" >&2; rm -f "$tgz.part"; return 1; }
+      mv "$tgz.part" "$tgz"
+    fi
+    rm -rf "$dir"; mkdir -p "$dir" && tar -xzf "$tgz" -C "$dir" || return 1
+  fi
+  export PATH="$dir/python/bin:$PATH"
+  python3 --version
+}
+
 # venv_from <dir> <requirements>: a venv with exactly the hash-pinned set, or return 1.
 venv_from() {
   local dir="$1" req="$2"
@@ -131,6 +158,7 @@ venv_from() {
 }
 
 provision() {
+  ensure_python || return 1
   ensure_go || return 1
   # The TCK's venv is where run-tck.sh expects it; its own installer then finds it and only checks
   # that the suite's imports work.
