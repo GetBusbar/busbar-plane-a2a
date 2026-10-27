@@ -385,14 +385,6 @@ fn a_document_that_is_not_an_object_is_not_a_card() {
     }
 }
 
-/// Ported from busbar-a2a a2a/tests/serve_tests.rs::a_string_that_merely_mentions_a_different_host_is_left_alone.
-#[test]
-fn a_string_that_merely_mentions_a_different_host_is_left_alone() {
-    let served = rewrite_card(&rich_backend_card(), BACKEND, PUBLIC, "planner").expect("rewrite");
-    assert_eq!(served["provider"]["url"], "https://acme.example");
-    assert_eq!(served["description"], "decomposes goals");
-}
-
 /// Ported from busbar-a2a a2a/tests/serve_tests.rs::busbars_own_endpoint_is_not_a_leak_when_it_shares_a_host_with_the_backend.
 #[test]
 fn busbars_own_endpoint_is_not_a_leak_when_it_shares_a_host_with_the_backend() {

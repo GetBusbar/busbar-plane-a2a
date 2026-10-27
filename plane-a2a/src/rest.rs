@@ -9,7 +9,7 @@
 //! the operation differs between the two lines but where the method NAME comes from (the request
 //! line) and how the answer is wrapped. This module is the first half: [`compose`] builds the
 //! envelope the served engine's `rest.rs` composed (member for member, the same fixed id), and the
-//! door decides it with [`crate::agent_arrival::decide_arrival`] under the caller's own head fields, which is the
+//! door decides it with [`crate::agent_arrival::decide_and_read`] under the caller's own head fields, which is the
 //! order the engine ran (its route handler composed, then `receive::invoke` judged the head and
 //! parsed the composed body). The one refusal composing can earn, a `POST /tasks/{id}:<verb>`
 //! naming no verb, comes first, as it did in the engine's handler.
@@ -58,11 +58,12 @@ pub mod method {
 const VERB_CANCEL: &str = "cancel";
 const VERB_SUBSCRIBE: &str = "subscribe";
 
-/// The status of a `POST /tasks/…` naming no verb this binding defines.
-const STATUS_NOT_FOUND: u32 = 404;
+/// `404`: the status of a `POST /tasks/…` naming no verb this binding defines, of an arrival no
+/// line of the door serves, and of a task the caller does not hold (A2A section 5.4,
+/// `TaskNotFoundError`).
+pub(crate) const STATUS_NOT_FOUND: u32 = 404;
 
-/// JSON-RPC's `MethodNotFound`: the fault is in the request line, not the task.
-const CODE_METHOD_NOT_FOUND: i64 = -32601;
+use crate::agent_arrival::CODE_METHOD_NOT_FOUND;
 
 /// A REQUEST'S PARAMS, built member by member, skipping what the caller did not send. Absent is
 /// not empty: a query parameter the caller omitted does not appear in the composed `params`.
@@ -226,15 +227,15 @@ pub fn json_body(body: &[u8]) -> Value {
 /// `MethodNotFound`, in the engine's words.
 #[must_use]
 pub fn not_a_verb(addressed: &str) -> AgentRefusal {
-    AgentRefusal {
-        status: STATUS_NOT_FOUND,
-        id: None,
-        code: CODE_METHOD_NOT_FOUND,
-        message: format!(
+    AgentRefusal::new(
+        STATUS_NOT_FOUND,
+        None,
+        CODE_METHOD_NOT_FOUND,
+        format!(
             "`{addressed}` names no operation on this binding; the task operations are \
              `{{id}}:{VERB_CANCEL}` and `{{id}}:{VERB_SUBSCRIBE}`"
         ),
-    }
+    )
 }
 
 /// The path variables `target` binds against `route`'s pattern, by name, each decoded as the

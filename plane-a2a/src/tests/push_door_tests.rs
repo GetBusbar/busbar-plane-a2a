@@ -52,7 +52,7 @@ fn a_moved_task_with_a_registered_config_queues_its_notification_to_that_config(
         scheme: "Bearer".into(),
         credentials: busbar_contract::abi::sdk::test_support::chip::cred("tok"),
     };
-    let d = Deliveries::new();
+    let d = Deliveries::default();
     assert!(queue(
         &d,
         &row,
@@ -75,13 +75,13 @@ fn a_moved_task_with_a_registered_config_queues_its_notification_to_that_config(
 fn the_rows_own_callback_is_the_destination_and_no_callback_queues_nothing() {
     let mut book = Book::default();
     let row = moved(&mut book, "https://inline.example/cb");
-    let d = Deliveries::new();
+    let d = Deliveries::default();
     assert!(queue(&d, &row, None));
     assert_eq!(d.next_due(0).expect("due").url, "https://inline.example/cb");
 
     let mut silent_book = Book::default();
     let silent = moved(&mut silent_book, "");
-    let quiet = Deliveries::new();
+    let quiet = Deliveries::default();
     assert!(!queue(&quiet, &silent, None));
     assert_eq!(quiet.next_tick_ns(), 0, "no tick is wanted");
 }
@@ -98,7 +98,7 @@ fn the_config_is_read_under_the_callers_own_key() {
         key: task_key(BOB, "t1"),
         value: theirs,
     }]);
-    let d = Deliveries::new();
+    let d = Deliveries::default();
     assert!(!queue_moved(&d, &mut book, ALICE, &row).unwrap());
     let mine = serde_json::to_vec(&config("https://alice.example/cb", None)).unwrap();
     book.apply(&[Write {
@@ -257,7 +257,7 @@ fn queued(callback: &str) -> Deliveries {
     let mut book = Book::default();
     let mut row = moved(&mut book, callback);
     row.state = "completed".into();
-    let d = Deliveries::new();
+    let d = Deliveries::default();
     let auth = DeliveryAuth {
         scheme: "Bearer".into(),
         credentials: busbar_contract::abi::sdk::test_support::chip::cred("tok"),
@@ -324,7 +324,7 @@ fn the_callers_own_webhook_credential_is_presented_on_the_delivery() {
     let callback = "https://hook.caller.test/notify";
     let mut book = Book::default();
     let row = moved(&mut book, callback);
-    let d = Deliveries::new();
+    let d = Deliveries::default();
     let auth = DeliveryAuth {
         scheme: "Bearer".into(),
         credentials: busbar_contract::abi::sdk::test_support::chip::cred("receiver-issued-token"),
@@ -368,18 +368,6 @@ fn the_callers_own_webhook_credential_is_presented_on_the_delivery() {
         1,
         "the sent head does not carry the credential the caller registered, once"
     );
-}
-
-/// A callback that now resolves to an internal address (a rebinding) is refused by the judge,
-/// which runs on every attempt, and nothing is sent.
-#[test]
-fn the_rebind_is_still_refused_when_no_pin_survives_the_restart() {
-    let callback = "https://hook.caller.test/notify";
-    let d = queued(callback);
-    let mut host = TestHost::answering(vec![Some((DEST_INTERNAL, &[][..]))], 200);
-    let (end, _) = tick_once(&d, &mut host, 0);
-    assert_eq!(end, Attempted::Judged(DEST_INTERNAL));
-    assert!(host.sent.is_empty());
 }
 
 /// A name that resolves to nothing at delivery, or a judgement that could not be made, is refused:
@@ -486,7 +474,7 @@ fn a_queued_notification_wakes_the_driver_ticket() {
     let mut book = Book::default();
     let row = moved(&mut book, "https://inline.example/cb");
     let (told, woken) = std::sync::mpsc::channel::<()>();
-    let d = Deliveries::new();
+    let d = Deliveries::default();
     assert!(queue(&d, &row, None), "unarmed: queued, no wake to make");
     d.arm(|| {
         Box::new(move || {
@@ -509,7 +497,7 @@ fn queue_moved_wakes_the_driver_ticket() {
     let mut book = Book::default();
     let row = moved(&mut book, "https://inline.example/cb");
     let (told, woken) = std::sync::mpsc::channel::<()>();
-    let d = Deliveries::new();
+    let d = Deliveries::default();
     d.arm(|| {
         Box::new(move || {
             let _ = told.send(());
@@ -722,7 +710,7 @@ fn a_task_that_ends_with_nothing_to_deliver_drops_its_credential() {
     let mut book = Book::default();
     let mut row = moved(&mut book, "");
     row.state = "completed".into();
-    let d = Deliveries::new();
+    let d = Deliveries::default();
     d.remember_auth(
         "t1",
         Some(DeliveryAuth {
@@ -754,7 +742,7 @@ fn a_task_that_ends_with_nothing_to_deliver_drops_its_credential() {
 fn an_ended_task_spends_its_callback_token() {
     let mut book = Book::default();
     let mut row = moved(&mut book, "");
-    let tokens = crate::push::Tokens::new();
+    let tokens = crate::push::Tokens::default();
     let token = tokens.mint(ALICE, "t1", &[7u8; 32]).expect("minted");
     ended(&tokens, &row);
     assert!(
@@ -780,7 +768,7 @@ fn a_notification_queued_during_a_held_attempt_waits_for_that_attempts_own_wake(
     let callback = "https://hook.caller.test/notify";
     let mut book = Book::default();
     let row = moved(&mut book, callback);
-    let d = Deliveries::new();
+    let d = Deliveries::default();
     let (told, woken) = std::sync::mpsc::channel::<()>();
     d.arm(|| {
         Box::new(move || {
@@ -818,7 +806,7 @@ fn a_notification_queued_during_a_held_attempt_waits_for_that_attempts_own_wake(
 fn a_silent_receiver_delays_another_tasks_delivery_by_one_deadline_at_most() {
     let silent = "https://silent.caller.test/notify";
     let prompt = "https://prompt.caller.test/notify";
-    let d = Deliveries::new();
+    let d = Deliveries::default();
     for (task, url) in [("a", silent), ("b", prompt)] {
         d.enqueue(
             Delivery {

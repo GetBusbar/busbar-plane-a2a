@@ -18,10 +18,16 @@
 //!   repo's pin, carries the SDK the linked build carries (compiled in or dropped in, "NOTHING
 //!   CHANGES about the plugin itself").
 
-#![allow(unsafe_code)]
+// A door-driven test crate: it reaches the plane only through `door`, the crate's one public item,
+// and plays the kernel's plane driver and the host over the raw door table, so the `unsafe` the
+// host side needs lives here, outside the plugin crate (whose root keeps the literal
+// `#![forbid(unsafe_code)]`). The door's private constants it needs are `door_facts`, held to the
+// crate's own items by the crate's unit test `door_facts`.
 
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::cell::Cell;
+#[path = "support/door_facts.rs"]
+#[allow(dead_code)] // the both-ways script's line and need facts are read there, not here
+mod door_facts;
+
 use std::collections::HashMap;
 use std::os::raw::c_void;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -49,47 +55,15 @@ use busbar_contract::abi::plane::{
     RefusalOut, ServeIn, ServeOut, UnitCount, EMIT_DONE, FROM_CALLER, FROM_FAR_END, FROM_KERNEL,
     PIECE_HAS_STATUS, PIECE_LAST, PIECE_REFUSED, REFUSAL_KERNEL,
 };
-use busbar_plane_a2a::agent_door::{self, MAX_UNITS};
-use busbar_plane_a2a::door_statement::{
-    self, CLASS_BYTES_INDEX, CLASS_FEE_INDEX, DIALECT_DOCUMENT,
-};
+use door_facts::{CLASS_BYTES_INDEX, CLASS_FEE_INDEX, DIALECT_DOCUMENT, MAX_UNITS};
 
-// ── the allocation count ────────────────────────────────────────────────────────────────────────
+// ── the allocation count: busbar-contract's test-only counter, this test binary's allocator ──────
 
-thread_local! {
-    /// Allocations made by THIS thread since the counter was last read.
-    static ALLOCS: Cell<u64> = const { Cell::new(0) };
-}
-
-/// The system allocator, counting.
-struct Counting;
-
-// SAFETY: every call is forwarded verbatim to the system allocator; the counter is a thread-local
-// `Cell` of a plain integer, touched only on the allocating thread, and never reads or writes the
-// memory being handed out.
-unsafe impl GlobalAlloc for Counting {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let _ = ALLOCS.try_with(|c| c.set(c.get() + 1));
-        unsafe { System.alloc(layout) }
-    }
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        unsafe { System.dealloc(ptr, layout) }
-    }
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        let _ = ALLOCS.try_with(|c| c.set(c.get() + 1));
-        unsafe { System.realloc(ptr, layout, new_size) }
-    }
-}
+use busbar_contract::alloc_counter::allocations_with as allocations_of;
 
 #[global_allocator]
-static ALLOC: Counting = Counting;
-
-/// How many allocations `f` made on this thread, and what it returned.
-fn allocations_of<R>(f: impl FnOnce() -> R) -> (u64, R) {
-    let before = ALLOCS.with(Cell::get);
-    let r = f();
-    (ALLOCS.with(Cell::get) - before, r)
-}
+static A: busbar_contract::alloc_counter::Counting =
+    busbar_contract::alloc_counter::Counting::new();
 
 // ── the host's services ─────────────────────────────────────────────────────────────────────────
 
@@ -106,10 +80,7 @@ fn answer(out: *mut ServiceOut, outcome: Outcome, value: u64, len: u64) -> RawOu
             items: 0,
             needed_bytes: 0,
             needed_items: 0,
-            error: AbiStr {
-                ptr: std::ptr::null(),
-                len: 0,
-            },
+            error: AbiStr::ABSENT,
         });
     }
     RawOutcome::of(outcome)
@@ -216,10 +187,10 @@ extern "C" fn records_list(_: HostCtx, input: *const c_void, out: *mut ServiceOu
     let i = unsafe { input.cast::<RecordsListIn>().read() };
     // SAFETY: as above.
     let text = |s: AbiStr| unsafe {
-        if s.ptr.is_null() {
+        if s.is_absent() {
             Vec::new()
         } else {
-            std::slice::from_raw_parts(s.ptr, s.len).to_vec()
+            std::slice::from_raw_parts(s.ptr(), s.len()).to_vec()
         }
     };
     let (kind, after) = (text(i.kind), text(i.after));
@@ -265,10 +236,7 @@ extern "C" fn records_list(_: HostCtx, input: *const c_void, out: *mut ServiceOu
             value: 0,
             needed_bytes: 0,
             needed_items: 0,
-            error: AbiStr {
-                ptr: std::ptr::null(),
-                len: 0,
-            },
+            error: AbiStr::ABSENT,
         });
     }
     RawOutcome::of(Outcome::Ready)
@@ -476,19 +444,13 @@ fn z<T>() -> T {
 }
 
 fn str_of(s: &[u8]) -> AbiStr {
-    AbiStr {
-        ptr: s.as_ptr(),
-        len: s.len(),
-    }
+    // SAFETY: `s` is a fixture or a buffer that outlives the call its `in` is lent to.
+    unsafe { AbiStr::from_raw_parts(s.as_ptr(), s.len()) }
 }
 
 fn octets(b: &[u8]) -> Blob {
-    Blob {
-        ptr: b.as_ptr(),
-        len: b.len(),
-        fmt: BLOB_OCTETS,
-        flags: 0,
-    }
+    // SAFETY: as `str_of`.
+    unsafe { Blob::from_raw_parts(b.as_ptr(), b.len(), BLOB_OCTETS, 0) }
 }
 
 fn head<T>(op: u32, ticket: Ticket) -> InHead {
@@ -509,7 +471,7 @@ fn out_head<T>() -> OutHead {
 
 fn ops() -> &'static Ops {
     // SAFETY: the door is a `'static` table whose ops are the plane kind's.
-    unsafe { &*(*agent_door::door()).ops().cast::<Ops>() }
+    unsafe { &*(*busbar_plane_a2a::door()).ops().cast::<Ops>() }
 }
 
 fn lifecycle() -> &'static OpsHead {
@@ -637,11 +599,7 @@ impl Given<'_> {
 
 /// The route index of `(verb, target)` in the door's table, the claim an arrival carries.
 fn claim(verb: &str, target: &str) -> u32 {
-    let i = door_statement::ROUTES
-        .iter()
-        .position(|r| r.verb == verb && r.target == target)
-        .unwrap_or_else(|| panic!("the door routes {verb} {target}"));
-    u32::try_from(i).unwrap()
+    door_facts::claim(verb, target)
 }
 
 fn open() -> Door {
@@ -665,11 +623,16 @@ fn open_with(section: &'static [u8]) -> Door {
         ..z()
     };
     let f = lifecycle().open.expect("the door opens");
-    let ret = f(
-        std::ptr::null_mut(),
-        std::ptr::from_ref(&i).cast(),
-        std::ptr::from_mut(&mut o).cast(),
-    );
+    // SAFETY: `f` is the door's own slot, called over an `in` and an `out` laid out as its ABI
+    // states and live for the call.
+    #[allow(unused_unsafe)]
+    let ret = unsafe {
+        f(
+            std::ptr::null_mut(),
+            std::ptr::from_ref(&i).cast(),
+            std::ptr::from_mut(&mut o).cast(),
+        )
+    };
     assert_eq!(ret.outcome(), Outcome::Ready, "the door opens");
     Door {
         instance: o.open.instance,
@@ -697,19 +660,33 @@ impl Door {
         let mut o: ArriveOut = z();
         o.head = out_head::<ArriveOut>();
         let f = ops().arrive.expect("arrive");
-        let ret = f(
-            self.instance,
-            std::ptr::from_ref(&i).cast(),
-            std::ptr::from_mut(&mut o).cast(),
-        );
+        // SAFETY: `f` is the door's own slot, called over an `in` and an `out` laid out as its ABI
+        // states and live for the call.
+        #[allow(unused_unsafe)]
+        let ret = unsafe {
+            f(
+                self.instance,
+                std::ptr::from_ref(&i).cast(),
+                std::ptr::from_mut(&mut o).cast(),
+            )
+        };
         (ret.outcome(), o.refusal_status)
     }
 
     /// Busbar's own card read, on the open line.
     fn arrive_own_card(&self, unit: u64) {
-        let route = ("GET", busbar_plane_a2a::WELL_KNOWN_CARD_PATH);
-        let (outcome, _) = self.arrive(unit, route, busbar_plane_a2a::WELL_KNOWN_CARD_PATH, b"");
-        assert_eq!(outcome, Outcome::Ready, "busbar's own card read arrives");
+        assert!(
+            self.arrives_own_card(unit),
+            "busbar's own card read arrives"
+        );
+    }
+
+    /// Whether busbar's own card read under `unit` is admitted (`arrive` answers READY; a full
+    /// instance refuses it `429`).
+    fn arrives_own_card(&self, unit: u64) -> bool {
+        let route = ("GET", door_facts::WELL_KNOWN_CARD_PATH);
+        let (outcome, _) = self.arrive(unit, route, door_facts::WELL_KNOWN_CARD_PATH, b"");
+        outcome == Outcome::Ready
     }
 
     /// One `on_piece` of `unit`, its reply buffer `reply_cap` bytes.
@@ -738,11 +715,16 @@ impl Door {
         let mut o: OnPieceOut = z();
         o.head = out_head::<OnPieceOut>();
         let f = ops().on_piece.expect("on_piece");
-        let ret = f(
-            self.instance,
-            std::ptr::from_ref(&i).cast(),
-            std::ptr::from_mut(&mut o).cast(),
-        );
+        // SAFETY: `f` is the door's own slot, called over an `in` and an `out` laid out as its ABI
+        // states and live for the call.
+        #[allow(unused_unsafe)]
+        let ret = unsafe {
+            f(
+                self.instance,
+                std::ptr::from_ref(&i).cast(),
+                std::ptr::from_mut(&mut o).cast(),
+            )
+        };
         let at = |s: busbar_contract::abi::mechanism::call::Span| {
             let from = s.offset as usize;
             String::from_utf8_lossy(&arena[from..from + s.len as usize]).into_owned()
@@ -795,11 +777,16 @@ impl Door {
         let mut o: RefusalOut = z();
         o.head = out_head::<RefusalOut>();
         let f = ops().refusal.expect("refusal");
-        let ret = f(
-            self.instance,
-            std::ptr::from_ref(&i).cast(),
-            std::ptr::from_mut(&mut o).cast(),
-        );
+        // SAFETY: `f` is the door's own slot, called over an `in` and an `out` laid out as its ABI
+        // states and live for the call.
+        #[allow(unused_unsafe)]
+        let ret = unsafe {
+            f(
+                self.instance,
+                std::ptr::from_ref(&i).cast(),
+                std::ptr::from_mut(&mut o).cast(),
+            )
+        };
         let body = String::from_utf8_lossy(&reply[..o.reply_written as usize]).into_owned();
         (ret.outcome(), o.status, body, o.records_written)
     }
@@ -854,13 +841,18 @@ impl Door {
         let mut o: ServeOut = z();
         o.head = out_head::<ServeOut>();
         let f = ops().serve.expect("serve");
-        let ret = f(
-            self.instance,
-            std::ptr::from_ref(&i).cast(),
-            std::ptr::from_mut(&mut o).cast(),
-        );
+        // SAFETY: `f` is the door's own slot, called over an `in` and an `out` laid out as its ABI
+        // states and live for the call.
+        #[allow(unused_unsafe)]
+        let ret = unsafe {
+            f(
+                self.instance,
+                std::ptr::from_ref(&i).cast(),
+                std::ptr::from_mut(&mut o).cast(),
+            )
+        };
         // The kernel writes the answer's record writes to the store, in order.
-        let held = busbar_plane_a2a::records::HELD_KINDS;
+        let held = door_facts::HELD_KINDS;
         let mut status = o.status;
         for w in &records[..(o.records_written as usize).min(records.len())] {
             let at = |s: busbar_contract::abi::mechanism::call::Span| {
@@ -892,11 +884,16 @@ impl Door {
         let mut o: TickOut = z();
         o.head = out_head::<TickOut>();
         let f = lifecycle().tick.expect("tick");
-        let ret = f(
-            self.instance,
-            std::ptr::from_ref(&i).cast(),
-            std::ptr::from_mut(&mut o).cast(),
-        );
+        // SAFETY: `f` is the door's own slot, called over an `in` and an `out` laid out as its ABI
+        // states and live for the call.
+        #[allow(unused_unsafe)]
+        let ret = unsafe {
+            f(
+                self.instance,
+                std::ptr::from_ref(&i).cast(),
+                std::ptr::from_mut(&mut o).cast(),
+            )
+        };
         (ret.outcome(), o.next_tick_ns)
     }
 
@@ -914,11 +911,16 @@ impl Door {
         let mut o: PlaneDriveOut = z();
         o.head = out_head::<PlaneDriveOut>();
         let f = lifecycle().drive.expect("drive");
-        let ret = f(
-            self.instance,
-            std::ptr::from_ref(&i).cast(),
-            std::ptr::from_mut(&mut o).cast(),
-        );
+        // SAFETY: `f` is the door's own slot, called over an `in` and an `out` laid out as its ABI
+        // states and live for the call.
+        #[allow(unused_unsafe)]
+        let ret = unsafe {
+            f(
+                self.instance,
+                std::ptr::from_ref(&i).cast(),
+                std::ptr::from_mut(&mut o).cast(),
+            )
+        };
         ret.outcome()
     }
 
@@ -932,11 +934,16 @@ impl Door {
         let mut o: PlaneCancelOut = z();
         o.cancel.head = out_head::<PlaneCancelOut>();
         let f = lifecycle().cancel.expect("cancel");
-        let ret = f(
-            self.instance,
-            std::ptr::from_ref(&i).cast(),
-            std::ptr::from_mut(&mut o).cast(),
-        );
+        // SAFETY: `f` is the door's own slot, called over an `in` and an `out` laid out as its ABI
+        // states and live for the call.
+        #[allow(unused_unsafe)]
+        let ret = unsafe {
+            f(
+                self.instance,
+                std::ptr::from_ref(&i).cast(),
+                std::ptr::from_mut(&mut o).cast(),
+            )
+        };
         ret.outcome()
     }
 
@@ -993,14 +1000,18 @@ fn units_whose_answer_is_written_never_push_a_live_unit_out() {
     let door = open();
     door.begin_own_card(1);
     for unit in 2..=(MAX_UNITS as u64 + 1) {
-        door.arrive_own_card(unit);
+        assert!(
+            door.arrives_own_card(unit),
+            "unit {unit} was refused: the card reads the door had already finished still held \
+             their places"
+        );
         let whole = door.piece(unit, Given::caller(b""), 1 << 16);
         assert_eq!(whole.outcome, Some(Outcome::Ready), "unit {unit}");
         assert_ne!(whole.flags & EMIT_DONE, 0, "unit {unit}'s answer is whole");
     }
     assert!(
         door.still_answers(1),
-        "a live unit was evicted by {MAX_UNITS} card reads the door had already finished"
+        "the live unit 1 was dropped to make room for {MAX_UNITS} finished card reads"
     );
 }
 
@@ -1013,13 +1024,17 @@ fn units_whose_refusal_is_rendered_never_push_a_live_unit_out() {
     let door = open();
     door.begin_own_card(1);
     for unit in 2..=(MAX_UNITS as u64 + 1) {
-        door.arrive_own_card(unit);
+        assert!(
+            door.arrives_own_card(unit),
+            "unit {unit} was refused: the units whose refusal the door had rendered were not \
+             forgotten"
+        );
         let (outcome, _, body) = door.refusal(unit, RefusalCode::RateLimited, 429);
         assert_eq!(outcome, Outcome::Ready, "unit {unit}: {body}");
     }
     assert!(
         door.still_answers(1),
-        "a live unit was evicted by {MAX_UNITS} units whose refusal the door had already rendered"
+        "the live unit 1 was dropped to make room for {MAX_UNITS} units whose refusal was rendered"
     );
 }
 
@@ -1037,7 +1052,7 @@ fn cancelled_units_make_room_before_a_live_unit_does() {
     }
     assert!(
         door.still_answers(1),
-        "a live unit was evicted while {MAX_UNITS} cancelled units were held"
+        "the live unit 1 was dropped to make room while {MAX_UNITS} cancelled units were held"
     );
 }
 
@@ -1054,16 +1069,16 @@ fn an_instance_full_of_live_units_refuses_the_next_arrival_and_evicts_none() {
     for unit in 2..=(MAX_UNITS as u64) {
         door.arrive_own_card(unit);
     }
-    let route = ("GET", busbar_plane_a2a::WELL_KNOWN_CARD_PATH);
+    let route = ("GET", door_facts::WELL_KNOWN_CARD_PATH);
     let next = MAX_UNITS as u64 + 1;
     assert_eq!(
-        door.arrive(next, route, busbar_plane_a2a::WELL_KNOWN_CARD_PATH, b""),
+        door.arrive(next, route, door_facts::WELL_KNOWN_CARD_PATH, b""),
         (Outcome::Refused, 429),
         "the arrival past {MAX_UNITS} live units is refused"
     );
     assert!(
         door.still_answers(1),
-        "a live unit was evicted to make room for an arrival"
+        "the live unit 1 was dropped to make room for a refused arrival"
     );
 }
 
@@ -1084,11 +1099,15 @@ fn a_unit_cancelled_before_its_first_piece_makes_room() {
             "unit {unit}'s cancel"
         );
     }
-    door.arrive_own_card(MAX_UNITS as u64 + 1);
+    assert!(
+        door.arrives_own_card(MAX_UNITS as u64 + 1),
+        "the arrival past {MAX_UNITS} units was refused: the units cancelled before their first \
+         piece are still live"
+    );
     assert!(
         door.still_answers(1),
-        "a live unit was evicted while {MAX_UNITS} units cancelled before their first piece were \
-         held"
+        "the live unit 1 was dropped to make room while {MAX_UNITS} units cancelled before their \
+         first piece were held"
     );
 }
 

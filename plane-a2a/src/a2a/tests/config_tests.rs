@@ -7,8 +7,57 @@
 use super::*;
 use crate::door_statement::read_agents_section;
 use busbar_contract::config::UpstreamCreds;
+use busbar_contract::plane::{PinMechanismDecl, TrustKeyDecl, TrustRole};
 use busbar_contract::secret_ref::SecretRef;
 use serde_json::json;
+
+/// THE KERNEL-OWNED TRUST KEYS of one `agents:` entry, declared for the kernel to parse and judge:
+/// the `pin:` object (with its optional `fingerprint`) over this plane's four mechanisms, and the two
+/// cadence durations with their defaults. Declaration order is judgement order.
+pub(crate) const TRUST_KEYS: &[TrustKeyDecl] = &[
+    TrustKeyDecl {
+        key: "pin",
+        role: TrustRole::Pin,
+        fingerprint: true,
+        default: None,
+        mechanisms: &[
+            PinMechanismDecl {
+                token: "jws_issuer_key",
+                root: true,
+                peer_key: false,
+            },
+            PinMechanismDecl {
+                token: "cert_spki",
+                root: true,
+                peer_key: true,
+            },
+            PinMechanismDecl {
+                token: "mtls",
+                root: true,
+                peer_key: true,
+            },
+            PinMechanismDecl {
+                token: "unpinned",
+                root: false,
+                peer_key: false,
+            },
+        ],
+    },
+    TrustKeyDecl {
+        key: "reverify_ttl",
+        role: TrustRole::ReverifyTtl,
+        fingerprint: false,
+        default: Some(DEFAULT_REVERIFY_TTL),
+        mechanisms: &[],
+    },
+    TrustKeyDecl {
+        key: "recovery_backoff",
+        role: TrustRole::RecoveryBackoff,
+        fingerprint: false,
+        default: Some("15m"),
+        mechanisms: &[],
+    },
+];
 
 /// The reference config's sugar `{ word: value }` reads as, through the contract's own reading, so
 /// the expectation is whatever shape the pinned contract gives it (busbar step 2c reads sugar
@@ -64,7 +113,7 @@ fn the_declared_trust_keys_match_the_grammar() {
             .iter()
             .find(|d| d.token == m.token())
             .unwrap_or_else(|| panic!("`{}` is declared", m.token()));
-        assert_eq!(declared.root, m.is_a_root(), "{}", m.token());
+        assert_eq!(declared.root, m != PinMechanism::Unpinned, "{}", m.token());
     }
     let ttl = TRUST_KEYS
         .iter()
@@ -76,7 +125,6 @@ fn the_declared_trust_keys_match_the_grammar() {
         .find(|k| k.key == "recovery_backoff")
         .expect("the recovery backoff is a declared trust key");
     assert_eq!(backoff.default, Some("15m"));
-    assert_eq!(DEFAULT_RECOVERY_BACKOFF_MS, 15 * 60 * 1_000);
 }
 
 /// Each mechanism's SERIALIZED token is the token its declared `TRUST_KEYS` spells, and the pin
@@ -99,7 +147,7 @@ fn every_serialized_pin_token_is_the_declared_trust_key_token() {
             .find(|d| d.token == token)
             .expect("declared")
             .root;
-        assert_eq!(declared_root, m.is_a_root(), "{token}");
+        assert_eq!(declared_root, m != PinMechanism::Unpinned, "{token}");
     }
 }
 

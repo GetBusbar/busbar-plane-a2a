@@ -9,8 +9,8 @@
 //! assert the operation class and the request id it reads; the door itself is then driven op by op,
 //! linked and dropped in, by the plugin crate's `tests/both_ways.rs`.
 
-use busbar_plane_a2a::agent_arrival::{self, AgentDisposition};
-use busbar_plane_a2a::ops;
+use crate::agent_arrival::{self, AgentDisposition};
+use crate::ops;
 
 /// The rig's own vocabulary table, read out of the file the rig imports it from.
 ///
@@ -57,7 +57,7 @@ fn request(id: &str, method: &str) -> Vec<u8> {
 /// Drive one body through the door's arrival (the JSON-RPC line, no head fields) and hand back the
 /// method row it classed the request under and the request id it read.
 fn decode(body: &[u8]) -> Result<(ops::MethodRow, serde_json::Value), String> {
-    match agent_arrival::decide_arrival(body, |_| None) {
+    match agent_arrival::decide_and_read(body, |_| None).0 {
         AgentDisposition::Request { row, id, .. } => Ok((*row, id)),
         other => Err(format!("{other:?}")),
     }
@@ -137,7 +137,20 @@ fn the_two_vocabularies_agree_slot_for_slot() {
 #[test]
 fn every_local_verb_of_the_codec_is_carried() {
     let mut seen = 0usize;
-    for method in busbar_plane_a2a::LOCAL_VERB_METHODS {
+    for method in [
+        "ListTasks",
+        "tasks/list",
+        "CreateTaskPushNotificationConfig",
+        "tasks/pushNotificationConfig/set",
+        "GetTaskPushNotificationConfig",
+        "tasks/pushNotificationConfig/get",
+        "ListTaskPushNotificationConfigs",
+        "tasks/pushNotificationConfig/list",
+        "DeleteTaskPushNotificationConfig",
+        "tasks/pushNotificationConfig/delete",
+        "SubscribeToTask",
+        "tasks/resubscribe",
+    ] {
         assert!(
             decode(&request("1", method)).is_ok(),
             "the codec answers {method} and this plane does not carry it"

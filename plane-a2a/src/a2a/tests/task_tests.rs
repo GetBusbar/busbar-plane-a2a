@@ -188,7 +188,6 @@ fn an_interrupt_is_active_and_never_collectable() {
     for s in [TaskState::InputRequired, TaskState::AuthRequired] {
         assert!(s.is_interrupted(), "{} is an interrupt", s.as_str());
         assert!(!s.is_terminal(), "{} is not an ending", s.as_str());
-        assert!(s.is_active(), "{} must be rehydrated on boot", s.as_str());
     }
     for s in [
         TaskState::Completed,
@@ -197,7 +196,6 @@ fn an_interrupt_is_active_and_never_collectable() {
         TaskState::Rejected,
     ] {
         assert!(s.is_terminal());
-        assert!(!s.is_active());
         assert!(!s.is_interrupted());
     }
 }

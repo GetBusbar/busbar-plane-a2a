@@ -7,6 +7,7 @@
 use serde_json::json;
 
 use super::*;
+use crate::answer_bytes::rewrap;
 
 fn card(words: &[&str]) -> Value {
     json!({ "supportedInterfaces": words.iter()
