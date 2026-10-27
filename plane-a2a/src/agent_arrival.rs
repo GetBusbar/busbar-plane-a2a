@@ -296,6 +296,17 @@ pub enum CardAsk {
 }
 
 impl AgentDisposition {
+    /// The request id the unit answers, when it names one (never `null`).
+    #[must_use]
+    pub fn rpc_id(&self) -> Option<Value> {
+        match self {
+            Self::Request { id, .. } | Self::Unlisted { id, .. } => {
+                (!id.is_null()).then(|| id.clone())
+            }
+            _ => None,
+        }
+    }
+
     /// The operation class an admitted arrival is a unit of: its row's, or for a method the
     /// vocabulary does not list, the class the engine relays it as ([`crate::ops::relay_class`]).
     /// `None` for a refused arrival.

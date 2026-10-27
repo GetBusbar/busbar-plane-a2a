@@ -1994,6 +1994,15 @@ fn transport_refusal(unit: &mut AgentUnit) -> Option<relay::RelayReply> {
     hop.refused.clone()
 }
 
+/// What `f` reads off unit `unit`, when the instance and the unit are both there.
+fn of_unit<T>(
+    instance: &Instance<'_, A2aDoor>,
+    unit: u64,
+    f: impl FnOnce(&mut AgentUnit) -> Option<T>,
+) -> Option<T> {
+    instance.get()?.units.with(&unit, |u| u.and_then(f))
+}
+
 /// THE KERNEL'S VERDICT ON `agent` (`trust.serves`: the kernel's Approve as a query, ARCHITECT
 /// FLIP-A2A; it never pends, so it rides no ticket): [`svc::DISTRUST_NONE`] serves, any other
 /// `DISTRUST_*` refuses. An instance opened without host services, or a service that does not
@@ -3065,11 +3074,7 @@ slot!(
         // `no_destination` for a unit routed by scope): 1.5.5's own words, the several agents it
         // reaches named from the kernel's text.
         let scoped = given.reason == busbar_contract::abi::plane::RefusalCode::NoDestination.code()
-            && instance.get().is_some_and(|plane| {
-            plane
-                .units
-                .with(&given.unit, |u| u.is_some_and(|u| u.agent.is_none()))
-        });
+            && of_unit(&instance, given.unit, |u| u.agent.is_none().then_some(())).is_some();
         // A REFUSAL BEFORE `arrive` READ ITS LINE (the kernel decoded none, so it states the first
         // dialect): the plane chooses its envelope from the target by its own rule (abi/plane
         // `RefusalIn::target`), and a call on the gRPC service is refused on the gRPC line.
@@ -3091,25 +3096,14 @@ slot!(
         // the agent failed, or closed unanswered): the engine's transport failure, not the
         // breaker's words ([`transport_refusal`]).
         let transport = breaker
-            .then(|| {
-                instance.get().and_then(|plane| {
-                    plane
-                        .units
-                        .with(&given.unit, |u| u.and_then(transport_refusal))
-                })
-            })
+            .then(|| of_unit(&instance, given.unit, transport_refusal))
             .flatten();
         let tripped = (breaker && transport.is_none())
             .then(|| {
                 instance.get().and_then(|plane| {
                     let (id, agent) = plane.units.with(&given.unit, |u| {
                         let u = u?;
-                        let id = match &u.disposition {
-                            AgentDisposition::Request { id, .. } | AgentDisposition::Unlisted { id, .. } => {
-                                (!id.is_null()).then(|| id.clone())
-                            }
-                            _ => None,
-                        };
+                        let id = u.disposition.rpc_id();
                         // A unit over a failover pool names the member its task is pinned to
                         // (predev's pinned hop: the member's own breaker), else the POOL, whose
                         // walk found nothing admissible (predev `route.rs`: `agent_id: pool_name`).
@@ -3143,57 +3137,35 @@ slot!(
         let untrusted = (given.reason
             == busbar_contract::abi::plane::RefusalCode::Untrusted.code())
         .then(|| {
-            instance.get().and_then(|plane| {
-                plane.units.with(&given.unit, |u| {
-                    let agent = u?.agent.clone()?;
-                    Some(crate::card_trust::not_serving(
-                        Some(&agent),
-                        crate::card_trust::verdict_state(u64::from(given.trust)),
-                        given.status,
-                    ))
-                })
+            of_unit(&instance, given.unit, |u| {
+                Some(crate::card_trust::not_serving(
+                    Some(u.agent.as_deref()?),
+                    crate::card_trust::verdict_state(u64::from(given.trust)),
+                    given.status,
+                ))
             })
         })
         .flatten();
         // A unit `project` refused for a committed rewrite it could not read back: predev's
         // conformant internal error, echoing the request id.
-        let unreadable = instance
-            .get()
-            .and_then(|plane| {
-                plane.units.with(&given.unit, |u| {
-                    let u = u.filter(|u| u.unreadable_rewrite)?;
-                    let id = match &u.disposition {
-                        AgentDisposition::Request { id, .. } | AgentDisposition::Unlisted { id, .. } => {
-                            (!id.is_null()).then(|| id.clone())
-                        }
-                        _ => None,
-                    };
-                    Some(unreadable_rewrite(id))
-                })
-            });
+        let unreadable = instance.get().and_then(|plane| {
+            plane.units.with(&given.unit, |u| {
+                let u = u.filter(|u| u.unreadable_rewrite)?;
+                let id = u.disposition.rpc_id();
+                Some(unreadable_rewrite(id))
+            })
+        });
         // A hop the kernel refused for busbar's own credential: the engine's answer to a lease it
         // could not mint, made on the refused piece, which ended its task ([`credential_refusal`]).
         let credential = (given.reason
             == busbar_contract::abi::plane::RefusalCode::CredentialUnavailable.code())
-        .then(|| {
-            instance.get().and_then(|plane| {
-                plane
-                    .units
-                    .with(&given.unit, |u| u.and_then(credential_refusal))
-            })
-        })
+        .then(|| of_unit(&instance, given.unit, credential_refusal))
         .flatten();
         // A unit whose record writes the store refused: the engine's answer for the write its verb
         // could not make durable, at its own status ([`crate::task_door::Pass`]'s `unrecorded`).
         let unrecorded = (given.reason
             == busbar_contract::abi::plane::RefusalCode::DurabilityUnavailable.code())
-        .then(|| {
-            instance.get().and_then(|plane| {
-                plane
-                    .units
-                    .with(&given.unit, |u| u.and_then(|u| u.pass.unrecorded.clone()))
-            })
-        })
+        .then(|| of_unit(&instance, given.unit, |u| u.pass.unrecorded.clone()))
         .flatten();
         // A KERNEL REFUSAL WITH NO UNIT (no credential, a body over the cap: refused before any
         // unit was made) answers the bytes v1.5.5 answered on the route, a JSON-RPC error with no
@@ -3222,13 +3194,7 @@ slot!(
         } else if let Some(refusal) = &tripped {
             // A FRESH SUBMISSION'S REFUSAL NAMES THE TASK IT REJECTED (predev `rpcerror::about_task`),
             // read off the unit's own memory: this slot is ticketless.
-            let rejected = instance
-                .get()
-                .and_then(|plane| {
-                    plane
-                        .units
-                        .with(&given.unit, |u| u.and_then(|u| u.hop.as_ref()?.rejected.clone()))
-                });
+            let rejected = of_unit(&instance, given.unit, |u| u.hop.as_ref()?.rejected.clone());
             match rejected {
                 Some(task) => agent_arrival::render_about_task(dialect, refusal, &task),
                 None => agent_arrival::render(dialect, refusal, true),
@@ -3265,13 +3231,7 @@ slot!(
             // A caller whose grant does not reach the agent it addressed: the engine's
             // `NotInScope` sentence, naming the agent's scope.
             let ungranted = (given.reason == Code::ScopeDenied.code())
-                .then(|| {
-                    instance.get().and_then(|plane| {
-                        plane
-                            .units
-                            .with(&given.unit, |u| u.and_then(|u| u.agent.clone()))
-                    })
-                })
+                .then(|| of_unit(&instance, given.unit, |u| u.agent.clone()))
                 .flatten()
                 .map(|agent| agent_arrival::not_granted_sentence(&door_statement::agent_resource(&agent)));
             let text = ungranted.as_deref().unwrap_or(text);
@@ -3321,18 +3281,14 @@ slot!(
             || unreadable.is_some();
         let audited = after_admission
             .then(|| {
-                instance.get().and_then(|plane| {
-                    plane.units.with(&given.unit, |u| {
-                        u.and_then(|u| match (&u.disposition, &u.agent) {
-                            (AgentDisposition::Request { row, .. }, None)
-                                if row.op == crate::ops::OP_AGENT_CARD =>
-                            {
-                                Some(door_statement::PLANE_POOL_RESOURCE.to_string())
-                            }
-                            (_, Some(agent)) => Some(door_statement::agent_resource(agent)),
-                            _ => None,
-                        })
-                    })
+                of_unit(&instance, given.unit, |u| match (&u.disposition, &u.agent) {
+                    (AgentDisposition::Request { row, .. }, None)
+                        if row.op == crate::ops::OP_AGENT_CARD =>
+                    {
+                        Some(door_statement::PLANE_POOL_RESOURCE.to_string())
+                    }
+                    (_, Some(agent)) => Some(door_statement::agent_resource(agent)),
+                    _ => None,
                 })
             })
             .flatten();
@@ -4423,11 +4379,7 @@ slot!(
             },
             // The gRPC line projects the JSON-RPC request its call's message composed at arrival.
             Line::Framed => {
-                let composed = instance.get().and_then(|plane| {
-                    plane
-                        .units
-                        .with(&input.get().unit, |u| u.and_then(|u| u.envelope.clone()))
-                });
+                let composed = of_unit(&instance, input.get().unit, |u| u.envelope.clone());
                 match composed {
                     Some(envelope) => envelope,
                     None => return Outcome::Refused,
