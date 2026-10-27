@@ -72,8 +72,8 @@ use crate::tasks::{task_key, Halt, Write};
 /// The most calls the kernel keeps in flight on one instance, as the transport doors state it.
 const MAX_INFLIGHT: u32 = 64;
 
-/// The version the Statement names: the crate's (a test pins the two equal).
-pub const VERSION: &str = "1.6.0";
+/// The version the Statement names: the crate's own, so a version bump is one edit.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// THE STATEMENT: the plane's name and version, the settings section it declares
 /// ([`door_statement::SECTIONS`]), its three outbound needs ([`door_statement::NEEDS`]), the secret references its
