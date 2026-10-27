@@ -1,0 +1,989 @@
+{
+  "_comment": [
+    "The A2A method inventory: every method x originator x role x transport cell, moved here from busbar's qa/method-inventory.json."
+  ],
+  "a2a_spec_tag": "v1.0.1",
+  "derived_from": {
+    "a2a": "a2a-pb 0.2.0 proto/a2a.proto"
+  },
+  "roles": [
+    "server",
+    "client"
+  ],
+  "methods": [
+    {
+      "protocol": "a2a",
+      "method": "CancelTask",
+      "originator": "client",
+      "kind": "rpc",
+      "derived_from": "a2a-pb 0.2.0 proto/a2a.proto service A2AService",
+      "transports": [
+        "jsonrpc",
+        "http+json",
+        "grpc"
+      ],
+      "server_streaming": false,
+      "wire_names": {
+        "jsonrpc_1_0": "CancelTask",
+        "jsonrpc_0_3": "tasks/cancel",
+        "http+json": "POST /tasks/{id=*}:cancel",
+        "grpc": "/a2a.v1.A2AService/CancelTask"
+      },
+      "na": {}
+    },
+    {
+      "protocol": "a2a",
+      "method": "CreateTaskPushNotificationConfig",
+      "originator": "client",
+      "kind": "rpc",
+      "derived_from": "a2a-pb 0.2.0 proto/a2a.proto service A2AService",
+      "transports": [
+        "jsonrpc",
+        "http+json",
+        "grpc"
+      ],
+      "server_streaming": false,
+      "wire_names": {
+        "jsonrpc_1_0": "CreateTaskPushNotificationConfig",
+        "jsonrpc_0_3": "tasks/pushNotificationConfig/set",
+        "http+json": "POST /tasks/{task_id=*}/pushNotificationConfigs",
+        "grpc": "/a2a.v1.A2AService/CreateTaskPushNotificationConfig"
+      },
+      "na": {}
+    },
+    {
+      "protocol": "a2a",
+      "method": "DeleteTaskPushNotificationConfig",
+      "originator": "client",
+      "kind": "rpc",
+      "derived_from": "a2a-pb 0.2.0 proto/a2a.proto service A2AService",
+      "transports": [
+        "jsonrpc",
+        "http+json",
+        "grpc"
+      ],
+      "server_streaming": false,
+      "wire_names": {
+        "jsonrpc_1_0": "DeleteTaskPushNotificationConfig",
+        "jsonrpc_0_3": "tasks/pushNotificationConfig/delete",
+        "http+json": "DELETE /tasks/{task_id=*}/pushNotificationConfigs/{id=*}",
+        "grpc": "/a2a.v1.A2AService/DeleteTaskPushNotificationConfig"
+      },
+      "na": {}
+    },
+    {
+      "protocol": "a2a",
+      "method": "GetExtendedAgentCard",
+      "originator": "client",
+      "kind": "rpc",
+      "derived_from": "a2a-pb 0.2.0 proto/a2a.proto service A2AService",
+      "transports": [
+        "jsonrpc",
+        "http+json",
+        "grpc"
+      ],
+      "server_streaming": false,
+      "wire_names": {
+        "jsonrpc_1_0": "GetExtendedAgentCard",
+        "jsonrpc_0_3": "agent/getAuthenticatedExtendedCard",
+        "http+json": "GET /extendedAgentCard",
+        "grpc": "/a2a.v1.A2AService/GetExtendedAgentCard"
+      },
+      "na": {}
+    },
+    {
+      "protocol": "a2a",
+      "method": "GetTask",
+      "originator": "client",
+      "kind": "rpc",
+      "derived_from": "a2a-pb 0.2.0 proto/a2a.proto service A2AService",
+      "transports": [
+        "jsonrpc",
+        "http+json",
+        "grpc"
+      ],
+      "server_streaming": false,
+      "wire_names": {
+        "jsonrpc_1_0": "GetTask",
+        "jsonrpc_0_3": "tasks/get",
+        "http+json": "GET /tasks/{id=*}",
+        "grpc": "/a2a.v1.A2AService/GetTask"
+      },
+      "na": {}
+    },
+    {
+      "protocol": "a2a",
+      "method": "GetTaskPushNotificationConfig",
+      "originator": "client",
+      "kind": "rpc",
+      "derived_from": "a2a-pb 0.2.0 proto/a2a.proto service A2AService",
+      "transports": [
+        "jsonrpc",
+        "http+json",
+        "grpc"
+      ],
+      "server_streaming": false,
+      "wire_names": {
+        "jsonrpc_1_0": "GetTaskPushNotificationConfig",
+        "jsonrpc_0_3": "tasks/pushNotificationConfig/get",
+        "http+json": "GET /tasks/{task_id=*}/pushNotificationConfigs/{id=*}",
+        "grpc": "/a2a.v1.A2AService/GetTaskPushNotificationConfig"
+      },
+      "na": {}
+    },
+    {
+      "protocol": "a2a",
+      "method": "ListTaskPushNotificationConfigs",
+      "originator": "client",
+      "kind": "rpc",
+      "derived_from": "a2a-pb 0.2.0 proto/a2a.proto service A2AService",
+      "transports": [
+        "jsonrpc",
+        "http+json",
+        "grpc"
+      ],
+      "server_streaming": false,
+      "wire_names": {
+        "jsonrpc_1_0": "ListTaskPushNotificationConfigs",
+        "jsonrpc_0_3": "tasks/pushNotificationConfig/list",
+        "http+json": "GET /tasks/{task_id=*}/pushNotificationConfigs",
+        "grpc": "/a2a.v1.A2AService/ListTaskPushNotificationConfigs"
+      },
+      "na": {}
+    },
+    {
+      "protocol": "a2a",
+      "method": "ListTasks",
+      "originator": "client",
+      "kind": "rpc",
+      "derived_from": "a2a-pb 0.2.0 proto/a2a.proto service A2AService",
+      "transports": [
+        "jsonrpc",
+        "http+json",
+        "grpc"
+      ],
+      "server_streaming": false,
+      "wire_names": {
+        "jsonrpc_1_0": "ListTasks",
+        "jsonrpc_0_3": "tasks/list",
+        "http+json": "GET /tasks",
+        "grpc": "/a2a.v1.A2AService/ListTasks"
+      },
+      "na": {}
+    },
+    {
+      "protocol": "a2a",
+      "method": "SendMessage",
+      "originator": "client",
+      "kind": "rpc",
+      "derived_from": "a2a-pb 0.2.0 proto/a2a.proto service A2AService",
+      "transports": [
+        "jsonrpc",
+        "http+json",
+        "grpc"
+      ],
+      "server_streaming": false,
+      "wire_names": {
+        "jsonrpc_1_0": "SendMessage",
+        "jsonrpc_0_3": "message/send",
+        "http+json": "POST /message:send",
+        "grpc": "/a2a.v1.A2AService/SendMessage"
+      },
+      "na": {}
+    },
+    {
+      "protocol": "a2a",
+      "method": "SendStreamingMessage",
+      "originator": "client",
+      "kind": "rpc",
+      "derived_from": "a2a-pb 0.2.0 proto/a2a.proto service A2AService",
+      "transports": [
+        "jsonrpc",
+        "http+json",
+        "grpc"
+      ],
+      "server_streaming": true,
+      "wire_names": {
+        "jsonrpc_1_0": "SendStreamingMessage",
+        "jsonrpc_0_3": "message/stream",
+        "http+json": "POST /message:stream",
+        "grpc": "/a2a.v1.A2AService/SendStreamingMessage"
+      },
+      "na": {}
+    },
+    {
+      "protocol": "a2a",
+      "method": "SubscribeToTask",
+      "originator": "client",
+      "kind": "rpc",
+      "derived_from": "a2a-pb 0.2.0 proto/a2a.proto service A2AService",
+      "transports": [
+        "jsonrpc",
+        "http+json",
+        "grpc"
+      ],
+      "server_streaming": true,
+      "wire_names": {
+        "jsonrpc_1_0": "SubscribeToTask",
+        "jsonrpc_0_3": "tasks/resubscribe",
+        "http+json": "GET /tasks/{id=*}:subscribe",
+        "grpc": "/a2a.v1.A2AService/SubscribeToTask"
+      },
+      "na": {}
+    },
+    {
+      "protocol": "a2a",
+      "method": "GET /.well-known/agent-card.json",
+      "originator": "client",
+      "kind": "http-resource",
+      "derived_from": "not derivable: A2A SPEC 8.2 and the IANA registration in SPEC 14.3 define the Agent Card as an HTTP resource. It is not an rpc in service A2AService, so a proto-only derivation misses it entirely -- and it is the FIRST thing every A2A client fetches.",
+      "exercised_by": [
+        "a2a-tck CARD-DISC-001",
+        "a2a-tck CARD-STRUCT-001",
+        "a2a-tck CARD-PROTO-001/002",
+        "a2a-tck CARD-CACHE-001/002/003",
+        "a2a-tck CARD-SIGN-001..004",
+        "a2a-tck CARD-EXT-001/002"
+      ],
+      "transports": [
+        "jsonrpc",
+        "http+json",
+        "grpc"
+      ],
+      "na": {
+        "grpc": "The card is an HTTP resource at a well-known path, not an rpc; gRPC has no well-known-path concept and the proto service block does not declare it. A gRPC-only peer discovers busbar via the same HTTP fetch."
+      }
+    },
+    {
+      "protocol": "a2a",
+      "method": "PushNotificationDelivery",
+      "originator": "server",
+      "kind": "webhook",
+      "derived_from": "not derivable: Delivering a push notification is the agent POSTing a Task to the client's webhook URL. It is an obligation of the server role with no rpc, no JSON-RPC method and no gRPC form -- so it is invisible to the service block even though three TCK MUSTs judge it.",
+      "exercised_by": [
+        "a2a-tck PUSH-DELIVER-001",
+        "a2a-tck PUSH-DELIVER-002",
+        "a2a-tck PUSH-DELIVER-003"
+      ],
+      "transports": [
+        "jsonrpc",
+        "http+json",
+        "grpc"
+      ],
+      "na": {
+        "jsonrpc": "Delivery is an outbound HTTP POST to the client's webhook. There is no JSON-RPC request for it; the JSON-RPC binding only carries the CONFIG methods.",
+        "grpc": "Same: the proto declares the config messages, never a delivery rpc."
+      }
+    }
+  ],
+  "cells": [
+    {
+      "id": "a2a|grpc|client|client|CancelTask",
+      "protocol": "a2a",
+      "method": "CancelTask",
+      "originator": "client",
+      "role": "client",
+      "transport": "grpc",
+      "obligation": "issue"
+    },
+    {
+      "id": "a2a|grpc|client|client|CreateTaskPushNotificationConfig",
+      "protocol": "a2a",
+      "method": "CreateTaskPushNotificationConfig",
+      "originator": "client",
+      "role": "client",
+      "transport": "grpc",
+      "obligation": "issue"
+    },
+    {
+      "id": "a2a|grpc|client|client|DeleteTaskPushNotificationConfig",
+      "protocol": "a2a",
+      "method": "DeleteTaskPushNotificationConfig",
+      "originator": "client",
+      "role": "client",
+      "transport": "grpc",
+      "obligation": "issue"
+    },
+    {
+      "id": "a2a|grpc|client|client|GET /.well-known/agent-card.json",
+      "protocol": "a2a",
+      "method": "GET /.well-known/agent-card.json",
+      "originator": "client",
+      "role": "client",
+      "transport": "grpc",
+      "obligation": "issue",
+      "na_reason": "The card is an HTTP resource at a well-known path, not an rpc; gRPC has no well-known-path concept and the proto service block does not declare it. A gRPC-only peer discovers busbar via the same HTTP fetch."
+    },
+    {
+      "id": "a2a|grpc|client|client|GetExtendedAgentCard",
+      "protocol": "a2a",
+      "method": "GetExtendedAgentCard",
+      "originator": "client",
+      "role": "client",
+      "transport": "grpc",
+      "obligation": "issue"
+    },
+    {
+      "id": "a2a|grpc|client|client|GetTask",
+      "protocol": "a2a",
+      "method": "GetTask",
+      "originator": "client",
+      "role": "client",
+      "transport": "grpc",
+      "obligation": "issue"
+    },
+    {
+      "id": "a2a|grpc|client|client|GetTaskPushNotificationConfig",
+      "protocol": "a2a",
+      "method": "GetTaskPushNotificationConfig",
+      "originator": "client",
+      "role": "client",
+      "transport": "grpc",
+      "obligation": "issue"
+    },
+    {
+      "id": "a2a|grpc|client|client|ListTaskPushNotificationConfigs",
+      "protocol": "a2a",
+      "method": "ListTaskPushNotificationConfigs",
+      "originator": "client",
+      "role": "client",
+      "transport": "grpc",
+      "obligation": "issue"
+    },
+    {
+      "id": "a2a|grpc|client|client|ListTasks",
+      "protocol": "a2a",
+      "method": "ListTasks",
+      "originator": "client",
+      "role": "client",
+      "transport": "grpc",
+      "obligation": "issue"
+    },
+    {
+      "id": "a2a|grpc|client|client|SendMessage",
+      "protocol": "a2a",
+      "method": "SendMessage",
+      "originator": "client",
+      "role": "client",
+      "transport": "grpc",
+      "obligation": "issue"
+    },
+    {
+      "id": "a2a|grpc|client|client|SendStreamingMessage",
+      "protocol": "a2a",
+      "method": "SendStreamingMessage",
+      "originator": "client",
+      "role": "client",
+      "transport": "grpc",
+      "obligation": "issue"
+    },
+    {
+      "id": "a2a|grpc|client|client|SubscribeToTask",
+      "protocol": "a2a",
+      "method": "SubscribeToTask",
+      "originator": "client",
+      "role": "client",
+      "transport": "grpc",
+      "obligation": "issue"
+    },
+    {
+      "id": "a2a|grpc|client|server|PushNotificationDelivery",
+      "protocol": "a2a",
+      "method": "PushNotificationDelivery",
+      "originator": "server",
+      "role": "client",
+      "transport": "grpc",
+      "obligation": "handle",
+      "na_reason": "Same: the proto declares the config messages, never a delivery rpc."
+    },
+    {
+      "id": "a2a|grpc|server|client|CancelTask",
+      "protocol": "a2a",
+      "method": "CancelTask",
+      "originator": "client",
+      "role": "server",
+      "transport": "grpc",
+      "obligation": "handle"
+    },
+    {
+      "id": "a2a|grpc|server|client|CreateTaskPushNotificationConfig",
+      "protocol": "a2a",
+      "method": "CreateTaskPushNotificationConfig",
+      "originator": "client",
+      "role": "server",
+      "transport": "grpc",
+      "obligation": "handle"
+    },
+    {
+      "id": "a2a|grpc|server|client|DeleteTaskPushNotificationConfig",
+      "protocol": "a2a",
+      "method": "DeleteTaskPushNotificationConfig",
+      "originator": "client",
+      "role": "server",
+      "transport": "grpc",
+      "obligation": "handle"
+    },
+    {
+      "id": "a2a|grpc|server|client|GET /.well-known/agent-card.json",
+      "protocol": "a2a",
+      "method": "GET /.well-known/agent-card.json",
+      "originator": "client",
+      "role": "server",
+      "transport": "grpc",
+      "obligation": "handle",
+      "na_reason": "The card is an HTTP resource at a well-known path, not an rpc; gRPC has no well-known-path concept and the proto service block does not declare it. A gRPC-only peer discovers busbar via the same HTTP fetch."
+    },
+    {
+      "id": "a2a|grpc|server|client|GetExtendedAgentCard",
+      "protocol": "a2a",
+      "method": "GetExtendedAgentCard",
+      "originator": "client",
+      "role": "server",
+      "transport": "grpc",
+      "obligation": "handle"
+    },
+    {
+      "id": "a2a|grpc|server|client|GetTask",
+      "protocol": "a2a",
+      "method": "GetTask",
+      "originator": "client",
+      "role": "server",
+      "transport": "grpc",
+      "obligation": "handle"
+    },
+    {
+      "id": "a2a|grpc|server|client|GetTaskPushNotificationConfig",
+      "protocol": "a2a",
+      "method": "GetTaskPushNotificationConfig",
+      "originator": "client",
+      "role": "server",
+      "transport": "grpc",
+      "obligation": "handle"
+    },
+    {
+      "id": "a2a|grpc|server|client|ListTaskPushNotificationConfigs",
+      "protocol": "a2a",
+      "method": "ListTaskPushNotificationConfigs",
+      "originator": "client",
+      "role": "server",
+      "transport": "grpc",
+      "obligation": "handle"
+    },
+    {
+      "id": "a2a|grpc|server|client|ListTasks",
+      "protocol": "a2a",
+      "method": "ListTasks",
+      "originator": "client",
+      "role": "server",
+      "transport": "grpc",
+      "obligation": "handle"
+    },
+    {
+      "id": "a2a|grpc|server|client|SendMessage",
+      "protocol": "a2a",
+      "method": "SendMessage",
+      "originator": "client",
+      "role": "server",
+      "transport": "grpc",
+      "obligation": "handle"
+    },
+    {
+      "id": "a2a|grpc|server|client|SendStreamingMessage",
+      "protocol": "a2a",
+      "method": "SendStreamingMessage",
+      "originator": "client",
+      "role": "server",
+      "transport": "grpc",
+      "obligation": "handle"
+    },
+    {
+      "id": "a2a|grpc|server|client|SubscribeToTask",
+      "protocol": "a2a",
+      "method": "SubscribeToTask",
+      "originator": "client",
+      "role": "server",
+      "transport": "grpc",
+      "obligation": "handle"
+    },
+    {
+      "id": "a2a|grpc|server|server|PushNotificationDelivery",
+      "protocol": "a2a",
+      "method": "PushNotificationDelivery",
+      "originator": "server",
+      "role": "server",
+      "transport": "grpc",
+      "obligation": "issue",
+      "na_reason": "Same: the proto declares the config messages, never a delivery rpc."
+    },
+    {
+      "id": "a2a|http+json|client|client|CancelTask",
+      "protocol": "a2a",
+      "method": "CancelTask",
+      "originator": "client",
+      "role": "client",
+      "transport": "http+json",
+      "obligation": "issue"
+    },
+    {
+      "id": "a2a|http+json|client|client|CreateTaskPushNotificationConfig",
+      "protocol": "a2a",
+      "method": "CreateTaskPushNotificationConfig",
+      "originator": "client",
+      "role": "client",
+      "transport": "http+json",
+      "obligation": "issue"
+    },
+    {
+      "id": "a2a|http+json|client|client|DeleteTaskPushNotificationConfig",
+      "protocol": "a2a",
+      "method": "DeleteTaskPushNotificationConfig",
+      "originator": "client",
+      "role": "client",
+      "transport": "http+json",
+      "obligation": "issue"
+    },
+    {
+      "id": "a2a|http+json|client|client|GET /.well-known/agent-card.json",
+      "protocol": "a2a",
+      "method": "GET /.well-known/agent-card.json",
+      "originator": "client",
+      "role": "client",
+      "transport": "http+json",
+      "obligation": "issue"
+    },
+    {
+      "id": "a2a|http+json|client|client|GetExtendedAgentCard",
+      "protocol": "a2a",
+      "method": "GetExtendedAgentCard",
+      "originator": "client",
+      "role": "client",
+      "transport": "http+json",
+      "obligation": "issue"
+    },
+    {
+      "id": "a2a|http+json|client|client|GetTask",
+      "protocol": "a2a",
+      "method": "GetTask",
+      "originator": "client",
+      "role": "client",
+      "transport": "http+json",
+      "obligation": "issue"
+    },
+    {
+      "id": "a2a|http+json|client|client|GetTaskPushNotificationConfig",
+      "protocol": "a2a",
+      "method": "GetTaskPushNotificationConfig",
+      "originator": "client",
+      "role": "client",
+      "transport": "http+json",
+      "obligation": "issue"
+    },
+    {
+      "id": "a2a|http+json|client|client|ListTaskPushNotificationConfigs",
+      "protocol": "a2a",
+      "method": "ListTaskPushNotificationConfigs",
+      "originator": "client",
+      "role": "client",
+      "transport": "http+json",
+      "obligation": "issue"
+    },
+    {
+      "id": "a2a|http+json|client|client|ListTasks",
+      "protocol": "a2a",
+      "method": "ListTasks",
+      "originator": "client",
+      "role": "client",
+      "transport": "http+json",
+      "obligation": "issue"
+    },
+    {
+      "id": "a2a|http+json|client|client|SendMessage",
+      "protocol": "a2a",
+      "method": "SendMessage",
+      "originator": "client",
+      "role": "client",
+      "transport": "http+json",
+      "obligation": "issue"
+    },
+    {
+      "id": "a2a|http+json|client|client|SendStreamingMessage",
+      "protocol": "a2a",
+      "method": "SendStreamingMessage",
+      "originator": "client",
+      "role": "client",
+      "transport": "http+json",
+      "obligation": "issue"
+    },
+    {
+      "id": "a2a|http+json|client|client|SubscribeToTask",
+      "protocol": "a2a",
+      "method": "SubscribeToTask",
+      "originator": "client",
+      "role": "client",
+      "transport": "http+json",
+      "obligation": "issue"
+    },
+    {
+      "id": "a2a|http+json|client|server|PushNotificationDelivery",
+      "protocol": "a2a",
+      "method": "PushNotificationDelivery",
+      "originator": "server",
+      "role": "client",
+      "transport": "http+json",
+      "obligation": "handle"
+    },
+    {
+      "id": "a2a|http+json|server|client|CancelTask",
+      "protocol": "a2a",
+      "method": "CancelTask",
+      "originator": "client",
+      "role": "server",
+      "transport": "http+json",
+      "obligation": "handle"
+    },
+    {
+      "id": "a2a|http+json|server|client|CreateTaskPushNotificationConfig",
+      "protocol": "a2a",
+      "method": "CreateTaskPushNotificationConfig",
+      "originator": "client",
+      "role": "server",
+      "transport": "http+json",
+      "obligation": "handle"
+    },
+    {
+      "id": "a2a|http+json|server|client|DeleteTaskPushNotificationConfig",
+      "protocol": "a2a",
+      "method": "DeleteTaskPushNotificationConfig",
+      "originator": "client",
+      "role": "server",
+      "transport": "http+json",
+      "obligation": "handle"
+    },
+    {
+      "id": "a2a|http+json|server|client|GET /.well-known/agent-card.json",
+      "protocol": "a2a",
+      "method": "GET /.well-known/agent-card.json",
+      "originator": "client",
+      "role": "server",
+      "transport": "http+json",
+      "obligation": "handle"
+    },
+    {
+      "id": "a2a|http+json|server|client|GetExtendedAgentCard",
+      "protocol": "a2a",
+      "method": "GetExtendedAgentCard",
+      "originator": "client",
+      "role": "server",
+      "transport": "http+json",
+      "obligation": "handle"
+    },
+    {
+      "id": "a2a|http+json|server|client|GetTask",
+      "protocol": "a2a",
+      "method": "GetTask",
+      "originator": "client",
+      "role": "server",
+      "transport": "http+json",
+      "obligation": "handle"
+    },
+    {
+      "id": "a2a|http+json|server|client|GetTaskPushNotificationConfig",
+      "protocol": "a2a",
+      "method": "GetTaskPushNotificationConfig",
+      "originator": "client",
+      "role": "server",
+      "transport": "http+json",
+      "obligation": "handle"
+    },
+    {
+      "id": "a2a|http+json|server|client|ListTaskPushNotificationConfigs",
+      "protocol": "a2a",
+      "method": "ListTaskPushNotificationConfigs",
+      "originator": "client",
+      "role": "server",
+      "transport": "http+json",
+      "obligation": "handle"
+    },
+    {
+      "id": "a2a|http+json|server|client|ListTasks",
+      "protocol": "a2a",
+      "method": "ListTasks",
+      "originator": "client",
+      "role": "server",
+      "transport": "http+json",
+      "obligation": "handle"
+    },
+    {
+      "id": "a2a|http+json|server|client|SendMessage",
+      "protocol": "a2a",
+      "method": "SendMessage",
+      "originator": "client",
+      "role": "server",
+      "transport": "http+json",
+      "obligation": "handle"
+    },
+    {
+      "id": "a2a|http+json|server|client|SendStreamingMessage",
+      "protocol": "a2a",
+      "method": "SendStreamingMessage",
+      "originator": "client",
+      "role": "server",
+      "transport": "http+json",
+      "obligation": "handle"
+    },
+    {
+      "id": "a2a|http+json|server|client|SubscribeToTask",
+      "protocol": "a2a",
+      "method": "SubscribeToTask",
+      "originator": "client",
+      "role": "server",
+      "transport": "http+json",
+      "obligation": "handle"
+    },
+    {
+      "id": "a2a|http+json|server|server|PushNotificationDelivery",
+      "protocol": "a2a",
+      "method": "PushNotificationDelivery",
+      "originator": "server",
+      "role": "server",
+      "transport": "http+json",
+      "obligation": "issue"
+    },
+    {
+      "id": "a2a|jsonrpc|client|client|CancelTask",
+      "protocol": "a2a",
+      "method": "CancelTask",
+      "originator": "client",
+      "role": "client",
+      "transport": "jsonrpc",
+      "obligation": "issue"
+    },
+    {
+      "id": "a2a|jsonrpc|client|client|CreateTaskPushNotificationConfig",
+      "protocol": "a2a",
+      "method": "CreateTaskPushNotificationConfig",
+      "originator": "client",
+      "role": "client",
+      "transport": "jsonrpc",
+      "obligation": "issue"
+    },
+    {
+      "id": "a2a|jsonrpc|client|client|DeleteTaskPushNotificationConfig",
+      "protocol": "a2a",
+      "method": "DeleteTaskPushNotificationConfig",
+      "originator": "client",
+      "role": "client",
+      "transport": "jsonrpc",
+      "obligation": "issue"
+    },
+    {
+      "id": "a2a|jsonrpc|client|client|GET /.well-known/agent-card.json",
+      "protocol": "a2a",
+      "method": "GET /.well-known/agent-card.json",
+      "originator": "client",
+      "role": "client",
+      "transport": "jsonrpc",
+      "obligation": "issue"
+    },
+    {
+      "id": "a2a|jsonrpc|client|client|GetExtendedAgentCard",
+      "protocol": "a2a",
+      "method": "GetExtendedAgentCard",
+      "originator": "client",
+      "role": "client",
+      "transport": "jsonrpc",
+      "obligation": "issue"
+    },
+    {
+      "id": "a2a|jsonrpc|client|client|GetTask",
+      "protocol": "a2a",
+      "method": "GetTask",
+      "originator": "client",
+      "role": "client",
+      "transport": "jsonrpc",
+      "obligation": "issue"
+    },
+    {
+      "id": "a2a|jsonrpc|client|client|GetTaskPushNotificationConfig",
+      "protocol": "a2a",
+      "method": "GetTaskPushNotificationConfig",
+      "originator": "client",
+      "role": "client",
+      "transport": "jsonrpc",
+      "obligation": "issue"
+    },
+    {
+      "id": "a2a|jsonrpc|client|client|ListTaskPushNotificationConfigs",
+      "protocol": "a2a",
+      "method": "ListTaskPushNotificationConfigs",
+      "originator": "client",
+      "role": "client",
+      "transport": "jsonrpc",
+      "obligation": "issue"
+    },
+    {
+      "id": "a2a|jsonrpc|client|client|ListTasks",
+      "protocol": "a2a",
+      "method": "ListTasks",
+      "originator": "client",
+      "role": "client",
+      "transport": "jsonrpc",
+      "obligation": "issue"
+    },
+    {
+      "id": "a2a|jsonrpc|client|client|SendMessage",
+      "protocol": "a2a",
+      "method": "SendMessage",
+      "originator": "client",
+      "role": "client",
+      "transport": "jsonrpc",
+      "obligation": "issue"
+    },
+    {
+      "id": "a2a|jsonrpc|client|client|SendStreamingMessage",
+      "protocol": "a2a",
+      "method": "SendStreamingMessage",
+      "originator": "client",
+      "role": "client",
+      "transport": "jsonrpc",
+      "obligation": "issue"
+    },
+    {
+      "id": "a2a|jsonrpc|client|client|SubscribeToTask",
+      "protocol": "a2a",
+      "method": "SubscribeToTask",
+      "originator": "client",
+      "role": "client",
+      "transport": "jsonrpc",
+      "obligation": "issue"
+    },
+    {
+      "id": "a2a|jsonrpc|client|server|PushNotificationDelivery",
+      "protocol": "a2a",
+      "method": "PushNotificationDelivery",
+      "originator": "server",
+      "role": "client",
+      "transport": "jsonrpc",
+      "obligation": "handle",
+      "na_reason": "Delivery is an outbound HTTP POST to the client's webhook. There is no JSON-RPC request for it; the JSON-RPC binding only carries the CONFIG methods."
+    },
+    {
+      "id": "a2a|jsonrpc|server|client|CancelTask",
+      "protocol": "a2a",
+      "method": "CancelTask",
+      "originator": "client",
+      "role": "server",
+      "transport": "jsonrpc",
+      "obligation": "handle"
+    },
+    {
+      "id": "a2a|jsonrpc|server|client|CreateTaskPushNotificationConfig",
+      "protocol": "a2a",
+      "method": "CreateTaskPushNotificationConfig",
+      "originator": "client",
+      "role": "server",
+      "transport": "jsonrpc",
+      "obligation": "handle"
+    },
+    {
+      "id": "a2a|jsonrpc|server|client|DeleteTaskPushNotificationConfig",
+      "protocol": "a2a",
+      "method": "DeleteTaskPushNotificationConfig",
+      "originator": "client",
+      "role": "server",
+      "transport": "jsonrpc",
+      "obligation": "handle"
+    },
+    {
+      "id": "a2a|jsonrpc|server|client|GET /.well-known/agent-card.json",
+      "protocol": "a2a",
+      "method": "GET /.well-known/agent-card.json",
+      "originator": "client",
+      "role": "server",
+      "transport": "jsonrpc",
+      "obligation": "handle"
+    },
+    {
+      "id": "a2a|jsonrpc|server|client|GetExtendedAgentCard",
+      "protocol": "a2a",
+      "method": "GetExtendedAgentCard",
+      "originator": "client",
+      "role": "server",
+      "transport": "jsonrpc",
+      "obligation": "handle"
+    },
+    {
+      "id": "a2a|jsonrpc|server|client|GetTask",
+      "protocol": "a2a",
+      "method": "GetTask",
+      "originator": "client",
+      "role": "server",
+      "transport": "jsonrpc",
+      "obligation": "handle"
+    },
+    {
+      "id": "a2a|jsonrpc|server|client|GetTaskPushNotificationConfig",
+      "protocol": "a2a",
+      "method": "GetTaskPushNotificationConfig",
+      "originator": "client",
+      "role": "server",
+      "transport": "jsonrpc",
+      "obligation": "handle"
+    },
+    {
+      "id": "a2a|jsonrpc|server|client|ListTaskPushNotificationConfigs",
+      "protocol": "a2a",
+      "method": "ListTaskPushNotificationConfigs",
+      "originator": "client",
+      "role": "server",
+      "transport": "jsonrpc",
+      "obligation": "handle"
+    },
+    {
+      "id": "a2a|jsonrpc|server|client|ListTasks",
+      "protocol": "a2a",
+      "method": "ListTasks",
+      "originator": "client",
+      "role": "server",
+      "transport": "jsonrpc",
+      "obligation": "handle"
+    },
+    {
+      "id": "a2a|jsonrpc|server|client|SendMessage",
+      "protocol": "a2a",
+      "method": "SendMessage",
+      "originator": "client",
+      "role": "server",
+      "transport": "jsonrpc",
+      "obligation": "handle"
+    },
+    {
+      "id": "a2a|jsonrpc|server|client|SendStreamingMessage",
+      "protocol": "a2a",
+      "method": "SendStreamingMessage",
+      "originator": "client",
+      "role": "server",
+      "transport": "jsonrpc",
+      "obligation": "handle"
+    },
+    {
+      "id": "a2a|jsonrpc|server|client|SubscribeToTask",
+      "protocol": "a2a",
+      "method": "SubscribeToTask",
+      "originator": "client",
+      "role": "server",
+      "transport": "jsonrpc",
+      "obligation": "handle"
+    },
+    {
+      "id": "a2a|jsonrpc|server|server|PushNotificationDelivery",
+      "protocol": "a2a",
+      "method": "PushNotificationDelivery",
+      "originator": "server",
+      "role": "server",
+      "transport": "jsonrpc",
+      "obligation": "issue",
+      "na_reason": "Delivery is an outbound HTTP POST to the client's webhook. There is no JSON-RPC request for it; the JSON-RPC binding only carries the CONFIG methods."
+    }
+  ]
+}
