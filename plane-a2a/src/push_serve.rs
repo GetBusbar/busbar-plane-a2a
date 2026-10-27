@@ -23,10 +23,7 @@
 
 use std::task::Poll;
 
-use busbar_contract::abi::host::service::ItemSpan;
-use busbar_contract::abi::mechanism::call::{Outcome, Span};
-use busbar_contract::abi::mechanism::check::SPAN_ABSENT;
-use busbar_contract::abi::mechanism::ticket::CompletionHandle;
+use busbar_contract::abi::mechanism::call::Outcome;
 use busbar_contract::abi::plane::{ServeIn, ServeOut, AUDIT_NONE};
 use busbar_contract::abi::sdk::{Instance, Lent, Out};
 use serde_json::{json, Value};
@@ -79,30 +76,14 @@ fn signature(
     seq: u32,
     task_id: &str,
 ) -> Option<Vec<u8>> {
-    let services = plane.services.as_ref()?;
-    let absent = Span {
-        offset: SPAN_ABSENT,
-        len: 0,
-    };
-    let mut buf = vec![0u8; 1024];
-    let mut spans = [ItemSpan {
-        key: absent,
-        value: absent,
-    }; 2];
-    let handle = CompletionHandle {
+    let mut signer = crate::task_door::HostSigner {
+        services: plane.services.as_ref(),
         ticket,
         seq,
-        _reserved: 0,
     };
-    let sig = services
-        .sign(
-            handle,
-            &crate::push::token_input(task_id),
-            &mut buf,
-            &mut spans,
-        )
-        .ok()?;
-    Some(sig.signature.to_vec())
+    signer
+        .signed(&crate::push::token_input(task_id))
+        .map(|(_, sig)| sig)
 }
 
 /// THE MOVE A PUSHED `document` ASKS OF A TASK IN `held`: the state it reports, when it reports one
