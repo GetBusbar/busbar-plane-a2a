@@ -9,7 +9,7 @@
 //! The settings blob is the plane's own section value — the `agents:` map — as JSON, with the
 //! kernel's reserved sub-keys already read and stripped (`BUSBAR-1.6.0.md` THE DESIGN, "Config"): the
 //! hook bindings and `upstream_credentials` never reach the plane, and neither do the kernel-owned
-//! trust keys each entry carries ([`crate::a2a::config::TRUST_KEYS`]), which the kernel parses and
+//! trust keys each entry carries ([`TRUST_KEYS`]), which the kernel parses and
 //! judges first. The plane judges the rest with its one grammar,
 //! [`crate::a2a::config::AgentsCfg`] and [`crate::a2a::config::validate_agent`].
 //!
@@ -300,8 +300,8 @@ const PIN_MECHANISMS: &[PinMechanism] = &[
     },
 ];
 
-/// The kernel-owned trust keys of one entry: the ABI spelling of
-/// [`crate::a2a::config::TRUST_KEYS`], then the registration's private reach, which the door path
+/// The kernel-owned trust keys of one entry (the `pin:` object over this plane's four mechanisms,
+/// and the two cadence durations with their defaults), then the registration's private reach, which the door path
 /// hands the host (the grammar keeps reading `allow_private` itself); declaration order is
 /// judgement order.
 const TRUST_KEYS: &[TrustKey] = &[

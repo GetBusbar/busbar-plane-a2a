@@ -90,18 +90,10 @@ pub use record::{TaskEventRow, TaskRow};
 //
 // Each is spelled once, here, and every place the plane states or answers it reads this spelling.
 
-/// THE REGISTRY KEY A2A IS KNOWN BY, in the plane registry and in the plugin contract alike.
-///
-/// Named ONCE, here, on the pure side of the split, because two declarations read it and both must
-/// agree: the engine's `PLANE_DECLARATION.key` and this crate's own plane `KEY`. A plane is a pure kind
-/// and cannot name the engine at all, so a key spelled on the server
-/// side would be a key the plane could only copy — which is how two answers to "what is this plane
-/// called" start to differ.
+/// THE KEY A2A IS KNOWN BY: the name the door's Statement states.
 pub const PLANE_KEY: &str = "a2a";
 
-/// THE CONFIGURATION SECTION THIS PLANE OWNS, named here for the same reason [`PLANE_KEY`] is: the
-/// plane declaration states it and the contract plane's configuration schema is asserted against it,
-/// and those two are on opposite sides of the purity seam.
+/// THE CONFIGURATION SECTION THIS PLANE OWNS (the door's declaring section).
 pub const CONFIG_SECTION: &str = "agents";
 
 /// THE PLANE'S MOUNT, the path prefix the A2A plane's HTTP bindings are served under. Every route
@@ -158,7 +150,7 @@ pub const METADATA_PATH: &str = "/.well-known/oauth-protected-resource/a2a";
 /// because the plane claims the mounted `/a2a/push` endpoint that pairs with it.
 pub const PUSH_PATH_SUFFIX: &str = "/push";
 
-/// [`MOUNT_PATH`] joined to one of the [`MOUNTED_ROUTE_SUFFIXES`]. One join, called from both sides,
+/// [`MOUNT_PATH`] joined to one of the route suffixes above. One join, called from both sides,
 /// so the served route and the plane's claim cannot be two different strings.
 #[must_use]
 pub fn mounted_route(suffix: &str) -> String {
