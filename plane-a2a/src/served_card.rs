@@ -56,8 +56,7 @@ pub const SERVABLE_BINDINGS: &[&str] = &["JSONRPC", "HTTP+JSON", "GRPC"];
 /// binding spells its operation in a request line no per-agent path carries.
 pub const AGENT_ADDRESS_BINDINGS: &[&str] = &["JSONRPC"];
 
-/// The gRPC binding's card spelling.
-const GRPC_BINDING: &str = "GRPC";
+use crate::binding::BINDING_GRPC as GRPC_BINDING;
 
 /// The `cache-control` busbar's own card is served with.
 pub const OWN_CARD_CACHE_CONTROL: &str = "public, max-age=3600";

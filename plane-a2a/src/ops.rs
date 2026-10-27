@@ -85,18 +85,6 @@ pub enum Wording {
     Verb,
 }
 
-impl Wording {
-    /// The name this wording is reported under, as a fact.
-    #[must_use]
-    #[cfg(test)]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Slashed => "slashed",
-            Self::Verb => "verb",
-        }
-    }
-}
-
 /// One row of the vocabulary: a method name, how it is spelled, and what it costs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MethodRow {

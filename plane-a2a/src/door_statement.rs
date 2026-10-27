@@ -9,7 +9,7 @@
 //! The settings blob is the plane's own section value — the `agents:` map — as JSON, with the
 //! kernel's reserved sub-keys already read and stripped (`BUSBAR-1.6.0.md` THE DESIGN, "Config"): the
 //! hook bindings and `upstream_credentials` never reach the plane, and neither do the kernel-owned
-//! trust keys each entry carries ([`crate::a2a::config::TRUST_KEYS`]), which the kernel parses and
+//! trust keys each entry carries ([`TRUST_KEYS`]), which the kernel parses and
 //! judges first. The plane judges the rest with its one grammar,
 //! [`crate::a2a::config::AgentsCfg`] and [`crate::a2a::config::validate_agent`].
 //!
@@ -39,8 +39,8 @@ use busbar_contract::records::Retention;
 use crate::a2a::config::{
     AgentsCfg, DEFAULT_REVERIFY_TTL, REFUSE_PASSTHROUGH_SECTION, SUBJECT_NOUN,
 };
+use crate::binding::{BINDING_DOCUMENT, BINDING_FRAMED, BINDING_TARGET};
 use crate::claims::{DOCUMENT_TRANSPORT, FRAMED_TRANSPORT};
-use crate::surface::{BINDING_DOCUMENT, BINDING_FRAMED, BINDING_TARGET};
 
 /// The grant kind that admits traffic on this plane: one registered agent.
 pub const SCOPE: &str = "agent";
@@ -213,7 +213,8 @@ const OP_CLASS_TABLE: &[OpClass] = &[
 
 const BILLABLE_CLASSES: &[BillableClass] = &[
     BillableClass {
-        class: abi_str(crate::meta::CLASS_BYTES.as_str()),
+        // The class a hop's moved bytes are counted in: payload bytes relayed both ways per hop.
+        class: abi_str("bytes"),
         family: abi_str(BYTES_FAMILY),
     },
     // THE FEE UNIT is also a class (the tail check holds `fee_units ⊆ billable_classes`, ARCHITECT
@@ -293,8 +294,8 @@ const PIN_MECHANISMS: &[PinMechanism] = &[
     },
 ];
 
-/// The kernel-owned trust keys of one entry: the ABI spelling of
-/// [`crate::a2a::config::TRUST_KEYS`], then the registration's private reach, which the door path
+/// The kernel-owned trust keys of one entry (the `pin:` object over this plane's four mechanisms,
+/// and the two cadence durations with their defaults), then the registration's private reach, which the door path
 /// hands the host (the grammar keeps reading `allow_private` itself); declaration order is
 /// judgement order.
 const TRUST_KEYS: &[TrustKey] = &[

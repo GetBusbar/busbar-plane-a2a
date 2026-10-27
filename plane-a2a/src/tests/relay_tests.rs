@@ -174,7 +174,7 @@ fn a_correlated_result_is_relayed_whole_under_the_callers_id() {
         reply.body,
         br#"{"jsonrpc":"2.0","id":7,"result":{"name":"Vendor","skills":[]}}"#.to_vec()
     );
-    assert!(r.answered());
+    assert!(r.answered);
     assert_eq!(r.on_piece(far(None, b"late", true)), PieceAnswer::Nothing);
 }
 
@@ -310,7 +310,7 @@ fn p_item_unary_empty_terminality_an_answer_closes_once_an_empty_envelope_never_
     let reply = answered(&mut r, 200, task_answer);
     assert_eq!(reply.status, 200);
     assert_eq!(body(&reply)["result"]["kind"], "task");
-    assert!(r.answered(), "a unary Task answer closes its unit");
+    assert!(r.answered, "a unary Task answer closes its unit");
     assert_eq!(r.take_reading(), Some(Reading::Healthy));
     assert_eq!(
         r.take_settled(),
@@ -331,7 +331,7 @@ fn p_item_unary_empty_terminality_an_answer_closes_once_an_empty_envelope_never_
     let mut r = sent();
     let reply = answered(&mut r, 200, message);
     assert_eq!(body(&reply)["result"]["kind"], "message");
-    assert!(r.answered(), "a unary Message answer closes its unit");
+    assert!(r.answered, "a unary Message answer closes its unit");
     assert_eq!(r.take_reading(), Some(Reading::Healthy));
     assert_eq!(r.on_piece(far(None, message, true)), PieceAnswer::Nothing);
 
@@ -341,7 +341,7 @@ fn p_item_unary_empty_terminality_an_answer_closes_once_an_empty_envelope_never_
     let reply = answered(&mut r, 200, error);
     assert!(body(&reply).get("result").is_none());
     assert!(body(&reply).get("error").is_some());
-    assert!(r.answered(), "an error answer is terminal");
+    assert!(r.answered, "an error answer is terminal");
     assert_eq!(r.take_reading(), Some(Reading::Healthy));
     assert_eq!(r.on_piece(far(None, error, true)), PieceAnswer::Nothing);
 
@@ -381,7 +381,7 @@ fn p_item_unary_empty_terminality_an_answer_closes_once_an_empty_envelope_never_
         first.head && !first.last,
         "a streamed initial Task is not the end"
     );
-    assert!(!r.answered());
+    assert!(!r.answered);
     let update = event(json!({ "kind": "status-update", "taskId": "far-1",
         "status": { "state": "working" }, "final": false }));
     let middle = part(r.on_piece(far(None, &update, false)));
@@ -389,12 +389,12 @@ fn p_item_unary_empty_terminality_an_answer_closes_once_an_empty_envelope_never_
         !middle.head && !middle.last,
         "an intermediate update is not the end"
     );
-    assert!(!r.answered());
+    assert!(!r.answered);
     let last = event(json!({ "kind": "status-update", "taskId": "far-1",
         "status": { "state": "completed" }, "final": true }));
     let end = part(r.on_piece(far(None, &last, true)));
     assert!(end.last, "the final frame ends the stream");
-    assert!(r.answered());
+    assert!(r.answered);
     assert_eq!(
         r.on_piece(far(None, &last, true)),
         PieceAnswer::Nothing,
@@ -780,7 +780,7 @@ fn events_are_answered_as_they_come_and_settled_as_they_pass() {
             },
         ]
     );
-    assert!(r.answered());
+    assert!(r.answered);
     assert_eq!(r.moved(), (STREAM.len() + first.len() + rest.len()) as u64);
 }
 
@@ -820,7 +820,7 @@ fn an_error_frame_mid_stream_passes_through_and_the_stream_ends_where_the_far_en
     assert_eq!(got[0]["error"]["code"], -32603);
     assert_eq!(got[0]["error"]["message"], "far end broke");
     assert!(got[0].get("result").is_none());
-    assert!(!r.answered(), "the stream goes on after the error frame");
+    assert!(!r.answered, "the stream goes on after the error frame");
     assert_eq!(
         r.take_settled(),
         Vec::new(),
@@ -836,7 +836,7 @@ fn an_error_frame_mid_stream_passes_through_and_the_stream_ends_where_the_far_en
         1,
         "the frame after the error passes too"
     );
-    assert!(r.answered());
+    assert!(r.answered);
     assert_eq!(
         r.on_piece(far(None, &after, true)),
         PieceAnswer::Nothing,
@@ -990,7 +990,7 @@ fn a_hop_refused_for_busbars_own_credential_answers_in_the_engines_words() {
             "addressed: {addressed}"
         );
         assert!(failed, "the task ends failed (addressed: {addressed})");
-        assert!(r.answered());
+        assert!(r.answered);
     }
 
     let mut r = sent();
@@ -1053,7 +1053,7 @@ fn a_buffered_hop_that_dies_mid_answer_bills_its_request_and_the_bytes_received(
         "the answer is incomplete, so nothing is relayed"
     );
     // The connection dies here: no last piece ever arrives.
-    assert!(!r.answered(), "an answer cut short is not an answer");
+    assert!(!r.answered, "an answer cut short is not an answer");
     assert_eq!(
         r.moved(),
         (ASK.len() + DELIVERED) as u64,

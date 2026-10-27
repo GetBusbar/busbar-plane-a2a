@@ -25,12 +25,6 @@ pub struct Cards {
 }
 
 impl Cards {
-    /// No card held.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Hold `card` for `agent` under `generation`, in place of any earlier one.
     pub fn hold(&self, agent: &str, generation: u64, card: Value) {
         self.by_agent.with_all(|m| {
