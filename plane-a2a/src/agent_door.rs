@@ -1096,7 +1096,7 @@ slot!(
         out.publish_with(|o| &o.snapshot, &plane.generations, generation, &spec, cfg);
         plane.published(generation);
         // EVERY REGISTRATION STARTS AGAIN at the fail-closed floor, as the engine rebuilt each one
-        // on a config apply (`A2aPlane::from_config_carrying`): nothing sighted. A kept
+        // on a config apply (`from_config_carrying`): nothing sighted. A kept
         // registration keeps the skills its kept approval was made at.
         plane.trust.with_all(|m| {
             m.clear();

@@ -25,7 +25,7 @@
 //! signature it degrades to a transport binding. That is four mechanisms carrying different
 //! material, and a scalar `pin_hash:` can spell exactly one of them. So `pin:` is
 //! `{mechanism, key?, fingerprint?}` and the mechanism is checked against the material it requires
-//! at parse, by the kernel: the pin is a kernel trust key ([`TRUST_KEYS`]). A registration cannot
+//! at parse, by the kernel: the pin is a kernel trust key (the door's `TRUST_KEYS`). A registration cannot
 //! claim `jws_issuer_key` and carry nothing to verify with.
 //!
 //! `unpinned` is accepted and named out loud rather than being spelled as an absent field, because
@@ -363,7 +363,7 @@ pub fn validate_agent(name: &str, def: &AgentDefCfg) -> Result<(), String> {
     }
 
     // THE PIN and the CADENCE (`reverify_ttl:`, `recovery_backoff:`) are not judged here: they are
-    // the kernel's trust keys ([`TRUST_KEYS`]), judged by the kernel before the section reaches
+    // the kernel's trust keys (the door's `TRUST_KEYS`), judged by the kernel before the section reaches
     // this validator.
 
     // THE CLIENT IDENTITY, matched against the mechanism and the scheme the same way the pin is
