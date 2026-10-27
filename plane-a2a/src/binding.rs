@@ -22,6 +22,13 @@ pub const BINDING_HTTP_JSON: &str = "HTTP+JSON";
 /// The gRPC binding's card word.
 pub const BINDING_GRPC: &str = "GRPC";
 
+/// The JSON-RPC binding's name, as the Statement and a published card spell it lower-cased.
+pub const BINDING_DOCUMENT: &str = "jsonrpc";
+/// The HTTP+JSON binding's lower-cased name.
+pub const BINDING_TARGET: &str = "http+json";
+/// The gRPC binding's lower-cased name.
+pub const BINDING_FRAMED: &str = "grpc";
+
 /// A binding the plane frames.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Binding {

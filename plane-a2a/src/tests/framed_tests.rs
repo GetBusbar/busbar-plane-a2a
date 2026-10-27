@@ -7,6 +7,26 @@
 use super::*;
 use crate::proto::pb;
 
+/// What a test reads back off a status.
+impl CallStatus {
+    /// The encoded `google.rpc.Status` details; empty when there are none.
+    #[must_use]
+    pub(crate) fn details(&self) -> &[u8] {
+        &self.details
+    }
+
+    /// The `ErrorInfo` the details carry, read back.
+    #[must_use]
+    pub(crate) fn error_info(&self) -> Option<ErrorInfo> {
+        let status = rpc::Status::decode(self.details.as_slice()).ok()?;
+        status
+            .details
+            .iter()
+            .find(|any| any.type_url == crate::ERROR_INFO_TYPE)
+            .and_then(|any| ErrorInfo::decode(any.value.as_slice()).ok())
+    }
+}
+
 /// THE PATH IS THE `.proto`'S: the generated service's own constant, never a literal typed twice.
 #[test]
 fn the_service_path_is_the_generated_services() {

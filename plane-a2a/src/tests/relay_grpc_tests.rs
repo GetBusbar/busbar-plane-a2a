@@ -405,7 +405,7 @@ fn params_that_are_not_the_request_message_are_refused_before_the_hop() {
         panic!("refused before the hop");
     };
     assert_eq!(reply.status, 502);
-    assert!(r.answered());
+    assert!(r.answered);
 }
 
 /// THE TRAILERS ARE NEVER BYTES OF THE ANSWER: on the JSON-RPC binding a field block after the

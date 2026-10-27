@@ -68,6 +68,18 @@ pub const CODE_CONTENT_TYPE_NOT_SUPPORTED: i64 = -32005;
 /// `-32009`: the asked version is not one this endpoint speaks.
 pub const CODE_VERSION_NOT_SUPPORTED: i64 = -32009;
 
+/// `-32001`: no such task for this caller.
+pub const CODE_TASK_NOT_FOUND: i64 = -32001;
+
+/// `-32002`: the task cannot be moved.
+pub const CODE_TASK_NOT_CANCELABLE: i64 = -32002;
+
+/// `-32601`: the method is not one this binding defines.
+pub const CODE_METHOD_NOT_FOUND: i64 = -32601;
+
+/// `-32603`: busbar failed.
+pub const CODE_INTERNAL: i64 = -32603;
+
 /// The status every refusal before a method is read answers with, but the media-type one.
 pub const STATUS_BAD_REQUEST: u32 = 400;
 
@@ -368,16 +380,6 @@ pub fn origin_refusal<'a>(field: impl Fn(&str) -> Option<&'a str>) -> Result<(),
     }
 }
 
-/// DECIDE ONE ARRIVAL on the JSON-RPC line. `field` reads a request head field by its lower-case
-/// name (the first, as sent; one that is not UTF-8 reads as absent). The conformance rig and the
-/// purity oracle decide arrivals through it.
-pub fn decide_arrival<'a>(
-    body: &[u8],
-    field: impl Fn(&str) -> Option<&'a str> + Copy,
-) -> AgentDisposition {
-    decide_and_read(body, field).0
-}
-
 /// DECIDE ONE ARRIVAL on the JSON-RPC line, and hand back the body as the JSON it was read as
 /// (`None` when the head was refused before it, or it is not JSON): the door keeps that value as
 /// the unit's request, so the body is parsed once. `field` reads a request head field by its
@@ -500,7 +502,7 @@ pub fn kernel_refusal(status: u32, text: &str) -> AgentRefusal {
 pub const fn class_code(class: busbar_contract::abi::plane::RefusalClass) -> i64 {
     use busbar_contract::abi::plane::RefusalClass as C;
     match class {
-        C::PlaneFault | C::NodeFault => crate::jsonrpc::CODE_INTERNAL,
+        C::PlaneFault | C::NodeFault => CODE_INTERNAL,
         C::Unreadable
         | C::Rejected
         | C::Unauthenticated

@@ -58,14 +58,9 @@ use crate::task_identity::{self, MINT_BYTES};
 use crate::tasks::{self, Halt, Planned, Records, Stamp, Write};
 use crate::TaskRow;
 
-/// `-32001`: no such task for this caller (A2A `TaskNotFoundError`).
-const CODE_TASK_NOT_FOUND: i64 = -32001;
-/// `-32002`: the task cannot be moved.
-const CODE_TASK_NOT_CANCELABLE: i64 = -32002;
-/// `-32603`: busbar failed.
-const CODE_INTERNAL: i64 = -32603;
-/// `-32602`: the params are wrong.
-const CODE_INVALID_PARAMS: i64 = -32602;
+use crate::agent_arrival::{
+    CODE_INTERNAL, CODE_INVALID_PARAMS, CODE_TASK_NOT_CANCELABLE, CODE_TASK_NOT_FOUND,
+};
 /// The status a callback busbar cannot honour, or a task verb naming no task, answers with: the
 /// caller's fault.
 const STATUS_BAD_REQUEST: u32 = 400;

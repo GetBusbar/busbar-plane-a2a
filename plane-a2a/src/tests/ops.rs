@@ -2,7 +2,7 @@
 //! measures implementation and nothing else; still a direct child module, so `use
 //! super::*` reaches the private items it always did.
 
-use super::{row_for, MethodRow, Wording, METHODS, OP_CLASSES};
+use super::{row_for, MethodRow, METHODS, OP_CLASSES};
 
 /// Every method maps to a class the plane declares.
 #[test]
@@ -86,11 +86,4 @@ fn the_multi_frame_set_matches_the_codecs_own_rule() {
             row.method
         );
     }
-}
-
-/// The wording names are stable, because they are written into facts the journal keeps.
-#[test]
-fn the_wording_names_are_stable() {
-    assert_eq!(Wording::Slashed.as_str(), "slashed");
-    assert_eq!(Wording::Verb.as_str(), "verb");
 }

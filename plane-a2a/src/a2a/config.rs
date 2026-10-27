@@ -49,10 +49,7 @@
 //! reference, because a dropped reference is an operator believing a control is attached that is
 //! not.
 
-use busbar_contract::{
-    plane::{PinMechanismDecl, TrustKeyDecl, TrustRole},
-    section::split_section,
-};
+use busbar_contract::section::split_section;
 use serde::{Deserialize, Serialize};
 
 /// The default MAX VERIFICATION STALENESS for a registration that names none: five seconds.
@@ -65,68 +62,6 @@ use serde::{Deserialize, Serialize};
 /// (The A2A key keeps its name `reverify_ttl`; the MCP sibling's is `verify_ttl` — the admin API
 /// projects both under one `reverify_ttl` view field, so the concept is one across the two planes.)
 pub const DEFAULT_REVERIFY_TTL: &str = "5s";
-
-/// THE DEPLOYMENT-WIDE RECOVERY BACKOFF a registration gets when it spells no `recovery_backoff:`.
-///
-/// The RECOVERY half of the cadence, and the only half that has a default at all — there is
-/// deliberately no deployment-wide knob for detection or demotion, because both would be a window an
-/// upstream could open for itself by flapping. Fifteen minutes is long enough that an alternating
-/// upstream collapses into one persistent quarantine rather than a demotion storm, and short enough
-/// that a genuine recovery is believed within one operator's attention span.
-///
-/// Non-zero on purpose: zero is a legitimate PER-AGENT setting for an upstream an operator knows to
-/// be flaky for boring reasons, but the boring explanation and the hostile one look identical from
-/// here, so it is not what an unconfigured deployment gets.
-pub const DEFAULT_RECOVERY_BACKOFF_MS: u64 = 15 * 60 * 1_000;
-
-/// THE KERNEL-OWNED TRUST KEYS of one `agents:` entry, declared for the kernel to parse and judge:
-/// the `pin:` object (with its optional `fingerprint`) over this plane's four mechanisms, and the two
-/// cadence durations with their defaults. Declaration order is judgement order.
-pub const TRUST_KEYS: &[TrustKeyDecl] = &[
-    TrustKeyDecl {
-        key: "pin",
-        role: TrustRole::Pin,
-        fingerprint: true,
-        default: None,
-        mechanisms: &[
-            PinMechanismDecl {
-                token: "jws_issuer_key",
-                root: true,
-                peer_key: false,
-            },
-            PinMechanismDecl {
-                token: "cert_spki",
-                root: true,
-                peer_key: true,
-            },
-            PinMechanismDecl {
-                token: "mtls",
-                root: true,
-                peer_key: true,
-            },
-            PinMechanismDecl {
-                token: "unpinned",
-                root: false,
-                peer_key: false,
-            },
-        ],
-    },
-    TrustKeyDecl {
-        key: "reverify_ttl",
-        role: TrustRole::ReverifyTtl,
-        fingerprint: false,
-        default: Some(DEFAULT_REVERIFY_TTL),
-        mechanisms: &[],
-    },
-    TrustKeyDecl {
-        key: "recovery_backoff",
-        role: TrustRole::RecoveryBackoff,
-        fingerprint: false,
-        // The same fifteen minutes as `DEFAULT_RECOVERY_BACKOFF_MS`.
-        default: Some("15m"),
-        mechanisms: &[],
-    },
-];
 
 /// WHAT ONE `agents:` ENTRY IS CALLED in the section's refusals and in the plane's declaration.
 pub const SUBJECT_NOUN: &str = "fronted agent";
@@ -169,20 +104,6 @@ pub enum PinMechanism {
 }
 
 impl PinMechanism {
-    /// Is this mechanism an authenticity ROOT at all — and therefore, does it require
-    /// operator-supplied key material?
-    ///
-    /// This is the predicate that makes the object form worth having: three of the four mechanisms
-    /// are meaningless without material, and the fourth is meaningless WITH it.
-    ///
-    /// ONE predicate answers both questions on purpose. It is the boot-time rule below AND the one
-    /// question the kernel's trust reader asks of a mechanism, so the reader that builds the
-    /// artifact and the refusal that fires at boot cannot come to disagree about what "rooted"
-    /// means.
-    pub fn is_a_root(self) -> bool {
-        !matches!(self, PinMechanism::Unpinned)
-    }
-
     /// The config token, for diagnostics, pin renderings and audit rows. Deliberately the same
     /// string `serde` accepts, so every surface spells a mechanism one way.
     pub fn token(self) -> &'static str {
@@ -508,4 +429,4 @@ pub fn validate_agent(name: &str, def: &AgentDefCfg) -> Result<(), String> {
 
 #[cfg(test)]
 #[path = "tests/config_tests.rs"]
-mod tests;
+pub(crate) mod tests;

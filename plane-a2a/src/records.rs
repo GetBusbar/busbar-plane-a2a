@@ -18,8 +18,6 @@
 //! units), an audit row, a breaker's verdict, an admission and an outbound credential are the
 //! kernel's.
 
-use busbar_contract::ids::RecordSchemaId;
-
 /// The `task` kind — the durable task record's tag on the store seam.
 pub const KIND_TASK: &str = "task";
 
@@ -40,10 +38,6 @@ pub const KIND_CARD: &str = "card";
 /// reads it back into the trust view's standing ([`crate::card_trust::TrustStanding::approved`]),
 /// so a restart keeps what the drift lists are judged against.
 pub const KIND_CARD_APPROVAL: &str = "card_approval";
-
-/// The plane-record kinds this plane keeps on the store's plane-record seam — its declaration's
-/// `record_kinds`, so the administrative `plane_record_write` verb writes only these under it.
-pub const RECORD_KINDS: &[&str] = &[KIND_TASK, KIND_TASK_EVENT];
 
 /// The host-record kinds the door's tail states (`PlaneTail::record_kinds`), in order: a record
 /// write names its kind by its index here.
@@ -105,98 +99,3 @@ pub fn retention_of(kind: &str) -> Retention {
 
 /// The task-event kind's index in [`HELD_KINDS`]: the kind the door declares chained.
 pub const TASK_EVENT_INDEX: u32 = 1;
-
-/// The task rows: one per governed exchange this node is tracking.
-pub const SCHEMA_TASK: RecordSchemaId = RecordSchemaId::new(KIND_TASK);
-
-/// The task event rows: the hash-linked history behind each task.
-pub const SCHEMA_TASK_EVENT: RecordSchemaId = RecordSchemaId::new(KIND_TASK_EVENT);
-
-/// The push-notification configurations a caller registered against a task.
-pub const SCHEMA_PUSH_CONFIG: RecordSchemaId = RecordSchemaId::new(KIND_PUSH_CONFIG);
-
-/// The pinned callback addresses a delivery is allowed to reach.
-pub const SCHEMA_PIN: RecordSchemaId = RecordSchemaId::new("pin");
-
-/// The record schemas this plane keeps kernel-held durable records under.
-pub const RECORD_SCHEMAS: &[RecordSchemaId] = &[
-    SCHEMA_TASK,
-    SCHEMA_TASK_EVENT,
-    SCHEMA_PUSH_CONFIG,
-    SCHEMA_PIN,
-];
-
-/// Read one record back by key.
-pub const OP_GET: &str = "get";
-
-/// Write one record, replacing any earlier one under the same key.
-pub const OP_PUT: &str = "put";
-
-/// Read every record of a schema under one parent.
-pub const OP_SCAN: &str = "scan";
-
-/// Add one record to a schema's append-only side.
-pub const OP_APPEND: &str = "append";
-
-/// Remove one record.
-pub const OP_DELETE: &str = "delete";
-
-/// Ask whether a callback token is STILL LIVE, and spend nothing asking.
-///
-/// The verb a push callback is authorised by, and deliberately not a `redeem`. The token busbar
-/// registers with a backend names ONE TASK and is presented once per state that task moves through —
-/// `working`, then `input-required`, then `completed` — so it is a capability that lasts as long as
-/// the work does, not a one-time nonce. A `redeem` gets that wrong twice over: spent on the first
-/// callback it refuses the rest of an honest sequence, and answered `true` every time it accepts a
-/// captured one forever.
-///
-/// LIVE means all three of: the configuration is still there, the task it names has not reached a
-/// terminal state, and the task's deadline has not passed. The moment any of those stops holding the
-/// token is dead and every later callback carrying it is refused.
-pub const OP_VERIFY_LIVE: &str = "verify_live";
-
-/// Revoke a callback token, so nothing presenting it is authorised again.
-///
-/// Its own operation rather than a `delete`, because the two say different things to an operator
-/// reading the plan: a `delete` is the caller withdrawing a configuration it registered, and this is
-/// busbar retiring a capability whose task has finished. They happen at different moments for
-/// different reasons, and folding them together would make the revocation invisible in the one place
-/// the push-event plan is read.
-pub const OP_REVOKE: &str = "revoke";
-
-/// Every operation any of this plane's schemas declares.
-pub const OPERATIONS: &[&str] = &[
-    OP_GET,
-    OP_PUT,
-    OP_SCAN,
-    OP_APPEND,
-    OP_DELETE,
-    OP_VERIFY_LIVE,
-    OP_REVOKE,
-];
-
-/// Which operations one schema declares.
-///
-/// A leg naming an operation its schema does not declare is refused by the trust unit, so the
-/// answer has to be a declaration rather than a convention.
-#[must_use]
-pub fn operations_for(schema: RecordSchemaId) -> &'static [&'static str] {
-    match schema.as_str() {
-        s if s == SCHEMA_TASK.as_str() => &[OP_GET, OP_PUT, OP_SCAN, OP_DELETE],
-        s if s == SCHEMA_TASK_EVENT.as_str() => &[OP_APPEND, OP_SCAN],
-        s if s == SCHEMA_PUSH_CONFIG.as_str() => &[
-            OP_GET,
-            OP_PUT,
-            OP_SCAN,
-            OP_DELETE,
-            OP_VERIFY_LIVE,
-            OP_REVOKE,
-        ],
-        s if s == SCHEMA_PIN.as_str() => &[OP_GET, OP_PUT, OP_DELETE],
-        _ => &[],
-    }
-}
-
-#[cfg(test)]
-#[path = "tests/records.rs"]
-mod tests;
