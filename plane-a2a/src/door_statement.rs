@@ -9,38 +9,38 @@
 //! The settings blob is the plane's own section value — the `agents:` map — as JSON, with the
 //! kernel's reserved sub-keys already read and stripped (`BUSBAR-1.6.0.md` THE DESIGN, "Config"): the
 //! hook bindings and `upstream_credentials` never reach the plane, and neither do the kernel-owned
-//! trust keys each entry carries ([`crate::a2a::config::TRUST_KEYS`]), which the kernel parses and
-//! judges first. The plane judges the rest with the same grammar the engine uses,
+//! trust keys each entry carries ([`TRUST_KEYS`]), which the kernel parses and
+//! judges first. The plane judges the rest with its one grammar,
 //! [`crate::a2a::config::AgentsCfg`] and [`crate::a2a::config::validate_agent`].
 //!
-//! ## What is written down here and pinned elsewhere
+//! ## What is written down here
 //!
-//! The tail's strings, the route table and the admin routes are stated here as constants. The
-//! engine that still serves A2A states the same facts in its own declaration and router, and a
-//! test on the engine's side pins the two equal, entry by entry, until the engine is gone.
+//! The tail's strings, the route table and the admin routes are stated here as constants, once;
+//! the door's tests read the Statement back and hold it to them.
 
 use busbar_contract::abi::host::conn::connector::{
     Need, DIRECTION_OUTBOUND, EGRESS_OPEN_WEB, EGRESS_PROVIDER, KEEP_NAMED,
 };
-use busbar_contract::abi::mechanism::call::{AbiStr, Blob, BLOB_ABSENT};
-use busbar_contract::abi::mechanism::door::{KindTailHead, Section, SECTION_DECLARING};
+use busbar_contract::abi::mechanism::call::{AbiStr, Blob};
+use busbar_contract::abi::mechanism::door::{Section, SECTION_DECLARING};
 use busbar_contract::abi::plane::{
-    AdminRoute, BillableClass, OpClass, PinMechanism, PlaneTail, RecordChain, TrustKey,
-    ANSWER_LAYOUT, CHAIN_DIGESTS_SCOPE, CHAIN_LENGTH_PREFIXED, INGRESS_REQUEST_RESPONSE,
+    AdminRoute, BillableClass, OpClass, PinMechanism, PlaneTail, RecordChain, RecordRetention,
+    TrustKey, ANSWER_LAYOUT, CHAIN_DIGESTS_SCOPE, CHAIN_LENGTH_PREFIXED, INGRESS_REQUEST_RESPONSE,
     INGRESS_RESPONSE_STREAM, MECHANISM_PEER_KEY, MECHANISM_ROOT, PIN_FINGERPRINT, SHAPE_PIECEWISE,
     TAIL_HOOKS_GATED, TAIL_REFUSED_PIECE, TRUST_PIN, TRUST_PRIVATE_REACH, TRUST_RECOVERY_BACKOFF,
     TRUST_REVERIFY_TTL,
 };
 use busbar_contract::abi::sdk::door::abi_str;
 use busbar_contract::abi::sdk::publish::{
-    admin_route, AdminRouteSpec, ClaimSpec, ServedRoute, SnapshotSpec,
+    admin_route, record_retention, AdminRouteSpec, ClaimSpec, ServedRoute, SnapshotSpec,
 };
+use busbar_contract::records::Retention;
 
 use crate::a2a::config::{
     AgentsCfg, DEFAULT_REVERIFY_TTL, REFUSE_PASSTHROUGH_SECTION, SUBJECT_NOUN,
 };
+use crate::binding::{BINDING_DOCUMENT, BINDING_FRAMED, BINDING_TARGET};
 use crate::claims::{DOCUMENT_TRANSPORT, FRAMED_TRANSPORT};
-use crate::surface::{BINDING_DOCUMENT, BINDING_FRAMED, BINDING_TARGET};
 
 /// The grant kind that admits traffic on this plane: one registered agent.
 pub const SCOPE: &str = "agent";
@@ -62,10 +62,47 @@ pub const FEE_PER_REQUEST: &str = busbar_contract::plane::PER_REQUEST;
 pub const DEFAULT_RECOVERY_BACKOFF: &str = "15m";
 
 /// An absent string.
-const NONE: AbiStr = AbiStr {
-    ptr: std::ptr::null(),
-    len: 0,
-};
+const NONE: AbiStr = AbiStr::ABSENT;
+
+/// THE PUSH QUEUE'S COUNTERS, the Statement's metric families (THE DESIGN, a2a: a per-task ordered
+/// bounded queue, "drop-oldest, counted"; A2A-PUSH: "drop-oldest + metric"): the notifications a
+/// full queue dropped, and the delivery outcomes a full book dropped before a piece of their
+/// caller filed them. Each is reported as the increment since the last report, on the tick.
+pub const FAMILIES: &[busbar_contract::abi::mechanism::door::MetricFamily] = &[
+    counter(
+        METRIC_PUSH_DROPPED,
+        "A2A push notifications dropped, oldest first, from a full per-task queue",
+    ),
+    counter(
+        METRIC_PUSH_UNFILED,
+        "A2A push delivery outcomes dropped unfiled from a full book of owed outcomes",
+    ),
+];
+
+/// [`FAMILIES`]' name for the push notifications a full queue dropped.
+pub const METRIC_PUSH_DROPPED: &str = "busbar_a2a_push_notifications_dropped_total";
+
+/// [`FAMILIES`]' name for the delivery outcomes dropped unfiled.
+pub const METRIC_PUSH_UNFILED: &str = "busbar_a2a_push_outcomes_unfiled_total";
+
+/// [`METRIC_PUSH_DROPPED`]'s index in [`FAMILIES`].
+pub const FAMILY_PUSH_DROPPED: u32 = 0;
+
+/// [`METRIC_PUSH_UNFILED`]'s index in [`FAMILIES`].
+pub const FAMILY_PUSH_UNFILED: u32 = 1;
+
+/// One unlabelled counter family.
+const fn counter(
+    name: &'static str,
+    help: &'static str,
+) -> busbar_contract::abi::mechanism::door::MetricFamily {
+    busbar_contract::abi::mechanism::door::MetricFamily::new(
+        abi_str(name),
+        abi_str(help),
+        NONE,
+        busbar_contract::abi::mechanism::door::FAMILY_COUNTER,
+    )
+}
 
 /// The plane's settings sections, as its Statement states them: `agents:` is the one it declares;
 /// `agent_push:` ([`PUSH_SECTION`]) is its own beside it, handed as written at `open`.
@@ -176,7 +213,8 @@ const OP_CLASS_TABLE: &[OpClass] = &[
 
 const BILLABLE_CLASSES: &[BillableClass] = &[
     BillableClass {
-        class: abi_str(crate::meta::CLASS_BYTES.as_str()),
+        // The class a hop's moved bytes are counted in: payload bytes relayed both ways per hop.
+        class: abi_str("bytes"),
         family: abi_str(BYTES_FAMILY),
     },
     // THE FEE UNIT is also a class (the tail check holds `fee_units ⊆ billable_classes`, ARCHITECT
@@ -209,6 +247,12 @@ const RECORD_KINDS: &[AbiStr] = &[
     abi_str(crate::records::HELD_KINDS[3]),
     abi_str(crate::records::HELD_KINDS[4]),
 ];
+
+/// The retention rule of each held kind that is not purged by age: a task row is kept while it is
+/// active (working or interrupted), so a purge drops only the terminal ones. `task_event` rows are
+/// always written active (they are the task's chain), so they list no rule and go by age, as do
+/// the push configs and cards.
+const RECORD_RETENTIONS: &[RecordRetention] = &[record_retention(0, Retention::TerminalOnly)];
 
 /// THE TASK CHAIN (ARCHITECT ruling B1, 2026-10-07; `BUSBAR-1.6.0.md` Part 3, the chain section, and THE
 /// DESIGN's route pump): the task-event kind is chained, LENGTH-PREFIXED with its scope in the
@@ -250,48 +294,40 @@ const PIN_MECHANISMS: &[PinMechanism] = &[
     },
 ];
 
-/// The kernel-owned trust keys of one entry: the ABI spelling of
-/// [`crate::a2a::config::TRUST_KEYS`], then the registration's private reach, which the door path
+/// The kernel-owned trust keys of one entry (the `pin:` object over this plane's four mechanisms,
+/// and the two cadence durations with their defaults), then the registration's private reach, which the door path
 /// hands the host (the grammar keeps reading `allow_private` itself); declaration order is
 /// judgement order.
 const TRUST_KEYS: &[TrustKey] = &[
-    TrustKey {
-        key: abi_str("pin"),
-        role: TRUST_PIN,
-        flags: PIN_FINGERPRINT,
-        default: NONE,
-        mechanisms: PIN_MECHANISMS.as_ptr(),
-        mechanisms_len: PIN_MECHANISMS.len(),
-    },
-    TrustKey {
-        key: abi_str("reverify_ttl"),
-        role: TRUST_REVERIFY_TTL,
-        flags: 0,
-        default: abi_str(DEFAULT_REVERIFY_TTL),
-        mechanisms: std::ptr::null(),
-        mechanisms_len: 0,
-    },
-    TrustKey {
-        key: abi_str("recovery_backoff"),
-        role: TRUST_RECOVERY_BACKOFF,
-        flags: 0,
-        default: abi_str(DEFAULT_RECOVERY_BACKOFF),
-        mechanisms: std::ptr::null(),
-        mechanisms_len: 0,
-    },
+    trust_key("pin", TRUST_PIN, PIN_FINGERPRINT, NONE).with_mechanisms(PIN_MECHANISMS),
+    trust_key(
+        "reverify_ttl",
+        TRUST_REVERIFY_TTL,
+        0,
+        abi_str(DEFAULT_REVERIFY_TTL),
+    ),
+    trust_key(
+        "recovery_backoff",
+        TRUST_RECOVERY_BACKOFF,
+        0,
+        abi_str(DEFAULT_RECOVERY_BACKOFF),
+    ),
     // THE REGISTRATION'S PRIVATE REACH (1.5.5's per-agent `allow_private: true`, ARCHITECT ruling
     // on FLIP-A2A, SEAM-4f1): the host seals it into the agent's anchors and the one guard admits
     // the agent's own private or loopback destination on [`NEED_AGENT`]; never a metadata address.
     // An agent without it is refused every private address by the guard.
-    TrustKey {
-        key: abi_str(PRIVATE_REACH_KEY),
-        role: TRUST_PRIVATE_REACH,
-        flags: 0,
-        default: NONE,
-        mechanisms: std::ptr::null(),
-        mechanisms_len: 0,
-    },
+    trust_key(PRIVATE_REACH_KEY, TRUST_PRIVATE_REACH, 0, NONE),
 ];
+
+/// One trust key's plain fields; its mechanisms (a pin's) are set by the caller.
+const fn trust_key(key: &'static str, role: u32, flags: u32, default: AbiStr) -> TrustKey {
+    let mut t = TrustKey::EMPTY;
+    t.key = abi_str(key);
+    t.role = role;
+    t.flags = flags;
+    t.default = default;
+    t
+}
 
 /// The per-registration key holding an agent's private reach (`allow_private`).
 pub const PRIVATE_REACH_KEY: &str = "allow_private";
@@ -344,77 +380,61 @@ pub const SECRET_REFS: &[AbiStr] = &[
 /// upstreams a plane reaches, each at its own `url`: over http ([`NEED_AGENT`]) and over grpc
 /// ([`NEED_GRPC`]), the two under the same trust anchors.
 pub const NEEDS: &[Need] = &[
-    Need {
-        direction: DIRECTION_OUTBOUND,
-        egress_class: EGRESS_OPEN_WEB,
-        transport: abi_str(DOCUMENT_TRANSPORT),
-        auth: NONE,
-        target_from: NONE,
-        trust_from: abi_str(PUSH_TRUST_FROM),
-        details: Blob {
-            ptr: std::ptr::null(),
-            len: 0,
-            fmt: BLOB_ABSENT,
-            flags: 0,
-        },
-        keep_response_headers: std::ptr::null(),
-        keep_response_headers_len: 0,
-        timeout_ms: 0,
-        keep_mode: KEEP_NAMED,
-        _reserved: 0,
-        deny_response_headers: std::ptr::null(),
-        deny_response_headers_len: 0,
-    },
-    Need {
-        direction: DIRECTION_OUTBOUND,
-        egress_class: EGRESS_PROVIDER,
-        transport: abi_str(DOCUMENT_TRANSPORT),
-        auth: NONE,
-        target_from: abi_str(MEMBER_TARGET),
-        trust_from: abi_str(CLIENT_IDENTITY_FROM),
-        details: Blob {
-            ptr: std::ptr::null(),
-            len: 0,
-            fmt: BLOB_ABSENT,
-            flags: 0,
-        },
-        keep_response_headers: KEEP_RESPONSE_HEADERS.as_ptr(),
-        keep_response_headers_len: KEEP_RESPONSE_HEADERS.len(),
-        timeout_ms: 0,
-        keep_mode: KEEP_NAMED,
-        _reserved: 0,
-        deny_response_headers: std::ptr::null(),
-        deny_response_headers_len: 0,
-    },
-    Need {
-        direction: DIRECTION_OUTBOUND,
-        egress_class: EGRESS_PROVIDER,
-        transport: abi_str(FRAMED_TRANSPORT),
-        auth: NONE,
-        target_from: abi_str(MEMBER_TARGET),
-        trust_from: abi_str(CLIENT_IDENTITY_FROM),
-        details: Blob {
-            ptr: std::ptr::null(),
-            len: 0,
-            fmt: BLOB_ABSENT,
-            flags: 0,
-        },
-        keep_response_headers: KEEP_RESPONSE_HEADERS.as_ptr(),
-        keep_response_headers_len: KEEP_RESPONSE_HEADERS.len(),
-        timeout_ms: 0,
-        keep_mode: KEEP_NAMED,
-        _reserved: 0,
-        deny_response_headers: std::ptr::null(),
-        deny_response_headers_len: 0,
-    },
+    need(
+        EGRESS_OPEN_WEB,
+        DOCUMENT_TRANSPORT,
+        NONE,
+        abi_str(PUSH_TRUST_FROM),
+    ),
+    need(
+        EGRESS_PROVIDER,
+        DOCUMENT_TRANSPORT,
+        abi_str(MEMBER_TARGET),
+        abi_str(CLIENT_IDENTITY_FROM),
+    )
+    .with_keep_response_headers(KEEP_RESPONSE_HEADERS),
+    need(
+        EGRESS_PROVIDER,
+        FRAMED_TRANSPORT,
+        abi_str(MEMBER_TARGET),
+        abi_str(CLIENT_IDENTITY_FROM),
+    )
+    .with_keep_response_headers(KEEP_RESPONSE_HEADERS),
 ];
 
+/// One outbound need's plain fields; its response header list is set by the caller.
+const fn need(
+    egress_class: u32,
+    transport: &'static str,
+    target_from: AbiStr,
+    trust_from: AbiStr,
+) -> Need {
+    let mut n = Need::EMPTY;
+    n.direction = DIRECTION_OUTBOUND;
+    n.egress_class = egress_class;
+    n.transport = abi_str(transport);
+    n.auth = NONE;
+    n.target_from = target_from;
+    n.trust_from = trust_from;
+    n.keep_mode = KEEP_NAMED;
+    n
+}
+
 /// THE STATEMENT TAIL: the plane's static facts.
-pub const TAIL: &PlaneTail = &PlaneTail {
-    head: KindTailHead {
-        size: std::mem::size_of::<PlaneTail>() as u32,
-        _reserved: 0,
-    },
+pub const TAIL: &PlaneTail = &{
+    let mut t = PlaneTail::EMPTY
+        .with_dialects(DIALECTS)
+        .with_scope_kinds(SCOPE_KINDS)
+        .with_op_classes(OP_CLASS_TABLE)
+        .with_billable_classes(BILLABLE_CLASSES)
+        .with_fee_units(FEE_UNITS)
+        .with_record_kinds(RECORD_KINDS)
+        .with_record_chains(RECORD_CHAINS)
+        .with_trust_keys(TRUST_KEYS)
+        .with_admin_routes(ADMIN_ROUTES)
+        // THE COUNTERS' LANE WORDS: the binding words a hop goes out on (predev's relay counted each
+        // attempt under its binding, relay.rs:1705), the same vocabulary as the dialects.
+        .with_metric_lanes(DIALECTS);
     // THE HOOK ORDER 1.5.5 USED FOR THIS PLANE (ARCHITECT ruling Q-FOLD-A2A-2; spec Part 3 section
     // 12 "Hooks", per attachment where 1.5.5 differed): the agent's gates screen the projected
     // `{tool, arguments}` first, keyed on the request's session, fail-closed, a veto at the hook's
@@ -422,60 +442,29 @@ pub const TAIL: &PlaneTail = &PlaneTail {
     // for busbar's own credential, or one that left and heard nothing back, is handed here as a
     // piece first, on the unit's own ticket, so its task is ended through the host's records (the
     // engine's `end_task`).
-    flags: TAIL_HOOKS_GATED | TAIL_REFUSED_PIECE,
-    ingress: INGRESS_REQUEST_RESPONSE | INGRESS_RESPONSE_STREAM,
-    dispatch_shape: SHAPE_PIECEWISE,
+    t.flags = TAIL_HOOKS_GATED | TAIL_REFUSED_PIECE;
+    t.ingress = INGRESS_REQUEST_RESPONSE | INGRESS_RESPONSE_STREAM;
+    t.dispatch_shape = SHAPE_PIECEWISE;
     // The layout this plane writes its answers in: the contract's it was built against.
-    answer_layout: ANSWER_LAYOUT,
-    scope: abi_str(SCOPE),
-    label: abi_str(LABEL),
-    subject_noun: abi_str(SUBJECT_NOUN),
-    admin_noun: abi_str(ADMIN_NOUN),
-    audit_kind: abi_str(AUDIT_KIND),
-    signing_domain: abi_str(CARD_SIGNING_DOMAIN),
-    signing_kid_prefix: abi_str(CARD_KID_PREFIX),
-    cli_help: NONE,
-    dialects: DIALECTS.as_ptr(),
-    dialects_len: DIALECTS.len(),
-    dialect_auth: std::ptr::null(),
-    dialect_auth_len: 0,
-    scope_kinds: SCOPE_KINDS.as_ptr(),
-    scope_kinds_len: SCOPE_KINDS.len(),
-    op_classes: OP_CLASS_TABLE.as_ptr(),
-    op_classes_len: OP_CLASS_TABLE.len(),
-    billable_classes: BILLABLE_CLASSES.as_ptr(),
-    billable_classes_len: BILLABLE_CLASSES.len(),
-    route_cost: std::ptr::null(),
-    route_cost_len: 0,
-    fee_units: FEE_UNITS.as_ptr(),
-    fee_units_len: FEE_UNITS.len(),
-    record_kinds: RECORD_KINDS.as_ptr(),
-    record_kinds_len: RECORD_KINDS.len(),
-    egress_targets: std::ptr::null(),
-    egress_targets_len: 0,
-    record_chains: RECORD_CHAINS.as_ptr(),
-    record_chains_len: RECORD_CHAINS.len(),
-    trust_keys: TRUST_KEYS.as_ptr(),
-    trust_keys_len: TRUST_KEYS.len(),
-    refusal_statuses: std::ptr::null(),
-    refusal_statuses_len: 0,
-    caller_credential_refusal: abi_str(REFUSE_PASSTHROUGH_SECTION),
-    admin_routes: ADMIN_ROUTES.as_ptr(),
-    admin_routes_len: ADMIN_ROUTES.len(),
-    admin_openapi: Blob {
-        ptr: ADMIN_OPENAPI.as_ptr(),
-        len: ADMIN_OPENAPI.len(),
-        fmt: busbar_contract::abi::mechanism::call::BLOB_JSON,
-        flags: 0,
-    },
-    // THE COUNTERS' LANE WORDS: the binding words a hop goes out on (predev's relay counted each
-    // attempt under its binding, relay.rs:1705), the same vocabulary as the dialects.
-    metric_lanes: DIALECTS.as_ptr(),
-    metric_lanes_len: DIALECTS.len(),
+    t.answer_layout = ANSWER_LAYOUT;
+    t.scope = abi_str(SCOPE);
+    t.label = abi_str(LABEL);
+    t.subject_noun = abi_str(SUBJECT_NOUN);
+    t.admin_noun = abi_str(ADMIN_NOUN);
+    t.audit_kind = abi_str(AUDIT_KIND);
+    t.signing_domain = abi_str(CARD_SIGNING_DOMAIN);
+    t.signing_kid_prefix = abi_str(CARD_KID_PREFIX);
+    t.cli_help = NONE;
+    t.caller_credential_refusal = abi_str(REFUSE_PASSTHROUGH_SECTION);
+    t.admin_openapi = Blob::json(ADMIN_OPENAPI.as_bytes());
+    // The kinds kept while active ([`RECORD_RETENTIONS`]).
+    t.record_retentions = RECORD_RETENTIONS.as_ptr();
+    t.record_retentions_len = RECORD_RETENTIONS.len();
     // THE STREAM CEILING (ARCHITECT ruling 2026-10-07, STREAM-CEILING): a streamed relay ran at
     // most `RELAY_STREAM_TIMEOUT` (predev transport.rs:94-98), and a caller that stopped reading
     // released it there (receive.rs `send_or_expire`, :2829-2850, :3000-3012).
-    stream_ceiling_secs: STREAM_CEILING_SECS,
+    t.stream_ceiling_secs = STREAM_CEILING_SECS;
+    t
 };
 
 /// How long a unit whose answer streams may run (predev `RELAY_STREAM_TIMEOUT`, 600 s,
@@ -510,6 +499,10 @@ const fn open(verb: &'static str, target: &'static str) -> Route {
     }
 }
 
+/// ONE FRONTED AGENT'S JSON-RPC ENDPOINT, `POST /a2a/agents/{agent_id}`: a row of [`ROUTES`], and
+/// the route every agent's trailing-separator claim ([`agent_slash_claims`]) is served as.
+pub const AGENT_ENDPOINT: Route = keyed("POST", "/a2a/agents/{agent_id}");
+
 /// EVERY ROUTE THE PLANE SERVES, in the order the engine mounts them: the document binding's
 /// named operations, then the two discovery documents, the catalogue entry, the JSON-RPC
 /// endpoint in both spellings, the push callback and the framed binding's service.
@@ -529,8 +522,9 @@ pub const ROUTES: &[Route] = &[
     keyed("GET", "/a2a/extendedAgentCard"),
     open("GET", "/.well-known/oauth-protected-resource/a2a"),
     open("GET", "/.well-known/agent-card.json"),
+    keyed("GET", "/a2a/agents/{agent_id}/.well-known/agent-card.json"),
     keyed("GET", "/a2a/agents/{agent_id}"),
-    keyed("POST", "/a2a/agents/{agent_id}"),
+    AGENT_ENDPOINT,
     keyed("POST", "/a2a"),
     keyed("POST", "/a2a/"),
     Route {
@@ -575,7 +569,13 @@ pub fn line_of(route: &Route) -> Line {
     if route.carrier == FRAMED_TRANSPORT {
         return Line::Framed;
     }
-    if route.open || (route.verb == "GET" && route.target == "/a2a/agents/{agent_id}") {
+    if route.open
+        || (route.verb == "GET"
+            && matches!(
+                route.target,
+                "/a2a/agents/{agent_id}" | "/a2a/agents/{agent_id}/.well-known/agent-card.json"
+            ))
+    {
         return Line::Open;
     }
     if route.verb == "POST" && matches!(route.target, "/a2a" | "/a2a/" | "/a2a/agents/{agent_id}") {
@@ -750,7 +750,8 @@ pub fn dealt_section(settings: &[u8]) -> std::borrow::Cow<'_, [u8]> {
 /// coordinator ruling Q1(b), 2026-10-07); the kernel still loads the plane, its section being
 /// present (LAW 7). Its trust verbs stay stated, and answer every name `404`: none is registered.
 #[must_use]
-pub fn agents_snapshot_spec(public_url: Option<&str>, fronts: bool) -> SnapshotSpec {
+pub fn agents_snapshot_spec(public_url: Option<&str>, agents: &[&str]) -> SnapshotSpec {
+    let fronts = !agents.is_empty();
     let admitted = public_url.filter(|_| fronts).and_then(|p| {
         Some((
             crate::a2a::public::absolute(p, crate::MOUNT_PATH)?,
@@ -758,7 +759,15 @@ pub fn agents_snapshot_spec(public_url: Option<&str>, fronts: bool) -> SnapshotS
         ))
     });
     let (audience, resource_metadata, claims) = match admitted {
-        Some((a, m)) => (Some(a), Some(m), ROUTES.iter().map(dialect_claim).collect()),
+        Some((a, m)) => (
+            Some(a),
+            Some(m),
+            ROUTES
+                .iter()
+                .map(dialect_claim)
+                .chain(agent_slash_claims(agents))
+                .collect(),
+        ),
         None => (None, None, Vec::new()),
     };
     SnapshotSpec {
@@ -782,6 +791,65 @@ pub fn agents_snapshot_spec(public_url: Option<&str>, fronts: bool) -> SnapshotS
         resource_facts: None,
         listed: Vec::new(),
     }
+}
+
+/// THE TRAILING-SEPARATOR SPELLING OF EACH FRONTED AGENT'S ENDPOINT (architect ruling 2026-10-24,
+/// R-16): an A2A client joins its relative calls to the card's `url` and so arrives at
+/// `/a2a/agents/<id>/`. The contract refuses a pattern claim that ends in a separator, so each
+/// configured agent's spelling is claimed EXACTLY, after [`ROUTES`], in the order the section's
+/// agents are read, and restated with every generation's snapshot; each is served as
+/// [`AGENT_ENDPOINT`] ([`route_of_claim`]). A name that is not one plain path segment claims
+/// nothing.
+#[must_use]
+pub fn agent_slash_claims(agents: &[&str]) -> Vec<ClaimSpec> {
+    agents
+        .iter()
+        .filter_map(|agent| agent_slash_target(agent))
+        .map(|target| {
+            let mut spec = ClaimSpec::new(
+                AGENT_ENDPOINT.verb,
+                &target,
+                AGENT_ENDPOINT.carrier,
+                busbar_contract::abi::plane::CLAIM_EXACT,
+            );
+            spec.refusal_dialect = u16::try_from(DIALECT_DOCUMENT).unwrap_or_default();
+            spec
+        })
+        .collect()
+}
+
+/// `/a2a/agents/<agent>/`, or `None` for a name that is not one plain path segment.
+#[must_use]
+pub fn agent_slash_target(agent: &str) -> Option<String> {
+    plain_segment(agent).then(|| format!("{}/agents/{agent}/", crate::MOUNT_PATH))
+}
+
+/// Whether `name` is one plain path segment (unreserved characters only, not `.` or `..`).
+fn plain_segment(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '~'))
+}
+
+/// The route the kernel's claim index `claim` names: a row of [`ROUTES`], or past them one of the
+/// generation's trailing-separator claims ([`agent_slash_claims`]; `agent_claims` counts them and is
+/// asked only for an index past the table, so a routed arrival allocates nothing for it), served as
+/// [`AGENT_ENDPOINT`]. Any other index names no claim of this plane (an unclaimed request, a 404).
+#[must_use]
+pub fn route_of_claim(claim: u32, agent_claims: impl FnOnce() -> usize) -> Option<&'static Route> {
+    let i = usize::try_from(claim).ok()?;
+    ROUTES
+        .get(i)
+        .or_else(|| (i < ROUTES.len().saturating_add(agent_claims())).then_some(&AGENT_ENDPOINT))
+}
+
+/// How many trailing-separator claims ([`agent_slash_claims`]) the agents named `agents` state.
+#[must_use]
+pub fn agent_claim_count<'a>(agents: impl IntoIterator<Item = &'a str>) -> usize {
+    agents.into_iter().filter(|a| plain_segment(a)).count()
 }
 
 /// A route as the snapshot's claim ([`ServedRoute::claim_spec`]: an open route takes no inbound

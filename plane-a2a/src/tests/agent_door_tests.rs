@@ -87,7 +87,7 @@ fn envelope(method: &str) -> Value {
 #[test]
 fn a_request_whose_answer_is_events_gets_an_events_hop() {
     for method in ["message/stream", "tasks/resubscribe"] {
-        let hop = hop_of(&request(method), false, Some(envelope(method))).expect(method);
+        let hop = hop_of(&request(method), false, &mut Some(envelope(method))).expect(method);
         assert!(hop.opening.is_some(), "{method}: about a task");
         assert_eq!(hop.subscribe, method == "tasks/resubscribe", "{method}");
     }
@@ -96,20 +96,67 @@ fn a_request_whose_answer_is_events_gets_an_events_hop() {
         id: json!(7),
         version: "1.0",
     };
-    let hop = hop_of(&unlisted, false, Some(envelope("vendor/stream"))).expect("relayed");
+    let hop = hop_of(&unlisted, false, &mut Some(envelope("vendor/stream"))).expect("relayed");
     assert!(!hop.subscribe);
 
     let unary = hop_of(
         &request("message/send"),
         false,
-        Some(envelope("message/send")),
+        &mut Some(envelope("message/send")),
     );
     assert!(unary.is_some_and(|h| !h.subscribe && h.opening.is_some()));
-    assert!(hop_of(&request("tasks/list"), false, Some(envelope("tasks/list"))).is_none());
+    assert!(hop_of(
+        &request("tasks/list"),
+        false,
+        &mut Some(envelope("tasks/list"))
+    )
+    .is_none());
     assert!(
-        hop_of(&request("message/stream"), false, None).is_none(),
+        hop_of(&request("message/stream"), false, &mut None).is_none(),
         "no request, no hop"
     );
+}
+
+/// THE ARRIVAL'S REQUEST IS READ ONCE AND NEVER COPIED: a hop takes the envelope the arrival was
+/// decided over, and an arrival that makes no hop leaves it for the admission to read.
+#[test]
+fn a_hop_takes_the_request_and_no_hop_leaves_it() {
+    let mut sent = Some(envelope("message/send"));
+    let hop = hop_of(&request("message/send"), false, &mut sent).expect("a task hop");
+    assert_eq!(hop.request, Some(envelope("message/send")));
+    assert!(sent.is_none(), "the hop took the request");
+    let mut listed = Some(envelope("tasks/list"));
+    assert!(hop_of(&request("tasks/list"), false, &mut listed).is_none());
+    assert_eq!(
+        listed,
+        Some(envelope("tasks/list")),
+        "no hop: the request is left for the admission"
+    );
+}
+
+/// A BLANK `a2a-version` ON THE gRPC LINE NAMES NO VERSION: the line's own (`1.0`) stands, as for
+/// an absent or empty one. RED before the fix: only an empty value was read as none, so a value of
+/// nothing but whitespace reached the version judgement, which trims it to empty and answered the
+/// JSON-RPC line's default (`0.3`).
+#[test]
+fn a_blank_a2a_version_on_the_grpc_line_reads_as_the_lines_own_version() {
+    use crate::agent_arrival::{decide_and_read, H_VERSION};
+    for blank in ["", " ", " \t  "] {
+        let head = |name: &str| (name == H_VERSION).then_some(blank);
+        assert_eq!(
+            framed_field(head, H_VERSION),
+            Some(crate::framed::DEFAULT_VERSION),
+            "{blank:?}"
+        );
+        let body = br#"{"jsonrpc":"2.0","id":7,"method":"SendMessage","params":{}}"#;
+        let (decided, _) = decide_and_read(body, |name| framed_field(head, name));
+        assert!(
+            matches!(decided, AgentDisposition::Request { version: "1.0", .. }),
+            "{blank:?}: {decided:?}"
+        );
+    }
+    let named = |name: &str| (name == H_VERSION).then_some("0.3");
+    assert_eq!(framed_field(named, H_VERSION), Some("0.3"));
 }
 
 /// THE STREAM CEILING (ARCHITECT ruling 2026-10-07, STREAM-CEILING): every hop whose answer is
@@ -128,7 +175,7 @@ fn a_streamed_hop_states_a_stream_and_the_tail_predevs_600_second_ceiling() {
         "SendStreamingMessage",
         "SubscribeToTask",
     ] {
-        let hop = hop_of(&request(method), false, Some(envelope(method))).expect(method);
+        let hop = hop_of(&request(method), false, &mut Some(envelope(method))).expect(method);
         assert!(hop.streams(), "{method}: its answer streams");
     }
     let unlisted = AgentDisposition::Unlisted {
@@ -136,10 +183,10 @@ fn a_streamed_hop_states_a_stream_and_the_tail_predevs_600_second_ceiling() {
         id: json!(7),
         version: "1.0",
     };
-    let hop = hop_of(&unlisted, false, Some(envelope("vendor/stream"))).expect("relayed");
+    let hop = hop_of(&unlisted, false, &mut Some(envelope("vendor/stream"))).expect("relayed");
     assert!(hop.streams(), "an unlisted method named as a stream");
     for method in ["message/send", "tasks/get", "tasks/cancel"] {
-        if let Some(hop) = hop_of(&request(method), false, Some(envelope(method))) {
+        if let Some(hop) = hop_of(&request(method), false, &mut Some(envelope(method))) {
             assert!(!hop.streams(), "{method}: one reply");
         }
     }
@@ -709,7 +756,7 @@ fn the_rewrite_apply_site_never_falls_back_to_the_caller_s_original_params() {
 
     let src = include_str!("../agent_door.rs");
     let site = src
-        .split_once("let rewrite = input.field(|i| &i.rewrite).bytes();")
+        .split_once("let rewrite = input.rewrite().bytes();")
         .map(|(_, rest)| rest)
         .expect("`project` reads the stage's rewrite");
     let site = &site[..site
@@ -763,7 +810,7 @@ fn a_notification_is_acknowledged_here_with_a_202_and_no_body() {
     };
     assert!(answered_here(&notice, true), "addressed to an agent");
     assert!(answered_here(&notice, false), "on the plane's own endpoint");
-    assert!(hop_of(&notice, true, Some(envelope("message/send"))).is_none());
+    assert!(hop_of(&notice, true, &mut Some(envelope("message/send"))).is_none());
     assert!(answered_here(&request("GetExtendedAgentCard"), false));
     assert!(!answered_here(&request("GetExtendedAgentCard"), true));
     assert!(!answered_here(&request("SendMessage"), false));
@@ -787,10 +834,10 @@ fn an_addressed_extended_card_read_is_relayed_as_a_task_less_hop() {
         version: "1.0",
     };
     assert!(
-        hop_of(&asked, false, Some(envelope.clone())).is_none(),
+        hop_of(&asked, false, &mut Some(envelope.clone())).is_none(),
         "the plane's own endpoint answers it locally"
     );
-    let mut hop = hop_of(&asked, true, Some(envelope.clone())).expect("a hop to the agent");
+    let mut hop = hop_of(&asked, true, &mut Some(envelope.clone())).expect("a hop to the agent");
     assert!(hop.opening.is_none(), "a card read opens no task");
     hop.relay.bind(crate::binding::Binding::JsonRpc, &envelope);
     let PieceAnswer::Attempt(attempt) = hop.relay.on_piece(relay::Piece {

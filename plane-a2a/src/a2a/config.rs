@@ -25,7 +25,7 @@
 //! signature it degrades to a transport binding. That is four mechanisms carrying different
 //! material, and a scalar `pin_hash:` can spell exactly one of them. So `pin:` is
 //! `{mechanism, key?, fingerprint?}` and the mechanism is checked against the material it requires
-//! at parse, by the kernel: the pin is a kernel trust key ([`TRUST_KEYS`]). A registration cannot
+//! at parse, by the kernel: the pin is a kernel trust key (the door's `TRUST_KEYS`). A registration cannot
 //! claim `jws_issuer_key` and carry nothing to verify with.
 //!
 //! `unpinned` is accepted and named out loud rather than being spelled as an absent field, because
@@ -49,10 +49,7 @@
 //! reference, because a dropped reference is an operator believing a control is attached that is
 //! not.
 
-use busbar_contract::{
-    plane::{PinMechanismDecl, TrustKeyDecl, TrustRole},
-    section::split_section,
-};
+use busbar_contract::section::split_section;
 use serde::{Deserialize, Serialize};
 
 /// The default MAX VERIFICATION STALENESS for a registration that names none: five seconds.
@@ -65,68 +62,6 @@ use serde::{Deserialize, Serialize};
 /// (The A2A key keeps its name `reverify_ttl`; the MCP sibling's is `verify_ttl` — the admin API
 /// projects both under one `reverify_ttl` view field, so the concept is one across the two planes.)
 pub const DEFAULT_REVERIFY_TTL: &str = "5s";
-
-/// THE DEPLOYMENT-WIDE RECOVERY BACKOFF a registration gets when it spells no `recovery_backoff:`.
-///
-/// The RECOVERY half of the cadence, and the only half that has a default at all — there is
-/// deliberately no deployment-wide knob for detection or demotion, because both would be a window an
-/// upstream could open for itself by flapping. Fifteen minutes is long enough that an alternating
-/// upstream collapses into one persistent quarantine rather than a demotion storm, and short enough
-/// that a genuine recovery is believed within one operator's attention span.
-///
-/// Non-zero on purpose: zero is a legitimate PER-AGENT setting for an upstream an operator knows to
-/// be flaky for boring reasons, but the boring explanation and the hostile one look identical from
-/// here, so it is not what an unconfigured deployment gets.
-pub const DEFAULT_RECOVERY_BACKOFF_MS: u64 = 15 * 60 * 1_000;
-
-/// THE KERNEL-OWNED TRUST KEYS of one `agents:` entry, declared for the kernel to parse and judge:
-/// the `pin:` object (with its optional `fingerprint`) over this plane's four mechanisms, and the two
-/// cadence durations with their defaults. Declaration order is judgement order.
-pub const TRUST_KEYS: &[TrustKeyDecl] = &[
-    TrustKeyDecl {
-        key: "pin",
-        role: TrustRole::Pin,
-        fingerprint: true,
-        default: None,
-        mechanisms: &[
-            PinMechanismDecl {
-                token: "jws_issuer_key",
-                root: true,
-                peer_key: false,
-            },
-            PinMechanismDecl {
-                token: "cert_spki",
-                root: true,
-                peer_key: true,
-            },
-            PinMechanismDecl {
-                token: "mtls",
-                root: true,
-                peer_key: true,
-            },
-            PinMechanismDecl {
-                token: "unpinned",
-                root: false,
-                peer_key: false,
-            },
-        ],
-    },
-    TrustKeyDecl {
-        key: "reverify_ttl",
-        role: TrustRole::ReverifyTtl,
-        fingerprint: false,
-        default: Some(DEFAULT_REVERIFY_TTL),
-        mechanisms: &[],
-    },
-    TrustKeyDecl {
-        key: "recovery_backoff",
-        role: TrustRole::RecoveryBackoff,
-        fingerprint: false,
-        // The same fifteen minutes as `DEFAULT_RECOVERY_BACKOFF_MS`.
-        default: Some("15m"),
-        mechanisms: &[],
-    },
-];
 
 /// WHAT ONE `agents:` ENTRY IS CALLED in the section's refusals and in the plane's declaration.
 pub const SUBJECT_NOUN: &str = "fronted agent";
@@ -169,20 +104,6 @@ pub enum PinMechanism {
 }
 
 impl PinMechanism {
-    /// Is this mechanism an authenticity ROOT at all — and therefore, does it require
-    /// operator-supplied key material?
-    ///
-    /// This is the predicate that makes the object form worth having: three of the four mechanisms
-    /// are meaningless without material, and the fourth is meaningless WITH it.
-    ///
-    /// ONE predicate answers both questions on purpose. It is the boot-time rule below AND the one
-    /// question the kernel's trust reader asks of a mechanism, so the reader that builds the
-    /// artifact and the refusal that fires at boot cannot come to disagree about what "rooted"
-    /// means.
-    pub fn is_a_root(self) -> bool {
-        !matches!(self, PinMechanism::Unpinned)
-    }
-
     /// The config token, for diagnostics, pin renderings and audit rows. Deliberately the same
     /// string `serde` accepts, so every surface spells a mechanism one way.
     pub fn token(self) -> &'static str {
@@ -276,9 +197,10 @@ pub struct AgentDefCfg {
     /// within its gift.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recovery_backoff: Option<String>,
-    /// The A2A protocol version this registration is PINNED to. Absent ⇒ the release default.
-    /// Pinned per registration because the well-known card path moved between versions and a
-    /// registration that follows whatever the upstream now claims has no pin at all.
+    /// The A2A protocol version an operator states for this registration. ACCEPTED AND READ BY
+    /// NOTHING: the key is the predev grammar's, so a config that states it still parses, but the
+    /// plane pins nothing on it: the card is fetched at both well-known paths, canonical first
+    /// ([`crate::card_trust`]), whatever version it names.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub protocol_version: Option<String>,
     /// MAY THIS AGENT LIVE ON A PRIVATE OR LOOPBACK ADDRESS, AND BE REACHED OVER PLAINTEXT.
@@ -311,9 +233,9 @@ pub struct AgentDefCfg {
     /// plus its lease policy. Never the secret, never the caller's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upstream_credential: Option<super::creds::OutboundCredential>,
-    /// WHICH FRONTED AGENTS MAY DELEGATE HERE. Egress policy, over the same `ScopeRef` kind as
-    /// inbound authZ. Absent or empty ⇒ NONE may: the fail-closed floor, because reading an empty
-    /// list as "everyone" is a registration granting egress nobody wrote down.
+    /// WHICH FRONTED AGENTS MAY DELEGATE HERE, as the predev grammar spelled the egress policy.
+    /// Judged for shape only ([`validate_agent`] refuses an empty name) and READ BY NOTHING: the
+    /// plane has no delegating-from path, so no request is ever judged against this list.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub egress_scopes: Vec<String>,
     /// Hooks attached to THIS agent, by bare name from the top-level `hooks:` map. ADDS to the
@@ -390,6 +312,20 @@ impl<'de> Deserialize<'de> for AgentsCfg {
     }
 }
 
+/// `url` as a refusal may repeat it: any userinfo in its authority (everything before the last `@`
+/// ahead of the path) replaced by `***`, so no refusal repeats a credential a URL carried.
+#[must_use]
+pub fn without_userinfo(url: &str) -> std::borrow::Cow<'_, str> {
+    let start = url.find("://").map_or(0, |i| i + 3);
+    let authority_end = url[start..]
+        .find(['/', '?', '#'])
+        .map_or(url.len(), |i| start + i);
+    match url[start..authority_end].rfind('@') {
+        Some(at) => std::borrow::Cow::Owned(format!("{}***{}", &url[..start], &url[start + at..])),
+        None => std::borrow::Cow::Borrowed(url),
+    }
+}
+
 /// THE VALUE-LEVEL RULES for one `agents:` entry.
 ///
 /// Split out as a free function on purpose: `serde` types check SHAPE, and every rule below is
@@ -404,18 +340,30 @@ pub fn validate_agent(name: &str, def: &AgentDefCfg) -> Result<(), String> {
     if def.url.trim().is_empty() {
         return Err(format!("{at}: `url:` must name the agent's A2A endpoint"));
     }
-    // Scheme is checked here rather than at fetch time so the failure lands on the operator who
-    // wrote it, at boot, rather than on a delegation six hours later.
-    let scheme_ok = def.url.starts_with("https://") || def.url.starts_with("http://");
+    // The URL is PARSED here rather than at fetch time so the failure lands on the operator who
+    // wrote it, at boot, rather than on a delegation hours after: an `http://` or `https://`
+    // URL with a host, and no userinfo, which is refused without being repeated (a password in a
+    // URL is a credential, and a refusal is logged).
+    let parsed = busbar_contract::net::parse_url(&def.url);
+    let scheme_ok = (def.url.starts_with("https://") || def.url.starts_with("http://"))
+        && parsed
+            .as_ref()
+            .is_ok_and(|p| p.scheme == "https" || p.scheme == "http");
     if !scheme_ok {
         return Err(format!(
             "{at}: `url:` must be an http:// or https:// endpoint, got `{}`",
-            def.url
+            without_userinfo(&def.url)
+        ));
+    }
+    if parsed.as_ref().is_ok_and(|p| p.userinfo) {
+        return Err(format!(
+            "{at}: `url:` carries a userinfo (`user@` or `user:password@`) in its authority; name \
+             the agent's credential under `upstream_credential:`, never in its URL"
         ));
     }
 
     // THE PIN and the CADENCE (`reverify_ttl:`, `recovery_backoff:`) are not judged here: they are
-    // the kernel's trust keys ([`TRUST_KEYS`]), judged by the kernel before the section reaches
+    // the kernel's trust keys (the door's `TRUST_KEYS`), judged by the kernel before the section reaches
     // this validator.
 
     // THE CLIENT IDENTITY, matched against the mechanism and the scheme the same way the pin is
@@ -432,7 +380,7 @@ pub fn validate_agent(name: &str, def: &AgentDefCfg) -> Result<(), String> {
     }
     // A client certificate is a TLS-handshake object. Over `http://` there is no handshake to put it
     // in, so an operator who wrote one there is being protected by nothing while reading the config
-    // as though they were — the same failure the `unpinned`-with-a-key rule above refuses.
+    // as though they were.
     if def.client_identity.is_some() && def.url.starts_with("http://") {
         return Err(format!(
             "{at}: `client_identity:` is a TLS client certificate and `url:` is `http://`, which \
@@ -481,4 +429,4 @@ pub fn validate_agent(name: &str, def: &AgentDefCfg) -> Result<(), String> {
 
 #[cfg(test)]
 #[path = "tests/config_tests.rs"]
-mod tests;
+pub(crate) mod tests;

@@ -7,7 +7,8 @@
 //!
 //! * a unit the door has finished with (its answer's last window written, its refusal rendered) no
 //!   longer holds a place among the [`MAX_UNITS`] the instance keeps, so it never pushes a live
-//!   unit out; a cancelled unit is the first to go when the instance is full;
+//!   unit out; a cancelled unit is the first to go when the instance is full, and an instance full
+//!   of live units refuses the next arrival, never evicting one;
 //! * a hop the kernel refused for the agent's credential before it dialled reports its fee unit at
 //!   `0` and no bytes on its refused piece, so the kernel's checkpoint refunds it
 //!   (`BUSBAR-1.6.0.md` l.1126: "a hop refused before the socket ledgers nothing");
@@ -17,10 +18,16 @@
 //!   repo's pin, carries the SDK the linked build carries (compiled in or dropped in, "NOTHING
 //!   CHANGES about the plugin itself").
 
-#![allow(unsafe_code)]
+// A door-driven test crate: it reaches the plane only through `door`, the crate's one public item,
+// and plays the kernel's plane driver and the host over the raw door table, so the `unsafe` the
+// host side needs lives here, outside the plugin crate (whose root keeps the literal
+// `#![forbid(unsafe_code)]`). The door's private constants it needs are `door_facts`, held to the
+// crate's own items by the crate's unit test `door_facts`.
 
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::cell::Cell;
+#[path = "support/door_facts.rs"]
+#[allow(dead_code)] // the both-ways script's line and need facts are read there, not here
+mod door_facts;
+
 use std::collections::HashMap;
 use std::os::raw::c_void;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -48,47 +55,15 @@ use busbar_contract::abi::plane::{
     RefusalOut, ServeIn, ServeOut, UnitCount, EMIT_DONE, FROM_CALLER, FROM_FAR_END, FROM_KERNEL,
     PIECE_HAS_STATUS, PIECE_LAST, PIECE_REFUSED, REFUSAL_KERNEL,
 };
-use busbar_plane_a2a::agent_door::{self, MAX_UNITS};
-use busbar_plane_a2a::door_statement::{
-    self, CLASS_BYTES_INDEX, CLASS_FEE_INDEX, DIALECT_DOCUMENT,
-};
+use door_facts::{CLASS_BYTES_INDEX, CLASS_FEE_INDEX, DIALECT_DOCUMENT, MAX_UNITS};
 
-// ── the allocation count ────────────────────────────────────────────────────────────────────────
+// ── the allocation count: busbar-contract's test-only counter, this test binary's allocator ──────
 
-thread_local! {
-    /// Allocations made by THIS thread since the counter was last read.
-    static ALLOCS: Cell<u64> = const { Cell::new(0) };
-}
-
-/// The system allocator, counting.
-struct Counting;
-
-// SAFETY: every call is forwarded verbatim to the system allocator; the counter is a thread-local
-// `Cell` of a plain integer, touched only on the allocating thread, and never reads or writes the
-// memory being handed out.
-unsafe impl GlobalAlloc for Counting {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let _ = ALLOCS.try_with(|c| c.set(c.get() + 1));
-        unsafe { System.alloc(layout) }
-    }
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        unsafe { System.dealloc(ptr, layout) }
-    }
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        let _ = ALLOCS.try_with(|c| c.set(c.get() + 1));
-        unsafe { System.realloc(ptr, layout, new_size) }
-    }
-}
+use busbar_contract::alloc_counter::allocations_with as allocations_of;
 
 #[global_allocator]
-static ALLOC: Counting = Counting;
-
-/// How many allocations `f` made on this thread, and what it returned.
-fn allocations_of<R>(f: impl FnOnce() -> R) -> (u64, R) {
-    let before = ALLOCS.with(Cell::get);
-    let r = f();
-    (ALLOCS.with(Cell::get) - before, r)
-}
+static A: busbar_contract::alloc_counter::Counting =
+    busbar_contract::alloc_counter::Counting::new();
 
 // ── the host's services ─────────────────────────────────────────────────────────────────────────
 
@@ -100,14 +75,12 @@ fn answer(out: *mut ServiceOut, outcome: Outcome, value: u64, len: u64) -> RawOu
             outcome: RawOutcome::of(outcome),
             value,
             len,
-            _reserved: [0; 3],
+            exited: 0,
+            _reserved: [0; 2],
             items: 0,
             needed_bytes: 0,
             needed_items: 0,
-            error: AbiStr {
-                ptr: std::ptr::null(),
-                len: 0,
-            },
+            error: AbiStr::ABSENT,
         });
     }
     RawOutcome::of(outcome)
@@ -190,8 +163,14 @@ fn store() -> MutexGuard<'static, Vec<(String, String, Vec<u8>)>> {
 /// when that handle is issued again (a store read on the host's pool, completed before the replay).
 static LIST_PENDS: AtomicBool = AtomicBool::new(false);
 
+/// While set, `records.list` is refused (the store is unavailable): FAILED, nothing listed.
+static LIST_REFUSES: AtomicBool = AtomicBool::new(false);
+
 extern "C" fn records_list(_: HostCtx, input: *const c_void, out: *mut ServiceOut) -> RawOutcome {
     handed(input);
+    if LIST_REFUSES.load(Ordering::SeqCst) {
+        return answer(out, Outcome::Failed, 0, 0);
+    }
     if LIST_PENDS.load(Ordering::SeqCst) {
         // SAFETY: every service's `in` leads with its head.
         let h = unsafe { input.cast::<ServiceHead>().read() }.handle;
@@ -208,10 +187,10 @@ extern "C" fn records_list(_: HostCtx, input: *const c_void, out: *mut ServiceOu
     let i = unsafe { input.cast::<RecordsListIn>().read() };
     // SAFETY: as above.
     let text = |s: AbiStr| unsafe {
-        if s.ptr.is_null() {
+        if s.is_absent() {
             Vec::new()
         } else {
-            std::slice::from_raw_parts(s.ptr, s.len).to_vec()
+            std::slice::from_raw_parts(s.ptr(), s.len()).to_vec()
         }
     };
     let (kind, after) = (text(i.kind), text(i.after));
@@ -252,14 +231,12 @@ extern "C" fn records_list(_: HostCtx, input: *const c_void, out: *mut ServiceOu
             outcome: RawOutcome::of(Outcome::Ready),
             len: at as u64,
             items: rows.len() as u64,
-            _reserved: [0; 3],
+            exited: 0,
+            _reserved: [0; 2],
             value: 0,
             needed_bytes: 0,
             needed_items: 0,
-            error: AbiStr {
-                ptr: std::ptr::null(),
-                len: 0,
-            },
+            error: AbiStr::ABSENT,
         });
     }
     RawOutcome::of(Outcome::Ready)
@@ -297,6 +274,9 @@ static HOST_SLOTS: HostSlots = HostSlots {
     trust_decide: Some(decided),
     trust_state: None,
     session_emit: None,
+    auth_call: None,
+    unit_hand_in: None,
+    unit_refuse: None,
 };
 
 // ── the agent behind the connector: it serves its card to every exchange ───────────────────────
@@ -464,19 +444,13 @@ fn z<T>() -> T {
 }
 
 fn str_of(s: &[u8]) -> AbiStr {
-    AbiStr {
-        ptr: s.as_ptr(),
-        len: s.len(),
-    }
+    // SAFETY: `s` is a fixture or a buffer that outlives the call its `in` is lent to.
+    unsafe { AbiStr::from_raw_parts(s.as_ptr(), s.len()) }
 }
 
 fn octets(b: &[u8]) -> Blob {
-    Blob {
-        ptr: b.as_ptr(),
-        len: b.len(),
-        fmt: BLOB_OCTETS,
-        flags: 0,
-    }
+    // SAFETY: as `str_of`.
+    unsafe { Blob::from_raw_parts(b.as_ptr(), b.len(), BLOB_OCTETS, 0) }
 }
 
 fn head<T>(op: u32, ticket: Ticket) -> InHead {
@@ -497,7 +471,7 @@ fn out_head<T>() -> OutHead {
 
 fn ops() -> &'static Ops {
     // SAFETY: the door is a `'static` table whose ops are the plane kind's.
-    unsafe { &*(*agent_door::door()).ops.cast::<Ops>() }
+    unsafe { &*(*busbar_plane_a2a::door()).ops().cast::<Ops>() }
 }
 
 fn lifecycle() -> &'static OpsHead {
@@ -625,11 +599,7 @@ impl Given<'_> {
 
 /// The route index of `(verb, target)` in the door's table, the claim an arrival carries.
 fn claim(verb: &str, target: &str) -> u32 {
-    let i = door_statement::ROUTES
-        .iter()
-        .position(|r| r.verb == verb && r.target == target)
-        .unwrap_or_else(|| panic!("the door routes {verb} {target}"));
-    u32::try_from(i).unwrap()
+    door_facts::claim(verb, target)
 }
 
 fn open() -> Door {
@@ -653,11 +623,16 @@ fn open_with(section: &'static [u8]) -> Door {
         ..z()
     };
     let f = lifecycle().open.expect("the door opens");
-    let ret = f(
-        std::ptr::null_mut(),
-        std::ptr::from_ref(&i).cast(),
-        std::ptr::from_mut(&mut o).cast(),
-    );
+    // SAFETY: `f` is the door's own slot, called over an `in` and an `out` laid out as its ABI
+    // states and live for the call.
+    #[allow(unused_unsafe)]
+    let ret = unsafe {
+        f(
+            std::ptr::null_mut(),
+            std::ptr::from_ref(&i).cast(),
+            std::ptr::from_mut(&mut o).cast(),
+        )
+    };
     assert_eq!(ret.outcome(), Outcome::Ready, "the door opens");
     Door {
         instance: o.open.instance,
@@ -685,19 +660,33 @@ impl Door {
         let mut o: ArriveOut = z();
         o.head = out_head::<ArriveOut>();
         let f = ops().arrive.expect("arrive");
-        let ret = f(
-            self.instance,
-            std::ptr::from_ref(&i).cast(),
-            std::ptr::from_mut(&mut o).cast(),
-        );
+        // SAFETY: `f` is the door's own slot, called over an `in` and an `out` laid out as its ABI
+        // states and live for the call.
+        #[allow(unused_unsafe)]
+        let ret = unsafe {
+            f(
+                self.instance,
+                std::ptr::from_ref(&i).cast(),
+                std::ptr::from_mut(&mut o).cast(),
+            )
+        };
         (ret.outcome(), o.refusal_status)
     }
 
     /// Busbar's own card read, on the open line.
     fn arrive_own_card(&self, unit: u64) {
-        let route = ("GET", busbar_plane_a2a::WELL_KNOWN_CARD_PATH);
-        let (outcome, _) = self.arrive(unit, route, busbar_plane_a2a::WELL_KNOWN_CARD_PATH, b"");
-        assert_eq!(outcome, Outcome::Ready, "busbar's own card read arrives");
+        assert!(
+            self.arrives_own_card(unit),
+            "busbar's own card read arrives"
+        );
+    }
+
+    /// Whether busbar's own card read under `unit` is admitted (`arrive` answers READY; a full
+    /// instance refuses it `429`).
+    fn arrives_own_card(&self, unit: u64) -> bool {
+        let route = ("GET", door_facts::WELL_KNOWN_CARD_PATH);
+        let (outcome, _) = self.arrive(unit, route, door_facts::WELL_KNOWN_CARD_PATH, b"");
+        outcome == Outcome::Ready
     }
 
     /// One `on_piece` of `unit`, its reply buffer `reply_cap` bytes.
@@ -726,11 +715,16 @@ impl Door {
         let mut o: OnPieceOut = z();
         o.head = out_head::<OnPieceOut>();
         let f = ops().on_piece.expect("on_piece");
-        let ret = f(
-            self.instance,
-            std::ptr::from_ref(&i).cast(),
-            std::ptr::from_mut(&mut o).cast(),
-        );
+        // SAFETY: `f` is the door's own slot, called over an `in` and an `out` laid out as its ABI
+        // states and live for the call.
+        #[allow(unused_unsafe)]
+        let ret = unsafe {
+            f(
+                self.instance,
+                std::ptr::from_ref(&i).cast(),
+                std::ptr::from_mut(&mut o).cast(),
+            )
+        };
         let at = |s: busbar_contract::abi::mechanism::call::Span| {
             let from = s.offset as usize;
             String::from_utf8_lossy(&arena[from..from + s.len as usize]).into_owned()
@@ -754,6 +748,17 @@ impl Door {
 
     /// `refusal` of `unit` for `reason` at `status`: its outcome, status and body.
     fn refusal(&self, unit: u64, reason: RefusalCode, status: u32) -> (Outcome, u32, String) {
+        let (outcome, answered, body, _) = self.refusal_writing(unit, reason, status);
+        (outcome, answered, body)
+    }
+
+    /// [`Self::refusal`], and how many record writes (its audit row among them) it answered.
+    fn refusal_writing(
+        &self,
+        unit: u64,
+        reason: RefusalCode,
+        status: u32,
+    ) -> (Outcome, u32, String, u32) {
         let text = b"refused";
         let mut reply = vec![0_u8; 4096];
         let mut fields = [z::<OutField>(); 8];
@@ -772,13 +777,18 @@ impl Door {
         let mut o: RefusalOut = z();
         o.head = out_head::<RefusalOut>();
         let f = ops().refusal.expect("refusal");
-        let ret = f(
-            self.instance,
-            std::ptr::from_ref(&i).cast(),
-            std::ptr::from_mut(&mut o).cast(),
-        );
+        // SAFETY: `f` is the door's own slot, called over an `in` and an `out` laid out as its ABI
+        // states and live for the call.
+        #[allow(unused_unsafe)]
+        let ret = unsafe {
+            f(
+                self.instance,
+                std::ptr::from_ref(&i).cast(),
+                std::ptr::from_mut(&mut o).cast(),
+            )
+        };
         let body = String::from_utf8_lossy(&reply[..o.reply_written as usize]).into_owned();
-        (ret.outcome(), o.status, body)
+        (ret.outcome(), o.status, body, o.records_written)
     }
 
     /// `serve` of the trust verb `connect` for `agent`: its outcome, status and body.
@@ -831,13 +841,18 @@ impl Door {
         let mut o: ServeOut = z();
         o.head = out_head::<ServeOut>();
         let f = ops().serve.expect("serve");
-        let ret = f(
-            self.instance,
-            std::ptr::from_ref(&i).cast(),
-            std::ptr::from_mut(&mut o).cast(),
-        );
+        // SAFETY: `f` is the door's own slot, called over an `in` and an `out` laid out as its ABI
+        // states and live for the call.
+        #[allow(unused_unsafe)]
+        let ret = unsafe {
+            f(
+                self.instance,
+                std::ptr::from_ref(&i).cast(),
+                std::ptr::from_mut(&mut o).cast(),
+            )
+        };
         // The kernel writes the answer's record writes to the store, in order.
-        let held = busbar_plane_a2a::records::HELD_KINDS;
+        let held = door_facts::HELD_KINDS;
         let mut status = o.status;
         for w in &records[..(o.records_written as usize).min(records.len())] {
             let at = |s: busbar_contract::abi::mechanism::call::Span| {
@@ -869,11 +884,16 @@ impl Door {
         let mut o: TickOut = z();
         o.head = out_head::<TickOut>();
         let f = lifecycle().tick.expect("tick");
-        let ret = f(
-            self.instance,
-            std::ptr::from_ref(&i).cast(),
-            std::ptr::from_mut(&mut o).cast(),
-        );
+        // SAFETY: `f` is the door's own slot, called over an `in` and an `out` laid out as its ABI
+        // states and live for the call.
+        #[allow(unused_unsafe)]
+        let ret = unsafe {
+            f(
+                self.instance,
+                std::ptr::from_ref(&i).cast(),
+                std::ptr::from_mut(&mut o).cast(),
+            )
+        };
         (ret.outcome(), o.next_tick_ns)
     }
 
@@ -891,11 +911,16 @@ impl Door {
         let mut o: PlaneDriveOut = z();
         o.head = out_head::<PlaneDriveOut>();
         let f = lifecycle().drive.expect("drive");
-        let ret = f(
-            self.instance,
-            std::ptr::from_ref(&i).cast(),
-            std::ptr::from_mut(&mut o).cast(),
-        );
+        // SAFETY: `f` is the door's own slot, called over an `in` and an `out` laid out as its ABI
+        // states and live for the call.
+        #[allow(unused_unsafe)]
+        let ret = unsafe {
+            f(
+                self.instance,
+                std::ptr::from_ref(&i).cast(),
+                std::ptr::from_mut(&mut o).cast(),
+            )
+        };
         ret.outcome()
     }
 
@@ -906,6 +931,32 @@ impl Door {
             head: head::<PlaneCancelIn>(life::CANCEL, Ticket::NONE),
             ticket: ticket(unit),
         };
+        let mut o: PlaneCancelOut = z();
+        o.cancel.head = out_head::<PlaneCancelOut>();
+        let f = lifecycle().cancel.expect("cancel");
+        // SAFETY: `f` is the door's own slot, called over an `in` and an `out` laid out as its ABI
+        // states and live for the call.
+        #[allow(unused_unsafe)]
+        let ret = unsafe {
+            f(
+                self.instance,
+                std::ptr::from_ref(&i).cast(),
+                std::ptr::from_mut(&mut o).cast(),
+            )
+        };
+        ret.outcome()
+    }
+
+    /// The host's own cancel of `unit`, naming it by the key `arrive` kept it under as well as by
+    /// its ticket (`PlaneCancelIn::unit`): a unit cancelled before any piece of it carried its
+    /// ticket.
+    fn cancel_unit(&self, unit: u64) -> Outcome {
+        let mut i: PlaneCancelIn = z();
+        i.cancel = CancelIn {
+            head: head::<PlaneCancelIn>(life::CANCEL, Ticket::NONE),
+            ticket: ticket(unit),
+        };
+        i.unit = unit;
         let mut o: PlaneCancelOut = z();
         o.cancel.head = out_head::<PlaneCancelOut>();
         let f = lifecycle().cancel.expect("cancel");
@@ -949,14 +1000,18 @@ fn units_whose_answer_is_written_never_push_a_live_unit_out() {
     let door = open();
     door.begin_own_card(1);
     for unit in 2..=(MAX_UNITS as u64 + 1) {
-        door.arrive_own_card(unit);
+        assert!(
+            door.arrives_own_card(unit),
+            "unit {unit} was refused: the card reads the door had already finished still held \
+             their places"
+        );
         let whole = door.piece(unit, Given::caller(b""), 1 << 16);
         assert_eq!(whole.outcome, Some(Outcome::Ready), "unit {unit}");
         assert_ne!(whole.flags & EMIT_DONE, 0, "unit {unit}'s answer is whole");
     }
     assert!(
         door.still_answers(1),
-        "a live unit was evicted by {MAX_UNITS} card reads the door had already finished"
+        "the live unit 1 was dropped to make room for {MAX_UNITS} finished card reads"
     );
 }
 
@@ -969,18 +1024,22 @@ fn units_whose_refusal_is_rendered_never_push_a_live_unit_out() {
     let door = open();
     door.begin_own_card(1);
     for unit in 2..=(MAX_UNITS as u64 + 1) {
-        door.arrive_own_card(unit);
+        assert!(
+            door.arrives_own_card(unit),
+            "unit {unit} was refused: the units whose refusal the door had rendered were not \
+             forgotten"
+        );
         let (outcome, _, body) = door.refusal(unit, RefusalCode::RateLimited, 429);
         assert_eq!(outcome, Outcome::Ready, "unit {unit}: {body}");
     }
     assert!(
         door.still_answers(1),
-        "a live unit was evicted by {MAX_UNITS} units whose refusal the door had already rendered"
+        "the live unit 1 was dropped to make room for {MAX_UNITS} units whose refusal was rendered"
     );
 }
 
-/// A CANCELLED UNIT GOES FIRST: when the instance is full, the oldest cancelled unit makes room,
-/// never a live one. RED before the fix: `cancel` left the unit as it was and the instance evicted
+/// A CANCELLED UNIT GOES FIRST: when the instance is full, the cancelled units make room, never a
+/// live one. RED before the fix: `cancel` left the unit as it was and the instance evicted
 /// the oldest unit whatever it was.
 #[test]
 fn cancelled_units_make_room_before_a_live_unit_does() {
@@ -993,7 +1052,105 @@ fn cancelled_units_make_room_before_a_live_unit_does() {
     }
     assert!(
         door.still_answers(1),
-        "a live unit was evicted while {MAX_UNITS} cancelled units were held"
+        "the live unit 1 was dropped to make room while {MAX_UNITS} cancelled units were held"
+    );
+}
+
+/// AN INSTANCE FULL OF LIVE UNITS REFUSES THE NEXT ARRIVAL, AND EVICTS NONE (THE DESIGN section
+/// 1: admission bounds live work, nothing evicts it; a refusal is a fact the caller can act on, an
+/// eviction is not). [`MAX_UNITS`] units arrive and none ends; the next arrival is refused `429`,
+/// and the oldest live unit still answers its next window. RED before the fix: the arrival was
+/// admitted and the oldest live unit evicted, its next window refused.
+#[test]
+fn an_instance_full_of_live_units_refuses_the_next_arrival_and_evicts_none() {
+    let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    let door = open();
+    door.begin_own_card(1);
+    for unit in 2..=(MAX_UNITS as u64) {
+        door.arrive_own_card(unit);
+    }
+    let route = ("GET", door_facts::WELL_KNOWN_CARD_PATH);
+    let next = MAX_UNITS as u64 + 1;
+    assert_eq!(
+        door.arrive(next, route, door_facts::WELL_KNOWN_CARD_PATH, b""),
+        (Outcome::Refused, 429),
+        "the arrival past {MAX_UNITS} live units is refused"
+    );
+    assert!(
+        door.still_answers(1),
+        "the live unit 1 was dropped to make room for a refused arrival"
+    );
+}
+
+/// A UNIT CANCELLED BEFORE ITS FIRST PIECE IS OVER: the host's cancel names it by the key `arrive`
+/// kept it under (no piece of it ever carried its ticket), so it makes room when the instance is
+/// full. RED before the fix: the cancel looked for the unit by its ticket alone, which the unit
+/// had not recorded, so the unit stayed live and the next arrival evicted the oldest live unit.
+#[test]
+fn a_unit_cancelled_before_its_first_piece_makes_room() {
+    let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    let door = open();
+    door.begin_own_card(1);
+    for unit in 2..=(MAX_UNITS as u64) {
+        door.arrive_own_card(unit);
+        assert_eq!(
+            door.cancel_unit(unit),
+            Outcome::Ready,
+            "unit {unit}'s cancel"
+        );
+    }
+    assert!(
+        door.arrives_own_card(MAX_UNITS as u64 + 1),
+        "the arrival past {MAX_UNITS} units was refused: the units cancelled before their first \
+         piece are still live"
+    );
+    assert!(
+        door.still_answers(1),
+        "the live unit 1 was dropped to make room while {MAX_UNITS} units cancelled before their \
+         first piece were held"
+    );
+}
+
+/// A FINISHED HOP'S UNIT IS STILL READ BY A REFUSAL OF ITS ANSWER: the hop's last piece wrote the
+/// caller's whole answer, and the kernel then refused that answer (a response hook's veto); the
+/// refusal still finds the unit, so its audit row names the agent the hop reached. RED before the
+/// fix: the finished hop's unit was dropped at once, so the refusal found nothing and wrote no
+/// row.
+#[test]
+fn a_refusal_after_a_finished_hop_still_reads_its_unit() {
+    let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    let door = open();
+    let (outcome, status, body) = door.connect("vendor");
+    assert_eq!(
+        (outcome, status),
+        (Outcome::Ready, 200),
+        "`connect` holds the agent's card: {body}"
+    );
+    let unit = 10;
+    let route = ("POST", "/a2a/agents/{agent_id}");
+    assert_eq!(
+        door.arrive(unit, route, "/a2a/agents/vendor", CARD_READ),
+        (Outcome::Ready, 0),
+        "the card read is admitted"
+    );
+    let attempt = door.piece(unit, Given::attempt(b"vendor"), 1 << 16);
+    assert_eq!(attempt.outcome, Some(Outcome::Ready), "{attempt:?}");
+    let sent = door.piece(unit, Given::caller(CARD_READ), 1 << 16);
+    assert_eq!(sent.outcome, Some(Outcome::Ready), "{sent:?}");
+    let empty: &[u8] = br#"{"jsonrpc":"2.0","id":1}"#;
+    let answered = door.piece(unit, Given::far_end(200, empty), 1 << 16);
+    assert_eq!(answered.outcome, Some(Outcome::Ready), "{answered:?}");
+    assert_ne!(
+        answered.flags & EMIT_DONE,
+        0,
+        "the hop's answer is written whole: {answered:?}"
+    );
+
+    let (refused, _, body, writes) = door.refusal_writing(unit, RefusalCode::HookVeto, 403);
+    assert_eq!(refused, Outcome::Ready, "{body}");
+    assert_eq!(
+        writes, 1,
+        "the refusal read the finished hop's unit and wrote its audit row: {body}"
     );
 }
 
@@ -1482,13 +1639,55 @@ fn a_kernel_refusal_with_no_unit_answers_the_baseline_json_rpc_bytes() {
     }
 }
 
+/// A CARD LISTING THE HOST REFUSED IS LISTED AGAIN: the cards are warmed only once both their
+/// listings land, so an instance opened again over a store that refused its first tick's listing
+/// warms them on a following tick and serves the agent. RED before the fix: a refused listing counted
+/// as warmed, no tick listed again, and every arrival addressed to the agent was refused for want
+/// of a card until an operator looked again.
+#[test]
+fn a_card_listing_the_host_refused_is_listed_again() {
+    let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    store().clear();
+    let before = open();
+    let (outcome, status, body) = before.connect("vendor");
+    assert_eq!(
+        (outcome, status),
+        (Outcome::Ready, 200),
+        "`connect` holds the agent's card: {body}"
+    );
+    struct Available;
+    impl Drop for Available {
+        fn drop(&mut self) {
+            LIST_REFUSES.store(false, Ordering::SeqCst);
+        }
+    }
+    let _available = Available;
+    LIST_REFUSES.store(true, Ordering::SeqCst);
+    let after = open();
+    let (ticked, _) = after.tick();
+    assert_eq!(ticked, Outcome::Ready, "a refused listing ends the tick");
+    LIST_REFUSES.store(false, Ordering::SeqCst);
+    // The tick after a refused warm attempts the deliveries; the one after it warms again.
+    for n in 0..2 {
+        let (ticked, _) = after.tick();
+        assert_eq!(ticked, Outcome::Ready, "tick {n} after the refused one");
+    }
+    let route = ("POST", "/a2a/agents/{agent_id}");
+    assert_eq!(
+        after.arrive(14, route, "/a2a/agents/vendor", CARD_READ),
+        (Outcome::Ready, 0),
+        "the instance warmed the agent's card once the store listed it"
+    );
+}
+
 // ── the READY path the dropped-in twin carries ──────────────────────────────────────────────────
 
 /// What one addressed READY arrival allocates on a warmed instance (the agent's card held, its
 /// route entry already named by earlier arrivals). The bound is exact (the plane's own unit state,
 /// task rows and relay set-up; the route name costs none): a change that moves it moves this
-/// constant in the same commit, with the reason.
-const READY_ARRIVAL_ALLOCATIONS: u64 = 64;
+/// constant in the same commit, with the reason. It came down from 64 to the measured 56 when the
+/// arrival's body was parsed once and its request handed to the hop rather than copied.
+const READY_ARRIVAL_ALLOCATIONS: u64 = 56;
 
 /// A WARMED READY ARRIVAL NAMES ITS ROUTE WITHOUT THE HEAP (THE DESIGN, the plugin ABI: "no
 /// allocation and no blocking on the hot path"; compiled in or dropped in, "NOTHING CHANGES about

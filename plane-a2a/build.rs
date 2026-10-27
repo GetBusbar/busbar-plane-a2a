@@ -49,27 +49,18 @@ const NULL_MAP_FIELDS: usize = 7;
 
 fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=proto");
-    // THE METHOD INVENTORY a unit test holds the plane's JSON-RPC names to: busbar's
-    // `qa/method-inventory.json` at `.busbar-ref`, read HERE, at build time, from the busbar
-    // checkout plugin CI exports (`BUSBAR_CHECKOUT`), and included by the test as generated source,
-    // so no test of the plane reads the environment or a file at run time. Unset (a build that is
-    // not CI, busbar's own workspace build), it is `None` and the test refuses.
-    println!("cargo:rerun-if-env-changed=BUSBAR_CHECKOUT");
-    let inventory = match std::env::var_os("BUSBAR_CHECKOUT") {
-        Some(busbar) => {
-            let path = PathBuf::from(busbar).join("qa/method-inventory.json");
-            println!("cargo:rerun-if-changed={}", path.display());
-            Some(std::fs::read_to_string(&path)?)
-        }
-        None => None,
-    };
-    let body = inventory.map_or_else(|| "None".to_string(), |text| format!("Some({text:?})"));
+    // THE METHOD INVENTORY a unit test holds the plane's JSON-RPC names to:
+    // `tests/data/method-inventory.json`, read HERE, at build time, and included by the test as
+    // generated source, so no test of the plane reads a file at run time.
+    let path = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR")?)
+        .join("tests/data/method-inventory.json");
+    println!("cargo:rerun-if-changed={}", path.display());
+    let text = std::fs::read_to_string(&path)?;
     std::fs::write(
         PathBuf::from(std::env::var("OUT_DIR")?).join("method_inventory.rs"),
         format!(
-            "/// busbar's `qa/method-inventory.json` at `.busbar-ref`, read at build time; `None` when\n\
-             /// the build had no busbar checkout.\n\
-             pub(crate) const METHOD_INVENTORY: Option<&str> = {body};\n"
+            "/// `tests/data/method-inventory.json`, read at build time.\n\
+             pub(crate) const METHOD_INVENTORY: &str = {text:?};\n"
         ),
     )?;
     // THE ROOT CELLS' ADDRESS (this crate's `links` row): the composition root compiles this
@@ -110,7 +101,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut generated = std::fs::read_to_string(&serde_path)?;
     // COUNTED, so a change in pbjson's output shape fails the build instead of silently matching
     // nothing (a null map or list would then be refused): every map field's line is patched, and
-    // every listed repeated member is patched at least once.
+    // each listed repeated member is patched exactly as many times as the vendored proto declares a
+    // repeated field of that name (`extensions` is three fields, `parts` two), so a generator
+    // change that alters the line of one of them fails too.
+    let proto = std::fs::read_to_string(PROTO_FILES[0])?;
     let maps = generated.matches(NULL_MAP.0).count();
     if maps != NULL_MAP_FIELDS {
         return Err(format!(
@@ -124,13 +118,34 @@ fn main() -> Result<(), Box<dyn Error>> {
         let patch =
             format!("{member}__ = Some(map_.next_value::<Option<_>>()?.unwrap_or_default());");
         let (patched, hits) = replace_whole(&generated, &needle, &patch);
-        if hits == 0 {
-            return Err(format!("the null-repeated patch for `{member}` matched nothing").into());
+        let declared = repeated_fields(&proto, member);
+        if declared == 0 || hits != declared {
+            return Err(format!(
+                "the null-repeated patch for `{member}` matched {hits} field(s), not the vendored \
+                 proto's {declared}"
+            )
+            .into());
         }
         generated = patched;
     }
     std::fs::write(serde_path, generated)?;
     Ok(())
+}
+
+/// How many fields named `name` the proto source `proto` declares `repeated`: every line
+/// `repeated <type> <name> = <tag>;`.
+fn repeated_fields(proto: &str, name: &str) -> usize {
+    proto
+        .lines()
+        .filter(|line| {
+            let mut words = line.split_whitespace();
+            words.next() == Some("repeated")
+                && words.next().is_some()
+                && words
+                    .next()
+                    .is_some_and(|field| field.split('=').next() == Some(name))
+        })
+        .count()
 }
 
 /// `text` with every `needle` that starts a whole identifier replaced by `with`, and how many were:

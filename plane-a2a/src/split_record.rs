@@ -137,8 +137,14 @@ fn assemble(
     if !digest || len <= MAX_RECORD_BYTES || count != len.div_ceil(MAX_RECORD_BYTES) {
         return Err(UNREADABLE);
     }
+    // A STORED HEAD NAMES NO MORE PARTS THAN WERE READ: its count is bounded by the rows the read
+    // answered before any key list is built or any byte is joined, so a corrupt head cannot size
+    // an allocation of its own choosing.
+    if count > parts.len() {
+        return Err("a part is missing");
+    }
     let keys: Vec<String> = (0..count).map(|n| part_key(key, hex, n)).collect();
-    let mut whole = Vec::new();
+    let mut whole = Vec::with_capacity(len.min(count.saturating_mul(MAX_RECORD_BYTES)));
     for k in &keys {
         whole.extend_from_slice(parts.get(k).ok_or("a part is missing")?);
     }

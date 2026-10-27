@@ -10,15 +10,15 @@
 //!
 //! * [`Deliveries::enqueue`] files a notification behind its task's earlier ones; past
 //!   [`QUEUE_CAPACITY`] the oldest waiting one is dropped and counted.
-//! * [`Deliveries::due`] hands out, per task, only the HEAD of its queue, once its time has come and
-//!   while no attempt on it is open, so a task's notifications reach the receiver in the order its
-//!   state changed.
+//! * [`Deliveries::next_due`] hands out the ONE delivery the door's `tick` attempts on one op: only
+//!   the HEAD of a task's queue, once its time has come and while no attempt on it is open (so a
+//!   task's notifications reach the receiver in the order its state changed), the tasks served in
+//!   turn.
 //! * Each attempt re-runs the destination judge, then dials the plane's outbound `open-web` need
 //!   ([`crate::door_statement::NEED_OPEN_WEB`]) with [`request`]; its end is [`Attempted`].
 //! * [`Deliveries::settle`] pops the head, or puts it back with its next time when the end is
 //!   retryable and attempts remain. [`Deliveries::next_tick_ns`] is the lifecycle tick's
-//!   `next_tick_ns`: nothing waits on a slot or a thread between attempts.
-//! * [`Deliveries::next_due`] is the one head the door's `tick` attempts on one op.
+//!   `next_tick_ns` while no attempt is held: nothing waits on a slot or a thread between attempts.
 //! * Every attempt's end is OWED to its task's chain ([`Deliveries::owe`]): a `tick` answer carries
 //!   no record write, so the outcome waits in plane memory, bounded, until a piece of its caller's
 //!   files it ([`Deliveries::take_owed`]).
@@ -324,6 +324,8 @@ struct Book {
     auths: BTreeMap<String, DeliveryAuth>,
     owed: VecDeque<Owed>,
     unfiled: u64,
+    /// The [`Book::dropped`] and [`Book::unfiled`] counts already reported as metrics.
+    reported: (u64, u64),
     /// The task the pump attempted last: the next turn starts after it.
     last_served: Option<String>,
     /// An attempt is held across `drive` entries: no wake is raised for a queued notification.
@@ -353,12 +355,6 @@ pub struct Deliveries {
 type Wakeup = Keyed<(), Box<dyn Fn() + Send + Sync>>;
 
 impl Deliveries {
-    /// None queued.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     fn with<R>(&self, f: impl FnOnce(&mut Book) -> R) -> R {
         self.book
             .with_all(|m| f(m.entry(()).or_insert_with(Book::default)))
@@ -414,36 +410,6 @@ impl Deliveries {
                 open: false,
             });
             dropped
-        })
-    }
-
-    /// How many notifications were dropped from full queues.
-    #[must_use]
-    pub fn dropped(&self) -> u64 {
-        self.with(|b| b.dropped)
-    }
-
-    /// How many notifications `task_id`'s queue holds.
-    #[must_use]
-    pub fn depth(&self, task_id: &str) -> usize {
-        self.with(|b| b.queues.get(task_id).map_or(0, VecDeque::len))
-    }
-
-    /// The deliveries to attempt now: each task's head, when its time has come and no attempt on
-    /// it is open. Each is marked open until [`Deliveries::settle`].
-    #[must_use]
-    pub fn due(&self, now_ns: u64) -> Vec<Delivery> {
-        self.with(|b| {
-            b.queues
-                .values_mut()
-                .filter_map(VecDeque::front_mut)
-                .filter(|w| !w.open && w.not_before_ns <= now_ns)
-                .map(|w| {
-                    w.open = true;
-                    w.attempts += 1;
-                    w.delivery.clone()
-                })
-                .collect()
         })
     }
 
@@ -514,10 +480,18 @@ impl Deliveries {
         })
     }
 
-    /// How many owed outcomes were dropped unfiled from a full book.
-    #[must_use]
-    pub fn unfiled(&self) -> u64 {
-        self.with(|b| b.unfiled)
+    /// The notifications dropped and the outcomes dropped unfiled SINCE THE LAST CALL: the
+    /// increments the door reports on its counters
+    /// ([`crate::door_statement::FAMILY_PUSH_DROPPED`], [`crate::door_statement::FAMILY_PUSH_UNFILED`]).
+    pub fn take_counted(&self) -> (u64, u64) {
+        self.with(|b| {
+            let counted = (
+                b.dropped.saturating_sub(b.reported.0),
+                b.unfiled.saturating_sub(b.reported.1),
+            );
+            b.reported = (b.dropped, b.unfiled);
+            counted
+        })
     }
 
     /// Settle the open attempt on `task_id`'s head, the attempt having ENDED at `now_ns`: done, or
@@ -687,12 +661,6 @@ pub struct Tokens {
 }
 
 impl Tokens {
-    /// None minted.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// The token for `caller`'s task `task_id` over the host's `signature` of [`token_input`];
     /// `None` past [`MAX_TOKENS`] or for an empty id or signature.
     #[must_use]
@@ -764,12 +732,6 @@ pub struct PushLimiter {
 }
 
 impl PushLimiter {
-    /// No push spent.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Spend one push from `task_id`'s budget at `now` (unix seconds): `false` once the window's
     /// budget is spent.
     pub fn admit(&self, task_id: &str, now: u64) -> bool {

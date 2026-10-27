@@ -75,7 +75,20 @@ fn error_of(body: &Value) -> (i64, String) {
 
 #[test]
 fn every_listed_method_is_a_local_verb() {
-    for method in crate::LOCAL_VERB_METHODS {
+    for method in [
+        "ListTasks",
+        "tasks/list",
+        "CreateTaskPushNotificationConfig",
+        "tasks/pushNotificationConfig/set",
+        "GetTaskPushNotificationConfig",
+        "tasks/pushNotificationConfig/get",
+        "ListTaskPushNotificationConfigs",
+        "tasks/pushNotificationConfig/list",
+        "DeleteTaskPushNotificationConfig",
+        "tasks/pushNotificationConfig/delete",
+        "SubscribeToTask",
+        "tasks/resubscribe",
+    ] {
         assert!(verb_of(method).is_some(), "{method}");
     }
     assert_eq!(verb_of("SendMessage"), None);
@@ -117,6 +130,21 @@ fn list_tasks_answers_the_callers_own_rows_a_page_at_a_time() {
         ALICE,
     );
     assert_eq!(body["result"]["totalSize"], 0);
+}
+
+/// A PAGE HOLDS AT MOST 100 TASKS, the protocol's maximum (`ListTasksRequest.page_size`, a2a.proto:
+/// "The maximum value is 100"): a caller asking for more gets 100 and the token to the rest.
+#[test]
+fn list_tasks_pages_at_most_the_protocols_hundred() {
+    let mut desk = desk();
+    for n in 0..120u64 {
+        submitted(&mut desk.book, ALICE, &format!("bulk-{n}"), 1_000 + n);
+    }
+    let (status, body) = call(&mut desk, "ListTasks", json!({ "pageSize": 150 }), ALICE);
+    assert_eq!(status, 200);
+    assert_eq!(body["result"]["tasks"].as_array().map(Vec::len), Some(100));
+    assert_eq!(body["result"]["pageSize"], 100);
+    assert_ne!(body["result"]["nextPageToken"], "");
 }
 
 /// A config is created, read, listed and deleted as a record of its task, in each dialect's shape,
@@ -533,14 +561,8 @@ fn the_v0_3_spelling_is_answered_in_the_v0_3_shape() {
 /// name: the local verb it is, the class it is relayed as, and whether its answer is events.
 #[test]
 fn every_a2a_method_is_read_identically_under_both_of_its_live_json_rpc_names() {
-    // busbar's generated inventory at the pin this repo names, read by `build.rs` from the busbar
-    // checkout plugin CI exports (`BUSBAR_CHECKOUT`) and included as generated source. A build
-    // with no checkout is a failure, never a skip.
-    let inventory = METHOD_INVENTORY.expect(
-        "the build had no BUSBAR_CHECKOUT: the inventory is busbar's qa/method-inventory.json at \
-         .busbar-ref (plugin CI exports it; locally, point it at a busbar checkout and rebuild)",
-    );
-    let doc: Value = serde_json::from_str(inventory).expect("the inventory parses");
+    // The inventory, read by `build.rs` from `tests/data/` and included as generated source.
+    let doc: Value = serde_json::from_str(METHOD_INVENTORY).expect("the inventory parses");
     let methods = doc["methods"].as_array().expect("a methods array");
     fn how_busbar_reads(method: &str) -> (Option<&'static str>, String, Option<bool>) {
         let verb = verb_of(method).map(|v| match v {
@@ -686,18 +708,77 @@ fn obfuscated_ipv4_hosts_are_refused_before_anything_is_resolved() {
 }
 
 /// A URL whose authority names a user is malformed, refused rather than normalised, before the
-/// host is asked anything.
+/// host is asked anything, and the refusal never repeats the userinfo it carried.
 #[test]
 fn a_url_with_userinfo_is_refused_rather_than_normalised() {
-    let url = "https://169.254.169.254@caller.example/cb";
+    for (url, shown) in [
+        (
+            "https://169.254.169.254@caller.example/cb",
+            "https://***@caller.example/cb",
+        ),
+        (
+            "https://alice:s3cret@caller.example/cb",
+            "https://***@caller.example/cb",
+        ),
+    ] {
+        let mut desk = desk();
+        let cfg = json!({ "taskId": "t1", "id": "c1", "url": url });
+        let (_, body) = call(&mut desk, "CreateTaskPushNotificationConfig", cfg, ALICE);
+        assert_eq!(
+            error_of(&body),
+            (-32602, format!("push callback URL is malformed: `{shown}`"))
+        );
+        assert!(!body.to_string().contains("s3cret"), "{body}");
+        assert!(desk.judged.is_empty());
+    }
+}
+
+/// A v1.0 PUSH-CONFIG VERB READS ITS TASK FROM `taskId` ALONE: `id` is the config's id, so a
+/// request naming a task the caller does not hold is the absent-task refusal even when its config
+/// id happens to be one of the caller's own task ids; on v0.3 `id` is the task.
+#[test]
+fn a_v10_push_config_verb_never_reads_its_config_id_as_the_task() {
     let mut desk = desk();
-    let cfg = json!({ "taskId": "t1", "id": "c1", "url": url });
-    let (_, body) = call(&mut desk, "CreateTaskPushNotificationConfig", cfg, ALICE);
-    assert_eq!(
-        error_of(&body),
-        (-32602, format!("push callback URL is malformed: `{url}`"))
+    let cfg = json!({ "taskId": "t1", "id": "c1", "url": "https://hooks.example/cb" });
+    call(&mut desk, "CreateTaskPushNotificationConfig", cfg, ALICE);
+    // `t2` is Alice's other task; `nope` is no task of hers.
+    let (status, body) = call(
+        &mut desk,
+        "CreateTaskPushNotificationConfig",
+        json!({ "taskId": "nope", "id": "t2", "url": "https://hooks.example/cb" }),
+        ALICE,
     );
-    assert!(desk.judged.is_empty());
+    assert_eq!((status, error_of(&body).0), (404, -32001));
+    assert!(desk
+        .book
+        .value(KIND_PUSH_CONFIG, &task_key(ALICE, "t2"))
+        .is_none());
+    for method in [
+        "GetTaskPushNotificationConfig",
+        "DeleteTaskPushNotificationConfig",
+    ] {
+        let (_, body) = call(
+            &mut desk,
+            method,
+            json!({ "taskId": "nope", "id": "t1" }),
+            ALICE,
+        );
+        assert_eq!(error_of(&body).0, -32001, "{method}");
+    }
+    let (_, body) = call(
+        &mut desk,
+        "GetTaskPushNotificationConfig",
+        json!({ "id": "t1" }),
+        ALICE,
+    );
+    assert_eq!(error_of(&body).0, -32001, "v1.0 `id` alone names no task");
+    let (_, body) = call(
+        &mut desk,
+        "tasks/pushNotificationConfig/get",
+        json!({ "id": "t1", "pushNotificationConfigId": "c1" }),
+        ALICE,
+    );
+    assert_eq!(body["result"]["pushNotificationConfig"]["id"], "c1");
 }
 
 /// A string that is not a URL is refused, and a scheme the host does not admit is refused in the

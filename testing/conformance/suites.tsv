@@ -1,0 +1,2 @@
+# <suite-id><TAB><command>, run by testing/conformance/run.sh (the ModernCI conformance check).
+a2a	bash testing/conformance/a2a.sh

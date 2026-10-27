@@ -25,12 +25,9 @@ fn task_rows_round_trip_through_the_store_seam_encoding() {
         created_at: 10,
         updated_at: 20,
     };
-    let env = task.to_plane_record().unwrap();
-    assert_eq!(env.kind, KIND_TASK);
-    assert_eq!(env.id, "t-1");
-    assert_eq!(env.disposition, PlaneDisposition::Active); // auth-required is not terminal
-    assert_eq!(TaskRow::from_body(&env.body).unwrap(), task);
-    let json = String::from_utf8(env.body).unwrap();
+    let body = serde_json::to_vec(&task).unwrap();
+    assert_eq!(serde_json::from_slice::<TaskRow>(&body).unwrap(), task);
+    let json = String::from_utf8(body).unwrap();
     for field in [
         "task_id",
         "context_id",
@@ -51,32 +48,6 @@ fn task_rows_round_trip_through_the_store_seam_encoding() {
 }
 
 #[test]
-fn a_terminal_task_state_marks_the_envelope_terminal() {
-    let mut task = TaskRow {
-        task_id: "t-2".into(),
-        context_id: "ctx".into(),
-        principal: "key".into(),
-        direction: "inbound".into(),
-        state: "completed".into(),
-        agent_id: String::new(),
-        artifact_cursor: 0,
-        push_callback: String::new(),
-        push_version: String::new(),
-        created_at: 1,
-        updated_at: 2,
-    };
-    assert_eq!(
-        task.to_plane_record().unwrap().disposition,
-        PlaneDisposition::Terminal
-    );
-    task.state = "working".into();
-    assert_eq!(
-        task.to_plane_record().unwrap().disposition,
-        PlaneDisposition::Active
-    );
-}
-
-#[test]
 fn task_event_rows_round_trip_through_the_task_event_envelope() {
     let event = TaskEventRow {
         task_id: "t-1".into(),
@@ -92,9 +63,9 @@ fn task_event_rows_round_trip_through_the_task_event_envelope() {
         hash: "deadbeef".into(),
         digest_version: DIGEST_VERSION_LEN_PREFIXED,
     };
-    let env = event.to_plane_record().unwrap();
-    assert_eq!(env.kind, KIND_TASK_EVENT);
-    assert_eq!(env.parent.as_deref(), Some("t-1"));
-    assert_eq!(env.seq, 1);
-    assert_eq!(TaskEventRow::from_body(&env.body).unwrap(), event);
+    let body = serde_json::to_vec(&event).unwrap();
+    assert_eq!(
+        serde_json::from_slice::<TaskEventRow>(&body).unwrap(),
+        event
+    );
 }

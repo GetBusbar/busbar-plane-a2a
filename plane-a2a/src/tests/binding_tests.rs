@@ -7,6 +7,7 @@
 use serde_json::json;
 
 use super::*;
+use crate::answer_bytes::rewrap;
 
 fn card(words: &[&str]) -> Value {
     json!({ "supportedInterfaces": words.iter()
@@ -260,4 +261,17 @@ fn http_json_client_cancel_carries_its_metadata_in_the_body() {
         serde_json::from_slice::<Value>(&f.body).unwrap(),
         json!({ "metadata": { "why": "done" } })
     );
+}
+
+/// AN ID CANNOT RE-POINT THE REQUEST LINE: a dot segment (`.`, `..`), the one value the
+/// percent-encoding allowlist passes that still moves a path, is refused rather than composed.
+#[test]
+fn a_dot_segment_id_is_refused_rather_than_composed() {
+    for id in [".", ".."] {
+        let err = compose(BASE, "GetTask", &json!({ "id": id }))
+            .expect_err("a dot segment is not carried");
+        assert!(err.contains("dot segment"), "{err}");
+    }
+    let f = compose(BASE, "GetTask", &json!({ "id": "...", "historyLength": 1 })).unwrap();
+    assert!(f.target.contains("/tasks/..."), "{}", f.target);
 }
