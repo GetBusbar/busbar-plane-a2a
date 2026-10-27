@@ -107,14 +107,20 @@ pub struct AgentRefusal {
 }
 
 impl AgentRefusal {
-    /// A refusal before any id could be read.
-    fn unnamed(status: u32, code: i64, message: impl Into<String>) -> Self {
+    /// A refusal answering the request `id` (`None` = `null`).
+    #[must_use]
+    pub fn new(status: u32, id: Option<Value>, code: i64, message: impl Into<String>) -> Self {
         AgentRefusal {
             status,
-            id: None,
+            id,
             code,
             message: message.into(),
         }
+    }
+
+    /// A refusal before any id could be read.
+    fn unnamed(status: u32, code: i64, message: impl Into<String>) -> Self {
+        Self::new(status, None, code, message)
     }
 
     /// The words a refused `arrive` carries in its `head.error`, read back by [`AgentRefusal::from_words`]:
@@ -139,12 +145,12 @@ impl AgentRefusal {
         let status = head.next()?.parse().ok()?;
         let code = head.next()?.parse().ok()?;
         let id: Value = serde_json::from_str(head.next()?).ok()?;
-        Some(AgentRefusal {
+        Some(AgentRefusal::new(
             status,
-            id: (!id.is_null()).then_some(id),
+            (!id.is_null()).then_some(id),
             code,
-            message: message.to_string(),
-        })
+            message.to_string(),
+        ))
     }
 
     /// The JSON-RPC error object, with the `google.rpc.ErrorInfo` entry an A2A-defined code carries
@@ -400,12 +406,12 @@ pub fn decide_and_read<'a>(
         return (AgentDisposition::Refused(refusal), None);
     };
     let disposition = match busbar_contract::jsonrpc::read(&value) {
-        Err(invalid) => AgentDisposition::Refused(AgentRefusal {
-            status: STATUS_BAD_REQUEST,
-            id: (!invalid.id.is_null()).then_some(invalid.id),
-            code: invalid.code,
-            message: invalid.message.to_string(),
-        }),
+        Err(invalid) => AgentDisposition::Refused(AgentRefusal::new(
+            STATUS_BAD_REQUEST,
+            (!invalid.id.is_null()).then_some(invalid.id),
+            invalid.code,
+            invalid.message.to_string(),
+        )),
         Ok(busbar_contract::jsonrpc::Envelope::Notification { method }) => {
             AgentDisposition::Notice { method }
         }
@@ -583,16 +589,16 @@ pub const STATUS_UNAVAILABLE: u32 = 503;
 /// `Retry-After` field carries); `503`, `-32004`, echoing the request id `id`.
 #[must_use]
 pub fn breaker_refusal(agent: &str, id: Option<Value>, retry_after_s: u32) -> AgentRefusal {
-    AgentRefusal {
-        status: STATUS_UNAVAILABLE,
+    AgentRefusal::new(
+        STATUS_UNAVAILABLE,
         id,
-        code: CODE_UNSUPPORTED_OPERATION,
-        message: format!(
+        CODE_UNSUPPORTED_OPERATION,
+        format!(
             "a2a.hop.breaker_open: agent `{agent}` is unavailable: its circuit breaker is open \
              after repeated backend failures; busbar did not dispatch this request. Retry after \
              {retry_after_s}s"
         ),
-    }
+    )
 }
 
 /// THE POOLED AGENT'S CARD READ, refused (predev `receive.rs:1846-1857`): a pool's members are
@@ -600,14 +606,14 @@ pub fn breaker_refusal(agent: &str, id: Option<Value>, retry_after_s: u32) -> Ag
 /// relay; `400`, `-32004`, echoing the request id `id`.
 #[must_use]
 pub fn pooled_card(id: Value) -> AgentRefusal {
-    AgentRefusal {
-        status: STATUS_BAD_REQUEST,
-        id: (!id.is_null()).then_some(id),
-        code: CODE_UNSUPPORTED_OPERATION,
-        message: "GetExtendedAgentCard is not defined for a pooled agent: its members may present \
+    AgentRefusal::new(
+        STATUS_BAD_REQUEST,
+        (!id.is_null()).then_some(id),
+        CODE_UNSUPPORTED_OPERATION,
+        "GetExtendedAgentCard is not defined for a pooled agent: its members may present \
                   different cards"
             .to_string(),
-    }
+    )
 }
 
 /// THE PINNED HOP'S GRANT REFUSAL (predev `route::hop_facts`, `creds::AgentEgressDenied`): a
@@ -627,12 +633,12 @@ pub fn pinned_ungranted(id: Value, resource: &str, live: bool) -> AgentRefusal {
     } else {
         "this key is not live, so no outbound credential is leased for it".to_string()
     };
-    AgentRefusal {
-        status: STATUS_FORBIDDEN,
-        id: (!id.is_null()).then_some(id),
-        code: CODE_UNSUPPORTED_OPERATION,
+    AgentRefusal::new(
+        STATUS_FORBIDDEN,
+        (!id.is_null()).then_some(id),
+        CODE_UNSUPPORTED_OPERATION,
         message,
-    }
+    )
 }
 
 /// THE WALK'S WORDS for a pool member not interchangeable with its primary (predev
