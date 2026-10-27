@@ -1291,12 +1291,12 @@ fn extended_card(
 ) -> (u32, Vec<u8>) {
     use crate::served_card as served;
     let refusal = |status: u32, code: i64, message: &str| {
-        let refusal = crate::agent_arrival::AgentRefusal {
+        let refusal = crate::agent_arrival::AgentRefusal::new(
             status,
-            id: Some(rpc.clone()),
+            Some(rpc.clone()),
             code,
-            message: message.to_string(),
-        };
+            message.to_string(),
+        );
         (
             status,
             serde_json::to_vec(&refusal.envelope()).unwrap_or_default(),

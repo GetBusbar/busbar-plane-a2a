@@ -48,7 +48,7 @@ use busbar_contract::abi::sdk::publish::Keyed;
 use serde_json::Value;
 
 use crate::a2a::task::{plan_transition, Direction, Task, TaskState};
-use crate::agent_arrival::{AgentRefusal, JSON_MEDIA_TYPE};
+use crate::agent_arrival::AgentRefusal;
 use crate::local::{self, Reach};
 use crate::push::DeliveryAuth;
 use crate::records::KIND_PUSH_CONFIG;
@@ -152,22 +152,15 @@ pub enum Opened {
 
 /// The refusal an opening gives, echoing `rpc_id`.
 fn refusal(status: u32, rpc_id: &Value, code: i64, message: &str) -> AgentRefusal {
-    AgentRefusal {
-        status,
-        id: Some(rpc_id.clone()),
-        code,
-        message: message.to_string(),
-    }
+    AgentRefusal::new(status, Some(rpc_id.clone()), code, message.to_string())
 }
 
 /// The answer a refused opening gives, in the engine's `rpcerror::body` words.
 fn refused(status: u32, rpc_id: &Value, code: i64, message: &str) -> Opened {
-    let answer = refusal(status, rpc_id, code, message);
-    Opened::Refused(RelayReply {
-        status,
-        content_type: JSON_MEDIA_TYPE,
-        body: serde_json::to_vec(&answer.envelope()).unwrap_or_default(),
-    })
+    Opened::Refused(RelayReply::refused(
+        &refusal(status, rpc_id, code, message),
+        None,
+    ))
 }
 
 /// A read that failed reads as nothing (the engine's scoped reads collapse an error to absent); a

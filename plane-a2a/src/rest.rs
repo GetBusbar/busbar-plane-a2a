@@ -225,15 +225,15 @@ pub fn json_body(body: &[u8]) -> Value {
 /// `MethodNotFound`, in the engine's words.
 #[must_use]
 pub fn not_a_verb(addressed: &str) -> AgentRefusal {
-    AgentRefusal {
-        status: STATUS_NOT_FOUND,
-        id: None,
-        code: CODE_METHOD_NOT_FOUND,
-        message: format!(
+    AgentRefusal::new(
+        STATUS_NOT_FOUND,
+        None,
+        CODE_METHOD_NOT_FOUND,
+        format!(
             "`{addressed}` names no operation on this binding; the task operations are \
              `{{id}}:{VERB_CANCEL}` and `{{id}}:{VERB_SUBSCRIBE}`"
         ),
-    }
+    )
 }
 
 /// The path variables `target` binds against `route`'s pattern, by name, each decoded as the

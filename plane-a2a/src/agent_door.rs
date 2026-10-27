@@ -978,12 +978,12 @@ fn framed_refusal(status: &crate::framed::CallStatus) -> agent_arrival::AgentRef
         Code::InvalidArgument => agent_arrival::CODE_INVALID_PARAMS,
         _ => -32603,
     };
-    agent_arrival::AgentRefusal {
-        status: agent_arrival::STATUS_BAD_REQUEST,
-        id: None,
+    agent_arrival::AgentRefusal::new(
+        agent_arrival::STATUS_BAD_REQUEST,
+        None,
         code,
-        message: status.message().to_string(),
-    }
+        status.message().to_string(),
+    )
 }
 
 /// REFUSED as UNSERVED (a `404`): no line of this door serves the arrival, a route it does not
@@ -2162,11 +2162,14 @@ fn pool_gate(
                 false => {
                     let standing = busbar_contract::abi::host::service::ENTITLEMENT_STANDING;
                     let live = entitled(reach, pass, standing);
-                    Gate::Refuse(reply_of(&agent_arrival::pinned_ungranted(
-                        hop.relay.id().clone(),
-                        &door_statement::agent_resource(gate.member),
-                        live,
-                    )))
+                    Gate::Refuse(relay::RelayReply::refused(
+                        &agent_arrival::pinned_ungranted(
+                            hop.relay.id().clone(),
+                            &door_statement::agent_resource(gate.member),
+                            live,
+                        ),
+                        None,
+                    ))
                 }
             }
         }
@@ -2250,30 +2253,14 @@ fn approved_fingerprint(plane: &A2aDoor, agent: &str, generation: u64) -> Option
 /// THE NOT-INTERCHANGEABLE REFUSAL (predev `route::render_pin_mismatch`): `503`, `-32004`, the
 /// walk's own words, naming the task the hop opened.
 fn not_interchangeable(hop: &Hop, reason: String) -> relay::RelayReply {
-    let refusal = agent_arrival::AgentRefusal {
-        status: agent_arrival::STATUS_UNAVAILABLE,
-        id: Some(hop.relay.id().clone()),
-        code: agent_arrival::CODE_UNSUPPORTED_OPERATION,
-        message: reason,
-    };
-    let body = match hop.relay.task() {
-        Some(task) => crate::task_identity::about_task(&refusal, &task.task_id),
-        None => refusal.envelope(),
-    };
-    relay::RelayReply {
-        status: refusal.status,
-        content_type: agent_arrival::JSON_MEDIA_TYPE,
-        body: serde_json::to_vec(&body).unwrap_or_default(),
-    }
-}
-
-/// A refusal as the caller's whole answer: its status, and its envelope.
-fn reply_of(refusal: &agent_arrival::AgentRefusal) -> relay::RelayReply {
-    relay::RelayReply {
-        status: refusal.status,
-        content_type: agent_arrival::JSON_MEDIA_TYPE,
-        body: serde_json::to_vec(&refusal.envelope()).unwrap_or_default(),
-    }
+    let refusal = agent_arrival::AgentRefusal::new(
+        agent_arrival::STATUS_UNAVAILABLE,
+        Some(hop.relay.id().clone()),
+        agent_arrival::CODE_UNSUPPORTED_OPERATION,
+        reason,
+    );
+    let task = hop.relay.task().map(|t| t.task_id.as_str());
+    relay::RelayReply::refused(&refusal, task)
 }
 
 /// BIND the hop to the binding `member`'s card held under `generation` declares; the refusal's
@@ -2466,7 +2453,7 @@ fn hop_piece(
                         hop.skill = skill;
                         None
                     }
-                    Err(refusal) => Some(reply_of(&refusal)),
+                    Err(refusal) => Some(relay::RelayReply::refused(&refusal, None)),
                 }
             }
             _ => None,
@@ -4366,12 +4353,12 @@ pub const UNREADABLE_REWRITE_STATUS: u32 = 500;
 /// A2A internal error (`-32603` at `500`, one row of section 5.4) echoing the request id `id`.
 #[must_use]
 pub fn unreadable_rewrite(id: Option<serde_json::Value>) -> agent_arrival::AgentRefusal {
-    agent_arrival::AgentRefusal {
-        status: UNREADABLE_REWRITE_STATUS,
+    agent_arrival::AgentRefusal::new(
+        UNREADABLE_REWRITE_STATUS,
         id,
-        code: crate::agent_arrival::CODE_INTERNAL,
-        message: UNREADABLE_REWRITE.to_string(),
-    }
+        crate::agent_arrival::CODE_INTERNAL,
+        UNREADABLE_REWRITE.to_string(),
+    )
 }
 
 /// THE ENVELOPE `envelope` WITH ITS `params` REPLACED by `params`, re-serialized (the served

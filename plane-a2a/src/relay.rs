@@ -130,6 +130,23 @@ pub struct RelayReply {
     pub body: Vec<u8>,
 }
 
+impl RelayReply {
+    /// A refusal as the caller's whole answer, at the refusal's status: its envelope, naming the
+    /// task `about` when there is one ([`task_identity::about_task`]).
+    #[must_use]
+    pub fn refused(refusal: &AgentRefusal, about: Option<&str>) -> Self {
+        let body = match about {
+            Some(task) => task_identity::about_task(refusal, task),
+            None => refusal.envelope(),
+        };
+        RelayReply {
+            status: refusal.status,
+            content_type: JSON_MEDIA_TYPE,
+            body: serde_json::to_vec(&body).unwrap_or_default(),
+        }
+    }
+}
+
 /// PART OF AN ANSWER IN EVENTS: whether it starts the caller's answer (its head: `200`, an event
 /// stream), the whole events it carries, and whether it ends the answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -262,17 +279,13 @@ impl HopRefusal {
     /// engine's `receive::refuse_hop_early`).
     #[must_use]
     pub fn reply(self, id: &Value) -> RelayReply {
-        let refusal = AgentRefusal {
-            status: STATUS_BAD_GATEWAY,
-            id: Some(id.clone()),
-            code: CODE_INVALID_AGENT_RESPONSE,
-            message: self.client_text(),
-        };
-        RelayReply {
-            status: STATUS_BAD_GATEWAY,
-            content_type: JSON_MEDIA_TYPE,
-            body: serde_json::to_vec(&refusal.envelope()).unwrap_or_default(),
-        }
+        let refusal = AgentRefusal::new(
+            STATUS_BAD_GATEWAY,
+            Some(id.clone()),
+            CODE_INVALID_AGENT_RESPONSE,
+            self.client_text(),
+        );
+        RelayReply::refused(&refusal, None)
     }
 }
 
@@ -699,31 +712,22 @@ impl HopRelay {
         let reply = match &self.task {
             Some(task) if task.addressed => task_refusal(None, task, &self.id).0,
             Some(task) => {
-                let refusal = AgentRefusal {
-                    status: STATUS_NOT_SERVING,
-                    id: Some(self.id.clone()),
-                    code: crate::agent_arrival::CODE_UNSUPPORTED_OPERATION,
-                    message: NOT_SERVING.to_string(),
-                };
-                RelayReply {
-                    status: STATUS_NOT_SERVING,
-                    content_type: JSON_MEDIA_TYPE,
-                    body: serde_json::to_vec(&task_identity::about_task(&refusal, &task.task_id))
-                        .unwrap_or_default(),
-                }
+                let refusal = AgentRefusal::new(
+                    STATUS_NOT_SERVING,
+                    Some(self.id.clone()),
+                    crate::agent_arrival::CODE_UNSUPPORTED_OPERATION,
+                    NOT_SERVING,
+                );
+                RelayReply::refused(&refusal, Some(&task.task_id))
             }
             None => {
-                let refusal = AgentRefusal {
-                    status: STATUS_NOT_SERVING,
-                    id: Some(self.id.clone()),
-                    code: CODE_INVALID_AGENT_RESPONSE,
-                    message: HopRefusal::NotServing.client_text(),
-                };
-                RelayReply {
-                    status: STATUS_NOT_SERVING,
-                    content_type: JSON_MEDIA_TYPE,
-                    body: serde_json::to_vec(&refusal.envelope()).unwrap_or_default(),
-                }
+                let refusal = AgentRefusal::new(
+                    STATUS_NOT_SERVING,
+                    Some(self.id.clone()),
+                    CODE_INVALID_AGENT_RESPONSE,
+                    HopRefusal::NotServing.client_text(),
+                );
+                RelayReply::refused(&refusal, None)
             }
         };
         PieceAnswer::ToCaller(reply)
@@ -736,14 +740,18 @@ impl HopRelay {
     pub fn refuse_endpoint(&mut self) -> PieceAnswer {
         self.answered = true;
         self.journal(HopRefusal::EndpointRefused, false);
-        let Some(task) = &self.task else {
-            return PieceAnswer::ToCaller(HopRefusal::EndpointRefused.reply(&self.id));
-        };
-        let (reply, failed) = task_refusal(None, task, &self.id);
+        let reply = self.task_refused(None);
+        PieceAnswer::ToCaller(reply.unwrap_or_else(|| HopRefusal::EndpointRefused.reply(&self.id)))
+    }
+
+    /// The caller's answer to this refused task hop ([`task_refusal`]), its task ended `failed`
+    /// when the refusal ends it; `None` for a task-less hop.
+    fn task_refused(&mut self, code: Option<i64>) -> Option<RelayReply> {
+        let (reply, failed) = task_refusal(code, self.task.as_ref()?, &self.id);
         if failed {
             self.settled.push(TaskSettled::Failed);
         }
-        PieceAnswer::ToCaller(reply)
+        Some(reply)
     }
 
     /// THE HOP LEFT AND NOTHING CAME BACK: the attempt went to the agent and the connection could
@@ -774,66 +782,38 @@ impl HopRelay {
     #[must_use]
     pub fn refuse_credential(&mut self) -> (RelayReply, bool) {
         self.answered = true;
-        let Some(task) = &self.task else {
-            let refusal = AgentRefusal {
-                status: STATUS_BAD_GATEWAY,
-                id: Some(self.id.clone()),
-                code: CODE_INVALID_AGENT_RESPONSE,
-                message: CARD_UNFETCHED.to_string(),
-            };
-            return (
-                RelayReply {
-                    status: STATUS_BAD_GATEWAY,
-                    content_type: JSON_MEDIA_TYPE,
-                    body: serde_json::to_vec(&refusal.envelope()).unwrap_or_default(),
-                },
-                false,
-            );
+        let task = self.task.as_ref().map(|t| t.task_id.as_str());
+        let message = if task.is_some() {
+            TASK_UNCOMPLETED
+        } else {
+            CARD_UNFETCHED
         };
-        let refusal = AgentRefusal {
-            status: STATUS_BAD_GATEWAY,
-            id: Some(self.id.clone()),
-            code: CODE_INVALID_AGENT_RESPONSE,
-            message: TASK_UNCOMPLETED.to_string(),
-        };
-        (
-            RelayReply {
-                status: STATUS_BAD_GATEWAY,
-                content_type: JSON_MEDIA_TYPE,
-                body: serde_json::to_vec(&task_identity::about_task(&refusal, &task.task_id))
-                    .unwrap_or_default(),
-            },
-            true,
-        )
+        let refusal = AgentRefusal::new(
+            STATUS_BAD_GATEWAY,
+            Some(self.id.clone()),
+            CODE_INVALID_AGENT_RESPONSE,
+            message,
+        );
+        (RelayReply::refused(&refusal, task), task.is_some())
     }
 
     /// The early refusal of a request that cannot be carried over `word`.
     fn unframable_reply(&self, word: &str) -> RelayReply {
-        let refusal = AgentRefusal {
-            status: STATUS_BAD_GATEWAY,
-            id: Some(self.id.clone()),
-            code: CODE_INVALID_AGENT_RESPONSE,
-            message: binding::unframable_text(&self.method, word),
-        };
-        RelayReply {
-            status: STATUS_BAD_GATEWAY,
-            content_type: JSON_MEDIA_TYPE,
-            body: serde_json::to_vec(&refusal.envelope()).unwrap_or_default(),
-        }
+        let refusal = AgentRefusal::new(
+            STATUS_BAD_GATEWAY,
+            Some(self.id.clone()),
+            CODE_INVALID_AGENT_RESPONSE,
+            binding::unframable_text(&self.method, word),
+        );
+        RelayReply::refused(&refusal, None)
     }
 
     /// The hop could not be framed on its binding: a task-less hop is refused by name; a task hop
     /// answers as any failed hop does.
     fn unframable(&mut self) -> PieceAnswer {
         self.answered = true;
-        let Some(task) = &self.task else {
-            return PieceAnswer::ToCaller(self.unframable_reply(self.binding.word()));
-        };
-        let (reply, failed) = task_refusal(None, task, &self.id);
-        if failed {
-            self.settled.push(TaskSettled::Failed);
-        }
-        PieceAnswer::ToCaller(reply)
+        let reply = self.task_refused(None);
+        PieceAnswer::ToCaller(reply.unwrap_or_else(|| self.unframable_reply(self.binding.word())))
     }
 
     /// The request one attempt sends on the hop's binding, to the agent at `url`.
@@ -1166,16 +1146,8 @@ impl HopRelay {
         let started = self.events.as_ref().is_some_and(|e| e.committed);
         self.journal(refusal, started || !body.is_empty());
         if !started && body.is_empty() {
-            return PieceAnswer::ToCaller(match &self.task {
-                None => refusal.reply(&self.id),
-                Some(task) => {
-                    let (reply, failed) = task_refusal(None, task, &self.id);
-                    if failed {
-                        self.settled.push(TaskSettled::Failed);
-                    }
-                    reply
-                }
-            });
+            let reply = self.task_refused(None);
+            return PieceAnswer::ToCaller(reply.unwrap_or_else(|| refusal.reply(&self.id)));
         }
         if self.task.is_some() {
             self.settled.push(TaskSettled::Failed);
@@ -1486,19 +1458,8 @@ fn task_refusal(code: Option<i64>, task: &TaskHop, id: &Value) -> (RelayReply, b
         ),
     };
     let status = task_identity::status_of_code(code).unwrap_or(STATUS_BAD_GATEWAY);
-    let refusal = AgentRefusal {
-        status,
-        id: Some(id.clone()),
-        code,
-        message: message.to_string(),
-    };
-    let reply = RelayReply {
-        status,
-        content_type: JSON_MEDIA_TYPE,
-        body: serde_json::to_vec(&task_identity::about_task(&refusal, &task.task_id))
-            .unwrap_or_default(),
-    };
-    (reply, failed)
+    let refusal = AgentRefusal::new(status, Some(id.clone()), code, message);
+    (RelayReply::refused(&refusal, Some(&task.task_id)), failed)
 }
 
 #[cfg(test)]

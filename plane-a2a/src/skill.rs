@@ -119,12 +119,12 @@ pub const STATUS_UNFIT: u32 = 403;
 /// `403`, `-32004`, no id, the exclusion's own name as the message.
 #[must_use]
 pub fn refusal(unfit: &Unfit) -> crate::agent_arrival::AgentRefusal {
-    crate::agent_arrival::AgentRefusal {
-        status: STATUS_UNFIT,
-        id: None,
-        code: crate::agent_arrival::CODE_UNSUPPORTED_OPERATION,
-        message: format!("{unfit:?}"),
-    }
+    crate::agent_arrival::AgentRefusal::new(
+        STATUS_UNFIT,
+        None,
+        crate::agent_arrival::CODE_UNSUPPORTED_OPERATION,
+        format!("{unfit:?}"),
+    )
 }
 
 /// JUDGE WHETHER AN AGENT CARD FITS A TASK SHAPE: the matched skill id (`None` when the shape

@@ -131,16 +131,16 @@ fn ok(rpc_id: &Value, result: Value) -> LocalAnswer {
 
 /// A JSON-RPC error under the caller's id, at the status A2A section 5.4 binds to its code.
 fn refusal(rpc_id: &Value, code: i64, message: impl Into<String>) -> AgentRefusal {
-    AgentRefusal {
-        status: match code {
+    AgentRefusal::new(
+        match code {
             TASK_NOT_FOUND => 404,
             UNSUPPORTED_OPERATION | INVALID_PARAMS => 400,
             _ => 500,
         },
-        id: Some(rpc_id.clone()),
+        Some(rpc_id.clone()),
         code,
-        message: message.into(),
-    }
+        message.into(),
+    )
 }
 
 /// [`refusal`], as the verb's answer.
