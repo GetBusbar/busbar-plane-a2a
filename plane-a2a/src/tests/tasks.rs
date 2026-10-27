@@ -11,6 +11,76 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
 
+/// SUBMIT `row` for the caller: the task, and its chain's genesis event, stamped with the row's
+/// `created_at`. The row is the caller's (its `principal` is the caller's reference).
+///
+/// # Errors
+/// [`Halt`]; `Failed` when there is no caller or the task id is already taken.
+pub(crate) fn submit(
+    rec: &mut dyn Records,
+    at: &Stamp<'_>,
+    mut row: TaskRow,
+    out: &mut Vec<Write>,
+) -> Result<TaskRow, Halt> {
+    if !is_caller(at.caller) {
+        return Err(Halt::Failed("no caller to hold the task under".into()));
+    }
+    row.principal = at.caller.to_string();
+    let genesis = HeldTask {
+        row: row.clone(),
+        next_seq: 1,
+    };
+    let at = Stamp {
+        now: row.created_at,
+        ..*at
+    };
+    submit_held(rec, &at, &genesis, row, out).map(|held| held.row)
+}
+
+/// DISPATCH: record the agent the task went to, with a `task.delegated` event.
+///
+/// # Errors
+/// As [`change`].
+pub(crate) fn dispatch(
+    rec: &mut dyn Records,
+    at: &Stamp<'_>,
+    task: &str,
+    agent_id: &str,
+    out: &mut Vec<Write>,
+) -> Result<Option<TaskRow>, Halt> {
+    let mut plan = |row: &TaskRow| -> Planned {
+        let mut next = row.clone();
+        next.agent_id = agent_id.to_string();
+        next.updated_at = at.now;
+        Ok(Some((next, EV_DELEGATED)))
+    };
+    change(rec, at, task, &mut plan, out)
+}
+
+/// ADVANCE the artifact cursor to `cursor`, monotonic, with a `task.artifact` event; nothing when it
+/// would not move forward.
+///
+/// # Errors
+/// As [`change`].
+pub(crate) fn advance_cursor(
+    rec: &mut dyn Records,
+    at: &Stamp<'_>,
+    task: &str,
+    cursor: u64,
+    out: &mut Vec<Write>,
+) -> Result<Option<TaskRow>, Halt> {
+    let mut plan = |row: &TaskRow| -> Planned {
+        if cursor <= row.artifact_cursor {
+            return Ok(None);
+        }
+        let mut next = row.clone();
+        next.artifact_cursor = cursor;
+        next.updated_at = at.now;
+        Ok(Some((next, EV_ARTIFACT)))
+    };
+    change(rec, at, task, &mut plan, out)
+}
+
 /// THE HOST RECORDS, as a test holds them.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub(crate) struct Book {
@@ -570,7 +640,7 @@ fn the_sweep_tombstones_the_expired_and_leaves_the_idle_active() {
 fn an_idle_active_task_survives_the_sweep_with_its_push_token() {
     let mut book = Book::default();
     submitted(&mut book, ALICE, "idle", 100);
-    let tokens = crate::push::Tokens::new();
+    let tokens = crate::push::Tokens::default();
     let token = tokens.mint(ALICE, "idle", b"sig").unwrap();
     let now = 100 + 86_400 * 30;
     let mut out = Vec::new();

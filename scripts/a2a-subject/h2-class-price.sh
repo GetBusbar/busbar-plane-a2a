@@ -11,7 +11,7 @@
 #
 # THE CLASS IS NOT A CHOICE THIS SCRIPT MAKES. This plane declares exactly ONE meter class and names
 # it in a constant: `bytes`, family `byte`, direction `Response`, `default_divisor: 1`
-# (`crates/busbar-plane-a2a/src/meta.rs:33-42`). Divisor one is load-bearing for the expected value:
+# (`plane-a2a/src/door_statement.rs` `BILLABLE_CLASSES`). Divisor one is load-bearing for the expected value:
 # "a byte is a byte: the class's own quantity is the quantity, so nothing is divided", so there is no
 # per-N-units term and therefore no rounding to argue about (#44). The expected price of one served
 # `message/send` is exactly

@@ -20,7 +20,7 @@ resource_kind = agent
 # The scope kind a key's grant names an agent under (door.rs SCOPE): `<scope_kind>:<agent id>`.
 scope_kind = agent
 # The section's subject noun in the config refusals (a2a/config.rs SUBJECT_NOUN), and the billable
-# class a hop's moved bytes are counted in (meta.rs CLASS_BYTES).
+# class a hop's moved bytes are counted in (door_statement.rs BILLABLE_CLASSES).
 subject_noun = fronted agent
 bytes_class = bytes
 # The gRPC binding (framed.rs SERVICE_PATH, binding.rs BINDING_GRPC): the service every rpc's path
@@ -31,7 +31,7 @@ grpc_binding = GRPC
 push_path = /a2a/push
 # The domain busbar's card-signing key is derived under (door.rs CARD_SIGNING_DOMAIN).
 card_signing_domain = a2a/agent-card-signing/v1
-# The binding word a JSON-RPC hop goes out on (surface.rs BINDING_DOCUMENT): the `lane` label its
+# The binding word a JSON-RPC hop goes out on (binding.rs BINDING_DOCUMENT): the `lane` label its
 # attempts' counters carry, as predev's relay counted them (relay.rs:1705).
 binding_document = jsonrpc
 # The prefix of the task ids busbar mints (identity.rs TASK_ID_PREFIX): `<prefix>-<agent>-<16 hex>`.
