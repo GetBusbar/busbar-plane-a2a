@@ -419,36 +419,6 @@ impl Deliveries {
         })
     }
 
-    /// How many notifications were dropped from full queues.
-    #[must_use]
-    pub fn dropped(&self) -> u64 {
-        self.with(|b| b.dropped)
-    }
-
-    /// How many notifications `task_id`'s queue holds.
-    #[must_use]
-    pub fn depth(&self, task_id: &str) -> usize {
-        self.with(|b| b.queues.get(task_id).map_or(0, VecDeque::len))
-    }
-
-    /// The deliveries to attempt now: each task's head, when its time has come and no attempt on
-    /// it is open. Each is marked open until [`Deliveries::settle`].
-    #[must_use]
-    pub fn due(&self, now_ns: u64) -> Vec<Delivery> {
-        self.with(|b| {
-            b.queues
-                .values_mut()
-                .filter_map(VecDeque::front_mut)
-                .filter(|w| !w.open && w.not_before_ns <= now_ns)
-                .map(|w| {
-                    w.open = true;
-                    w.attempts += 1;
-                    w.delivery.clone()
-                })
-                .collect()
-        })
-    }
-
     /// THE ONE DELIVERY TO ATTEMPT NOW, for one `tick` op: the tasks' queues are served IN TURN,
     /// one attempt per task per turn (ARCHITECT ruling on a slow push receiver), so a slow receiver
     /// delays another task's delivery by at most one attempt's deadline: of the heads whose time
@@ -514,12 +484,6 @@ impl Deliveries {
             b.owed = kept;
             taken
         })
-    }
-
-    /// How many owed outcomes were dropped unfiled from a full book.
-    #[must_use]
-    pub fn unfiled(&self) -> u64 {
-        self.with(|b| b.unfiled)
     }
 
     /// The notifications dropped and the outcomes dropped unfiled SINCE THE LAST CALL: the

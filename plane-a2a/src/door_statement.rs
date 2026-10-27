@@ -39,8 +39,8 @@ use busbar_contract::records::Retention;
 use crate::a2a::config::{
     AgentsCfg, DEFAULT_REVERIFY_TTL, REFUSE_PASSTHROUGH_SECTION, SUBJECT_NOUN,
 };
+use crate::binding::{BINDING_DOCUMENT, BINDING_FRAMED, BINDING_TARGET};
 use crate::claims::{DOCUMENT_TRANSPORT, FRAMED_TRANSPORT};
-use crate::surface::{BINDING_DOCUMENT, BINDING_FRAMED, BINDING_TARGET};
 
 /// The grant kind that admits traffic on this plane: one registered agent.
 pub const SCOPE: &str = "agent";
@@ -219,7 +219,8 @@ const OP_CLASS_TABLE: &[OpClass] = &[
 
 const BILLABLE_CLASSES: &[BillableClass] = &[
     BillableClass {
-        class: abi_str(crate::meta::CLASS_BYTES.as_str()),
+        // The class a hop's moved bytes are counted in: payload bytes relayed both ways per hop.
+        class: abi_str("bytes"),
         family: abi_str(BYTES_FAMILY),
     },
     // THE FEE UNIT is also a class (the tail check holds `fee_units ⊆ billable_classes`, ARCHITECT

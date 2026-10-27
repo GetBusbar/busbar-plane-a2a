@@ -292,8 +292,13 @@ fn push_notification_not_supported_and_extension_support_required_round_trip() {
             Some(reason),
             "{code} reason"
         );
-        let wire = crate::jsonrpc::error(&json!(1), code, "words").expect("encodes");
-        let wire: serde_json::Value = serde_json::from_slice(&wire).expect("json");
+        let wire = crate::agent_arrival::AgentRefusal {
+            status: 400,
+            id: Some(json!(1)),
+            code,
+            message: "words".to_string(),
+        }
+        .envelope();
         assert_eq!(wire["error"]["code"], code);
         assert_eq!(wire["error"]["data"][0]["reason"], reason);
         assert_ne!(code, -32006, "must not collapse to the gateway-fault code");

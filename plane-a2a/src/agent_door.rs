@@ -2725,9 +2725,9 @@ fn hop_piece(
     // The transport axis's word for the binding (predev `framed_leg`: `framing.leg().name()`, the
     // lower-case wire word, never the card's upper-case one), as the tail declares it.
     let binding_word = match hop.relay.binding() {
-        crate::binding::Binding::JsonRpc => crate::surface::BINDING_DOCUMENT,
-        crate::binding::Binding::HttpJson => crate::surface::BINDING_TARGET,
-        crate::binding::Binding::Grpc => crate::surface::BINDING_FRAMED,
+        crate::binding::Binding::JsonRpc => crate::binding::BINDING_DOCUMENT,
+        crate::binding::Binding::HttpJson => crate::binding::BINDING_TARGET,
+        crate::binding::Binding::Grpc => crate::binding::BINDING_FRAMED,
     };
     let ob = &mut hop.outbox;
     let (mut reply, mut fields, mut records, mut arena, mut units) = (
@@ -4440,7 +4440,7 @@ pub fn unreadable_rewrite(id: Option<serde_json::Value>) -> agent_arrival::Agent
     agent_arrival::AgentRefusal {
         status: UNREADABLE_REWRITE_STATUS,
         id,
-        code: crate::jsonrpc::CODE_INTERNAL,
+        code: crate::agent_arrival::CODE_INTERNAL,
         message: UNREADABLE_REWRITE.to_string(),
     }
 }

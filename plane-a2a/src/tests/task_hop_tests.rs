@@ -191,7 +191,7 @@ fn an_interrupted_task_on_the_agent_under_the_callers_context_resumes_as_working
         request_id: "r",
         now: 150,
     };
-    tasks::dispatch(&mut desk.book, &at, "t1", MEMBER, &mut out).unwrap();
+    tasks::tests::dispatch(&mut desk.book, &at, "t1", MEMBER, &mut out).unwrap();
     desk.book.apply(&out);
     out.clear();
     tasks::transition(&mut desk.book, &at, "t1", TaskState::Working, &mut out).unwrap();
@@ -719,7 +719,7 @@ fn walk(desk: &mut Desk, caller: &str, task: &str, states: &[TaskState]) {
         now: 150,
     };
     let mut out = Vec::new();
-    tasks::dispatch(&mut desk.book, &at, task, MEMBER, &mut out).unwrap();
+    tasks::tests::dispatch(&mut desk.book, &at, task, MEMBER, &mut out).unwrap();
     desk.book.apply(&out);
     for state in states {
         let mut out = Vec::new();
@@ -1147,7 +1147,7 @@ fn an_opening_states_the_engines_answer_should_the_store_refuse_its_writes() {
         request_id: "r",
         now: 150,
     };
-    tasks::dispatch(&mut desk.book, &at, "t1", MEMBER, &mut out).unwrap();
+    tasks::tests::dispatch(&mut desk.book, &at, "t1", MEMBER, &mut out).unwrap();
     for state in [TaskState::Working, TaskState::InputRequired] {
         desk.book.apply(&out);
         out.clear();
@@ -1264,7 +1264,7 @@ fn a_second_turn_naming_a_held_task_in_its_message_addresses_that_task() {
         request_id: "r",
         now: 150,
     };
-    tasks::dispatch(&mut d.book, &at, "t1", "planner-b", &mut out).unwrap();
+    tasks::tests::dispatch(&mut d.book, &at, "t1", "planner-b", &mut out).unwrap();
     d.book.apply(&out);
     let before = d.book.clone();
     let turn = send(json!({ "message": { "messageId": "m-2", "taskId": "t1" } }));

@@ -74,8 +74,7 @@ pub enum LocalVerb {
     Subscribe,
 }
 
-/// The local verb `method` names, listed rather than pattern-matched (the names are
-/// [`crate::LOCAL_VERB_METHODS`]).
+/// The local verb `method` names, listed rather than pattern-matched.
 #[must_use]
 pub fn verb_of(method: &str) -> Option<LocalVerb> {
     Some(match method {
@@ -112,14 +111,10 @@ pub struct LocalAnswer {
     pub body: Vec<u8>,
 }
 
-/// `-32001`: no such task for this caller.
-const TASK_NOT_FOUND: i64 = -32001;
-/// `-32004`: busbar does not do that.
-const UNSUPPORTED_OPERATION: i64 = -32004;
-/// `-32602`: the params are wrong.
-const INVALID_PARAMS: i64 = -32602;
-/// `-32603`: busbar failed.
-const INTERNAL: i64 = -32603;
+use crate::agent_arrival::{
+    CODE_INTERNAL as INTERNAL, CODE_INVALID_PARAMS as INVALID_PARAMS,
+    CODE_TASK_NOT_FOUND as TASK_NOT_FOUND, CODE_UNSUPPORTED_OPERATION as UNSUPPORTED_OPERATION,
+};
 
 /// The refusal every verb gives for a task id it does not hold for this caller: one string, so the
 /// verbs cannot drift into different existence oracles.

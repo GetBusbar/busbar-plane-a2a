@@ -42,7 +42,7 @@ pub mod pb {
 pub const SERVICE_NAME: &str = "lf.a2a.v1.A2AService";
 
 /// The interface binding whose URL the model writes without an `http://` scheme.
-const GRPC_BINDING: &str = "GRPC";
+use crate::binding::BINDING_GRPC as GRPC_BINDING;
 
 /// An answer the model refuses: it carries no payload (the SDK's `MissingPayload`, named by the
 /// model type it was for).

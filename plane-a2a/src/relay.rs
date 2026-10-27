@@ -77,8 +77,7 @@ pub const TASK_UNCOMPLETED: &str = "the backend agent did not complete this task
 /// The words an extended-card read through the relay that could not be made is refused with (the
 /// engine's `card_fetch` arm of `receive.rs`).
 pub const CARD_UNFETCHED: &str = "the extended agent card could not be fetched";
-/// JSON-RPC's own internal error: a gRPC far end's error status that names no A2A code.
-const CODE_INTERNAL_ERROR: i64 = -32603;
+use crate::agent_arrival::CODE_INTERNAL as CODE_INTERNAL_ERROR;
 
 /// Who pushed a piece.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -929,12 +928,6 @@ impl HopRelay {
     /// the answer or for a task-less hop.
     pub fn take_settled(&mut self) -> Vec<TaskSettled> {
         std::mem::take(&mut self.settled)
-    }
-
-    /// `true` once the caller's answer has been given.
-    #[must_use]
-    pub const fn answered(&self) -> bool {
-        self.answered
     }
 
     /// The payload bytes the hop has moved both ways, the request's and the reply's, once the far
