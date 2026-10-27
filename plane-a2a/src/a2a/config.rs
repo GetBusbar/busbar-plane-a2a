@@ -25,7 +25,7 @@
 //! signature it degrades to a transport binding. That is four mechanisms carrying different
 //! material, and a scalar `pin_hash:` can spell exactly one of them. So `pin:` is
 //! `{mechanism, key?, fingerprint?}` and the mechanism is checked against the material it requires
-//! at parse, by the kernel: the pin is a kernel trust key ([`TRUST_KEYS`]). A registration cannot
+//! at parse, by the kernel: the pin is a kernel trust key (the door's `TRUST_KEYS`). A registration cannot
 //! claim `jws_issuer_key` and carry nothing to verify with.
 //!
 //! `unpinned` is accepted and named out loud rather than being spelled as an absent field, because
@@ -49,8 +49,6 @@
 //! reference, because a dropped reference is an operator believing a control is attached that is
 //! not.
 
-#[cfg(test)]
-use busbar_contract::plane::{PinMechanismDecl, TrustKeyDecl, TrustRole};
 use busbar_contract::section::split_section;
 use serde::{Deserialize, Serialize};
 
@@ -64,55 +62,6 @@ use serde::{Deserialize, Serialize};
 /// (The A2A key keeps its name `reverify_ttl`; the MCP sibling's is `verify_ttl` — the admin API
 /// projects both under one `reverify_ttl` view field, so the concept is one across the two planes.)
 pub const DEFAULT_REVERIFY_TTL: &str = "5s";
-
-/// THE KERNEL-OWNED TRUST KEYS of one `agents:` entry, declared for the kernel to parse and judge:
-/// the `pin:` object (with its optional `fingerprint`) over this plane's four mechanisms, and the two
-/// cadence durations with their defaults. Declaration order is judgement order.
-#[cfg(test)]
-pub const TRUST_KEYS: &[TrustKeyDecl] = &[
-    TrustKeyDecl {
-        key: "pin",
-        role: TrustRole::Pin,
-        fingerprint: true,
-        default: None,
-        mechanisms: &[
-            PinMechanismDecl {
-                token: "jws_issuer_key",
-                root: true,
-                peer_key: false,
-            },
-            PinMechanismDecl {
-                token: "cert_spki",
-                root: true,
-                peer_key: true,
-            },
-            PinMechanismDecl {
-                token: "mtls",
-                root: true,
-                peer_key: true,
-            },
-            PinMechanismDecl {
-                token: "unpinned",
-                root: false,
-                peer_key: false,
-            },
-        ],
-    },
-    TrustKeyDecl {
-        key: "reverify_ttl",
-        role: TrustRole::ReverifyTtl,
-        fingerprint: false,
-        default: Some(DEFAULT_REVERIFY_TTL),
-        mechanisms: &[],
-    },
-    TrustKeyDecl {
-        key: "recovery_backoff",
-        role: TrustRole::RecoveryBackoff,
-        fingerprint: false,
-        default: Some(crate::door_statement::DEFAULT_RECOVERY_BACKOFF),
-        mechanisms: &[],
-    },
-];
 
 /// WHAT ONE `agents:` ENTRY IS CALLED in the section's refusals and in the plane's declaration.
 pub const SUBJECT_NOUN: &str = "fronted agent";
@@ -414,7 +363,7 @@ pub fn validate_agent(name: &str, def: &AgentDefCfg) -> Result<(), String> {
     }
 
     // THE PIN and the CADENCE (`reverify_ttl:`, `recovery_backoff:`) are not judged here: they are
-    // the kernel's trust keys ([`TRUST_KEYS`]), judged by the kernel before the section reaches
+    // the kernel's trust keys (the door's `TRUST_KEYS`), judged by the kernel before the section reaches
     // this validator.
 
     // THE CLIENT IDENTITY, matched against the mechanism and the scheme the same way the pin is
@@ -480,4 +429,4 @@ pub fn validate_agent(name: &str, def: &AgentDefCfg) -> Result<(), String> {
 
 #[cfg(test)]
 #[path = "tests/config_tests.rs"]
-mod tests;
+pub(crate) mod tests;

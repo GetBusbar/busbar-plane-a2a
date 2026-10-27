@@ -115,25 +115,6 @@ impl CallStatus {
     pub fn message(&self) -> &str {
         &self.message
     }
-
-    /// The encoded `google.rpc.Status` details; empty when there are none.
-    #[must_use]
-    #[cfg(test)]
-    pub fn details(&self) -> &[u8] {
-        &self.details
-    }
-
-    /// The `ErrorInfo` the details carry, read back.
-    #[must_use]
-    #[cfg(test)]
-    pub fn error_info(&self) -> Option<ErrorInfo> {
-        let status = rpc::Status::decode(self.details.as_slice()).ok()?;
-        status
-            .details
-            .iter()
-            .find(|any| any.type_url == crate::ERROR_INFO_TYPE)
-            .and_then(|any| ErrorInfo::decode(any.value.as_slice()).ok())
-    }
 }
 
 /// `google.rpc.ErrorInfo`: why an A2A error happened, in the protocol's own reason vocabulary.

@@ -75,7 +75,20 @@ fn error_of(body: &Value) -> (i64, String) {
 
 #[test]
 fn every_listed_method_is_a_local_verb() {
-    for method in crate::LOCAL_VERB_METHODS {
+    for method in [
+        "ListTasks",
+        "tasks/list",
+        "CreateTaskPushNotificationConfig",
+        "tasks/pushNotificationConfig/set",
+        "GetTaskPushNotificationConfig",
+        "tasks/pushNotificationConfig/get",
+        "ListTaskPushNotificationConfigs",
+        "tasks/pushNotificationConfig/list",
+        "DeleteTaskPushNotificationConfig",
+        "tasks/pushNotificationConfig/delete",
+        "SubscribeToTask",
+        "tasks/resubscribe",
+    ] {
         assert!(verb_of(method).is_some(), "{method}");
     }
     assert_eq!(verb_of("SendMessage"), None);

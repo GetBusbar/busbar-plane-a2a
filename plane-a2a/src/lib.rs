@@ -49,11 +49,8 @@ mod claims;
 mod diagnostics;
 mod door_statement;
 mod events;
-mod facts;
 mod framed;
-mod jsonrpc;
 mod local;
-mod meta;
 mod mirror;
 mod ops;
 mod proto;
@@ -68,7 +65,6 @@ mod served_card;
 mod skill;
 mod split_record;
 mod sse;
-mod surface;
 mod task_door;
 mod task_hop;
 mod task_identity;
@@ -110,17 +106,6 @@ const CONFIG_SECTION: &str = "agents";
 /// from it, so the claimed mount and the published one cannot be two strings.
 const MOUNT_PATH: &str = "/a2a";
 
-/// THE PATH PREFIX THE gRPC BINDING IS SERVED AT, and busbar did not choose it.
-///
-/// gRPC derives a request path from the `.proto`'s package and service name — `lf.a2a.v1` and
-/// `A2AService` in the a2aproject's own canonical `a2a.proto`, vendored by `a2a-pb` — and a client
-/// is given an AUTHORITY, never a path prefix, so there is no spelling of this that could live under
-/// [`MOUNT_PATH`]. Written as a constant beside the mount it is not under, because "the A2A plane
-/// answers here too" is a fact the mount table has to be told or this binding's tokens go unchecked
-/// for audience.
-#[cfg(test)]
-const GRPC_MOUNT_PATH: &str = "/lf.a2a.v1.A2AService";
-
 // ══ THE ROUTES THIS PLANE SERVES, SPELLED EXACTLY ONCE ══════════════════════════════════════════
 //
 // Every path below is spelled once and read twice: the door's Statement CLAIMS it, and the
@@ -152,21 +137,6 @@ const ROUTE_AGENT: &str = "/agents/{agent_id}";
 /// `url` names that endpoint.
 const ROUTE_AGENT_CARD: &str = "/agents/{agent_id}/.well-known/agent-card.json";
 
-/// EVERY SUFFIX ABOVE, as one list. The plane asserts its claim for each is [`MOUNT_PATH`] joined to
-/// it, so a route added on the server side with no claim behind it is a red test.
-#[cfg(test)]
-const MOUNTED_ROUTE_SUFFIXES: &[&str] = &[
-    ROUTE_MESSAGE_SEND,
-    ROUTE_MESSAGE_STREAM,
-    ROUTE_TASKS,
-    ROUTE_TASK,
-    ROUTE_PUSH_CONFIGS,
-    ROUTE_PUSH_CONFIG,
-    ROUTE_EXTENDED_AGENT_CARD,
-    ROUTE_AGENT_CARD,
-    ROUTE_AGENT,
-];
-
 /// THE PROTOCOL'S CANONICAL CARD DISCOVERY PATH, from protocol v0.3 onward. Absolute, not under
 /// [`MOUNT_PATH`]: a well-known path is a property of the ORIGIN.
 const WELL_KNOWN_CARD_PATH: &str = "/.well-known/agent-card.json";
@@ -180,7 +150,7 @@ const METADATA_PATH: &str = "/.well-known/oauth-protected-resource/a2a";
 /// ([`door_statement::PUSH_ROUTE`]), never as one of the plane's claims.
 const PUSH_PATH_SUFFIX: &str = "/push";
 
-/// [`MOUNT_PATH`] joined to one of the [`MOUNTED_ROUTE_SUFFIXES`]. One join, called from both sides,
+/// [`MOUNT_PATH`] joined to one of the route suffixes above. One join, called from both sides,
 /// so the served route and the plane's claim cannot be two different strings.
 #[must_use]
 fn mounted_route(suffix: &str) -> String {
@@ -207,27 +177,6 @@ const ERRORS: &[(i64, &str)] = &[
     (-32009, "VERSION_NOT_SUPPORTED"),
 ];
 
-/// EVERY METHOD NAME THE LOCAL-VERB TABLE ANSWERS, in both dialects.
-///
-/// A2A v1.0 spells these in `PascalCase` and v0.3 spelled the same operations as slash-separated
-/// paths; both are still answered, so both are named here. A test holds `local::verb_of` to it: a
-/// name on this list the local-verb table does not answer is red.
-#[cfg(test)]
-const LOCAL_VERB_METHODS: &[&str] = &[
-    "ListTasks",
-    "tasks/list",
-    "CreateTaskPushNotificationConfig",
-    "tasks/pushNotificationConfig/set",
-    "GetTaskPushNotificationConfig",
-    "tasks/pushNotificationConfig/get",
-    "ListTaskPushNotificationConfigs",
-    "tasks/pushNotificationConfig/list",
-    "DeleteTaskPushNotificationConfig",
-    "tasks/pushNotificationConfig/delete",
-    "SubscribeToTask",
-    "tasks/resubscribe",
-];
-
 /// The `@type` of the detail entry an A2A error carries in `error.data` — `google.rpc.ErrorInfo`,
 /// spelled as the protobuf type URL the specification names.
 const ERROR_INFO_TYPE: &str = "type.googleapis.com/google.rpc.ErrorInfo";
@@ -235,80 +184,6 @@ const ERROR_INFO_TYPE: &str = "type.googleapis.com/google.rpc.ErrorInfo";
 /// The `ErrorInfo.domain` every A2A error is reported under. The protocol's own, not busbar's: the
 /// reason tokens above are the specification's vocabulary and the domain says so.
 const ERROR_INFO_DOMAIN: &str = "a2a-protocol.org";
-
-#[cfg(test)]
-use busbar_contract::ids::LaneId;
-#[cfg(test)]
-use busbar_contract::plugin::{AbiVersion, Kind, Plugin};
-
-/// One configured agent this plane may name.
-///
-/// Every string is borrowed for the life of the program, because a plane's declarations are read at
-/// registration and sealed. Configured names reach here through the seam that says so: the host's
-/// word interner (its `Registration`). The composition root builds one at boot, interns every
-/// config-derived key through it exactly once, and hands over names that outlive it — so nothing
-/// after registration can vary them, and the memory the names occupy is a fixed term rather than
-/// one that grows with traffic.
-#[cfg(test)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Agent {
-    /// The name the operator gave this agent, and the resource the scope unit judges.
-    pub id: &'static str,
-    /// The priced lane this agent is reached on.
-    pub lane: LaneId,
-    /// The host to dial.
-    pub host: &'static str,
-    /// Which of the two transports the hop is made over.
-    pub transport: &'static str,
-}
-
-/// The A2A plane.
-///
-/// The one field is a borrowed, immutable list. There is no cell here, no lock and no atomic: the
-/// purity test asserts that by walking the type, not by trusting this sentence.
-#[cfg(test)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct A2aPlane {
-    agents: &'static [Agent],
-}
-
-#[cfg(test)]
-impl A2aPlane {
-    /// A plane with a configured agent set.
-    #[must_use]
-    pub const fn new(agents: &'static [Agent]) -> Self {
-        Self { agents }
-    }
-
-    /// A plane with nothing configured.
-    ///
-    /// It answers every question the loop asks, and its answer to "where does this go" is a
-    /// destination the trust unit refuses. That is the honest answer for a plane with no agent — not
-    /// a panic, and not a fabricated host.
-    pub const EMPTY: Self = Self::new(&[]);
-}
-
-#[cfg(test)]
-impl Default for A2aPlane {
-    fn default() -> Self {
-        Self::EMPTY
-    }
-}
-
-#[cfg(test)]
-impl Plugin for A2aPlane {
-    fn key(&self) -> &'static str {
-        <Self as busbar_contract::plane::PlaneMeta>::KEY
-    }
-
-    fn kind(&self) -> Kind {
-        Kind::Plane
-    }
-
-    fn abi(&self) -> AbiVersion {
-        AbiVersion(1)
-    }
-}
 
 /// The crate's tests that reach past [`door`]: once integration tests (`tests/*.rs`), now in-crate
 /// because the crate's only public item is the door.

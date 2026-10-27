@@ -18,9 +18,6 @@
 //! units), an audit row, a breaker's verdict, an admission and an outbound credential are the
 //! kernel's.
 
-#[cfg(test)]
-use busbar_contract::ids::RecordSchemaId;
-
 /// The `task` kind — the durable task record's tag on the store seam.
 pub const KIND_TASK: &str = "task";
 
@@ -102,32 +99,3 @@ pub fn retention_of(kind: &str) -> Retention {
 
 /// The task-event kind's index in [`HELD_KINDS`]: the kind the door declares chained.
 pub const TASK_EVENT_INDEX: u32 = 1;
-
-/// The task rows: one per governed exchange this node is tracking.
-#[cfg(test)]
-pub const SCHEMA_TASK: RecordSchemaId = RecordSchemaId::new(KIND_TASK);
-
-/// The task event rows: the hash-linked history behind each task.
-#[cfg(test)]
-pub const SCHEMA_TASK_EVENT: RecordSchemaId = RecordSchemaId::new(KIND_TASK_EVENT);
-
-/// The push-notification configurations a caller registered against a task.
-#[cfg(test)]
-pub const SCHEMA_PUSH_CONFIG: RecordSchemaId = RecordSchemaId::new(KIND_PUSH_CONFIG);
-
-/// The pinned callback addresses a delivery is allowed to reach.
-#[cfg(test)]
-pub const SCHEMA_PIN: RecordSchemaId = RecordSchemaId::new("pin");
-
-/// The record schemas this plane keeps kernel-held durable records under.
-#[cfg(test)]
-pub const RECORD_SCHEMAS: &[RecordSchemaId] = &[
-    SCHEMA_TASK,
-    SCHEMA_TASK_EVENT,
-    SCHEMA_PUSH_CONFIG,
-    SCHEMA_PIN,
-];
-
-#[cfg(test)]
-#[path = "tests/records.rs"]
-mod tests;

@@ -48,7 +48,7 @@ use busbar_contract::abi::sdk::publish::Keyed;
 use serde_json::Value;
 
 use crate::a2a::task::{plan_transition, Direction, Task, TaskState};
-use crate::agent_arrival::{AgentRefusal, JSON_MEDIA_TYPE};
+use crate::agent_arrival::AgentRefusal;
 use crate::local::{self, Reach};
 use crate::push::DeliveryAuth;
 use crate::records::KIND_PUSH_CONFIG;
@@ -59,14 +59,9 @@ use crate::task_identity::{self, MINT_BYTES};
 use crate::tasks::{self, Halt, Planned, Records, Stamp, Write};
 use crate::TaskRow;
 
-/// `-32001`: no such task for this caller (A2A `TaskNotFoundError`).
-const CODE_TASK_NOT_FOUND: i64 = -32001;
-/// `-32002`: the task cannot be moved.
-const CODE_TASK_NOT_CANCELABLE: i64 = -32002;
-/// `-32603`: busbar failed.
-const CODE_INTERNAL: i64 = -32603;
-/// `-32602`: the params are wrong.
-const CODE_INVALID_PARAMS: i64 = -32602;
+use crate::agent_arrival::{
+    CODE_INTERNAL, CODE_INVALID_PARAMS, CODE_TASK_NOT_CANCELABLE, CODE_TASK_NOT_FOUND,
+};
 /// The status a callback busbar cannot honour, or a task verb naming no task, answers with: the
 /// caller's fault.
 const STATUS_BAD_REQUEST: u32 = 400;
@@ -156,22 +151,15 @@ pub enum Opened {
 
 /// The refusal an opening gives, echoing `rpc_id`.
 fn refusal(status: u32, rpc_id: &Value, code: i64, message: &str) -> AgentRefusal {
-    AgentRefusal {
-        status,
-        id: Some(rpc_id.clone()),
-        code,
-        message: message.to_string(),
-    }
+    AgentRefusal::new(status, Some(rpc_id.clone()), code, message.to_string())
 }
 
 /// The answer a refused opening gives, in the engine's `rpcerror::body` words.
 fn refused(status: u32, rpc_id: &Value, code: i64, message: &str) -> Opened {
-    let answer = refusal(status, rpc_id, code, message);
-    Opened::Refused(RelayReply {
-        status,
-        content_type: JSON_MEDIA_TYPE,
-        body: serde_json::to_vec(&answer.envelope()).unwrap_or_default(),
-    })
+    Opened::Refused(RelayReply::refused(
+        &refusal(status, rpc_id, code, message),
+        None,
+    ))
 }
 
 /// A read that failed reads as nothing (the engine's scoped reads collapse an error to absent); a
@@ -572,12 +560,6 @@ pub struct Latches {
 }
 
 impl Latches {
-    /// No latch tripped.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Trip latch `kind`; `true` when this is the first trip.
     fn first(&self, kind: u8) -> bool {
         self.tripped.with_all(|m| m.insert(kind, ()).is_none())
