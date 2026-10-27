@@ -143,12 +143,6 @@ impl TaskState {
         matches!(self, TaskState::InputRequired | TaskState::AuthRequired)
     }
 
-    /// Live in any sense — running or paused. The rehydrate-on-restart set, and the set the
-    /// retention sweep must never touch.
-    pub fn is_active(self) -> bool {
-        !self.is_terminal()
-    }
-
     /// Is `to` a legal move from `self`?
     ///
     /// Written as a total function over the pair rather than as guards at the call sites, so the

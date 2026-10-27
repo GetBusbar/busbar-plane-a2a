@@ -21,8 +21,8 @@
 use busbar_contract::abi::host::conn::connector::{
     Need, DIRECTION_OUTBOUND, EGRESS_OPEN_WEB, EGRESS_PROVIDER, KEEP_NAMED,
 };
-use busbar_contract::abi::mechanism::call::{AbiStr, Blob, BLOB_ABSENT};
-use busbar_contract::abi::mechanism::door::{KindTailHead, Section, SECTION_DECLARING};
+use busbar_contract::abi::mechanism::call::{AbiStr, Blob};
+use busbar_contract::abi::mechanism::door::{Section, SECTION_DECLARING};
 use busbar_contract::abi::plane::{
     AdminRoute, BillableClass, OpClass, PinMechanism, PlaneTail, RecordChain, RecordRetention,
     TrustKey, ANSWER_LAYOUT, CHAIN_DIGESTS_SCOPE, CHAIN_LENGTH_PREFIXED, INGRESS_REQUEST_RESPONSE,
@@ -62,10 +62,7 @@ pub const FEE_PER_REQUEST: &str = busbar_contract::plane::PER_REQUEST;
 pub const DEFAULT_RECOVERY_BACKOFF: &str = "15m";
 
 /// An absent string.
-const NONE: AbiStr = AbiStr {
-    ptr: std::ptr::null(),
-    len: 0,
-};
+const NONE: AbiStr = AbiStr::ABSENT;
 
 /// THE PUSH QUEUE'S COUNTERS, the Statement's metric families (THE DESIGN, a2a: a per-task ordered
 /// bounded queue, "drop-oldest, counted"; A2A-PUSH: "drop-oldest + metric"): the notifications a
@@ -99,15 +96,12 @@ const fn counter(
     name: &'static str,
     help: &'static str,
 ) -> busbar_contract::abi::mechanism::door::MetricFamily {
-    busbar_contract::abi::mechanism::door::MetricFamily {
-        name: abi_str(name),
-        help: abi_str(help),
-        unit: NONE,
-        label_keys: std::ptr::null(),
-        label_keys_len: 0,
-        kind: busbar_contract::abi::mechanism::door::FAMILY_COUNTER,
-        _reserved: [0; 7],
-    }
+    busbar_contract::abi::mechanism::door::MetricFamily::new(
+        abi_str(name),
+        abi_str(help),
+        NONE,
+        busbar_contract::abi::mechanism::door::FAMILY_COUNTER,
+    )
 }
 
 /// The plane's settings sections, as its Statement states them: `agents:` is the one it declares;
@@ -305,43 +299,35 @@ const PIN_MECHANISMS: &[PinMechanism] = &[
 /// hands the host (the grammar keeps reading `allow_private` itself); declaration order is
 /// judgement order.
 const TRUST_KEYS: &[TrustKey] = &[
-    TrustKey {
-        key: abi_str("pin"),
-        role: TRUST_PIN,
-        flags: PIN_FINGERPRINT,
-        default: NONE,
-        mechanisms: PIN_MECHANISMS.as_ptr(),
-        mechanisms_len: PIN_MECHANISMS.len(),
-    },
-    TrustKey {
-        key: abi_str("reverify_ttl"),
-        role: TRUST_REVERIFY_TTL,
-        flags: 0,
-        default: abi_str(DEFAULT_REVERIFY_TTL),
-        mechanisms: std::ptr::null(),
-        mechanisms_len: 0,
-    },
-    TrustKey {
-        key: abi_str("recovery_backoff"),
-        role: TRUST_RECOVERY_BACKOFF,
-        flags: 0,
-        default: abi_str(DEFAULT_RECOVERY_BACKOFF),
-        mechanisms: std::ptr::null(),
-        mechanisms_len: 0,
-    },
+    trust_key("pin", TRUST_PIN, PIN_FINGERPRINT, NONE).with_mechanisms(PIN_MECHANISMS),
+    trust_key(
+        "reverify_ttl",
+        TRUST_REVERIFY_TTL,
+        0,
+        abi_str(DEFAULT_REVERIFY_TTL),
+    ),
+    trust_key(
+        "recovery_backoff",
+        TRUST_RECOVERY_BACKOFF,
+        0,
+        abi_str(DEFAULT_RECOVERY_BACKOFF),
+    ),
     // THE REGISTRATION'S PRIVATE REACH (1.5.5's per-agent `allow_private: true`, ARCHITECT ruling
     // on FLIP-A2A, SEAM-4f1): the host seals it into the agent's anchors and the one guard admits
     // the agent's own private or loopback destination on [`NEED_AGENT`]; never a metadata address.
     // An agent without it is refused every private address by the guard.
-    TrustKey {
-        key: abi_str(PRIVATE_REACH_KEY),
-        role: TRUST_PRIVATE_REACH,
-        flags: 0,
-        default: NONE,
-        mechanisms: std::ptr::null(),
-        mechanisms_len: 0,
-    },
+    trust_key(PRIVATE_REACH_KEY, TRUST_PRIVATE_REACH, 0, NONE),
 ];
+
+/// One trust key's plain fields; its mechanisms (a pin's) are set by the caller.
+const fn trust_key(key: &'static str, role: u32, flags: u32, default: AbiStr) -> TrustKey {
+    let mut t = TrustKey::EMPTY;
+    t.key = abi_str(key);
+    t.role = role;
+    t.flags = flags;
+    t.default = default;
+    t
+}
 
 /// The per-registration key holding an agent's private reach (`allow_private`).
 pub const PRIVATE_REACH_KEY: &str = "allow_private";
@@ -394,77 +380,61 @@ pub const SECRET_REFS: &[AbiStr] = &[
 /// upstreams a plane reaches, each at its own `url`: over http ([`NEED_AGENT`]) and over grpc
 /// ([`NEED_GRPC`]), the two under the same trust anchors.
 pub const NEEDS: &[Need] = &[
-    Need {
-        direction: DIRECTION_OUTBOUND,
-        egress_class: EGRESS_OPEN_WEB,
-        transport: abi_str(DOCUMENT_TRANSPORT),
-        auth: NONE,
-        target_from: NONE,
-        trust_from: abi_str(PUSH_TRUST_FROM),
-        details: Blob {
-            ptr: std::ptr::null(),
-            len: 0,
-            fmt: BLOB_ABSENT,
-            flags: 0,
-        },
-        keep_response_headers: std::ptr::null(),
-        keep_response_headers_len: 0,
-        timeout_ms: 0,
-        keep_mode: KEEP_NAMED,
-        _reserved: 0,
-        deny_response_headers: std::ptr::null(),
-        deny_response_headers_len: 0,
-    },
-    Need {
-        direction: DIRECTION_OUTBOUND,
-        egress_class: EGRESS_PROVIDER,
-        transport: abi_str(DOCUMENT_TRANSPORT),
-        auth: NONE,
-        target_from: abi_str(MEMBER_TARGET),
-        trust_from: abi_str(CLIENT_IDENTITY_FROM),
-        details: Blob {
-            ptr: std::ptr::null(),
-            len: 0,
-            fmt: BLOB_ABSENT,
-            flags: 0,
-        },
-        keep_response_headers: KEEP_RESPONSE_HEADERS.as_ptr(),
-        keep_response_headers_len: KEEP_RESPONSE_HEADERS.len(),
-        timeout_ms: 0,
-        keep_mode: KEEP_NAMED,
-        _reserved: 0,
-        deny_response_headers: std::ptr::null(),
-        deny_response_headers_len: 0,
-    },
-    Need {
-        direction: DIRECTION_OUTBOUND,
-        egress_class: EGRESS_PROVIDER,
-        transport: abi_str(FRAMED_TRANSPORT),
-        auth: NONE,
-        target_from: abi_str(MEMBER_TARGET),
-        trust_from: abi_str(CLIENT_IDENTITY_FROM),
-        details: Blob {
-            ptr: std::ptr::null(),
-            len: 0,
-            fmt: BLOB_ABSENT,
-            flags: 0,
-        },
-        keep_response_headers: KEEP_RESPONSE_HEADERS.as_ptr(),
-        keep_response_headers_len: KEEP_RESPONSE_HEADERS.len(),
-        timeout_ms: 0,
-        keep_mode: KEEP_NAMED,
-        _reserved: 0,
-        deny_response_headers: std::ptr::null(),
-        deny_response_headers_len: 0,
-    },
+    need(
+        EGRESS_OPEN_WEB,
+        DOCUMENT_TRANSPORT,
+        NONE,
+        abi_str(PUSH_TRUST_FROM),
+    ),
+    need(
+        EGRESS_PROVIDER,
+        DOCUMENT_TRANSPORT,
+        abi_str(MEMBER_TARGET),
+        abi_str(CLIENT_IDENTITY_FROM),
+    )
+    .with_keep_response_headers(KEEP_RESPONSE_HEADERS),
+    need(
+        EGRESS_PROVIDER,
+        FRAMED_TRANSPORT,
+        abi_str(MEMBER_TARGET),
+        abi_str(CLIENT_IDENTITY_FROM),
+    )
+    .with_keep_response_headers(KEEP_RESPONSE_HEADERS),
 ];
 
+/// One outbound need's plain fields; its response header list is set by the caller.
+const fn need(
+    egress_class: u32,
+    transport: &'static str,
+    target_from: AbiStr,
+    trust_from: AbiStr,
+) -> Need {
+    let mut n = Need::EMPTY;
+    n.direction = DIRECTION_OUTBOUND;
+    n.egress_class = egress_class;
+    n.transport = abi_str(transport);
+    n.auth = NONE;
+    n.target_from = target_from;
+    n.trust_from = trust_from;
+    n.keep_mode = KEEP_NAMED;
+    n
+}
+
 /// THE STATEMENT TAIL: the plane's static facts.
-pub const TAIL: &PlaneTail = &PlaneTail {
-    head: KindTailHead {
-        size: std::mem::size_of::<PlaneTail>() as u32,
-        _reserved: 0,
-    },
+pub const TAIL: &PlaneTail = &{
+    let mut t = PlaneTail::EMPTY
+        .with_dialects(DIALECTS)
+        .with_scope_kinds(SCOPE_KINDS)
+        .with_op_classes(OP_CLASS_TABLE)
+        .with_billable_classes(BILLABLE_CLASSES)
+        .with_fee_units(FEE_UNITS)
+        .with_record_kinds(RECORD_KINDS)
+        .with_record_chains(RECORD_CHAINS)
+        .with_trust_keys(TRUST_KEYS)
+        .with_admin_routes(ADMIN_ROUTES)
+        // THE COUNTERS' LANE WORDS: the binding words a hop goes out on (predev's relay counted each
+        // attempt under its binding, relay.rs:1705), the same vocabulary as the dialects.
+        .with_metric_lanes(DIALECTS);
     // THE HOOK ORDER 1.5.5 USED FOR THIS PLANE (ARCHITECT ruling Q-FOLD-A2A-2; spec Part 3 section
     // 12 "Hooks", per attachment where 1.5.5 differed): the agent's gates screen the projected
     // `{tool, arguments}` first, keyed on the request's session, fail-closed, a veto at the hook's
@@ -472,62 +442,29 @@ pub const TAIL: &PlaneTail = &PlaneTail {
     // for busbar's own credential, or one that left and heard nothing back, is handed here as a
     // piece first, on the unit's own ticket, so its task is ended through the host's records (the
     // engine's `end_task`).
-    flags: TAIL_HOOKS_GATED | TAIL_REFUSED_PIECE,
-    ingress: INGRESS_REQUEST_RESPONSE | INGRESS_RESPONSE_STREAM,
-    dispatch_shape: SHAPE_PIECEWISE,
+    t.flags = TAIL_HOOKS_GATED | TAIL_REFUSED_PIECE;
+    t.ingress = INGRESS_REQUEST_RESPONSE | INGRESS_RESPONSE_STREAM;
+    t.dispatch_shape = SHAPE_PIECEWISE;
     // The layout this plane writes its answers in: the contract's it was built against.
-    answer_layout: ANSWER_LAYOUT,
-    scope: abi_str(SCOPE),
-    label: abi_str(LABEL),
-    subject_noun: abi_str(SUBJECT_NOUN),
-    admin_noun: abi_str(ADMIN_NOUN),
-    audit_kind: abi_str(AUDIT_KIND),
-    signing_domain: abi_str(CARD_SIGNING_DOMAIN),
-    signing_kid_prefix: abi_str(CARD_KID_PREFIX),
-    cli_help: NONE,
-    dialects: DIALECTS.as_ptr(),
-    dialects_len: DIALECTS.len(),
-    dialect_auth: std::ptr::null(),
-    dialect_auth_len: 0,
-    scope_kinds: SCOPE_KINDS.as_ptr(),
-    scope_kinds_len: SCOPE_KINDS.len(),
-    op_classes: OP_CLASS_TABLE.as_ptr(),
-    op_classes_len: OP_CLASS_TABLE.len(),
-    billable_classes: BILLABLE_CLASSES.as_ptr(),
-    billable_classes_len: BILLABLE_CLASSES.len(),
-    route_cost: std::ptr::null(),
-    route_cost_len: 0,
-    fee_units: FEE_UNITS.as_ptr(),
-    fee_units_len: FEE_UNITS.len(),
-    record_kinds: RECORD_KINDS.as_ptr(),
-    record_kinds_len: RECORD_KINDS.len(),
-    record_retentions: RECORD_RETENTIONS.as_ptr(),
-    record_retentions_len: RECORD_RETENTIONS.len(),
-    egress_targets: std::ptr::null(),
-    egress_targets_len: 0,
-    record_chains: RECORD_CHAINS.as_ptr(),
-    record_chains_len: RECORD_CHAINS.len(),
-    trust_keys: TRUST_KEYS.as_ptr(),
-    trust_keys_len: TRUST_KEYS.len(),
-    refusal_statuses: std::ptr::null(),
-    refusal_statuses_len: 0,
-    caller_credential_refusal: abi_str(REFUSE_PASSTHROUGH_SECTION),
-    admin_routes: ADMIN_ROUTES.as_ptr(),
-    admin_routes_len: ADMIN_ROUTES.len(),
-    admin_openapi: Blob {
-        ptr: ADMIN_OPENAPI.as_ptr(),
-        len: ADMIN_OPENAPI.len(),
-        fmt: busbar_contract::abi::mechanism::call::BLOB_JSON,
-        flags: 0,
-    },
-    // THE COUNTERS' LANE WORDS: the binding words a hop goes out on (predev's relay counted each
-    // attempt under its binding, relay.rs:1705), the same vocabulary as the dialects.
-    metric_lanes: DIALECTS.as_ptr(),
-    metric_lanes_len: DIALECTS.len(),
+    t.answer_layout = ANSWER_LAYOUT;
+    t.scope = abi_str(SCOPE);
+    t.label = abi_str(LABEL);
+    t.subject_noun = abi_str(SUBJECT_NOUN);
+    t.admin_noun = abi_str(ADMIN_NOUN);
+    t.audit_kind = abi_str(AUDIT_KIND);
+    t.signing_domain = abi_str(CARD_SIGNING_DOMAIN);
+    t.signing_kid_prefix = abi_str(CARD_KID_PREFIX);
+    t.cli_help = NONE;
+    t.caller_credential_refusal = abi_str(REFUSE_PASSTHROUGH_SECTION);
+    t.admin_openapi = Blob::json(ADMIN_OPENAPI.as_bytes());
+    // The kinds kept while active ([`RECORD_RETENTIONS`]).
+    t.record_retentions = RECORD_RETENTIONS.as_ptr();
+    t.record_retentions_len = RECORD_RETENTIONS.len();
     // THE STREAM CEILING (ARCHITECT ruling 2026-10-07, STREAM-CEILING): a streamed relay ran at
     // most `RELAY_STREAM_TIMEOUT` (predev transport.rs:94-98), and a caller that stopped reading
     // released it there (receive.rs `send_or_expire`, :2829-2850, :3000-3012).
-    stream_ceiling_secs: STREAM_CEILING_SECS,
+    t.stream_ceiling_secs = STREAM_CEILING_SECS;
+    t
 };
 
 /// How long a unit whose answer streams may run (predev `RELAY_STREAM_TIMEOUT`, 600 s,

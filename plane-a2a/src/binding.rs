@@ -301,16 +301,6 @@ pub fn compose(base: &str, method: &str, params: &Value) -> Result<Framed, Strin
     })
 }
 
-/// THE ANSWER, BACK IN ONE DIALECT: an HTTP+JSON success body IS the `result`, wrapped into the
-/// JSON-RPC envelope under `rpc_id` so the one reader reads it; an empty body is `"result": null`.
-///
-/// # Errors
-/// The body is not JSON.
-pub fn rewrap(body: &[u8], rpc_id: &Value) -> Result<Vec<u8>, String> {
-    // The body's own bytes are the `result` (Law 5): never re-serialised.
-    crate::answer_bytes::rewrap(body, rpc_id)
-}
-
 /// A query-string value: a string as itself, anything else as its JSON rendering.
 fn scalar(value: &Value) -> String {
     value

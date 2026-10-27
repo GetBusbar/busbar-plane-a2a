@@ -110,7 +110,6 @@ dependencies = [
  "busbar-contract",
  "busbar-plane-a2a",
  "busbar-plugin-loader",
- "prost",
  "serde_json",
 ]
 

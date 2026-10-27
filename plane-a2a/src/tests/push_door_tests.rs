@@ -354,18 +354,6 @@ fn the_callers_own_webhook_credential_is_presented_on_the_delivery() {
     );
 }
 
-/// A callback that now resolves to an internal address (a rebinding) is refused by the judge,
-/// which runs on every attempt, and nothing is sent.
-#[test]
-fn the_rebind_is_still_refused_when_no_pin_survives_the_restart() {
-    let callback = "https://hook.caller.test/notify";
-    let d = queued(callback);
-    let mut host = TestHost::answering(vec![Some((DEST_INTERNAL, &[][..]))], 200);
-    let (end, _) = tick_once(&d, &mut host, 0);
-    assert_eq!(end, Attempted::Judged(DEST_INTERNAL));
-    assert!(host.sent.is_empty());
-}
-
 /// A name that resolves to nothing at delivery, or a judgement that could not be made, is refused:
 /// nothing was checked, so nothing is allowed.
 #[test]

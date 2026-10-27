@@ -23,8 +23,10 @@ use busbar_contract::abi::plane::{
     OnPieceIn, OnPieceOut, OutField, RecordWrite, UnitCount, EMIT_DONE, FROM_CALLER, RECORD_PUT,
     UNITS_REPORTED,
 };
-use busbar_contract::abi::sdk::conn::{Connector, Host};
-use busbar_contract::abi::sdk::{Instance, Keyed, Lent, Out, ServiceError, Services};
+use busbar_contract::abi::sdk::conn::{Connector, StaticHost};
+use busbar_contract::abi::sdk::{
+    Instance, Keyed, Lent, Out, ServiceError, Services, StaticServices,
+};
 use serde_json::Value;
 
 use crate::agent_arrival::{AgentDisposition, JSON_MEDIA_TYPE};
@@ -103,9 +105,12 @@ struct Entry {
 
 /// THE HOST RECORDS AND THE DESTINATION JUDGE, for one piece: its connector, and the host services
 /// the door was opened with. Every call counts on the piece's one handle sequence.
+///
+/// Both handles are the door's own install handles ('static by construction); a test passes the
+/// handles of a host it leaked, which is 'static too.
 pub struct Via<'h> {
-    host: &'h Host,
-    services: Option<Services>,
+    host: &'h StaticHost,
+    services: Option<StaticServices>,
     ticket: Ticket,
     conn: Connector<'h>,
     grown: &'h Grown,
@@ -121,8 +126,8 @@ impl<'h> Via<'h> {
     /// The piece's calls, counting on from the `issued` its unit's finished pieces made; `grown` is
     /// the instance's book of the sizes short records answers named.
     pub fn new(
-        host: &'h Host,
-        services: Option<Services>,
+        host: &'h StaticHost,
+        services: Option<StaticServices>,
         ticket: Ticket,
         issued: u32,
         grown: &'h Grown,
@@ -139,7 +144,7 @@ impl<'h> Via<'h> {
     }
 
     /// The services the door was opened with.
-    fn services(&self) -> Result<Services, Halt> {
+    fn services(&self) -> Result<StaticServices, Halt> {
         self.services
             .ok_or_else(|| Halt::Failed(format!("{:?}", ServiceError::Unserved)))
     }
@@ -384,7 +389,7 @@ const JUDGED_ADDRESSES: usize = 16;
 /// deployment's private-address setting (the engine's callback and delivery guards had no knob that
 /// admitted one); the allow-list stands.
 pub(crate) fn judge_open_web(
-    services: &Services,
+    services: &StaticServices,
     handle: CompletionHandle,
     dest: &str,
 ) -> Poll<Result<(u64, String), ServiceError>> {
@@ -493,13 +498,13 @@ pub fn on_piece(
     input: Lent<'_, OnPieceIn>,
     mut out: Out<'_, OnPieceOut>,
 ) -> Option<Outcome> {
-    let unit = input.get().unit;
+    let unit = input.unit();
     // A NOTIFICATION, acknowledged on the caller's piece: `202` and no body, nothing moved, no
     // fee kept and no audit row (the engine answered it before anything was admitted).
     if plane.units.with(&unit, |u| {
         u.is_some_and(|u| matches!(u.disposition, AgentDisposition::Notice { .. }))
     }) {
-        if input.get().from != FROM_CALLER {
+        if input.from() != FROM_CALLER {
             return Some(Outcome::Ready);
         }
         let (status, body) = notice_answer();
@@ -568,9 +573,9 @@ pub fn on_piece(
         ));
     }
     // The ATTEMPT piece: the caller's body follows, and the answer comes on it.
-    if input.get().from != FROM_CALLER {
+    if input.from() != FROM_CALLER {
         // The agent the ATTEMPT reached, kept for the caller's piece.
-        let given = input.field(|i| &i.member).as_str().unwrap_or_default();
+        let given = input.member().as_str().unwrap_or_default();
         if !given.is_empty() {
             plane.on_unit(unit, |u| {
                 u.pass.member = given.to_string();
@@ -593,11 +598,9 @@ pub fn on_piece(
     })?;
     let mut via = Via::new(host, plane.services, instance.ticket(), base, &plane.grown);
     // An HTTP+JSON unit answers the envelope its request spelled, not the caller's body.
-    let raw = composed
-        .as_deref()
-        .unwrap_or_else(|| input.field(|i| &i.bytes).bytes());
+    let raw = composed.as_deref().unwrap_or_else(|| input.bytes().bytes());
     let envelope: Value = serde_json::from_slice(raw).unwrap_or(Value::Null);
-    let caller = input.field(|i| &i.caller_ref).as_str().unwrap_or_default();
+    let caller = input.caller_ref().as_str().unwrap_or_default();
     let mut writes = Vec::new();
     if entry.restore {
         // The instance's restore: it writes nothing, and one that fails does not fail the verb.
@@ -609,7 +612,7 @@ pub fn on_piece(
     // THE ADMISSION AND THE CATALOGUE (the engine's `receive::admit`, ahead of its local verbs): a
     // verb routed to an agent that is not `approved`, holds no card, or whose card the request does
     // not fit, is refused in the engine's words.
-    let given_member = input.field(|i| &i.member).as_str().unwrap_or_default();
+    let given_member = input.member().as_str().unwrap_or_default();
     let held_member = plane
         .units
         .with(&unit, |u| u.map(|u| u.pass.member.clone()))
@@ -1237,7 +1240,7 @@ fn window_core(
 /// first signature (the host names it beside every signature), then the signature, each on its own
 /// handle of the piece's ticket.
 pub(crate) struct HostSigner<'a> {
-    pub(crate) services: Option<&'a Services>,
+    pub(crate) services: Option<&'a StaticServices>,
     pub(crate) ticket: Ticket,
     pub(crate) seq: u32,
 }
@@ -1363,7 +1366,7 @@ pub fn card_piece(
     ask: crate::agent_arrival::CardAsk,
 ) -> Outcome {
     use crate::served_card::{self as served, OWN_CARD_CACHE_CONTROL, OWN_CARD_MEDIA_TYPE};
-    let unit = input.get().unit;
+    let unit = input.unit();
     let Some((rest, answered, agent, section, generation, issued, rpc, composed, framed)) =
         plane.units.with(&unit, |u| {
             u.map(|u| {

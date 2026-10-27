@@ -204,7 +204,8 @@ pub const PLANE_SSE_FRAME_NOT_UTF8: Diagnostic = Diagnostic {
 /// `diag_*!`, and exactly the `diagnostics` its `declares.json` states (a test holds the three
 /// equal), from which the host installs them in either build. `BUSBAR-7104` came out of the host
 /// registry with the relay's frame reader that emits it, under its frozen number.
-pub static DIAGNOSTICS: &[&Diagnostic] = &[
+#[cfg(test)]
+pub const DIAGNOSTICS: &[&Diagnostic] = &[
     &A2A_TASK_CHAIN_VERIFY_FAILED,
     &A2A_POOL_NOT_INTERCHANGEABLE,
     &A2A_OUTBOUND_CRED_UNLEASED,
