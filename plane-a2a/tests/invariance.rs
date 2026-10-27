@@ -71,15 +71,21 @@ fn no_item_is_conditionally_compiled() {
     );
 }
 
-/// The crate carries the two lint gates the design requires of a plugin.
+/// The crate carries the two lint gates the design requires of a plugin: the literal
+/// `#![forbid(unsafe_code)]` (BUSBAR-1.6.0.md l.273), in the test build as in the shipped one, and
+/// no `cfg_attr` that would loosen it (ARCHITECT ruling 2026-10-21: the allocation gates' counter
+/// is busbar-contract's `alloc-counter`).
 #[test]
 fn the_crate_forbids_unsafe_and_undocumented_items() {
     let lib = std::fs::read_to_string(src_dir().join("lib.rs")).expect("the root is readable");
-    assert!(lib.contains("#![forbid(unsafe_code)]"));
+    assert!(lib.lines().any(|l| l.trim() == "#![forbid(unsafe_code)]"));
+    assert!(!lib.contains("cfg_attr(not(test), forbid(unsafe_code))"));
+    assert!(!lib.contains("cfg_attr(test, deny(unsafe_code))"));
     assert!(lib.contains("#![deny(missing_docs)]"));
 }
 
-/// No source file contains the word the lint gate forbids.
+/// No source file contains the word the lint gate forbids, the crate's test modules (`src/tests`,
+/// `src/a2a/tests`) included: they compile under the same literal `forbid`.
 #[test]
 fn the_source_contains_no_unsafe_block() {
     let mut offenders = Vec::new();

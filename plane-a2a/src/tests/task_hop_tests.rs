@@ -11,6 +11,7 @@ use super::*;
 use crate::records::{KIND_TASK, KIND_TASK_EVENT};
 use crate::tasks::tests::{submitted, Book, ALICE, BOB};
 use crate::tasks::{event_key, get};
+use crate::tests::capture::Capture;
 use crate::TaskEventRow;
 
 /// The host records, the random bytes the kernel hands out, and the destination judge's verdict.
@@ -82,6 +83,7 @@ fn opened_with(
     let req = Request {
         envelope,
         relayed: None,
+        relayed_bytes: None,
         caller,
         member: MEMBER,
         addressed: None,
@@ -94,7 +96,7 @@ fn opened_with(
 
 fn hop(opened: Opened) -> (TaskHop, Option<Vec<u8>>) {
     match opened {
-        Opened::Hop { task, instead, .. } => (task, instead),
+        Opened::Hop { task, instead, .. } => (*task, instead),
         Opened::Refused(reply) => panic!("refused: {reply:?}"),
     }
 }
@@ -123,6 +125,7 @@ fn a_fresh_request_mints_busbars_id_and_opens_the_task_dispatched_to_the_agent()
             context_id: MINTED.into(),
             addressed: false,
             skill: None,
+            references: Vec::new(),
         }
     );
     assert_eq!(instead, None);
@@ -189,7 +192,7 @@ fn an_interrupted_task_on_the_agent_under_the_callers_context_resumes_as_working
         request_id: "r",
         now: 150,
     };
-    tasks::dispatch(&mut desk.book, &at, "t1", MEMBER, &mut out).unwrap();
+    tasks::tests::dispatch(&mut desk.book, &at, "t1", MEMBER, &mut out).unwrap();
     desk.book.apply(&out);
     out.clear();
     tasks::transition(&mut desk.book, &at, "t1", TaskState::Working, &mut out).unwrap();
@@ -261,7 +264,7 @@ fn settled(desk: &mut Desk, task: &TaskHop, how: &TaskSettled) -> usize {
         ALICE,
         400,
         &mut out,
-        &Latches::new(),
+        &Latches::default(),
     )
     .unwrap();
     desk.book.apply(&out);
@@ -301,7 +304,7 @@ fn the_answer_records_the_reported_state_and_a_failed_hop_ends_the_task_failed()
         BOB,
         400,
         &mut out,
-        &Latches::new(),
+        &Latches::default(),
     )
     .unwrap();
     desk.book.apply(&out);
@@ -357,6 +360,7 @@ fn an_inline_callback_the_floor_refuses_refuses_the_request_before_anything_open
         let req = Request {
             envelope: &envelope,
             relayed: None,
+            relayed_bytes: None,
             caller: ALICE,
             member: MEMBER,
             addressed: None,
@@ -620,6 +624,7 @@ fn opened_writing(desk: &mut Desk, envelope: &Value) -> (Opened, Vec<Write>) {
     let req = Request {
         envelope,
         relayed: None,
+        relayed_bytes: None,
         caller: ALICE,
         member: MEMBER,
         addressed: None,
@@ -643,7 +648,7 @@ fn ended_on_refusal(d: &mut Desk, task: &TaskHop) -> Vec<Write> {
         ALICE,
         300,
         &mut out,
-        &Latches::new(),
+        &Latches::default(),
     )
     .unwrap();
     out
@@ -715,7 +720,7 @@ fn walk(desk: &mut Desk, caller: &str, task: &str, states: &[TaskState]) {
         now: 150,
     };
     let mut out = Vec::new();
-    tasks::dispatch(&mut desk.book, &at, task, MEMBER, &mut out).unwrap();
+    tasks::tests::dispatch(&mut desk.book, &at, task, MEMBER, &mut out).unwrap();
     desk.book.apply(&out);
     for state in states {
         let mut out = Vec::new();
@@ -889,13 +894,6 @@ fn a_streamed_artifact_advances_the_durable_resume_cursor() {
 
 // ── a hop that left and heard nothing back: its task end, racing another writer of the task ───
 
-/// End `task`, whose hop left and heard nothing back, failed, as the door ends it on the refused
-/// piece, on the unit's own ticket: [`settle_on_answer`] on `TaskSettled::Failed` over the host's records
-/// (`agent_door::settle_task`).
-fn ended_after_no_answer(d: &mut Desk, task: &TaskHop) -> Vec<Write> {
-    ended_on_refusal(d, task)
-}
-
 /// A HOP THAT LEFT AND HEARD NOTHING BACK ENDS THE TASK IT OPENED WITHOUT LOSING ANOTHER WRITER'S
 /// CHANGE (the engine's `refuse_hop` on `RelayRefusal::Transport`, origin/predev
 /// `crates/busbar-a2a/src/a2a/receive.rs:3325` and its `fail_task` arm `:3463-3471`, then
@@ -931,7 +929,7 @@ fn a_hop_that_heard_nothing_back_ends_its_task_keeping_a_concurrent_writers_chan
         .cloned()
         .expect("their event");
 
-    let ours = ended_after_no_answer(&mut d, &task);
+    let ours = ended_on_refusal(&mut d, &task);
     d.book.apply(&ours);
 
     assert_eq!(
@@ -952,38 +950,6 @@ fn a_hop_that_heard_nothing_back_ends_its_task_keeping_a_concurrent_writers_chan
 
 // ── a record write the store refuses is reported, and the answer stands ────────────────────────
 
-/// Every event's level and rendered fields, sent down a channel (the plane holds no subscriber
-/// dependency, so the `tracing` trait is implemented by hand). Admits every level, so the
-/// assertion holds whichever side of the error-once latch this process is on.
-struct Capture(std::sync::mpsc::Sender<(tracing::Level, String)>);
-
-struct Render<'a>(&'a mut String);
-
-impl tracing::field::Visit for Render<'_> {
-    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-        use std::fmt::Write as _;
-        let _ = write!(self.0, "{}={value:?} ", field.name());
-    }
-}
-
-impl tracing::Subscriber for Capture {
-    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
-        true
-    }
-    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
-        tracing::span::Id::from_u64(1)
-    }
-    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
-    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
-    fn event(&self, event: &tracing::Event<'_>) {
-        let mut line = String::new();
-        event.record(&mut Render(&mut line));
-        let _ = self.0.send((*event.metadata().level(), line));
-    }
-    fn enter(&self, _: &tracing::span::Id) {}
-    fn exit(&self, _: &tracing::span::Id) {}
-}
-
 /// Settle `how` on Alice's task as BOB, who holds no such task: the store refuses the write.
 /// Answers what the call answered, the writes it staged, and the lines it logged.
 fn refused_settle(how: &TaskSettled) -> (Result<Option<TaskRow>, Halt>, usize, Vec<String>) {
@@ -999,7 +965,7 @@ fn refused_settle(how: &TaskSettled) -> (Result<Option<TaskRow>, Halt>, usize, V
             BOB,
             400,
             &mut out,
-            &Latches::new(),
+            &Latches::default(),
         )
     });
     let lines = heard.try_iter().map(|(_, line)| line).collect();
@@ -1090,7 +1056,7 @@ fn a_transition_the_store_refuses_is_surfaced_and_the_answer_stands() {
 #[test]
 fn a_refused_write_is_an_error_the_first_time_and_debug_after() {
     use tracing::Level;
-    let latches = Latches::new();
+    let latches = Latches::default();
     let (sent, heard) = std::sync::mpsc::channel();
     tracing::subscriber::with_default(Capture(sent), || {
         WriteRefused::Cursor.report(&latches, "t1", "no such task");
@@ -1143,7 +1109,7 @@ fn an_opening_states_the_engines_answer_should_the_store_refuse_its_writes() {
         request_id: "r",
         now: 150,
     };
-    tasks::dispatch(&mut desk.book, &at, "t1", MEMBER, &mut out).unwrap();
+    tasks::tests::dispatch(&mut desk.book, &at, "t1", MEMBER, &mut out).unwrap();
     for state in [TaskState::Working, TaskState::InputRequired] {
         desk.book.apply(&out);
         out.clear();
@@ -1211,6 +1177,7 @@ fn a_task_verb_naming_a_task_the_caller_does_not_hold_is_refused_task_not_found(
             let req = Request {
                 envelope: &envelope,
                 relayed: None,
+                relayed_bytes: None,
                 caller: ALICE,
                 member: MEMBER,
                 addressed: None,
@@ -1259,7 +1226,7 @@ fn a_second_turn_naming_a_held_task_in_its_message_addresses_that_task() {
         request_id: "r",
         now: 150,
     };
-    tasks::dispatch(&mut d.book, &at, "t1", "planner-b", &mut out).unwrap();
+    tasks::tests::dispatch(&mut d.book, &at, "t1", "planner-b", &mut out).unwrap();
     d.book.apply(&out);
     let before = d.book.clone();
     let turn = send(json!({ "message": { "messageId": "m-2", "taskId": "t1" } }));
@@ -1286,6 +1253,7 @@ fn writes_of(desk: &mut Desk, envelope: &Value) -> Vec<Write> {
     let req = Request {
         envelope,
         relayed: None,
+        relayed_bytes: None,
         caller: ALICE,
         member: MEMBER,
         addressed: None,
@@ -1377,4 +1345,162 @@ fn a_cancel_of_a_task_held_as_terminal_is_refused_not_cancelable() {
         let (task, _) = hop(opened(&mut d, &read, ALICE));
         assert!(task.addressed, "a read of a terminal task is relayed");
     }
+}
+
+// ── a task verb naming no task ──────────────────────────────────────────────────────────────────
+
+/// A TASK VERB WHOSE `params` NAME NO TASK AS A STRING (absent, a number, `null`, no `params` at
+/// all) is refused `400`, invalid params (`-32602`), before anything is opened: no id is minted,
+/// nothing is written, nothing is relayed. RED against a task verb read as unaddressed, which
+/// minted a task, recorded it and relayed the malformed read.
+#[test]
+fn a_task_verb_naming_no_task_is_refused_invalid_params_and_opens_nothing() {
+    for method in [
+        "GetTask",
+        "tasks/get",
+        "CancelTask",
+        "tasks/cancel",
+        "SubscribeToTask",
+        "tasks/resubscribe",
+    ] {
+        for envelope in [
+            json!({ "jsonrpc": "2.0", "id": 7, "method": method, "params": {} }),
+            json!({ "jsonrpc": "2.0", "id": 7, "method": method, "params": { "id": 5 } }),
+            json!({ "jsonrpc": "2.0", "id": 7, "method": method, "params": { "id": null } }),
+            json!({ "jsonrpc": "2.0", "id": 7, "method": method }),
+        ] {
+            let mut d = desk();
+            let before = d.book.clone();
+            let (status, code, message) = refusal_of(opened(&mut d, &envelope, ALICE));
+            assert_eq!((status, code), (400, -32602), "{envelope}");
+            assert_eq!(message, TASK_UNNAMED, "{envelope}");
+            assert_eq!(d.draws, 0, "{envelope}: no id is minted");
+            assert_eq!(d.book, before, "{envelope}: nothing is written");
+        }
+    }
+}
+
+// ── the retention sweep runs from a submit ──────────────────────────────────────────────────────
+
+/// Open `envelope` for Alice at `now`, its writes applied.
+fn opened_at(d: &mut Desk, envelope: &Value, now: u64) -> Opened {
+    let mut out = Vec::new();
+    let req = Request {
+        envelope,
+        relayed: None,
+        relayed_bytes: None,
+        caller: ALICE,
+        member: MEMBER,
+        addressed: None,
+        now,
+    };
+    let opened = open(d, &req, &json!(7), &|_| None, &mut out).unwrap();
+    d.book.apply(&out);
+    opened
+}
+
+/// Move Alice's `task` to `completed` at `now`.
+fn complete(d: &mut Desk, task: &str, now: u64) {
+    let mut out = Vec::new();
+    let at = Stamp {
+        caller: ALICE,
+        request_id: "r",
+        now,
+    };
+    tasks::transition(&mut d.book, &at, task, TaskState::Completed, &mut out)
+        .unwrap()
+        .expect("it moved");
+    d.book.apply(&out);
+}
+
+/// How many task rows the store holds.
+fn held_tasks(d: &mut Desk) -> usize {
+    d.book.list(KIND_TASK, "").unwrap().len()
+}
+
+/// UNDER SUBMIT-ONLY TRAFFIC THE SETTLED TASKS ARE RETIRED AND THE STORE STAYS BOUNDED: each fresh
+/// submit carries the retention sweep, so a task finished past its window is tombstoned with its
+/// chain by the next submit, and a run of submits that each finish keeps only the window's worth.
+/// The active tasks are never swept. RED against a sweep that ran only from the local verbs: a
+/// workload that only submits never retired a task.
+#[test]
+fn submit_only_traffic_retires_settled_tasks_and_keeps_the_store_bounded() {
+    let mut d = desk();
+    complete(&mut d, "t1", 100);
+    let late = 101 + tasks::TERMINAL_TTL_SECS;
+    hop(opened_at(
+        &mut d,
+        &send(json!({ "message": { "messageId": "m" } })),
+        late,
+    ));
+    assert!(
+        d.book
+            .value(KIND_TASK, &tasks::task_key(ALICE, "t1"))
+            .is_none(),
+        "the settled task past its window is retired by the submit"
+    );
+    assert!(
+        d.book
+            .value(KIND_TASK_EVENT, &event_key(ALICE, "t1", 1))
+            .is_none(),
+        "its chain goes with it"
+    );
+    assert!(
+        d.book
+            .value(KIND_TASK, &tasks::task_key(BOB, "t2"))
+            .is_some(),
+        "an active task is never swept"
+    );
+
+    let step = 10;
+    for i in 1..=200u64 {
+        let now = late + i * step;
+        d.random = i.to_be_bytes();
+        let (task, _) = hop(opened_at(
+            &mut d,
+            &send(json!({ "message": { "messageId": "m" } })),
+            now,
+        ));
+        complete(&mut d, &task.task_id, now);
+    }
+    let window = usize::try_from(tasks::TERMINAL_TTL_SECS / step).unwrap();
+    let held = held_tasks(&mut d);
+    assert!(
+        held <= window + 4,
+        "submit-only traffic keeps the window's worth of settled tasks, not every one: {held}"
+    );
+    assert!(
+        d.book
+            .value(KIND_TASK, &tasks::task_key(BOB, "t2"))
+            .is_some(),
+        "the active task outlives every sweep"
+    );
+}
+
+/// A READ NEVER SWEEPS: a `GetTask` of a settled task past its window answers it as missing and
+/// writes nothing, and a second turn of a held task retires nothing either; only a fresh submit
+/// carries the sweep.
+#[test]
+fn a_read_or_an_addressed_turn_never_sweeps() {
+    let mut d = desk();
+    complete(&mut d, "t1", 100);
+    let late = 101 + tasks::TERMINAL_TTL_SECS;
+    let before = d.book.clone();
+    let read = json!({ "jsonrpc": "2.0", "id": 7, "method": "GetTask", "params": { "id": "t1" } });
+    let (status, _, _) = refusal_of(opened_at(&mut d, &read, late));
+    assert_eq!(status, 404, "a task past its window reads as missing");
+    assert_eq!(d.book, before, "the read wrote nothing");
+
+    let mut d = desk();
+    submitted(&mut d.book, ALICE, "t3", 100);
+    complete(&mut d, "t1", 100);
+    let turn = send(json!({ "message": { "messageId": "m", "taskId": "t3" } }));
+    let (task, _) = hop(opened_at(&mut d, &turn, late));
+    assert!(task.addressed);
+    assert!(
+        d.book
+            .value(KIND_TASK, &tasks::task_key(ALICE, "t1"))
+            .is_some(),
+        "an addressed turn retires nothing"
+    );
 }

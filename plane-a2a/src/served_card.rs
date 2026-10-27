@@ -21,7 +21,10 @@
 //! card points at `/a2a/agents/{id}`, where only the JSON-RPC envelope is mounted
 //! ([`AGENT_ADDRESS_BINDINGS`]); an entry whose binding busbar cannot serve there is dropped (in
 //! `supportedInterfaces` and in v0.3's `additionalInterfaces`, whose `preferredTransport` becomes
-//! the JSON-RPC envelope), and a card left with no interface at all is refused.
+//! the JSON-RPC envelope), each kept entry is published once, and a card that offers no binding
+//! busbar serves there is refused, in either version: a v1.0 card none of whose
+//! `supportedInterfaces` busbar serves, and a v0.3 card whose `preferredTransport` (JSON-RPC when
+//! unstated) and `additionalInterfaces` name none.
 //!
 //! ## The vendor's signature is REMOVED, and BUSBAR'S REPLACES IT; its schemes are REPLACED
 //!
@@ -53,8 +56,7 @@ pub const SERVABLE_BINDINGS: &[&str] = &["JSONRPC", "HTTP+JSON", "GRPC"];
 /// binding spells its operation in a request line no per-agent path carries.
 pub const AGENT_ADDRESS_BINDINGS: &[&str] = &["JSONRPC"];
 
-/// The gRPC binding's card spelling.
-const GRPC_BINDING: &str = "GRPC";
+use crate::binding::BINDING_GRPC as GRPC_BINDING;
 
 /// The `cache-control` busbar's own card is served with.
 pub const OWN_CARD_CACHE_CONTROL: &str = "public, max-age=3600";
@@ -224,6 +226,18 @@ pub enum ServeError {
     BackendLeak(Vec<String>),
 }
 
+/// Keep each interface entry once, in the order first offered: two entries a rewrite pointed at the
+/// same address on the same binding are one interface.
+fn dedup(interfaces: &mut Vec<Value>) {
+    let mut kept: Vec<Value> = Vec::with_capacity(interfaces.len());
+    for iface in interfaces.drain(..) {
+        if !kept.contains(&iface) {
+            kept.push(iface);
+        }
+    }
+    *interfaces = kept;
+}
+
 /// REWRITE a fronted agent's backend card into the card busbar serves (before signing).
 ///
 /// # Errors
@@ -252,15 +266,22 @@ pub fn rewrite_card(
     };
 
     let mut out = obj.clone();
+    // ONE SERVABLE-BINDING RULE FOR BOTH VERSIONS: the bindings a card offers are its v1.0
+    // `supportedInterfaces` entries, or its v0.3 `preferredTransport` (the binding of its `url`,
+    // JSON-RPC when unstated) and `additionalInterfaces` entries. An entry busbar cannot serve at
+    // the agent's address is dropped; a card that offered bindings and is left with none busbar
+    // serves there is refused; what is kept points at busbar, each entry once. A card that states
+    // `supportedInterfaces` is judged on that list alone.
+    let v10 = out.get("supportedInterfaces").is_some_and(Value::is_array);
+    let mut offered = false;
+    let mut servable = false;
     if let Some(Value::Array(interfaces)) = out.get_mut("supportedInterfaces") {
-        let offered_any = !interfaces.is_empty();
+        offered |= !interfaces.is_empty();
         interfaces.retain(|iface| match iface.get("protocolBinding") {
             Some(Value::String(b)) => can_serve(b),
             _ => true,
         });
-        if offered_any && interfaces.is_empty() {
-            return Err(ServeError::NoServableBinding);
-        }
+        servable |= !interfaces.is_empty();
         for iface in interfaces.iter_mut() {
             let binding = iface
                 .get("protocolBinding")
@@ -278,21 +299,34 @@ pub fn rewrite_card(
                 }
             }
         }
+        dedup(interfaces);
     }
     // THE v0.3 SPELLING of the same list (`additionalInterfaces`, `{url, transport}`) and of the
-    // binding its `url` speaks (`preferredTransport`): an entry busbar cannot serve at the agent's
-    // address is dropped, every other one points at busbar whatever host it named, and the
-    // preferred binding is the one busbar serves there.
+    // binding its `url` speaks (`preferredTransport`).
     if let Some(Value::Array(interfaces)) = out.get_mut("additionalInterfaces") {
+        offered |= !v10 && !interfaces.is_empty();
         interfaces.retain(|iface| match iface.get("transport") {
             Some(Value::String(t)) => can_serve(t),
             _ => true,
         });
+        servable |= !v10 && !interfaces.is_empty();
         for iface in interfaces.iter_mut().filter_map(Value::as_object_mut) {
             if iface.contains_key("url") {
                 iface.insert("url".to_string(), Value::String(endpoint.clone()));
             }
         }
+        dedup(interfaces);
+    }
+    if !v10 && (out.contains_key("url") || out.contains_key("preferredTransport")) {
+        offered = true;
+        servable |= match out.get("preferredTransport") {
+            Some(Value::String(t)) => can_serve(t),
+            Some(_) => false,
+            None => can_serve(AGENT_ADDRESS_BINDINGS[0]),
+        };
+    }
+    if offered && !servable {
+        return Err(ServeError::NoServableBinding);
     }
     if out.contains_key("preferredTransport") {
         out.insert(

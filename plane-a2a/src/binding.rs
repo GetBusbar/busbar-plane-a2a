@@ -22,6 +22,13 @@ pub const BINDING_HTTP_JSON: &str = "HTTP+JSON";
 /// The gRPC binding's card word.
 pub const BINDING_GRPC: &str = "GRPC";
 
+/// The JSON-RPC binding's name, as the Statement and a published card spell it lower-cased.
+pub const BINDING_DOCUMENT: &str = "jsonrpc";
+/// The HTTP+JSON binding's lower-cased name.
+pub const BINDING_TARGET: &str = "http+json";
+/// The gRPC binding's lower-cased name.
+pub const BINDING_FRAMED: &str = "grpc";
+
 /// A binding the plane frames.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Binding {
@@ -240,6 +247,14 @@ pub fn compose(base: &str, method: &str, params: &Value) -> Result<Framed, Strin
         if value.is_empty() {
             return Err(format!("`{method}`'s `{name}` is empty"));
         }
+        // A DOT SEGMENT is the one value the allowlist passes that still moves the request line
+        // (`/tasks/..` resolves to `/`, and its percent-encoded spelling is read as a dot segment
+        // too): it addresses no task, so it is not carried.
+        if value == "." || value == ".." {
+            return Err(format!(
+                "`{method}`'s `{name}` is a dot segment, which would re-point the request line"
+            ));
+        }
         path.push_str(&percent(&value));
         rest = &rest[close + 1..];
     }
@@ -286,16 +301,6 @@ pub fn compose(base: &str, method: &str, params: &Value) -> Result<Framed, Strin
     })
 }
 
-/// THE ANSWER, BACK IN ONE DIALECT: an HTTP+JSON success body IS the `result`, wrapped into the
-/// JSON-RPC envelope under `rpc_id` so the one reader reads it; an empty body is `"result": null`.
-///
-/// # Errors
-/// The body is not JSON.
-pub fn rewrap(body: &[u8], rpc_id: &Value) -> Result<Vec<u8>, String> {
-    // The body's own bytes are the `result` (Law 5): never re-serialised.
-    crate::answer_bytes::rewrap(body, rpc_id)
-}
-
 /// A query-string value: a string as itself, anything else as its JSON rendering.
 fn scalar(value: &Value) -> String {
     value
@@ -303,7 +308,8 @@ fn scalar(value: &Value) -> String {
         .map_or_else(|| value.to_string(), str::to_string)
 }
 
-/// Percent-encode one path segment against an allowlist, so an id cannot re-point the request line.
+/// Percent-encode one path segment against an allowlist, so no `/`, `?`, `#` or `%` in an id can
+/// re-point the request line ([`compose`] refuses the dot segments, which the allowlist passes).
 fn percent(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     for b in raw.bytes() {

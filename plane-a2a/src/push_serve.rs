@@ -17,20 +17,18 @@
 //!    refusal: whether a task exists or has ended is not told here);
 //! 5. the body is JSON, or `400`;
 //! 6. the state it reports is recorded on the task's own chain through the one transition table
-//!    (a re-reported state is a retry, not a move; a move that cannot be recorded is still `202`);
+//!    (a push reporting no state this build can read, or the state already held, is `202` and moves
+//!    nothing, queuing no notification; a move that cannot be recorded is still `202`);
 //! 7. the caller's own delivery is queued from busbar's own row, never from the pushed body.
 
 use std::task::Poll;
 
-use busbar_contract::abi::host::service::ItemSpan;
-use busbar_contract::abi::mechanism::call::{Outcome, Span};
-use busbar_contract::abi::mechanism::check::SPAN_ABSENT;
-use busbar_contract::abi::mechanism::ticket::CompletionHandle;
+use busbar_contract::abi::mechanism::call::Outcome;
 use busbar_contract::abi::plane::{ServeIn, ServeOut, AUDIT_NONE};
 use busbar_contract::abi::sdk::{Instance, Lent, Out};
 use serde_json::{json, Value};
 
-use crate::a2a::task::Task;
+use crate::a2a::task::{Task, TaskState};
 use crate::agent_door::A2aDoor;
 use crate::tasks::{self, Halt, Stamp, Write};
 
@@ -64,58 +62,7 @@ fn refused(
 /// `202`, with no document: the report was taken, the move it recorded written to the task's
 /// chain with the answer (SEAM-L(t)).
 fn accepted(input: &Lent<'_, ServeIn>, out: &mut Out<'_, ServeOut>, writes: &[Write]) -> Outcome {
-    serve_answer(input, out, (202, &[], b""), writes)
-}
-
-/// A whole serve answer: `status`, the head `fields`, `body`, and the record `writes` it carries,
-/// every span in the one arena; a short buffer answers FAILED with what each needs.
-fn serve_answer(
-    input: &Lent<'_, ServeIn>,
-    out: &mut Out<'_, ServeOut>,
-    (status, head, body): (u32, &[(&str, &str)], &[u8]),
-    writes: &[Write],
-) -> Outcome {
-    use busbar_contract::abi::plane::{OutField, RecordWrite, RECORD_PUT};
-    let (mut reply, mut fields, mut arena, mut records) = (
-        input.reply_buf(),
-        input.fields_buf(),
-        input.arena_buf(),
-        input.records_buf(),
-    );
-    reply.extend(body);
-    for (name, value) in head {
-        fields.push(OutField {
-            name: arena.span(name.as_bytes()),
-            value: arena.span(value.as_bytes()),
-        });
-    }
-    for w in writes {
-        records.push(RecordWrite {
-            kind: crate::task_door::kind_index(w.kind),
-            op: RECORD_PUT,
-            key: arena.span(w.key.as_bytes()),
-            value: arena.span(&w.value),
-        });
-    }
-    let short = !(reply.fits() && fields.fits() && arena.fits() && records.fits());
-    let (rw, rnd) = reply.settle(short);
-    let (fw, fnd) = fields.settle(short);
-    let (cw, cnd) = records.settle(short);
-    let (aw, and) = arena.settle(short);
-    out.set(|o| &o.reply_written, rw as u64);
-    out.set(|o| &o.reply_needed, rnd as u64);
-    out.set(|o| &o.fields_written, fw as u32);
-    out.set(|o| &o.fields_needed, fnd as u32);
-    out.set(|o| &o.records_written, cw as u32);
-    out.set(|o| &o.records_needed, cnd as u32);
-    out.set(|o| &o.arena_written, aw as u64);
-    out.set(|o| &o.arena_needed, and as u64);
-    if short {
-        return Outcome::Failed;
-    }
-    out.set(|o| &o.status, status);
-    out.set(|o| &o.audit, AUDIT_NONE);
-    Outcome::Ready
+    crate::agent_door::verb_answer(input, out, (202, &[], b""), AUDIT_NONE, writes)
 }
 
 /// What a push keeps across its op's PENDING entries: it has already spent its push-volume budget,
@@ -129,30 +76,21 @@ fn signature(
     seq: u32,
     task_id: &str,
 ) -> Option<Vec<u8>> {
-    let services = plane.services.as_ref()?;
-    let absent = Span {
-        offset: SPAN_ABSENT,
-        len: 0,
-    };
-    let mut buf = vec![0u8; 1024];
-    let mut spans = [ItemSpan {
-        key: absent,
-        value: absent,
-    }; 2];
-    let handle = CompletionHandle {
+    let mut signer = crate::task_door::HostSigner {
+        services: plane.services.as_ref(),
         ticket,
         seq,
-        _reserved: 0,
     };
-    let sig = services
-        .sign(
-            handle,
-            &crate::push::token_input(task_id),
-            &mut buf,
-            &mut spans,
-        )
-        .ok()?;
-    Some(sig.signature.to_vec())
+    signer
+        .signed(&crate::push::token_input(task_id))
+        .map(|(_, sig)| sig)
+}
+
+/// THE MOVE A PUSHED `document` ASKS OF A TASK IN `held`: the state it reports, when it reports one
+/// this build can read and the task is not already in it. `None` is no move: an artifact update or
+/// a message reports no state, and a retried push re-reports the one already recorded.
+pub(crate) fn push_move(held: TaskState, document: &Value) -> Option<TaskState> {
+    crate::task_identity::reported_task_state(document).filter(|reported| *reported != held)
 }
 
 /// `serve` of the push route.
@@ -167,11 +105,11 @@ pub(crate) fn serve(
     let authorization = fields
         .iter()
         .find(|f| {
-            f.field(|f| &f.name)
+            f.name()
                 .as_str()
                 .is_ok_and(|n| n.eq_ignore_ascii_case("authorization"))
         })
-        .and_then(|f| f.field(|f| &f.value).as_str().ok())
+        .and_then(|f| f.value().as_str().ok())
         .unwrap_or_default();
     // 1. THE CAPABILITY: a token this instance minted, signed again by the host and compared in
     //    constant time.
@@ -204,7 +142,7 @@ pub(crate) fn serve(
         );
     }
     // 3. THE BODY'S CEILING.
-    let body = input.field(|i| &i.body).bytes();
+    let body = input.body().bytes();
     if body.len() > MAX_PUSH_BODY {
         return refused(
             &input,
@@ -244,24 +182,24 @@ pub(crate) fn serve(
             &[],
         );
     };
-    // 6. THE MOVE, through the one transition table, read by the one reader of a task's state.
-    let reported = crate::task_identity::reported_task_state(&document);
+    // 6. THE MOVE, through the one transition table, read by the one reader of a task's state. A
+    //    push that reports no state, or the state the task holds, moves nothing: `202`, nothing
+    //    recorded and no notification queued.
+    let Some(reported) = push_move(task.state, &document) else {
+        return accepted(&input, &mut out, &[]);
+    };
     let mut writes = Vec::new();
-    let moved = if reported == task.state {
-        held.row
-    } else {
-        let at = Stamp {
-            caller: &caller,
-            request_id: "",
-            now,
-        };
-        match tasks::transition(&mut via, &at, &task_id, reported, &mut writes) {
-            Err(Halt::Pending) => return pend(),
-            // A move that cannot be recorded (commonly a push about a task already terminal) is
-            // the agent being redundant: `202` stops its retry loop.
-            Err(Halt::Failed(_)) | Ok(None) => return accepted(&input, &mut out, &[]),
-            Ok(Some(row)) => row,
-        }
+    let at = Stamp {
+        caller: &caller,
+        request_id: "",
+        now,
+    };
+    let moved = match tasks::transition(&mut via, &at, &task_id, reported, &mut writes) {
+        Err(Halt::Pending) => return pend(),
+        // A move that cannot be recorded (commonly a push about a task already terminal) is the
+        // agent being redundant: `202` stops its retry loop.
+        Err(Halt::Failed(_)) | Ok(None) => return accepted(&input, &mut out, &[]),
+        Ok(Some(row)) => row,
     };
     // 7. THE CALLER'S OWN DELIVERY, from busbar's row.
     match crate::push_door::queue_moved(&plane.deliveries, &mut via, &caller, &moved) {

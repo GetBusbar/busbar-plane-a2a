@@ -11,6 +11,76 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
 
+/// SUBMIT `row` for the caller: the task, and its chain's genesis event, stamped with the row's
+/// `created_at`. The row is the caller's (its `principal` is the caller's reference).
+///
+/// # Errors
+/// [`Halt`]; `Failed` when there is no caller or the task id is already taken.
+pub(crate) fn submit(
+    rec: &mut dyn Records,
+    at: &Stamp<'_>,
+    mut row: TaskRow,
+    out: &mut Vec<Write>,
+) -> Result<TaskRow, Halt> {
+    if !is_caller(at.caller) {
+        return Err(Halt::Failed("no caller to hold the task under".into()));
+    }
+    row.principal = at.caller.to_string();
+    let genesis = HeldTask {
+        row: row.clone(),
+        next_seq: 1,
+    };
+    let at = Stamp {
+        now: row.created_at,
+        ..*at
+    };
+    submit_held(rec, &at, &genesis, row, out).map(|held| held.row)
+}
+
+/// DISPATCH: record the agent the task went to, with a `task.delegated` event.
+///
+/// # Errors
+/// As [`change`].
+pub(crate) fn dispatch(
+    rec: &mut dyn Records,
+    at: &Stamp<'_>,
+    task: &str,
+    agent_id: &str,
+    out: &mut Vec<Write>,
+) -> Result<Option<TaskRow>, Halt> {
+    let mut plan = |row: &TaskRow| -> Planned {
+        let mut next = row.clone();
+        next.agent_id = agent_id.to_string();
+        next.updated_at = at.now;
+        Ok(Some((next, EV_DELEGATED)))
+    };
+    change(rec, at, task, &mut plan, out)
+}
+
+/// ADVANCE the artifact cursor to `cursor`, monotonic, with a `task.artifact` event; nothing when it
+/// would not move forward.
+///
+/// # Errors
+/// As [`change`].
+pub(crate) fn advance_cursor(
+    rec: &mut dyn Records,
+    at: &Stamp<'_>,
+    task: &str,
+    cursor: u64,
+    out: &mut Vec<Write>,
+) -> Result<Option<TaskRow>, Halt> {
+    let mut plan = |row: &TaskRow| -> Planned {
+        if cursor <= row.artifact_cursor {
+            return Ok(None);
+        }
+        let mut next = row.clone();
+        next.artifact_cursor = cursor;
+        next.updated_at = at.now;
+        Ok(Some((next, EV_ARTIFACT)))
+    };
+    change(rec, at, task, &mut plan, out)
+}
+
 /// THE HOST RECORDS, as a test holds them.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub(crate) struct Book {
@@ -570,7 +640,7 @@ fn the_sweep_tombstones_the_expired_and_leaves_the_idle_active() {
 fn an_idle_active_task_survives_the_sweep_with_its_push_token() {
     let mut book = Book::default();
     submitted(&mut book, ALICE, "idle", 100);
-    let tokens = crate::push::Tokens::new();
+    let tokens = crate::push::Tokens::default();
     let token = tokens.mint(ALICE, "idle", b"sig").unwrap();
     let now = 100 + 86_400 * 30;
     let mut out = Vec::new();
@@ -1146,4 +1216,45 @@ fn the_records_layer_declares_the_task_kind_as_terminal_only() {
         out.is_empty(),
         "a restarted sweep finds nothing more to drop"
     );
+}
+
+/// The host records, every `records.list` they answer logged as `(kind, prefix)`.
+struct Listed<'b> {
+    book: &'b mut Book,
+    lists: Vec<(String, String)>,
+}
+
+impl Records for Listed<'_> {
+    fn get(&mut self, kind: &str, key: &str) -> Result<Option<Vec<u8>>, Halt> {
+        self.book.get(kind, key)
+    }
+    fn list(&mut self, kind: &str, prefix: &str) -> Result<Vec<(String, Vec<u8>)>, Halt> {
+        self.lists.push((kind.to_string(), prefix.to_string()));
+        self.book.list(kind, prefix)
+    }
+    fn claim(&mut self, kind: &str, key: &str, ttl_ms: u64) -> Result<bool, Halt> {
+        self.book.claim(kind, key, ttl_ms)
+    }
+}
+
+/// THE RESTORE READS ONLY THE IN-FLIGHT TASKS' CHAINS: each one listed under its own scope, and a
+/// terminal task's chain never asked for. RED against a restore that listed every task event of
+/// every chain, terminal ones included.
+#[test]
+fn the_restore_reads_only_the_in_flight_tasks_chains() {
+    let mut book = process_one();
+    moved_to(&mut book, "t-work", TaskState::Completed, 110);
+    let mut listed = Listed {
+        book: &mut book,
+        lists: Vec::new(),
+    };
+    let out = restore(&mut listed).unwrap();
+    assert_eq!((out.active, out.terminal), (1, 1));
+    let chains: Vec<&str> = listed
+        .lists
+        .iter()
+        .filter(|(kind, _)| kind == KIND_TASK_EVENT)
+        .map(|(_, prefix)| prefix.as_str())
+        .collect();
+    assert_eq!(chains, [task_key(BOB, "t-paused").as_str()]);
 }

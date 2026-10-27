@@ -85,16 +85,6 @@ impl<'de> serde::Deserialize<'de> for CredentialPlacement {
     }
 }
 
-impl CredentialPlacement {
-    /// The header this placement writes.
-    pub fn header_name(&self) -> &str {
-        match self {
-            CredentialPlacement::AuthorizationHeader => "authorization",
-            CredentialPlacement::Header(name) => name.as_str(),
-        }
-    }
-}
-
 /// The HANDLE plus its lease policy, as the registration holds it. Operator INTENT, so it is
 /// overlay state — and the reason `config_validate::secret_refs` now walks the `agents:` arm.
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]

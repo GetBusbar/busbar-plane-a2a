@@ -7,6 +7,7 @@
 //! length-prefixed, its trailers). The oracle is the generated `pb` messages, decoded and encoded
 //! with `prost` directly, never the code under test.
 
+use super::tests::{body, caller, far, kernel, part};
 use super::*;
 use crate::proto::pb;
 use prost::Message as _;
@@ -17,33 +18,6 @@ const URL: &str = "https://backend.agent.test/a2a";
 
 /// The backend's own task id, which every addressed rpc must name.
 const BACKEND: &str = "BACKEND-OWN-TASK-ID";
-
-fn kernel(url: Option<&str>) -> Piece<'_> {
-    Piece {
-        from: From::Kernel(url),
-        bytes: &[],
-        status: None,
-        last: false,
-    }
-}
-
-fn caller(bytes: &[u8]) -> Piece<'_> {
-    Piece {
-        from: From::Caller,
-        bytes,
-        status: None,
-        last: true,
-    }
-}
-
-fn far(status: Option<u32>, bytes: &[u8], last: bool) -> Piece<'_> {
-    Piece {
-        from: From::FarEnd,
-        bytes,
-        status,
-        last,
-    }
-}
 
 /// One message in its length-prefixed form, as the grpc transport hands an answer back.
 fn framed<M: prost::Message>(message: &M) -> Vec<u8> {
@@ -140,10 +114,6 @@ fn whole(answers: Vec<PieceAnswer>) -> RelayReply {
         .expect("the caller is answered")
 }
 
-fn body(reply: &RelayReply) -> serde_json::Value {
-    serde_json::from_slice(&reply.body).expect("the answer is JSON")
-}
-
 /// `grpc_client_issues_send_message`: the rpc's own path under the service (never the operator's
 /// path), a POST, the gRPC media type, and the caller's content surviving the transcode into the
 /// request message; the far end's message reaches the caller as the JSON-RPC result it is.
@@ -191,6 +161,7 @@ fn a_grpc_answer_about_a_task_leaves_under_busbars_identity() {
         context_id: "busbar-c".into(),
         addressed: false,
         skill: None,
+        references: Vec::new(),
     });
     let reply = whole(answer(
         &mut r,
@@ -339,6 +310,7 @@ fn a_grpc_error_status_is_the_backends_refusal_with_its_a2a_code() {
         context_id: "busbar-c".into(),
         addressed: true,
         skill: None,
+        references: Vec::new(),
     });
     let reply = whole(answer(&mut r, &[], Some(5)));
     let got = body(&reply);
@@ -403,7 +375,7 @@ fn params_that_are_not_the_request_message_are_refused_before_the_hop() {
         panic!("refused before the hop");
     };
     assert_eq!(reply.status, 502);
-    assert!(r.answered());
+    assert!(r.answered);
 }
 
 /// THE TRAILERS ARE NEVER BYTES OF THE ANSWER: on the JSON-RPC binding a field block after the
@@ -462,6 +434,7 @@ fn a_status_handed_on_with_the_last_trailers_ends_the_call() {
             context_id: "busbar-c".into(),
             addressed: true,
             skill: None,
+            references: Vec::new(),
         });
         assert_eq!(r.on_piece(far(Some(0), &[], false)), PieceAnswer::Nothing);
         r
@@ -559,5 +532,93 @@ fn a_grpc_hop_bills_its_framed_request_and_answer_and_never_its_trailers() {
         moved,
         (crate::framed::MESSAGE_PREFIX + card.len()) as u64,
         "the empty message's prefix plus the prefixed answer"
+    );
+}
+
+/// An events hop on the gRPC binding about a task it opened, its head read.
+fn streaming() -> HopRelay {
+    let (mut r, _, _) = dialled(&submission("SendStreamingMessage"), None, true);
+    r.for_task(TaskHop {
+        task_id: "busbar-t".into(),
+        context_id: "busbar-c".into(),
+        addressed: false,
+        skill: None,
+        references: Vec::new(),
+    });
+    assert_eq!(r.on_piece(far(Some(0), &[], false)), PieceAnswer::Nothing);
+    r
+}
+
+/// A STREAM WHOSE TRAILERS END IT WITH AN ERROR STATUS AFTER ITS EVENTS BEGAN (THE DESIGN section 2
+/// a2a: a gRPC binding reads `grpc-status` from the trailers): the far end's error goes to the
+/// caller as the last event, under the caller's id and its A2A code, and the task fails. RED: the
+/// stream closed cleanly on the last piece and the task was left as the last event said.
+#[test]
+fn a_grpc_stream_ending_with_an_error_status_fails_its_task() {
+    use crate::framed::Code;
+    let mut r = streaming();
+    let first = part(r.on_piece(far(None, &stream_event(pb::TaskState::Working), false)));
+    assert!(first.head && !first.last);
+    let _ = r.take_settled();
+    assert_eq!(
+        r.on_far_fields(&[], Some(Code::NotFound as u32), false),
+        PieceAnswer::Nothing
+    );
+    let end = part(r.on_piece(far(None, &[], true)));
+    assert!(end.last && !end.head);
+    let text = String::from_utf8(end.body).unwrap();
+    let error: serde_json::Value =
+        serde_json::from_str(text.strip_prefix("data: ").unwrap().trim_end()).unwrap();
+    assert_eq!(error["id"], 7);
+    assert_eq!(error["error"]["code"], -32001);
+    assert_eq!(r.take_settled(), vec![TaskSettled::Failed]);
+    assert_eq!(
+        r.on_piece(far(None, &[], true)),
+        PieceAnswer::Nothing,
+        "it ends once"
+    );
+    // A call that ends `OK` closes the stream as it is.
+    let mut ok = streaming();
+    let _ = ok.on_piece(far(None, &stream_event(pb::TaskState::Working), false));
+    let _ = ok.take_settled();
+    let _ = ok.on_far_fields(&[], Some(0), false);
+    let end = part(ok.on_piece(far(None, &[], true)));
+    assert!(end.last && end.body.is_empty());
+    assert_eq!(ok.take_settled(), Vec::new());
+}
+
+/// A STREAM MESSAGE THE PLANE CANNOT READ REFUSES THE HOP, never stepped over or waited on: a
+/// compressed message before any event refuses it outright, its task failed; an undecodable one
+/// after the events began ends the answer there, its task failed. RED: the compressed message
+/// stalled the reading silently and the undecodable one was dropped, the stream going on.
+#[test]
+fn an_unreadable_grpc_stream_message_refuses_the_hop() {
+    let mut compressed = stream_event(pb::TaskState::Working);
+    compressed[0] = 1;
+    let mut before = streaming();
+    let PieceAnswer::ToCaller(reply) = before.on_piece(far(None, &compressed, false)) else {
+        panic!("refused before the answer started");
+    };
+    assert_eq!(reply.status, 502);
+    assert_eq!(before.take_settled(), vec![TaskSettled::Failed]);
+
+    let mut after = streaming();
+    let mut pieces = stream_event(pb::TaskState::Working);
+    pieces.extend_from_slice(&[0, 0, 0, 0, 2, 0xff, 0xff]);
+    pieces.extend_from_slice(&stream_event(pb::TaskState::Completed));
+    let end = part(after.on_piece(far(None, &pieces, false)));
+    assert!(
+        end.head && end.last,
+        "the event read goes out and the answer ends"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&end.body).matches("data: ").count(),
+        1,
+        "nothing after the unreadable message is relayed"
+    );
+    assert_eq!(
+        after.take_settled().last(),
+        Some(&TaskSettled::Failed),
+        "the task fails"
     );
 }

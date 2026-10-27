@@ -6,12 +6,13 @@
 //! `receive::refuse_hop_early`).
 
 use super::*;
+use crate::tests::capture::Capture;
 use serde_json::json;
 
 const URL: &str = "https://vendor.example/a2a/v1?tenant=t1";
 const ASK: &[u8] = br#"{"jsonrpc":"2.0","id":7,"method":"GetExtendedAgentCard"}"#;
 
-fn kernel(url: Option<&str>) -> Piece<'_> {
+pub(super) fn kernel(url: Option<&str>) -> Piece<'_> {
     Piece {
         from: From::Kernel(url),
         bytes: &[],
@@ -20,7 +21,7 @@ fn kernel(url: Option<&str>) -> Piece<'_> {
     }
 }
 
-fn caller(bytes: &[u8]) -> Piece<'_> {
+pub(super) fn caller(bytes: &[u8]) -> Piece<'_> {
     Piece {
         from: From::Caller,
         bytes,
@@ -29,7 +30,7 @@ fn caller(bytes: &[u8]) -> Piece<'_> {
     }
 }
 
-fn far(status: Option<u32>, bytes: &[u8], last: bool) -> Piece<'_> {
+pub(super) fn far(status: Option<u32>, bytes: &[u8], last: bool) -> Piece<'_> {
     Piece {
         from: From::FarEnd,
         bytes,
@@ -173,7 +174,7 @@ fn a_correlated_result_is_relayed_whole_under_the_callers_id() {
         reply.body,
         br#"{"jsonrpc":"2.0","id":7,"result":{"name":"Vendor","skills":[]}}"#.to_vec()
     );
-    assert!(r.answered());
+    assert!(r.answered);
     assert_eq!(r.on_piece(far(None, b"late", true)), PieceAnswer::Nothing);
 }
 
@@ -309,7 +310,7 @@ fn p_item_unary_empty_terminality_an_answer_closes_once_an_empty_envelope_never_
     let reply = answered(&mut r, 200, task_answer);
     assert_eq!(reply.status, 200);
     assert_eq!(body(&reply)["result"]["kind"], "task");
-    assert!(r.answered(), "a unary Task answer closes its unit");
+    assert!(r.answered, "a unary Task answer closes its unit");
     assert_eq!(r.take_reading(), Some(Reading::Healthy));
     assert_eq!(
         r.take_settled(),
@@ -330,7 +331,7 @@ fn p_item_unary_empty_terminality_an_answer_closes_once_an_empty_envelope_never_
     let mut r = sent();
     let reply = answered(&mut r, 200, message);
     assert_eq!(body(&reply)["result"]["kind"], "message");
-    assert!(r.answered(), "a unary Message answer closes its unit");
+    assert!(r.answered, "a unary Message answer closes its unit");
     assert_eq!(r.take_reading(), Some(Reading::Healthy));
     assert_eq!(r.on_piece(far(None, message, true)), PieceAnswer::Nothing);
 
@@ -340,7 +341,7 @@ fn p_item_unary_empty_terminality_an_answer_closes_once_an_empty_envelope_never_
     let reply = answered(&mut r, 200, error);
     assert!(body(&reply).get("result").is_none());
     assert!(body(&reply).get("error").is_some());
-    assert!(r.answered(), "an error answer is terminal");
+    assert!(r.answered, "an error answer is terminal");
     assert_eq!(r.take_reading(), Some(Reading::Healthy));
     assert_eq!(r.on_piece(far(None, error, true)), PieceAnswer::Nothing);
 
@@ -380,7 +381,7 @@ fn p_item_unary_empty_terminality_an_answer_closes_once_an_empty_envelope_never_
         first.head && !first.last,
         "a streamed initial Task is not the end"
     );
-    assert!(!r.answered());
+    assert!(!r.answered);
     let update = event(json!({ "kind": "status-update", "taskId": "far-1",
         "status": { "state": "working" }, "final": false }));
     let middle = part(r.on_piece(far(None, &update, false)));
@@ -388,12 +389,12 @@ fn p_item_unary_empty_terminality_an_answer_closes_once_an_empty_envelope_never_
         !middle.head && !middle.last,
         "an intermediate update is not the end"
     );
-    assert!(!r.answered());
+    assert!(!r.answered);
     let last = event(json!({ "kind": "status-update", "taskId": "far-1",
         "status": { "state": "completed" }, "final": true }));
     let end = part(r.on_piece(far(None, &last, true)));
     assert!(end.last, "the final frame ends the stream");
-    assert!(r.answered());
+    assert!(r.answered);
     assert_eq!(
         r.on_piece(far(None, &last, true)),
         PieceAnswer::Nothing,
@@ -411,6 +412,7 @@ fn task(addressed: bool) -> TaskHop {
         context_id: "ctx-1".into(),
         addressed,
         skill: None,
+        references: Vec::new(),
     }
 }
 
@@ -426,7 +428,7 @@ fn task_sent(addressed: bool) -> HopRelay {
     r
 }
 
-fn body(reply: &RelayReply) -> serde_json::Value {
+pub(super) fn body(reply: &RelayReply) -> serde_json::Value {
     serde_json::from_slice(&reply.body).expect("json")
 }
 
@@ -702,7 +704,7 @@ fn event(result: serde_json::Value) -> Vec<u8> {
     .into_bytes()
 }
 
-fn part(answer: PieceAnswer) -> Part {
+pub(super) fn part(answer: PieceAnswer) -> Part {
     match answer {
         PieceAnswer::Part(part) => part,
         other => panic!("not a part: {other:?}"),
@@ -734,7 +736,7 @@ fn an_events_attempt_accepts_an_event_stream_or_one_document() {
 fn events_are_answered_as_they_come_and_settled_as_they_pass() {
     let (mut r, _) = events_sent();
     let first = event(
-        json!({ "kind": "status-update", "id": "far-1", "contextId": "far-c",
+        json!({ "kind": "status-update", "taskId": "far-1", "contextId": "far-c",
         "status": { "state": "working" } }),
     );
     let (head, tail) = first.split_at(10);
@@ -747,7 +749,7 @@ fn events_are_answered_as_they_come_and_settled_as_they_pass() {
     assert!(one.head && !one.last);
     let got = datas(&one.body);
     assert_eq!(got.len(), 1);
-    assert_eq!(got[0]["result"]["id"], "a2a-p-0102030405060708");
+    assert_eq!(got[0]["result"]["taskId"], "a2a-p-0102030405060708");
     assert_eq!(got[0]["result"]["contextId"], "ctx-1");
     assert_eq!(
         r.take_settled(),
@@ -778,7 +780,7 @@ fn events_are_answered_as_they_come_and_settled_as_they_pass() {
             },
         ]
     );
-    assert!(r.answered());
+    assert!(r.answered);
     assert_eq!(r.moved(), (STREAM.len() + first.len() + rest.len()) as u64);
 }
 
@@ -818,7 +820,7 @@ fn an_error_frame_mid_stream_passes_through_and_the_stream_ends_where_the_far_en
     assert_eq!(got[0]["error"]["code"], -32603);
     assert_eq!(got[0]["error"]["message"], "far end broke");
     assert!(got[0].get("result").is_none());
-    assert!(!r.answered(), "the stream goes on after the error frame");
+    assert!(!r.answered, "the stream goes on after the error frame");
     assert_eq!(
         r.take_settled(),
         Vec::new(),
@@ -834,7 +836,7 @@ fn an_error_frame_mid_stream_passes_through_and_the_stream_ends_where_the_far_en
         1,
         "the frame after the error passes too"
     );
-    assert!(r.answered());
+    assert!(r.answered);
     assert_eq!(
         r.on_piece(far(None, &after, true)),
         PieceAnswer::Nothing,
@@ -908,7 +910,7 @@ fn an_http_json_far_ends_bare_events_are_read_as_results() {
     let one = part(r.on_piece(far(Some(200), bare, true)));
     let got = datas(&one.body);
     assert_eq!(got[0]["id"], 7);
-    assert_eq!(got[0]["result"]["id"], "a2a-p-0102030405060708");
+    assert_eq!(got[0]["result"]["taskId"], "a2a-p-0102030405060708");
 }
 
 /// THE BREAKER'S READING (ARCHITECT ruling: the engine's `classify_hop` table, stated by the plane;
@@ -988,7 +990,7 @@ fn a_hop_refused_for_busbars_own_credential_answers_in_the_engines_words() {
             "addressed: {addressed}"
         );
         assert!(failed, "the task ends failed (addressed: {addressed})");
-        assert!(r.answered());
+        assert!(r.answered);
     }
 
     let mut r = sent();
@@ -1051,7 +1053,7 @@ fn a_buffered_hop_that_dies_mid_answer_bills_its_request_and_the_bytes_received(
         "the answer is incomplete, so nothing is relayed"
     );
     // The connection dies here: no last piece ever arrives.
-    assert!(!r.answered(), "an answer cut short is not an answer");
+    assert!(!r.answered, "an answer cut short is not an answer");
     assert_eq!(
         r.moved(),
         (ASK.len() + DELIVERED) as u64,
@@ -1164,37 +1166,6 @@ fn an_oversized_body_is_cut_one_byte_past_the_ceiling_so_the_driver_can_refuse_i
 }
 
 // ── the operator's journal names the backend; the caller's answer never does ───────────────────
-
-/// Every event's level and rendered fields (the plane holds no subscriber dependency, so the
-/// `tracing` trait is implemented by hand).
-struct Capture(std::sync::mpsc::Sender<(tracing::Level, String)>);
-
-struct Render<'a>(&'a mut String);
-
-impl tracing::field::Visit for Render<'_> {
-    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-        use std::fmt::Write as _;
-        let _ = write!(self.0, "{}={value:?} ", field.name());
-    }
-}
-
-impl tracing::Subscriber for Capture {
-    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
-        true
-    }
-    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
-        tracing::span::Id::from_u64(1)
-    }
-    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
-    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
-    fn event(&self, event: &tracing::Event<'_>) {
-        let mut line = String::new();
-        event.record(&mut Render(&mut line));
-        let _ = self.0.send((*event.metadata().level(), line));
-    }
-    fn enter(&self, _: &tracing::span::Id) {}
-    fn exit(&self, _: &tracing::span::Id) {}
-}
 
 /// What `run` answers the caller, and the lines it journaled.
 fn journaled(run: impl FnOnce() -> RelayReply) -> (RelayReply, Vec<(tracing::Level, String)>) {
@@ -1355,4 +1326,35 @@ fn a_relayed_result_is_the_far_ends_bytes_with_busbars_identity_spliced_in() {
         String::from_utf8(reply.body).unwrap(),
         r#"{"jsonrpc":"2.0","id":7,"result":{"z":1,"a":12345678901234567890123}}"#
     );
+}
+
+/// A RESULT THAT IS NO OBJECT IS NO ANSWER ABOUT A TASK (Law 11: no invented answer): the plane
+/// cannot read it and refuses it as it refuses an answer that is not JSON. The task the hop opened
+/// fails; a task the caller addressed is a failed request. RED: the result was replaced by
+/// `{"kind":"task"}` under busbar's identity and relayed as the agent's answer.
+#[test]
+fn a_task_hops_result_that_is_no_object_is_refused_not_invented() {
+    for result in ["\"done\"", "[1]", "7", "null"] {
+        let far = format!(r#"{{"jsonrpc":"2.0","id":7,"result":{result}}}"#);
+        let mut opened = task_sent(false);
+        let reply = answered(&mut opened, 200, far.as_bytes());
+        assert_eq!(reply.status, 502, "{result}");
+        assert_eq!(body(&reply)["error"]["code"], -32006, "{result}");
+        assert!(
+            !String::from_utf8_lossy(&reply.body).contains("\"kind\":\"task\""),
+            "{result}"
+        );
+        assert_eq!(opened.take_settled(), vec![TaskSettled::Failed], "{result}");
+
+        let mut held = task_sent(true);
+        assert_eq!(answered(&mut held, 200, far.as_bytes()).status, 502);
+        assert_eq!(held.take_settled(), Vec::new(), "{result}");
+    }
+    let (mut r, _) = events_sent();
+    let end = r.on_piece(far(Some(200), &event(json!("done")), true));
+    let PieceAnswer::ToCaller(reply) = end else {
+        panic!("refused before the answer: {end:?}");
+    };
+    assert_eq!(reply.status, 502);
+    assert_eq!(r.take_settled(), vec![TaskSettled::Failed]);
 }

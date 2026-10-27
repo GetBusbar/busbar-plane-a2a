@@ -13,16 +13,9 @@ use serde_json::Value;
 
 use crate::a2a::agent_card::AgentCard;
 
-/// EVERY PLACE A2A SPELLS "the callback to call when this task moves", in both revisions: v0.3's
-/// `pushNotificationConfig`, v1.0's `taskPushNotificationConfig`, flat or nested.
-pub const CALLBACK_POINTERS: [&str; 3] = [
-    "/params/configuration/pushNotificationConfig/url",
-    "/params/configuration/taskPushNotificationConfig/url",
-    "/params/configuration/taskPushNotificationConfig/pushNotificationConfig/url",
-];
-
-/// The CONFIG OBJECTS those three URLs sit in, in the same order, so the URL and the credential
-/// beside it are read out of ONE object.
+/// EVERY PLACE A2A SPELLS the push-callback config object, in both revisions: v0.3's
+/// `pushNotificationConfig`, v1.0's `taskPushNotificationConfig`, flat or nested. The URL and the
+/// credential beside it are read out of ONE object.
 pub const CALLBACK_CONFIG_POINTERS: [&str; 3] = [
     "/params/configuration/pushNotificationConfig",
     "/params/configuration/taskPushNotificationConfig",
@@ -48,9 +41,8 @@ pub struct TaskShape {
     pub requires_stream: bool,
     /// The task registers a push callback.
     pub requires_push_notifications: bool,
-    /// MIME modes the caller will SEND.
-    pub input_modes: Vec<String>,
-    /// MIME modes the caller can ACCEPT back.
+    /// MIME modes the caller can ACCEPT back (`configuration.acceptedOutputModes`). A request
+    /// states no modes it will send, so the fit reads only this side.
     pub output_modes: Vec<String>,
 }
 
@@ -73,7 +65,6 @@ impl TaskShape {
             requires_push_notifications: CALLBACK_CONFIG_POINTERS
                 .into_iter()
                 .any(|p| envelope.pointer(p).is_some()),
-            input_modes: Vec::new(),
             output_modes: cfg
                 .and_then(|c| c.get("acceptedOutputModes"))
                 .and_then(Value::as_array)
@@ -96,7 +87,7 @@ pub enum Unfit {
     SkillNotDeclared(String),
     /// The card does not declare a capability the task requires.
     CapabilityNotDeclared(&'static str),
-    /// The card accepts none of the modes the caller will send, or produces none it can accept.
+    /// The card produces none of the modes the caller accepts.
     ModesIncompatible,
     /// The held card cannot be read.
     Unreadable(Unreadable),
@@ -128,12 +119,12 @@ pub const STATUS_UNFIT: u32 = 403;
 /// `403`, `-32004`, no id, the exclusion's own name as the message.
 #[must_use]
 pub fn refusal(unfit: &Unfit) -> crate::agent_arrival::AgentRefusal {
-    crate::agent_arrival::AgentRefusal {
-        status: STATUS_UNFIT,
-        id: None,
-        code: crate::agent_arrival::CODE_UNSUPPORTED_OPERATION,
-        message: format!("{unfit:?}"),
-    }
+    crate::agent_arrival::AgentRefusal::new(
+        STATUS_UNFIT,
+        None,
+        crate::agent_arrival::CODE_UNSUPPORTED_OPERATION,
+        format!("{unfit:?}"),
+    )
 }
 
 /// JUDGE WHETHER AN AGENT CARD FITS A TASK SHAPE: the matched skill id (`None` when the shape
@@ -155,12 +146,10 @@ pub fn judge(card: &AgentCard, shape: &TaskShape) -> Result<Option<String>, Unfi
             .find(|s| &s.id == wanted)
             .ok_or_else(|| Unfit::SkillNotDeclared(wanted.clone()))?;
         // A skill's own modes OVERRIDE the card defaults where it declares them.
-        let inputs = pick(&skill.input_modes, &card.default_input_modes);
-        let outputs = pick(&skill.output_modes, &card.default_output_modes);
-        check_modes(shape, inputs, outputs)?;
+        check_modes(shape, pick(&skill.output_modes, &card.default_output_modes))?;
         return Ok(Some(skill.id.clone()));
     }
-    check_modes(shape, &card.default_input_modes, &card.default_output_modes)?;
+    check_modes(shape, &card.default_output_modes)?;
     Ok(None)
 }
 
@@ -172,22 +161,18 @@ fn pick<'a>(specific: &'a [String], fallback: &'a [String]) -> &'a [String] {
     }
 }
 
-/// The caller must be able to SEND something the agent accepts and RECEIVE something it produces;
-/// a side that names no modes constrains nothing.
-fn check_modes(
-    shape: &TaskShape,
-    agent_inputs: &[String],
-    agent_outputs: &[String],
-) -> Result<(), Unfit> {
-    let compatible = |wanted: &[String], declared: &[String]| -> bool {
-        wanted.is_empty() || declared.is_empty() || wanted.iter().any(|w| declared.contains(w))
-    };
-    if !compatible(&shape.input_modes, agent_inputs)
-        || !compatible(&shape.output_modes, agent_outputs)
+/// The caller must be able to RECEIVE something the agent produces; a side that names no modes
+/// constrains nothing.
+fn check_modes(shape: &TaskShape, agent_outputs: &[String]) -> Result<(), Unfit> {
+    let wanted = &shape.output_modes;
+    if wanted.is_empty()
+        || agent_outputs.is_empty()
+        || wanted.iter().any(|w| agent_outputs.contains(w))
     {
-        return Err(Unfit::ModesIncompatible);
+        Ok(())
+    } else {
+        Err(Unfit::ModesIncompatible)
     }
-    Ok(())
 }
 
 #[cfg(test)]

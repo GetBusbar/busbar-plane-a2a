@@ -7,6 +7,14 @@
 
 use super::*;
 
+/// One arrival's disposition alone.
+fn decide_arrival<'a>(
+    body: &[u8],
+    field: impl Fn(&str) -> Option<&'a str> + Copy,
+) -> AgentDisposition {
+    decide_and_read(body, field).0
+}
+
 /// A head with the given `content-type` and `a2a-version`.
 fn head<'a>(
     ct: Option<&'a str>,
@@ -609,7 +617,7 @@ fn p_item_refusal_reason_collapse_only_a_node_fault_is_internal_and_one_class_on
             "{code:?}: the kernel's words"
         );
         assert_eq!(
-            rpc["error"]["code"] == crate::jsonrpc::CODE_INTERNAL,
+            rpc["error"]["code"] == crate::agent_arrival::CODE_INTERNAL,
             class.is_node_fault(),
             "{code:?} (class {class:?}) renders {rpc}"
         );

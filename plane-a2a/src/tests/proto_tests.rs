@@ -45,7 +45,7 @@ fn a_contentless_part_is_empty_text_and_a_non_finite_number_is_null() {
     assert_eq!(p.content, Some(pb::part::Content::Text(String::new())));
     let mut p = pb::Part {
         content: Some(pb::part::Content::Data(Value {
-            kind: Some(Kind::NumberValue(f64::NAN)),
+            kind: Some(Kind::Number(f64::NAN)),
         })),
         ..Default::default()
     };
@@ -53,7 +53,7 @@ fn a_contentless_part_is_empty_text_and_a_non_finite_number_is_null() {
     assert_eq!(
         p.content,
         Some(pb::part::Content::Data(Value {
-            kind: Some(Kind::NullValue(0))
+            kind: Some(Kind::Null(0))
         }))
     );
 }

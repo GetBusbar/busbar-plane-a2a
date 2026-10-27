@@ -1,23 +1,23 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! The door's half of the task verbs: the once-a-second sweep claim and the record kind indices.
+//! The door's half of the task verbs: the restore claim, the records reach and the record kind
+//! indices.
 
 use super::*;
 
-/// The first caller of each second runs the sweep, and no other caller of that second does; the
-/// instance's very first caller runs its restore too, and no other one does.
+/// The instance's very first local verb runs its restore, and no local verb after it does, whatever
+/// second it arrives in. A local verb claims nothing else: the retention sweep runs from a submit, never
+/// from a read or a timer, so no second's first caller sweeps.
 #[test]
-fn the_sweep_runs_once_a_second() {
-    let swept = Keyed::new();
-    assert_eq!(claim_sweep(&swept, 10), (true, true), "the first restores");
-    assert_eq!(claim_sweep(&swept, 10), (false, false));
-    assert_eq!(
-        claim_sweep(&swept, 9),
-        (false, false),
-        "time read late never sweeps again"
+fn only_the_first_local_verb_restores_and_none_sweeps() {
+    let restored = Keyed::new();
+    assert!(claim_restore(&restored, 10), "the first restores");
+    assert!(!claim_restore(&restored, 10));
+    assert!(
+        !claim_restore(&restored, 11),
+        "the next second restores nothing"
     );
-    assert_eq!(claim_sweep(&swept, 11), (false, true));
 }
 
 /// A record write names its kind by its index in the tail's record kinds.
@@ -37,22 +37,8 @@ fn a_write_names_its_kind_by_the_tails_index() {
 
 // ── the host records, through the SDK wrappers ───────────────────────────────────────────────────
 
-use busbar_contract::abi::host::service::HostSlots;
-use busbar_contract::abi::mechanism::ticket::{HostCtx, HostTables};
-
-/// Tables naming a services table this file never calls through: [`Via::issue`] hands the
-/// crossing to the closure the test writes, so the table is only ever stored.
-fn tables() -> HostTables {
-    HostTables {
-        size: std::mem::size_of::<HostTables>() as u32,
-        _reserved: 0,
-        ctx: HostCtx::NONE,
-        wake: None,
-        conns: std::ptr::null(),
-        services: std::ptr::NonNull::<HostSlots>::dangling().as_ptr(),
-        io: std::ptr::null(),
-    }
-}
+use busbar_contract::abi::sdk::conn::Host;
+use busbar_contract::abi::sdk::test_support::fake::FakeHost;
 
 const TICKET: Ticket = Ticket {
     slot: 3,
@@ -83,7 +69,8 @@ fn long_record(
 /// A short answer is re-called ONCE, on the same handle, at the size it named.
 #[test]
 fn a_short_records_answer_is_re_called_once_on_its_handle_at_the_named_size() {
-    let t = tables();
+    let fake: &'static FakeHost = Box::leak(Box::new(FakeHost::new()));
+    let t = fake.lent();
     let host = Host::of(&t);
     let grown = Keyed::new();
     let mut via = Via::new(&host, Services::of(&t), TICKET, 0, &grown);
@@ -100,7 +87,8 @@ fn a_short_records_answer_is_re_called_once_on_its_handle_at_the_named_size() {
 /// re-issued at that size, so the host never answers it short a second time (that is FAULT).
 #[test]
 fn a_piece_run_again_issues_a_short_handle_at_the_size_already_named() {
-    let t = tables();
+    let fake: &'static FakeHost = Box::leak(Box::new(FakeHost::new()));
+    let t = fake.lent();
     let host = Host::of(&t);
     let grown = Keyed::new();
     let mut log = Vec::new();
@@ -132,7 +120,8 @@ fn a_piece_run_again_issues_a_short_handle_at_the_size_already_named() {
 /// A host that names a size and then answers short at it broke its own rule.
 #[test]
 fn a_second_short_answer_on_one_handle_is_a_broken_host() {
-    let t = tables();
+    let fake: &'static FakeHost = Box::leak(Box::new(FakeHost::new()));
+    let t = fake.lent();
     let host = Host::of(&t);
     let grown = Keyed::new();
     let mut via = Via::new(&host, Services::of(&t), TICKET, 0, &grown);
@@ -148,7 +137,8 @@ fn a_second_short_answer_on_one_handle_is_a_broken_host() {
 /// No host services: every records call fails, and nothing is crossed.
 #[test]
 fn a_door_opened_with_no_services_reads_no_record() {
-    let t = tables();
+    let fake: &'static FakeHost = Box::leak(Box::new(FakeHost::new()));
+    let t = fake.lent();
     let host = Host::of(&t);
     let grown = Keyed::new();
     let mut via = Via::new(&host, None, TICKET, 0, &grown);
@@ -160,7 +150,8 @@ fn a_door_opened_with_no_services_reads_no_record() {
 /// The sizes book is bounded: at its cap it is cleared before the next entry.
 #[test]
 fn the_sizes_book_is_bounded() {
-    let t = tables();
+    let fake: &'static FakeHost = Box::leak(Box::new(FakeHost::new()));
+    let t = fake.lent();
     let host = Host::of(&t);
     let grown = Keyed::new();
     let via = Via::new(&host, Services::of(&t), TICKET, 0, &grown);
