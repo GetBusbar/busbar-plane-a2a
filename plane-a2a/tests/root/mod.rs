@@ -2061,7 +2061,7 @@ async fn an_agent_sections_per_request_fee_validates_and_per_session_is_refused(
     // binary the protocol set is installed by whichever test installs it first, so the cell
     // installs the linked declarations itself, as the root's other config-fixture cells do.
     for decls in crate::LINKED.protocols {
-        busbar_kernel::proto::register_test_protocols(decls);
+        busbar_kernel::ingress::protocols::register_test_protocols(decls);
     }
     let with_fees = |per_request: i64, per_session: i64| {
         let mut cfg = busbar_kernel::test_support::cfg_with_provider_api_key(
