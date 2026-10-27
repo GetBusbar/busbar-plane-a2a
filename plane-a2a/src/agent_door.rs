@@ -599,6 +599,11 @@ pub struct A2aDoor {
 }
 
 impl A2aDoor {
+    /// Run `f` over unit `unit`, when the instance still keeps it.
+    pub(crate) fn on_unit(&self, unit: u64, f: impl FnOnce(&mut AgentUnit)) {
+        self.units.with(&unit, |u| u.map(f));
+    }
+
     /// The agent's own id for `caller`'s task `task_id`, once the agent named it.
     pub(crate) fn backend_of(&self, caller: &str, task_id: &str) -> Option<String> {
         self.backends.get(&task_key(caller, task_id))
@@ -1998,11 +2003,7 @@ pub(crate) fn verdict(plane: &A2aDoor, agent: &str) -> u64 {
     let Some(services) = plane.services else {
         return svc::DISTRUST_UNKNOWN;
     };
-    let handle = CompletionHandle {
-        ticket: Ticket::NONE,
-        seq: 0,
-        _reserved: 0,
-    };
+    let handle = crate::task_door::handle(Ticket::NONE, 0);
     services
         .trust_serves(handle, agent, None, None)
         .unwrap_or(svc::DISTRUST_UNKNOWN)
@@ -2085,18 +2086,10 @@ fn caller_stands(
     if addressed.is_some_and(|a| a != member) {
         return None;
     }
-    let handle = CompletionHandle {
-        ticket: reach.ticket,
-        seq: pass.issued,
-        _reserved: 0,
-    };
-    pass.issued += 1;
-    let entitled = reach.plane.services.is_some_and(|services| {
-        services
-            .entitled(handle, &door_statement::agent_resource(member))
-            .unwrap_or(false)
-    });
-    match (entitled, addressed) {
+    match (
+        entitled(reach, pass, &door_statement::agent_resource(member)),
+        addressed,
+    ) {
         (true, _) => None,
         (false, Some(_)) => Some(agent_arrival::not_live()),
         (false, None) => Some(agent_arrival::scope_refusal("")),
@@ -2235,11 +2228,7 @@ fn read_holder(
 /// `entitlement.check` of the unit's caller for `target` (an agent's scope, or the principal's
 /// standing), on the piece's next handle; a check the host cannot answer is no entitlement.
 fn entitled(reach: &Reach<'_>, pass: &mut crate::task_door::Pass, target: &str) -> bool {
-    let handle = CompletionHandle {
-        ticket: reach.ticket,
-        seq: pass.issued,
-        _reserved: 0,
-    };
+    let handle = crate::task_door::handle(reach.ticket, pass.issued);
     pass.issued += 1;
     reach
         .plane
@@ -2959,19 +2948,15 @@ slot!(
             if warming || (first && !plane.cards_warmed.get(&()).unwrap_or(false)) {
                 let (warmed, counted) = warm_cards(plane, instance.ticket(), issued);
                 let Poll::Ready(landed) = warmed else {
-                    plane.units.with(&unit, |u| {
-                        if let Some(u) = u {
+                    plane.on_unit(unit, |u| {
                             u.pass.warming = true;
-                        }
-                    });
+});
                     return Outcome::Pending;
                 };
-                plane.units.with(&unit, |u| {
-                    if let Some(u) = u {
+                plane.on_unit(unit, |u| {
                         u.pass.warming = false;
                         u.pass.issued = counted;
-                    }
-                });
+});
                 if landed {
                     plane.cards_warmed.insert((), true);
                 }
@@ -2979,11 +2964,9 @@ slot!(
         }
         // The unit's ticket, which the kernel's `cancel` names it by.
         let ticket = instance.ticket();
-        plane.units.with(&unit, |u| {
-            if let Some(u) = u {
+        plane.on_unit(unit, |u| {
                 u.ticket = ticket;
-            }
-        });
+});
         // A REFUSED PIECE (`TAIL_REFUSED_PIECE`) ends only a relayed hop's task: a unit with no hop
         // has nothing to end, and `refusal` answers it.
         let refused = input.get().from == FROM_KERNEL && input.get().flags & PIECE_REFUSED != 0;
@@ -3021,11 +3004,9 @@ slot!(
         // A FINISHED HOP'S UNIT IS OVER, never dropped here: a `refusal` of the answer it wrote
         // (the store refused its record writes, a response hook vetoed it) still reads it.
         if done {
-            plane.units.with(&unit, |u| {
-                if let Some(u) = u {
+            plane.on_unit(unit, |u| {
                     u.over = true;
-                }
-            });
+});
         }
         outcome
     }
@@ -3453,11 +3434,7 @@ struct LookAt<'a> {
 
 impl LookAt<'_> {
     fn handle(&self, seq: u32) -> CompletionHandle {
-        CompletionHandle {
-            ticket: self.ticket,
-            seq,
-            _reserved: 0,
-        }
+        crate::task_door::handle(self.ticket, seq)
     }
 }
 
@@ -3496,10 +3473,8 @@ fn judge_hop(
     use busbar_contract::abi::host::conn::connector::{
         EGRESS_OPEN_WEB, EGRESS_OPERATOR_INFRASTRUCTURE,
     };
-    use busbar_contract::abi::host::service::{
-        ItemSpan, DEST_ALLOWED, DEST_EXPLAIN, DEST_REFUSE_PRIVATE,
-    };
-    use busbar_contract::abi::mechanism::check::SPAN_ABSENT;
+    use busbar_contract::abi::host::service::{DEST_ALLOWED, DEST_EXPLAIN, DEST_REFUSE_PRIVATE};
+
     let Some(services) = at.plane.services else {
         return Poll::Ready(Ok((base, String::new())));
     };
@@ -3513,15 +3488,8 @@ fn judge_hop(
     } else {
         (EGRESS_OPEN_WEB, DEST_EXPLAIN | DEST_REFUSE_PRIVATE)
     };
-    let absent = busbar_contract::abi::mechanism::call::Span {
-        offset: SPAN_ABSENT,
-        len: 0,
-    };
     let mut bytes = vec![0u8; JUDGED_BYTES];
-    let mut spans = [ItemSpan {
-        key: absent,
-        value: absent,
-    }; JUDGED_ADDRESSES];
+    let mut spans = [crate::task_door::ABSENT_SPAN; JUDGED_ADDRESSES];
     let judged = services.dest_judge_as(
         at.handle(base),
         url,
@@ -4519,11 +4487,9 @@ slot!(
             Ok(applied) => applied,
             Err(_) => {
                 if let Some(plane) = instance.get() {
-                    plane.units.with(&input.get().unit, |u| {
-                        if let Some(u) = u {
+                    plane.on_unit(input.get().unit, |u| {
                             u.unreadable_rewrite = true;
-                        }
-                    });
+});
                 }
                 return Outcome::Refused;
             }
@@ -4531,8 +4497,7 @@ slot!(
         let (envelope, rewritten) = match applied {
             Some((value, bytes, kept)) => {
                 if let Some(plane) = instance.get() {
-                    plane.units.with(&input.get().unit, |u| {
-                        if let Some(u) = u {
+                    plane.on_unit(input.get().unit, |u| {
                             // A line that composed its request relays the composition, so the
                             // rewrite is what it relays (the HTTP+JSON and gRPC lines).
                             let composed = u.envelope.is_some();
@@ -4543,8 +4508,7 @@ slot!(
                                 hop.rewritten = Some(value.clone());
                                 hop.relayed_bytes = Some(bytes.clone());
                             }
-                        }
-                    });
+});
                 }
                 let kept = match line {
                     Line::Document => Some(bytes.clone()),
