@@ -27,17 +27,13 @@
 
 use std::task::Poll;
 
-use busbar_contract::abi::host::conn::connector::EGRESS_OPEN_WEB;
-use busbar_contract::abi::host::service::{
-    ItemSpan, DEST_ALLOWED, DEST_REFUSE_PRIVATE, DEST_UNRESOLVABLE,
-};
-use busbar_contract::abi::mechanism::call::{Outcome, Span};
-use busbar_contract::abi::mechanism::check::SPAN_ABSENT;
+use busbar_contract::abi::host::service::{DEST_ALLOWED, DEST_UNRESOLVABLE};
+use busbar_contract::abi::mechanism::call::Outcome;
 use busbar_contract::abi::mechanism::ticket::{CompletionHandle, Ticket};
-use busbar_contract::abi::sdk::conn::Host;
+use busbar_contract::abi::sdk::conn::StaticHost;
 use busbar_contract::abi::sdk::exchange::{exchange, Exchange};
 use busbar_contract::abi::sdk::publish::Keyed;
-use busbar_contract::abi::sdk::{Instance, Services};
+use busbar_contract::abi::sdk::{Instance, StaticServices};
 
 use crate::a2a::task::Task;
 use crate::agent_door::A2aDoor;
@@ -47,11 +43,6 @@ use crate::push::{Attempted, Deliveries, Delivery, DeliverySettled, Owed, Tokens
 use crate::records::KIND_PUSH_CONFIG;
 use crate::tasks::{self, Halt, Records, Stamp, Write};
 use crate::TaskRow;
-
-/// Room for the judged addresses of one callback.
-const JUDGED_BYTES: usize = 512;
-/// One span per judged address.
-const JUDGED_ADDRESSES: usize = 16;
 
 /// The jitter byte that moves a retry's wait by nothing: used when the host lends no random byte
 /// (a delay is a timing nicety, not a security property, as the engine's delivery reads it).
@@ -161,18 +152,14 @@ struct Flight {
 /// The host calls one attempt makes, in their one order: the random byte (handle `0`), the judge
 /// (handle `1`), the exchange (from handle `2`).
 struct Calls<'h> {
-    host: &'h Host,
-    services: Services,
+    host: &'h StaticHost,
+    services: StaticServices,
     ticket: Ticket,
 }
 
 impl Calls<'_> {
     const fn handle(&self, seq: u32) -> CompletionHandle {
-        CompletionHandle {
-            ticket: self.ticket,
-            seq,
-            _reserved: 0,
-        }
+        crate::task_door::handle(self.ticket, seq)
     }
 
     /// The jitter byte, from the kernel's random bytes.
@@ -218,30 +205,7 @@ impl Line for Calls<'_> {
         }
     }
     fn judge(&mut self, url: &str) -> Poll<Option<Judgement>> {
-        let absent = Span {
-            offset: SPAN_ABSENT,
-            len: 0,
-        };
-        let mut bytes = [0u8; JUDGED_BYTES];
-        let mut spans = [ItemSpan {
-            key: absent,
-            value: absent,
-        }; JUDGED_ADDRESSES];
-        // Private reach refused whatever the deployment's private-address setting, as the engine's
-        // delivery guard refused every internal answer with no knob to admit one; the allow-list
-        // stands.
-        let judged = self.services.dest_judge_as(
-            self.handle(1),
-            url,
-            EGRESS_OPEN_WEB,
-            DEST_REFUSE_PRIVATE,
-            Some((&mut bytes[..], &mut spans[..])),
-        );
-        match judged {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(Err(_)) => Poll::Ready(None),
-            Poll::Ready(Ok(j)) => Poll::Ready(Some((j.verdict, j.within()))),
-        }
+        crate::task_door::judge_open_web(&self.services, self.handle(1), url).map(Result::ok)
     }
 
     fn send(&mut self, ex: &mut Exchange, url: &str) -> Poll<Option<u16>> {

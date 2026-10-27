@@ -6,16 +6,6 @@
 //! writes and names none of these types; the plane owns the schema and reads it back with
 //! `serde_json`.
 
-use busbar_contract::records::{
-    PlaneDisposition, PlaneRecord, PlaneSelector, RecordStoreError, RecordStoreResult,
-};
-
-// THE TWO KIND STRINGS ARE THE PLANE'S, AND ARE READ FROM IT. A record kind is the name the plane
-// declares its schema under (`busbar_plane_a2a::records::SCHEMA_TASK`), so it is named once, there,
-// and this crate reads it. Spelling it on both sides is how two answers to "what is this record
-// called" come to differ, and the schema id is what a store indexes by.
-pub use crate::records::{KIND_TASK, KIND_TASK_EVENT};
-
 /// DIGEST FRAMING VERSION 1 — the LEGACY ambiguous pipe-join (`{prev_hash}|{task_id}|…|{state}`). The
 /// free-text fields (`context_id`, `principal`, `agent_id`) are NOT length-framed, so a value that
 /// itself contains `|` shifts the field boundaries: two distinct event tuples can hash the SAME
@@ -36,10 +26,6 @@ pub const DIGEST_VERSION_LEN_PREFIXED: u8 = 2;
 fn default_digest_version() -> u8 {
     DIGEST_VERSION_LEGACY_PIPE
 }
-
-/// The A2A task states that are FINAL — the terminal set the `task` kind's retention contract drops.
-/// Kept beside the row so the `disposition` a record carries and the purge that reads it agree.
-const TERMINAL_TASK_STATES: [&str; 4] = ["completed", "failed", "canceled", "rejected"];
 
 /// ONE A2A TASK, as a `task` host record's value. [`crate::a2a::task::Task`] is read from it
 /// ([`crate::a2a::task::Task::from_row`]); this side is plain data with the enums flattened to
@@ -78,34 +64,6 @@ pub struct TaskRow {
     pub updated_at: u64,
 }
 
-impl TaskRow {
-    /// Serialize this task into the opaque `task` [`PlaneRecord`] envelope. `ts` is `updated_at` (the
-    /// axis retention compares against) and `disposition` is `Terminal` exactly when the task's state
-    /// is final, so `purge_plane_records_before` can honor the terminal-only contract from the typed
-    /// sidecar without decoding the body.
-    pub fn to_plane_record(&self) -> RecordStoreResult<PlaneRecord> {
-        let disposition = if TERMINAL_TASK_STATES.contains(&self.state.as_str()) {
-            PlaneDisposition::Terminal
-        } else {
-            PlaneDisposition::Active
-        };
-        Ok(PlaneRecord {
-            kind: KIND_TASK.to_string(),
-            id: self.task_id.clone(),
-            parent: None,
-            seq: 0,
-            ts: self.updated_at,
-            disposition,
-            body: encode(self)?,
-        })
-    }
-
-    /// Reconstruct a task from an opaque `task` body — the inverse of [`Self::to_plane_record`].
-    pub fn from_body(body: &[u8]) -> RecordStoreResult<Self> {
-        decode(body)
-    }
-}
-
 /// ONE PER-TASK PROVENANCE EVENT, as it crosses the store seam. Hash-chained WITHIN a task, and
 /// `prev_hash` is the preceding event's `hash` (empty for `seq` 1). Per-TASK rather than one global
 /// chain: tasks are concurrent and long-lived, and a per-task chain is independently verifiable and
@@ -141,43 +99,6 @@ pub struct TaskEventRow {
     /// to [`DIGEST_VERSION_LEGACY_PIPE`]; new events set [`DIGEST_VERSION_LEN_PREFIXED`].
     #[serde(default = "default_digest_version")]
     pub digest_version: u8,
-}
-
-impl TaskEventRow {
-    /// Serialize this event into the opaque `task_event` [`PlaneRecord`] envelope, hung off its task
-    /// via `parent` and ordered by the event's own `seq`.
-    pub fn to_plane_record(&self) -> RecordStoreResult<PlaneRecord> {
-        Ok(PlaneRecord {
-            kind: KIND_TASK_EVENT.to_string(),
-            id: self.task_id.clone(),
-            parent: Some(self.task_id.clone()),
-            seq: self.seq,
-            ts: self.ts,
-            disposition: PlaneDisposition::Active,
-            body: encode(self)?,
-        })
-    }
-
-    /// The list selector that reads one task's `task_event` chain back, oldest-first.
-    pub fn parent_selector(task_id: &str) -> PlaneSelector<'_> {
-        PlaneSelector::Parent(task_id.into())
-    }
-
-    /// Reconstruct an event from an opaque `task_event` body — the inverse of
-    /// [`Self::to_plane_record`].
-    pub fn from_body(body: &[u8]) -> RecordStoreResult<Self> {
-        decode(body)
-    }
-}
-
-/// Serialize a typed plane row into an opaque `PlaneRecord::body`. `serde_json`.
-fn encode<T: serde::Serialize>(row: &T) -> RecordStoreResult<Vec<u8>> {
-    serde_json::to_vec(row).map_err(|e| RecordStoreError(format!("plane body encode: {e}")))
-}
-
-/// Decode an opaque `PlaneRecord::body` back into its typed plane row — the inverse of [`encode`].
-fn decode<T: serde::de::DeserializeOwned>(body: &[u8]) -> RecordStoreResult<T> {
-    serde_json::from_slice(body).map_err(|e| RecordStoreError(format!("plane body decode: {e}")))
 }
 
 #[cfg(test)]

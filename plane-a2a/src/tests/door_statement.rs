@@ -37,7 +37,7 @@ fn the_tail_declares_the_task_kind_as_terminal_only() {
 }
 
 fn s(a: AbiStr) -> &'static str {
-    if a.ptr.is_null() {
+    if a.is_absent() {
         return "";
     }
     // The tail's strings are `'static` constants of this crate.
@@ -72,7 +72,7 @@ fn known_bytes(a: AbiStr) -> &'static [u8] {
         crate::records::KIND_CARD_APPROVAL,
     ]
     .into_iter()
-    .find(|c| c.as_ptr() == a.ptr && c.len() == a.len)
+    .find(|c| c.as_ptr() == a.ptr() && c.len() == a.len())
     .expect("a tail string this test knows")
     .as_bytes()
 }
@@ -88,11 +88,11 @@ fn the_tail_passes_the_dispatchers_check() {
 /// 2026-10-07), and passes the loader's check.
 #[test]
 fn the_tail_declares_the_task_chain() {
-    assert_eq!(TAIL.record_chains_len, 1);
-    assert_eq!(TAIL.record_chains, RECORD_CHAINS.as_ptr());
+    assert_eq!(TAIL.record_chains_len(), 1);
+    assert_eq!(TAIL.record_chains_ptr(), RECORD_CHAINS.as_ptr());
     let chains = RECORD_CHAINS;
     assert_eq!(
-        check_record_chains(chains, TAIL.record_kinds_len as u64),
+        check_record_chains(chains, TAIL.record_kinds_len() as u64),
         Ok(())
     );
     let chain = chains[0];
@@ -117,8 +117,8 @@ fn the_tail_states_the_planes_nouns() {
     assert_eq!(s(TAIL.audit_kind), AUDIT_KIND);
     assert_eq!(s(TAIL.signing_domain), CARD_SIGNING_DOMAIN);
     assert_eq!(s(TAIL.signing_kid_prefix), CARD_KID_PREFIX);
-    assert_eq!(TAIL.dialects_len, 3);
-    assert_eq!(TAIL.record_kinds_len, crate::records::HELD_KINDS.len());
+    assert_eq!(TAIL.dialects_len(), 3);
+    assert_eq!(TAIL.record_kinds_len(), crate::records::HELD_KINDS.len());
     for (abi, kind) in RECORD_KINDS.iter().zip(crate::records::HELD_KINDS) {
         assert_eq!(s(*abi), *kind);
     }
@@ -126,15 +126,20 @@ fn the_tail_states_the_planes_nouns() {
 
 #[test]
 fn the_abi_trust_keys_are_the_grammars_trust_keys() {
-    let grammar = crate::a2a::config::TRUST_KEYS;
+    let grammar = crate::a2a::config::tests::TRUST_KEYS;
     assert_eq!(TRUST_KEYS.len(), grammar.len() + 1);
     let reach = TRUST_KEYS[grammar.len()];
     assert_eq!(
-        (s(reach.key), reach.role, reach.flags, reach.mechanisms_len),
+        (
+            s(reach.key),
+            reach.role,
+            reach.flags,
+            reach.mechanisms_len()
+        ),
         (PRIVATE_REACH_KEY, TRUST_PRIVATE_REACH, 0, 0),
         "the private reach rides last, on the key the grammar reads"
     );
-    assert!(reach.default.ptr.is_null());
+    assert!(reach.default.is_absent());
     for (abi, decl) in TRUST_KEYS.iter().zip(grammar) {
         assert_eq!(s(abi.key), decl.key);
         let role = match decl.role {
@@ -152,7 +157,7 @@ fn the_abi_trust_keys_are_the_grammars_trust_keys() {
             decl.key
         );
         assert_eq!(s(abi.default), decl.default.unwrap_or(""), "{}", decl.key);
-        assert_eq!(abi.mechanisms_len, decl.mechanisms.len(), "{}", decl.key);
+        assert_eq!(abi.mechanisms_len(), decl.mechanisms.len(), "{}", decl.key);
     }
     for (abi, decl) in PIN_MECHANISMS.iter().zip(grammar[0].mechanisms) {
         assert_eq!(s(abi.token), decl.token);
@@ -271,9 +276,12 @@ fn the_admin_routes_pass_the_dispatchers_check() {
 fn the_abi_admin_routes_are_the_admin_verbs() {
     assert_eq!(ADMIN_ROUTES.len(), ADMIN_VERBS.len());
     for (abi, (verb, target)) in ADMIN_ROUTES.iter().zip(ADMIN_VERBS) {
-        assert_eq!((abi.verb.ptr, abi.verb.len), (verb.as_ptr(), verb.len()));
         assert_eq!(
-            (abi.target.ptr, abi.target.len),
+            (abi.verb.ptr(), abi.verb.len()),
+            (verb.as_ptr(), verb.len())
+        );
+        assert_eq!(
+            (abi.target.ptr(), abi.target.len()),
             (target.as_ptr(), target.len())
         );
     }
@@ -438,7 +446,7 @@ fn every_route_is_one_line_of_the_dialect_in_mount_order() {
     // Each line's refusals speak the binding its dialect index names.
     let lens: Vec<usize> = [Document, Target, Framed]
         .iter()
-        .map(|l| DIALECTS[l.dialect().expect("a line") as usize].len)
+        .map(|l| DIALECTS[l.dialect().expect("a line") as usize].len())
         .collect();
     assert_eq!(
         lens,
@@ -453,9 +461,9 @@ fn every_route_is_one_line_of_the_dialect_in_mount_order() {
 
 #[test]
 fn the_tail_declares_the_op_class_of_every_method_arrive_can_name() {
-    assert_eq!(TAIL.op_classes_len, crate::ops::OP_CLASSES.len());
+    assert_eq!(TAIL.op_classes_len(), crate::ops::OP_CLASSES.len());
     for (i, class) in OP_CLASS_TABLE.iter().enumerate() {
-        assert_eq!(class.op.len, crate::ops::OP_CLASSES[i].as_str().len());
+        assert_eq!(class.op.len(), crate::ops::OP_CLASSES[i].as_str().len());
     }
     for row in crate::ops::METHODS {
         let i = busbar_contract::abi::sdk::publish::class_index(crate::ops::OP_CLASSES, row.op)
@@ -503,7 +511,7 @@ fn the_credential_kind_and_the_scope_kind_are_the_spellings_the_rest_of_the_tree
 /// class at the index the door reports it under, once per served unit.
 #[test]
 fn the_door_counts_the_per_request_fee_and_never_a_per_session_one() {
-    let same = |a: AbiStr, b: &str| a.ptr == b.as_ptr() && a.len == b.len();
+    let same = |a: AbiStr, b: &str| a.ptr() == b.as_ptr() && a.len() == b.len();
     assert_eq!(FEE_PER_REQUEST, busbar_contract::plane::PER_REQUEST);
     assert_ne!(FEE_PER_REQUEST, busbar_contract::plane::PER_SESSION);
     assert_eq!(FEE_UNITS.len(), 1, "one fee unit");
@@ -623,12 +631,12 @@ fn the_registry_follows_config_order_rather_than_hash_order() {
 /// Ported from busbar-a2a a2a/tests/serve_tests.rs::every_published_binding_is_one_the_a2a_plane_declares_a_wire_format_for.
 #[test]
 fn every_published_binding_is_one_the_a2a_plane_declares_a_wire_format_for() {
-    use crate::surface::{BINDING_DOCUMENT, BINDING_FRAMED, BINDING_TARGET};
+    use crate::binding::{BINDING_DOCUMENT, BINDING_FRAMED, BINDING_TARGET};
     let declared: Vec<&str> = [BINDING_DOCUMENT, BINDING_TARGET, BINDING_FRAMED].to_vec();
     // The tail declares exactly those three, in this order.
     assert_eq!(DIALECTS.len(), declared.len());
     for (abi, name) in DIALECTS.iter().zip(&declared) {
-        assert_eq!((abi.ptr, abi.len), (name.as_ptr(), name.len()));
+        assert_eq!((abi.ptr(), abi.len()), (name.as_ptr(), name.len()));
     }
     // Every binding the served card publishes is one of them, in the card's upper-case spelling,
     // and the card publishes every one of them.
@@ -666,12 +674,12 @@ fn the_plane_declares_its_published_identity_and_its_claims_speak_its_wire_forma
     assert_eq!(SCOPE, "agent");
     assert_eq!(s(TAIL.audit_kind), "a2a_agent");
     assert_eq!(s(TAIL.subject_noun), "fronted agent");
-    assert_eq!(TAIL.scope_kinds_len, 1);
+    assert_eq!(TAIL.scope_kinds_len(), 1);
     assert_eq!(s(TAIL.scope), "agent");
-    assert_eq!(crate::surface::BINDING_DOCUMENT, "jsonrpc");
-    assert_eq!(crate::surface::BINDING_TARGET, "http+json");
-    assert_eq!(crate::surface::BINDING_FRAMED, "grpc");
-    assert_eq!(TAIL.dialects_len, 3);
+    assert_eq!(crate::binding::BINDING_DOCUMENT, "jsonrpc");
+    assert_eq!(crate::binding::BINDING_TARGET, "http+json");
+    assert_eq!(crate::binding::BINDING_FRAMED, "grpc");
+    assert_eq!(TAIL.dialects_len(), 3);
 
     // Its claims: an admitted generation claims doors at exactly the plane's two mounts.
     let spec = agents_snapshot_spec(Some(&endpoint("gw", "")), &["vendor"]);
@@ -685,7 +693,7 @@ fn the_plane_declares_its_published_identity_and_its_claims_speak_its_wire_forma
         );
         assert!(
             c.target.starts_with(crate::MOUNT_PATH)
-                || c.target.starts_with(crate::GRPC_MOUNT_PATH)
+                || c.target.starts_with(crate::framed::SERVICE_PATH)
                 || c.target.starts_with("/.well-known/"),
             "a claim outside the plane's mounts: {}",
             c.target

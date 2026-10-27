@@ -5,6 +5,45 @@
 //! bounded queue and its count, the credential's path, and busbar's own callback tokens.
 
 use super::*;
+
+/// What a test reads off the delivery queues.
+impl Deliveries {
+    /// How many notifications were dropped from full queues.
+    #[must_use]
+    pub(crate) fn dropped(&self) -> u64 {
+        self.with(|b| b.dropped)
+    }
+
+    /// How many notifications `task_id`'s queue holds.
+    #[must_use]
+    pub(crate) fn depth(&self, task_id: &str) -> usize {
+        self.with(|b| b.queues.get(task_id).map_or(0, VecDeque::len))
+    }
+
+    /// The deliveries to attempt now: each task's head, when its time has come and no attempt on
+    /// it is open. Each is marked open until [`Deliveries::settle`].
+    #[must_use]
+    pub(crate) fn due(&self, now_ns: u64) -> Vec<Delivery> {
+        self.with(|b| {
+            b.queues
+                .values_mut()
+                .filter_map(VecDeque::front_mut)
+                .filter(|w| !w.open && w.not_before_ns <= now_ns)
+                .map(|w| {
+                    w.open = true;
+                    w.attempts += 1;
+                    w.delivery.clone()
+                })
+                .collect()
+        })
+    }
+
+    /// How many owed outcomes were dropped unfiled from a full book.
+    #[must_use]
+    pub(crate) fn unfiled(&self) -> u64 {
+        self.with(|b| b.unfiled)
+    }
+}
 use crate::a2a::task::{Direction, TaskState};
 use busbar_contract::abi::host::service::DEST_METADATA;
 use busbar_contract::abi::sdk::exchange::Exchange;
@@ -68,7 +107,7 @@ fn the_wait_is_the_base_moved_by_at_most_twenty_percent() {
 
 #[test]
 fn a_failing_receiver_gets_three_attempts_at_250_then_500_ms_and_no_fourth() {
-    let d = Deliveries::new();
+    let d = Deliveries::default();
     d.enqueue(delivery("t1"), 0);
     assert_eq!(d.due(0).len(), 1);
     // The low end of the first wait (250 - 20 %), then the high end of the second (500 + 20 %).
@@ -94,7 +133,7 @@ fn a_failing_receiver_gets_three_attempts_at_250_then_500_ms_and_no_fourth() {
 
 #[test]
 fn a_refused_destination_or_a_4xx_ends_the_delivery_at_once() {
-    let d = Deliveries::new();
+    let d = Deliveries::default();
     d.enqueue(delivery("a"), 0);
     d.enqueue(delivery("b"), 0);
     d.enqueue(delivery("c"), 0);
@@ -120,7 +159,7 @@ fn a_refused_destination_or_a_4xx_ends_the_delivery_at_once() {
 
 #[test]
 fn a_tasks_notifications_go_out_in_order_one_at_a_time() {
-    let d = Deliveries::new();
+    let d = Deliveries::default();
     let mut first = delivery("t1");
     first.body = b"first".to_vec();
     let mut second = delivery("t1");
@@ -155,7 +194,7 @@ fn a_tasks_notifications_go_out_in_order_one_at_a_time() {
 
 #[test]
 fn a_full_queue_drops_its_oldest_waiting_notification_and_counts_it() {
-    let d = Deliveries::new();
+    let d = Deliveries::default();
     for i in 0..QUEUE_CAPACITY {
         let mut x = delivery("t1");
         x.body = i.to_string().into_bytes();
@@ -229,7 +268,7 @@ fn auth(scheme: &str, credentials: &str) -> DeliveryAuth {
 
 #[test]
 fn the_request_is_a_post_to_the_callbacks_path_with_the_credential_only_once_held() {
-    let d = Deliveries::new();
+    let d = Deliveries::default();
     let x = delivery("t1");
     let (bare, sealed) = d.request(&x);
     assert_eq!(bare.method, b"POST");
@@ -273,7 +312,7 @@ fn the_sealed_request_frames_the_bytes_the_plain_one_did() {
         "https://hook.example/a/b",
     ] {
         for shape in shapes {
-            let d = Deliveries::new();
+            let d = Deliveries::default();
             let x = Delivery {
                 url: url.to_string(),
                 ..delivery("t1")
@@ -303,7 +342,7 @@ fn the_sealed_credential_requires_the_secured_stream_its_https_callback_names() 
 
 #[test]
 fn a_terminal_tasks_last_delivery_forgets_its_credential() {
-    let d = Deliveries::new();
+    let d = Deliveries::default();
     d.remember_auth("t1", Some(auth("Basic", "")));
     let last = Delivery::of(&task("t1", TaskState::Completed)).expect("a callback");
     assert!(last.terminal);
@@ -372,7 +411,7 @@ fn the_notification_is_the_registered_versions_shape() {
 
 #[test]
 fn a_callback_token_names_its_one_task_and_nothing_else() {
-    let tokens = Tokens::new();
+    let tokens = Tokens::default();
     let sig_a = [7u8; 64];
     let token = tokens.mint("c1", "task.a", &sig_a).expect("minted");
     assert_eq!(token, format!("task.a.{}", hex(&sig_a)));
@@ -415,7 +454,7 @@ fn a_callback_token_names_its_one_task_and_nothing_else() {
 
 #[test]
 fn tokens_are_bounded() {
-    let tokens = Tokens::new();
+    let tokens = Tokens::default();
     let sig = [3u8; 64];
     for i in 0..MAX_TOKENS {
         assert!(tokens.mint("c", &i.to_string(), &sig).is_some());
@@ -431,7 +470,7 @@ fn tokens_are_bounded() {
 /// window refills, and a clock that steps back cannot reopen a spent window.
 #[test]
 fn the_push_volume_bound_is_one_point_five_point_fives() {
-    let limiter = PushLimiter::new();
+    let limiter = PushLimiter::default();
     for _ in 0..PUSH_RATE_LIMIT {
         assert!(limiter.admit("t", 120));
     }
@@ -455,16 +494,20 @@ fn the_statement_declares_its_open_web_need_and_its_agent_member_need() {
     };
     use busbar_contract::abi::mechanism::check::check_needs;
     let st = &crate::agent_door::STATEMENT;
-    assert!(!st.needs.is_null());
+    assert!(!st.needs_ptr().is_null());
     // The open web, the agents over http, the agents over grpc.
-    assert_eq!((st.needs_len, NEEDS.len()), (3, 3));
+    assert_eq!((st.needs_len(), NEEDS.len()), (3, 3));
     // The relayed calls' need: each registered agent reached at its own `url`, as an upstream.
     let agent = NEEDS[NEED_AGENT as usize];
     assert_eq!(
         (agent.direction, agent.egress_class),
         (DIRECTION_OUTBOUND, EGRESS_PROVIDER)
     );
-    assert_eq!(agent.target_from.len, MEMBER_TARGET.len(), "settings.*.url");
+    assert_eq!(
+        agent.target_from.len(),
+        MEMBER_TARGET.len(),
+        "settings.*.url"
+    );
     assert!(check_needs(NEEDS).is_ok());
     let need = NEEDS[NEED_OPEN_WEB as usize];
     assert_eq!(
@@ -472,17 +515,17 @@ fn the_statement_declares_its_open_web_need_and_its_agent_member_need() {
         (DIRECTION_OUTBOUND, EGRESS_OPEN_WEB)
     );
     assert_eq!(
-        need.transport.len,
+        need.transport.len(),
         crate::claims::DOCUMENT_TRANSPORT.len(),
         "the http claim"
     );
     assert_eq!(
-        (need.auth.len, need.target_from.len),
+        (need.auth.len(), need.target_from.len()),
         (0, 0),
         "no auth style, no configured target: the plane names each dial's target"
     );
     assert_eq!(
-        need.trust_from.len,
+        need.trust_from.len(),
         crate::door_statement::PUSH_TRUST_FROM.len(),
         "its trust anchor is the operator's optional `agent_push.ca` (the text is pinned by the \
          conformance read of the rendered Statement)"
@@ -506,7 +549,7 @@ fn the_push_trust_path_names_the_owned_agent_push_section() {
     );
     assert_eq!(SECTIONS.len(), 2, "`agents:`, and `agent_push:` beside it");
     assert_eq!(
-        (SECTIONS[1].name.len, SECTIONS[1].flags),
+        (SECTIONS[1].name.len(), SECTIONS[1].flags),
         (PUSH_SECTION.len(), 0),
         "owned, as written: neither declaring nor consumed"
     );
@@ -559,7 +602,7 @@ fn predev_shaped(token: &str, task_id: &str) -> bool {
 
 #[test]
 fn a_callback_token_has_predevs_wire_shape_and_rides_its_bearer_scheme() {
-    let tokens = Tokens::new();
+    let tokens = Tokens::default();
     // predev's own HMAC token for task `t-1` (hex of a 32-byte MAC) is the shape the check holds.
     let predev = "t-1.5d41402abc4b2a76b9719d911017c5925d41402abc4b2a76b9719d911017c592";
     assert!(predev_shaped(predev, "t-1"));
@@ -615,7 +658,7 @@ fn the_credential_serializes_into_the_record_and_nowhere_else() {
 /// open so the next op takes another; a task's later notification waits behind its open head.
 #[test]
 fn the_next_due_is_one_head_at_a_time_each_task_in_turn() {
-    let d = Deliveries::new();
+    let d = Deliveries::default();
     assert_eq!(d.next_due(0), None);
     d.enqueue(delivery("t2"), 5 * MS);
     d.enqueue(delivery("t1"), 9 * MS);
@@ -645,7 +688,7 @@ fn a_delivery_names_the_caller_holding_its_task() {
 /// the task the taking piece changes itself; the rest stay owed.
 #[test]
 fn owed_outcomes_are_taken_per_caller_one_per_task() {
-    let d = Deliveries::new();
+    let d = Deliveries::default();
     let mine = delivery("t1");
     let mut theirs = delivery("t9");
     theirs.caller = "other".into();
@@ -677,7 +720,7 @@ fn owed_outcomes_are_taken_per_caller_one_per_task() {
 /// The owed book is bounded: past [`MAX_OWED`] the oldest goes, counted.
 #[test]
 fn the_owed_book_is_bounded_and_counts_what_it_drops() {
-    let d = Deliveries::new();
+    let d = Deliveries::default();
     for i in 0..=MAX_OWED {
         d.owe(&delivery(&format!("t{i}")), Attempted::Delivered);
     }
@@ -756,7 +799,7 @@ fn the_push_credential_reaches_the_authorization_field_and_no_debug_or_error_tex
 /// three-attempt rule. RED against an unbounded request.
 #[test]
 fn a_delivery_attempt_is_bounded_by_the_request_deadline() {
-    let d = Deliveries::new();
+    let d = Deliveries::default();
     assert_eq!(
         d.request(&delivery("t1")).0.timeout_ms,
         10_000,
@@ -770,7 +813,7 @@ fn a_delivery_attempt_is_bounded_by_the_request_deadline() {
 /// every notification of `a` before `b`'s one.
 #[test]
 fn the_pump_serves_each_tasks_queue_in_turn() {
-    let d = Deliveries::new();
+    let d = Deliveries::default();
     d.enqueue(delivery("a"), 0);
     d.enqueue(delivery("a"), 0);
     d.enqueue(delivery("b"), 0);

@@ -11,6 +11,7 @@ use super::*;
 use crate::records::{KIND_TASK, KIND_TASK_EVENT};
 use crate::tasks::tests::{submitted, Book, ALICE, BOB};
 use crate::tasks::{event_key, get};
+use crate::tests::capture::Capture;
 use crate::TaskEventRow;
 
 /// The host records, the random bytes the kernel hands out, and the destination judge's verdict.
@@ -191,7 +192,7 @@ fn an_interrupted_task_on_the_agent_under_the_callers_context_resumes_as_working
         request_id: "r",
         now: 150,
     };
-    tasks::dispatch(&mut desk.book, &at, "t1", MEMBER, &mut out).unwrap();
+    tasks::tests::dispatch(&mut desk.book, &at, "t1", MEMBER, &mut out).unwrap();
     desk.book.apply(&out);
     out.clear();
     tasks::transition(&mut desk.book, &at, "t1", TaskState::Working, &mut out).unwrap();
@@ -263,7 +264,7 @@ fn settled(desk: &mut Desk, task: &TaskHop, how: &TaskSettled) -> usize {
         ALICE,
         400,
         &mut out,
-        &Latches::new(),
+        &Latches::default(),
     )
     .unwrap();
     desk.book.apply(&out);
@@ -303,7 +304,7 @@ fn the_answer_records_the_reported_state_and_a_failed_hop_ends_the_task_failed()
         BOB,
         400,
         &mut out,
-        &Latches::new(),
+        &Latches::default(),
     )
     .unwrap();
     desk.book.apply(&out);
@@ -651,7 +652,7 @@ fn ended_on_refusal(d: &mut Desk, task: &TaskHop) -> Vec<Write> {
         ALICE,
         300,
         &mut out,
-        &Latches::new(),
+        &Latches::default(),
     )
     .unwrap();
     out
@@ -723,7 +724,7 @@ fn walk(desk: &mut Desk, caller: &str, task: &str, states: &[TaskState]) {
         now: 150,
     };
     let mut out = Vec::new();
-    tasks::dispatch(&mut desk.book, &at, task, MEMBER, &mut out).unwrap();
+    tasks::tests::dispatch(&mut desk.book, &at, task, MEMBER, &mut out).unwrap();
     desk.book.apply(&out);
     for state in states {
         let mut out = Vec::new();
@@ -897,13 +898,6 @@ fn a_streamed_artifact_advances_the_durable_resume_cursor() {
 
 // ── a hop that left and heard nothing back: its task end, racing another writer of the task ───
 
-/// End `task`, whose hop left and heard nothing back, failed, as the door ends it on the refused
-/// piece, on the unit's own ticket: [`settle_on_answer`] on `TaskSettled::Failed` over the host's records
-/// (`agent_door::settle_task`).
-fn ended_after_no_answer(d: &mut Desk, task: &TaskHop) -> Vec<Write> {
-    ended_on_refusal(d, task)
-}
-
 /// A HOP THAT LEFT AND HEARD NOTHING BACK ENDS THE TASK IT OPENED WITHOUT LOSING ANOTHER WRITER'S
 /// CHANGE (the engine's `refuse_hop` on `RelayRefusal::Transport`, origin/predev
 /// `crates/busbar-a2a/src/a2a/receive.rs:3325` and its `fail_task` arm `:3463-3471`, then
@@ -939,7 +933,7 @@ fn a_hop_that_heard_nothing_back_ends_its_task_keeping_a_concurrent_writers_chan
         .cloned()
         .expect("their event");
 
-    let ours = ended_after_no_answer(&mut d, &task);
+    let ours = ended_on_refusal(&mut d, &task);
     d.book.apply(&ours);
 
     assert_eq!(
@@ -960,38 +954,6 @@ fn a_hop_that_heard_nothing_back_ends_its_task_keeping_a_concurrent_writers_chan
 
 // ── a record write the store refuses is reported, and the answer stands ────────────────────────
 
-/// Every event's level and rendered fields, sent down a channel (the plane holds no subscriber
-/// dependency, so the `tracing` trait is implemented by hand). Admits every level, so the
-/// assertion holds whichever side of the error-once latch this process is on.
-struct Capture(std::sync::mpsc::Sender<(tracing::Level, String)>);
-
-struct Render<'a>(&'a mut String);
-
-impl tracing::field::Visit for Render<'_> {
-    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-        use std::fmt::Write as _;
-        let _ = write!(self.0, "{}={value:?} ", field.name());
-    }
-}
-
-impl tracing::Subscriber for Capture {
-    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
-        true
-    }
-    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
-        tracing::span::Id::from_u64(1)
-    }
-    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
-    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
-    fn event(&self, event: &tracing::Event<'_>) {
-        let mut line = String::new();
-        event.record(&mut Render(&mut line));
-        let _ = self.0.send((*event.metadata().level(), line));
-    }
-    fn enter(&self, _: &tracing::span::Id) {}
-    fn exit(&self, _: &tracing::span::Id) {}
-}
-
 /// Settle `how` on Alice's task as BOB, who holds no such task: the store refuses the write.
 /// Answers what the call answered, the writes it staged, and the lines it logged.
 fn refused_settle(how: &TaskSettled) -> (Result<Option<TaskRow>, Halt>, usize, Vec<String>) {
@@ -1007,7 +969,7 @@ fn refused_settle(how: &TaskSettled) -> (Result<Option<TaskRow>, Halt>, usize, V
             BOB,
             400,
             &mut out,
-            &Latches::new(),
+            &Latches::default(),
         )
     });
     let lines = heard.try_iter().map(|(_, line)| line).collect();
@@ -1098,7 +1060,7 @@ fn a_transition_the_store_refuses_is_surfaced_and_the_answer_stands() {
 #[test]
 fn a_refused_write_is_an_error_the_first_time_and_debug_after() {
     use tracing::Level;
-    let latches = Latches::new();
+    let latches = Latches::default();
     let (sent, heard) = std::sync::mpsc::channel();
     tracing::subscriber::with_default(Capture(sent), || {
         WriteRefused::Cursor.report(&latches, "t1", "no such task");
@@ -1151,7 +1113,7 @@ fn an_opening_states_the_engines_answer_should_the_store_refuse_its_writes() {
         request_id: "r",
         now: 150,
     };
-    tasks::dispatch(&mut desk.book, &at, "t1", MEMBER, &mut out).unwrap();
+    tasks::tests::dispatch(&mut desk.book, &at, "t1", MEMBER, &mut out).unwrap();
     for state in [TaskState::Working, TaskState::InputRequired] {
         desk.book.apply(&out);
         out.clear();
@@ -1268,7 +1230,7 @@ fn a_second_turn_naming_a_held_task_in_its_message_addresses_that_task() {
         request_id: "r",
         now: 150,
     };
-    tasks::dispatch(&mut d.book, &at, "t1", "planner-b", &mut out).unwrap();
+    tasks::tests::dispatch(&mut d.book, &at, "t1", "planner-b", &mut out).unwrap();
     d.book.apply(&out);
     let before = d.book.clone();
     let turn = send(json!({ "message": { "messageId": "m-2", "taskId": "t1" } }));

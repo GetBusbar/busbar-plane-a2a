@@ -37,22 +37,8 @@ fn a_write_names_its_kind_by_the_tails_index() {
 
 // ── the host records, through the SDK wrappers ───────────────────────────────────────────────────
 
-use busbar_contract::abi::host::service::HostSlots;
-use busbar_contract::abi::mechanism::ticket::{HostCtx, HostTables};
-
-/// Tables naming a services table this file never calls through: [`Via::issue`] hands the
-/// crossing to the closure the test writes, so the table is only ever stored.
-fn tables() -> HostTables {
-    HostTables {
-        size: std::mem::size_of::<HostTables>() as u32,
-        _reserved: 0,
-        ctx: HostCtx::NONE,
-        wake: None,
-        conns: std::ptr::null(),
-        services: std::ptr::NonNull::<HostSlots>::dangling().as_ptr(),
-        io: std::ptr::null(),
-    }
-}
+use busbar_contract::abi::sdk::conn::Host;
+use busbar_contract::abi::sdk::test_support::fake::FakeHost;
 
 const TICKET: Ticket = Ticket {
     slot: 3,
@@ -83,7 +69,8 @@ fn long_record(
 /// A short answer is re-called ONCE, on the same handle, at the size it named.
 #[test]
 fn a_short_records_answer_is_re_called_once_on_its_handle_at_the_named_size() {
-    let t = tables();
+    let fake: &'static FakeHost = Box::leak(Box::new(FakeHost::new()));
+    let t = fake.lent();
     let host = Host::of(&t);
     let grown = Keyed::new();
     let mut via = Via::new(&host, Services::of(&t), TICKET, 0, &grown);
@@ -100,7 +87,8 @@ fn a_short_records_answer_is_re_called_once_on_its_handle_at_the_named_size() {
 /// re-issued at that size, so the host never answers it short a second time (that is FAULT).
 #[test]
 fn a_piece_run_again_issues_a_short_handle_at_the_size_already_named() {
-    let t = tables();
+    let fake: &'static FakeHost = Box::leak(Box::new(FakeHost::new()));
+    let t = fake.lent();
     let host = Host::of(&t);
     let grown = Keyed::new();
     let mut log = Vec::new();
@@ -132,7 +120,8 @@ fn a_piece_run_again_issues_a_short_handle_at_the_size_already_named() {
 /// A host that names a size and then answers short at it broke its own rule.
 #[test]
 fn a_second_short_answer_on_one_handle_is_a_broken_host() {
-    let t = tables();
+    let fake: &'static FakeHost = Box::leak(Box::new(FakeHost::new()));
+    let t = fake.lent();
     let host = Host::of(&t);
     let grown = Keyed::new();
     let mut via = Via::new(&host, Services::of(&t), TICKET, 0, &grown);
@@ -148,7 +137,8 @@ fn a_second_short_answer_on_one_handle_is_a_broken_host() {
 /// No host services: every records call fails, and nothing is crossed.
 #[test]
 fn a_door_opened_with_no_services_reads_no_record() {
-    let t = tables();
+    let fake: &'static FakeHost = Box::leak(Box::new(FakeHost::new()));
+    let t = fake.lent();
     let host = Host::of(&t);
     let grown = Keyed::new();
     let mut via = Via::new(&host, None, TICKET, 0, &grown);
@@ -160,7 +150,8 @@ fn a_door_opened_with_no_services_reads_no_record() {
 /// The sizes book is bounded: at its cap it is cleared before the next entry.
 #[test]
 fn the_sizes_book_is_bounded() {
-    let t = tables();
+    let fake: &'static FakeHost = Box::leak(Box::new(FakeHost::new()));
+    let t = fake.lent();
     let host = Host::of(&t);
     let grown = Keyed::new();
     let via = Via::new(&host, Services::of(&t), TICKET, 0, &grown);

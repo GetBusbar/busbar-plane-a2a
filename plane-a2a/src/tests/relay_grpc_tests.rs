@@ -7,6 +7,7 @@
 //! length-prefixed, its trailers). The oracle is the generated `pb` messages, decoded and encoded
 //! with `prost` directly, never the code under test.
 
+use super::tests::{body, caller, far, kernel, part};
 use super::*;
 use crate::proto::pb;
 use prost::Message as _;
@@ -17,33 +18,6 @@ const URL: &str = "https://backend.agent.test/a2a";
 
 /// The backend's own task id, which every addressed rpc must name.
 const BACKEND: &str = "BACKEND-OWN-TASK-ID";
-
-fn kernel(url: Option<&str>) -> Piece<'_> {
-    Piece {
-        from: From::Kernel(url),
-        bytes: &[],
-        status: None,
-        last: false,
-    }
-}
-
-fn caller(bytes: &[u8]) -> Piece<'_> {
-    Piece {
-        from: From::Caller,
-        bytes,
-        status: None,
-        last: true,
-    }
-}
-
-fn far(status: Option<u32>, bytes: &[u8], last: bool) -> Piece<'_> {
-    Piece {
-        from: From::FarEnd,
-        bytes,
-        status,
-        last,
-    }
-}
 
 /// One message in its length-prefixed form, as the grpc transport hands an answer back.
 fn framed<M: prost::Message>(message: &M) -> Vec<u8> {
@@ -138,10 +112,6 @@ fn whole(answers: Vec<PieceAnswer>) -> RelayReply {
             _ => None,
         })
         .expect("the caller is answered")
-}
-
-fn body(reply: &RelayReply) -> serde_json::Value {
-    serde_json::from_slice(&reply.body).expect("the answer is JSON")
 }
 
 /// `grpc_client_issues_send_message`: the rpc's own path under the service (never the operator's
@@ -405,7 +375,7 @@ fn params_that_are_not_the_request_message_are_refused_before_the_hop() {
         panic!("refused before the hop");
     };
     assert_eq!(reply.status, 502);
-    assert!(r.answered());
+    assert!(r.answered);
 }
 
 /// THE TRAILERS ARE NEVER BYTES OF THE ANSWER: on the JSON-RPC binding a field block after the
@@ -651,11 +621,4 @@ fn an_unreadable_grpc_stream_message_refuses_the_hop() {
         Some(&TaskSettled::Failed),
         "the task fails"
     );
-}
-
-fn part(answer: PieceAnswer) -> Part {
-    match answer {
-        PieceAnswer::Part(part) => part,
-        other => panic!("not a part: {other:?}"),
-    }
 }

@@ -23,10 +23,7 @@
 
 use std::task::Poll;
 
-use busbar_contract::abi::host::service::ItemSpan;
-use busbar_contract::abi::mechanism::call::{Outcome, Span};
-use busbar_contract::abi::mechanism::check::SPAN_ABSENT;
-use busbar_contract::abi::mechanism::ticket::CompletionHandle;
+use busbar_contract::abi::mechanism::call::Outcome;
 use busbar_contract::abi::plane::{ServeIn, ServeOut, AUDIT_NONE};
 use busbar_contract::abi::sdk::{Instance, Lent, Out};
 use serde_json::{json, Value};
@@ -65,58 +62,7 @@ fn refused(
 /// `202`, with no document: the report was taken, the move it recorded written to the task's
 /// chain with the answer (SEAM-L(t)).
 fn accepted(input: &Lent<'_, ServeIn>, out: &mut Out<'_, ServeOut>, writes: &[Write]) -> Outcome {
-    serve_answer(input, out, (202, &[], b""), writes)
-}
-
-/// A whole serve answer: `status`, the head `fields`, `body`, and the record `writes` it carries,
-/// every span in the one arena; a short buffer answers FAILED with what each needs.
-fn serve_answer(
-    input: &Lent<'_, ServeIn>,
-    out: &mut Out<'_, ServeOut>,
-    (status, head, body): (u32, &[(&str, &str)], &[u8]),
-    writes: &[Write],
-) -> Outcome {
-    use busbar_contract::abi::plane::{OutField, RecordWrite, RECORD_PUT};
-    let (mut reply, mut fields, mut arena, mut records) = (
-        input.reply_buf(),
-        input.fields_buf(),
-        input.arena_buf(),
-        input.records_buf(),
-    );
-    reply.extend(body);
-    for (name, value) in head {
-        fields.push(OutField {
-            name: arena.span(name.as_bytes()),
-            value: arena.span(value.as_bytes()),
-        });
-    }
-    for w in writes {
-        records.push(RecordWrite {
-            kind: crate::task_door::kind_index(w.kind),
-            op: RECORD_PUT,
-            key: arena.span(w.key.as_bytes()),
-            value: arena.span(&w.value),
-        });
-    }
-    let short = !(reply.fits() && fields.fits() && arena.fits() && records.fits());
-    let (rw, rnd) = reply.settle(short);
-    let (fw, fnd) = fields.settle(short);
-    let (cw, cnd) = records.settle(short);
-    let (aw, and) = arena.settle(short);
-    out.set(|o| &o.reply_written, rw as u64);
-    out.set(|o| &o.reply_needed, rnd as u64);
-    out.set(|o| &o.fields_written, fw as u32);
-    out.set(|o| &o.fields_needed, fnd as u32);
-    out.set(|o| &o.records_written, cw as u32);
-    out.set(|o| &o.records_needed, cnd as u32);
-    out.set(|o| &o.arena_written, aw as u64);
-    out.set(|o| &o.arena_needed, and as u64);
-    if short {
-        return Outcome::Failed;
-    }
-    out.set(|o| &o.status, status);
-    out.set(|o| &o.audit, AUDIT_NONE);
-    Outcome::Ready
+    crate::agent_door::verb_answer(input, out, (202, &[], b""), AUDIT_NONE, writes)
 }
 
 /// What a push keeps across its op's PENDING entries: it has already spent its push-volume budget,
@@ -130,30 +76,14 @@ fn signature(
     seq: u32,
     task_id: &str,
 ) -> Option<Vec<u8>> {
-    let services = plane.services.as_ref()?;
-    let absent = Span {
-        offset: SPAN_ABSENT,
-        len: 0,
-    };
-    let mut buf = vec![0u8; 1024];
-    let mut spans = [ItemSpan {
-        key: absent,
-        value: absent,
-    }; 2];
-    let handle = CompletionHandle {
+    let mut signer = crate::task_door::HostSigner {
+        services: plane.services.as_ref(),
         ticket,
         seq,
-        _reserved: 0,
     };
-    let sig = services
-        .sign(
-            handle,
-            &crate::push::token_input(task_id),
-            &mut buf,
-            &mut spans,
-        )
-        .ok()?;
-    Some(sig.signature.to_vec())
+    signer
+        .signed(&crate::push::token_input(task_id))
+        .map(|(_, sig)| sig)
 }
 
 /// THE MOVE A PUSHED `document` ASKS OF A TASK IN `held`: the state it reports, when it reports one
@@ -175,11 +105,11 @@ pub(crate) fn serve(
     let authorization = fields
         .iter()
         .find(|f| {
-            f.field(|f| &f.name)
+            f.name()
                 .as_str()
                 .is_ok_and(|n| n.eq_ignore_ascii_case("authorization"))
         })
-        .and_then(|f| f.field(|f| &f.value).as_str().ok())
+        .and_then(|f| f.value().as_str().ok())
         .unwrap_or_default();
     // 1. THE CAPABILITY: a token this instance minted, signed again by the host and compared in
     //    constant time.
@@ -212,7 +142,7 @@ pub(crate) fn serve(
         );
     }
     // 3. THE BODY'S CEILING.
-    let body = input.field(|i| &i.body).bytes();
+    let body = input.body().bytes();
     if body.len() > MAX_PUSH_BODY {
         return refused(
             &input,
