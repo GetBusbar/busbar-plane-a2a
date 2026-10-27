@@ -355,12 +355,6 @@ pub struct Deliveries {
 type Wakeup = Keyed<(), Box<dyn Fn() + Send + Sync>>;
 
 impl Deliveries {
-    /// None queued.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     fn with<R>(&self, f: impl FnOnce(&mut Book) -> R) -> R {
         self.book
             .with_all(|m| f(m.entry(()).or_insert_with(Book::default)))
@@ -416,36 +410,6 @@ impl Deliveries {
                 open: false,
             });
             dropped
-        })
-    }
-
-    /// How many notifications were dropped from full queues.
-    #[must_use]
-    pub fn dropped(&self) -> u64 {
-        self.with(|b| b.dropped)
-    }
-
-    /// How many notifications `task_id`'s queue holds.
-    #[must_use]
-    pub fn depth(&self, task_id: &str) -> usize {
-        self.with(|b| b.queues.get(task_id).map_or(0, VecDeque::len))
-    }
-
-    /// The deliveries to attempt now: each task's head, when its time has come and no attempt on
-    /// it is open. Each is marked open until [`Deliveries::settle`].
-    #[must_use]
-    pub fn due(&self, now_ns: u64) -> Vec<Delivery> {
-        self.with(|b| {
-            b.queues
-                .values_mut()
-                .filter_map(VecDeque::front_mut)
-                .filter(|w| !w.open && w.not_before_ns <= now_ns)
-                .map(|w| {
-                    w.open = true;
-                    w.attempts += 1;
-                    w.delivery.clone()
-                })
-                .collect()
         })
     }
 
@@ -514,12 +478,6 @@ impl Deliveries {
             b.owed = kept;
             taken
         })
-    }
-
-    /// How many owed outcomes were dropped unfiled from a full book.
-    #[must_use]
-    pub fn unfiled(&self) -> u64 {
-        self.with(|b| b.unfiled)
     }
 
     /// The notifications dropped and the outcomes dropped unfiled SINCE THE LAST CALL: the
@@ -703,12 +661,6 @@ pub struct Tokens {
 }
 
 impl Tokens {
-    /// None minted.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// The token for `caller`'s task `task_id` over the host's `signature` of [`token_input`];
     /// `None` past [`MAX_TOKENS`] or for an empty id or signature.
     #[must_use]
@@ -780,12 +732,6 @@ pub struct PushLimiter {
 }
 
 impl PushLimiter {
-    /// No push spent.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Spend one push from `task_id`'s budget at `now` (unix seconds): `false` once the window's
     /// budget is spent.
     pub fn admit(&self, task_id: &str, now: u64) -> bool {

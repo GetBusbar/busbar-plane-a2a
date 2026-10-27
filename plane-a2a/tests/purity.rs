@@ -5,8 +5,6 @@
 //! would make either false, and the door's arrival is driven repeatedly over the same inputs and its
 //! answers compared. A comment claiming purity is worth nothing; a scan and a repeat are worth something.
 
-use busbar_contract::plane::PlaneMeta;
-use busbar_plane_a2a::A2aPlane;
 use std::path::{Path, PathBuf};
 
 /// The crate's own source directory.
@@ -194,7 +192,7 @@ fn the_plane_names_no_kernel_side_crate() {
 /// The door's arrival gives the same answer every time it is asked the same question.
 #[test]
 fn the_arrival_is_deterministic() {
-    let bodies: Vec<Vec<u8>> = A2aPlane::OP_CLASSES
+    let bodies: Vec<Vec<u8>> = busbar_plane_a2a::ops::OP_CLASSES
         .iter()
         .filter_map(|op| busbar_plane_a2a::ops::METHODS.iter().find(|r| r.op == *op))
         .map(|row| {
@@ -218,7 +216,7 @@ fn the_arrival_is_deterministic() {
             .map(|_| {
                 format!(
                     "{:?}",
-                    busbar_plane_a2a::agent_arrival::decide_arrival(body, |_| None)
+                    busbar_plane_a2a::agent_arrival::decide_and_read(body, |_| None).0
                 )
             })
             .collect();

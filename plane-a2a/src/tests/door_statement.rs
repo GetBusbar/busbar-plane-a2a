@@ -126,7 +126,7 @@ fn the_tail_states_the_planes_nouns() {
 
 #[test]
 fn the_abi_trust_keys_are_the_grammars_trust_keys() {
-    let grammar = crate::a2a::config::TRUST_KEYS;
+    let grammar = crate::a2a::config::tests::TRUST_KEYS;
     assert_eq!(TRUST_KEYS.len(), grammar.len() + 1);
     let reach = TRUST_KEYS[grammar.len()];
     assert_eq!(
@@ -623,7 +623,7 @@ fn the_registry_follows_config_order_rather_than_hash_order() {
 /// Ported from busbar-a2a a2a/tests/serve_tests.rs::every_published_binding_is_one_the_a2a_plane_declares_a_wire_format_for.
 #[test]
 fn every_published_binding_is_one_the_a2a_plane_declares_a_wire_format_for() {
-    use crate::surface::{BINDING_DOCUMENT, BINDING_FRAMED, BINDING_TARGET};
+    use crate::binding::{BINDING_DOCUMENT, BINDING_FRAMED, BINDING_TARGET};
     let declared: Vec<&str> = [BINDING_DOCUMENT, BINDING_TARGET, BINDING_FRAMED].to_vec();
     // The tail declares exactly those three, in this order.
     assert_eq!(DIALECTS.len(), declared.len());
@@ -668,9 +668,9 @@ fn the_plane_declares_its_published_identity_and_its_claims_speak_its_wire_forma
     assert_eq!(s(TAIL.subject_noun), "fronted agent");
     assert_eq!(TAIL.scope_kinds_len, 1);
     assert_eq!(s(TAIL.scope), "agent");
-    assert_eq!(crate::surface::BINDING_DOCUMENT, "jsonrpc");
-    assert_eq!(crate::surface::BINDING_TARGET, "http+json");
-    assert_eq!(crate::surface::BINDING_FRAMED, "grpc");
+    assert_eq!(crate::binding::BINDING_DOCUMENT, "jsonrpc");
+    assert_eq!(crate::binding::BINDING_TARGET, "http+json");
+    assert_eq!(crate::binding::BINDING_FRAMED, "grpc");
     assert_eq!(TAIL.dialects_len, 3);
 
     // Its claims: an admitted generation claims doors at exactly the plane's two mounts.
@@ -685,7 +685,7 @@ fn the_plane_declares_its_published_identity_and_its_claims_speak_its_wire_forma
         );
         assert!(
             c.target.starts_with(crate::MOUNT_PATH)
-                || c.target.starts_with(crate::GRPC_MOUNT_PATH)
+                || c.target.starts_with(crate::framed::SERVICE_PATH)
                 || c.target.starts_with("/.well-known/"),
             "a claim outside the plane's mounts: {}",
             c.target

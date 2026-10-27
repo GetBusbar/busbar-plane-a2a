@@ -412,33 +412,7 @@ fn commit(
     Ok(Some(next))
 }
 
-/// SUBMIT `row` for the caller: the task, and its chain's genesis event, stamped with the row's
-/// `created_at`. The row is the caller's (its `principal` is the caller's reference).
-///
-/// # Errors
-/// [`Halt`]; `Failed` when there is no caller or the task id is already taken.
-pub fn submit(
-    rec: &mut dyn Records,
-    at: &Stamp<'_>,
-    mut row: TaskRow,
-    out: &mut Vec<Write>,
-) -> Result<TaskRow, Halt> {
-    if !is_caller(at.caller) {
-        return Err(Halt::Failed("no caller to hold the task under".into()));
-    }
-    row.principal = at.caller.to_string();
-    let genesis = HeldTask {
-        row: row.clone(),
-        next_seq: 1,
-    };
-    let at = Stamp {
-        now: row.created_at,
-        ..*at
-    };
-    submit_held(rec, &at, &genesis, row, out).map(|held| held.row)
-}
-
-/// The genesis commit of [`submit`], answering the task as held.
+/// The genesis commit of a task, answering it as held.
 fn submit_held(
     rec: &mut dyn Records,
     at: &Stamp<'_>,
@@ -535,50 +509,6 @@ pub fn transition(
     out: &mut Vec<Write>,
 ) -> Result<Option<TaskRow>, Halt> {
     let mut plan = |row: &TaskRow| -> Planned { plan_transition(to, at.now)(row).map(Some) };
-    change(rec, at, task, &mut plan, out)
-}
-
-/// DISPATCH: record the agent the task went to, with a `task.delegated` event.
-///
-/// # Errors
-/// As [`change`].
-pub fn dispatch(
-    rec: &mut dyn Records,
-    at: &Stamp<'_>,
-    task: &str,
-    agent_id: &str,
-    out: &mut Vec<Write>,
-) -> Result<Option<TaskRow>, Halt> {
-    let mut plan = |row: &TaskRow| -> Planned {
-        let mut next = row.clone();
-        next.agent_id = agent_id.to_string();
-        next.updated_at = at.now;
-        Ok(Some((next, EV_DELEGATED)))
-    };
-    change(rec, at, task, &mut plan, out)
-}
-
-/// ADVANCE the artifact cursor to `cursor`, monotonic, with a `task.artifact` event; nothing when it
-/// would not move forward.
-///
-/// # Errors
-/// As [`change`].
-pub fn advance_cursor(
-    rec: &mut dyn Records,
-    at: &Stamp<'_>,
-    task: &str,
-    cursor: u64,
-    out: &mut Vec<Write>,
-) -> Result<Option<TaskRow>, Halt> {
-    let mut plan = |row: &TaskRow| -> Planned {
-        if cursor <= row.artifact_cursor {
-            return Ok(None);
-        }
-        let mut next = row.clone();
-        next.artifact_cursor = cursor;
-        next.updated_at = at.now;
-        Ok(Some((next, EV_ARTIFACT)))
-    };
     change(rec, at, task, &mut plan, out)
 }
 
