@@ -355,12 +355,6 @@ pub struct Deliveries {
 type Wakeup = Keyed<(), Box<dyn Fn() + Send + Sync>>;
 
 impl Deliveries {
-    /// None queued.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     fn with<R>(&self, f: impl FnOnce(&mut Book) -> R) -> R {
         self.book
             .with_all(|m| f(m.entry(()).or_insert_with(Book::default)))
@@ -667,12 +661,6 @@ pub struct Tokens {
 }
 
 impl Tokens {
-    /// None minted.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// The token for `caller`'s task `task_id` over the host's `signature` of [`token_input`];
     /// `None` past [`MAX_TOKENS`] or for an empty id or signature.
     #[must_use]
@@ -744,12 +732,6 @@ pub struct PushLimiter {
 }
 
 impl PushLimiter {
-    /// No push spent.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Spend one push from `task_id`'s budget at `now` (unix seconds): `false` once the window's
     /// budget is spent.
     pub fn admit(&self, task_id: &str, now: u64) -> bool {

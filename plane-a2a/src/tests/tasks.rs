@@ -640,7 +640,7 @@ fn the_sweep_tombstones_the_expired_and_leaves_the_idle_active() {
 fn an_idle_active_task_survives_the_sweep_with_its_push_token() {
     let mut book = Book::default();
     submitted(&mut book, ALICE, "idle", 100);
-    let tokens = crate::push::Tokens::new();
+    let tokens = crate::push::Tokens::default();
     let token = tokens.mint(ALICE, "idle", b"sig").unwrap();
     let now = 100 + 86_400 * 30;
     let mut out = Vec::new();
