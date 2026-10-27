@@ -28,9 +28,14 @@ license = "Apache-2.0"
 publish = false
 repository = "https://github.com/GetBusbar/busbar-plane-a2a"
 
+# `T { .., ..T::ZERO }` and `..Default::default()` are the fleet's forward-compatible literal idiom
+# (coordinator ruling (a)): a spread that fills no field today still compiles when the type grows one.
+[workspace.lints.clippy]
+needless_update = "allow"
+
 [workspace.dependencies]
-busbar-contract = { git = "https://github.com/GetBusbar/busbar", rev = "6bd0a7ad2f3f7956515290b4318d28eeee2c9886" }
-busbar-plugin-loader = { git = "https://github.com/GetBusbar/busbar", rev = "6bd0a7ad2f3f7956515290b4318d28eeee2c9886" }
+busbar-contract = { git = "https://github.com/GetBusbar/busbar", rev = "70b430271740e7e54048aba7b337437c68d14e93" }
+busbar-plugin-loader = { git = "https://github.com/GetBusbar/busbar", rev = "70b430271740e7e54048aba7b337437c68d14e93" }
 # busbar's root [workspace.dependencies], third-party rows, at 804aced00db2e2e891f8746cace448601b6c0064
 aes = { version = "0.8", default-features = false }
 arc-swap = "1"
@@ -73,7 +78,7 @@ pbjson-build = "0.9"
 proc-macro2 = { version = "1", features = ["span-locations"] }
 proptest = "1"
 prost = { version = "0.14", default-features = false, features = ["std"] }
-prost-build = "0.14"
+prost-build = { version = "0.14", default-features = false }
 protoc-bin-vendored = "3"
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }

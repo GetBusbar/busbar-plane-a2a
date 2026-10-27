@@ -174,14 +174,33 @@
       ]
     ],
     "member": "vendor",
+    "caller_ref": "c0ffee01",
     "host": {
       "entitled": [
         {
           "target": "agent:vendor"
         }
-      ]
+      ],
+      "trusted": [
+        [
+          "vendor",
+          null,
+          "none"
+        ]
+      ],
+      "resolve": {
+        "vendor.example": [
+          "93.184.216.34"
+        ]
+      }
     },
     "arrive_each": true,
+    "serve_first": [
+      {
+        "route": 0,
+        "target": "/agents/vendor/connect"
+      }
+    ],
     "claimed": {
       "unit": 7,
       "method": "POST",
@@ -231,5 +250,45 @@
       "text": "denied",
       "reply": "{\"error\":{\"code\":-32004,\"data\":[{\"@type\":\"type.googleapis.com/google.rpc.ErrorInfo\",\"domain\":\"a2a-protocol.org\",\"reason\":\"UNSUPPORTED_OPERATION\"}],\"message\":\"denied\"},\"id\":null,\"jsonrpc\":\"2.0\"}"
     }
-  }
+  },
+  "far_ends": [
+    {
+      "url": "https://vendor.example/.well-known/agent-card.json",
+      "cert_pem": null,
+      "status": 200,
+      "body": {
+        "name": "vendor",
+        "description": "The vendor agent",
+        "url": "https://vendor.example/agent",
+        "version": "1.0.0",
+        "capabilities": {},
+        "defaultInputModes": [
+          "text/plain"
+        ],
+        "defaultOutputModes": [
+          "text/plain"
+        ],
+        "skills": [
+          {
+            "id": "answer",
+            "name": "Answer",
+            "description": "Answers a message",
+            "tags": [
+              "chat"
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "unreached_schemes": [
+    {
+      "scheme": "grpc",
+      "why": "the agent's gRPC binding is reached only when its card names one; the suite's card names the JSON-RPC binding, so the grpc relay is proven by the plane's own client-leg cells",
+      "covered_by": [
+        "plane-a2a/src/tests/relay_grpc_tests.rs::grpc_client_issues_send_message",
+        "plane-a2a/src/tests/relay_grpc_tests.rs::grpc_client_issues_get_task"
+      ]
+    }
+  ]
 }
