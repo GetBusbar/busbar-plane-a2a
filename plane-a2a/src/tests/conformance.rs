@@ -9,8 +9,8 @@
 //! assert the operation class and the request id it reads; the door itself is then driven op by op,
 //! linked and dropped in, by the plugin crate's `tests/both_ways.rs`.
 
-use busbar_plane_a2a::agent_arrival::{self, AgentDisposition};
-use busbar_plane_a2a::ops;
+use crate::agent_arrival::{self, AgentDisposition};
+use crate::ops;
 
 /// The rig's own vocabulary table, read out of the file the rig imports it from.
 ///
