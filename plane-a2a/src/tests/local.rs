@@ -561,14 +561,8 @@ fn the_v0_3_spelling_is_answered_in_the_v0_3_shape() {
 /// name: the local verb it is, the class it is relayed as, and whether its answer is events.
 #[test]
 fn every_a2a_method_is_read_identically_under_both_of_its_live_json_rpc_names() {
-    // busbar's generated inventory at the pin this repo names, read by `build.rs` from the busbar
-    // checkout plugin CI exports (`BUSBAR_CHECKOUT`) and included as generated source. A build
-    // with no checkout is a failure, never a skip.
-    let inventory = METHOD_INVENTORY.expect(
-        "the build had no BUSBAR_CHECKOUT: the inventory is busbar's qa/method-inventory.json at \
-         .busbar-ref (plugin CI exports it; locally, point it at a busbar checkout and rebuild)",
-    );
-    let doc: Value = serde_json::from_str(inventory).expect("the inventory parses");
+    // The inventory, read by `build.rs` from `tests/data/` and included as generated source.
+    let doc: Value = serde_json::from_str(METHOD_INVENTORY).expect("the inventory parses");
     let methods = doc["methods"].as_array().expect("a methods array");
     fn how_busbar_reads(method: &str) -> (Option<&'static str>, String, Option<bool>) {
         let verb = verb_of(method).map(|v| match v {
