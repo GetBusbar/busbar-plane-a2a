@@ -473,7 +473,7 @@ pub fn status_reading(status: u32) -> Reading {
 
 /// ONE UNARY HOP: the caller's request id and negotiated version, and what the current attempt's
 /// far end has said so far.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct HopRelay {
     id: Value,
     version: &'static str,
@@ -581,23 +581,7 @@ impl HopRelay {
         HopRelay {
             id,
             version,
-            sent: 0,
-            status: None,
-            far: Vec::new(),
-            received: 0,
-            answered: false,
-            task: None,
-            instead: None,
-            instead_sent: false,
-            settled: Vec::new(),
-            binding: Binding::JsonRpc,
-            method: String::new(),
-            params: Value::Null,
-            events: None,
-            reading: None,
-            grpc: GrpcRead::default(),
-            agent: String::new(),
-            url: String::new(),
+            ..HopRelay::default()
         }
     }
 

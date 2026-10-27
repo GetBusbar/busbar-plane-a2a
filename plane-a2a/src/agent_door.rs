@@ -137,7 +137,7 @@ pub struct AgentUnit {
 }
 
 /// One unit's unary hop, and the answer it is part way through writing.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Hop {
     relay: HopRelay,
     outbox: Outbox,
@@ -241,31 +241,7 @@ impl Hop {
     pub fn new(id: serde_json::Value, version: &'static str) -> Self {
         Hop {
             relay: HopRelay::new(id, version),
-            outbox: Outbox::default(),
-            opening: None,
-            request: None,
-            settle: Vec::new(),
-            now: None,
-            subscribe: false,
-            queued: 0,
-            owed: None,
-            admitted: false,
-            skill: None,
-            waits_on: None,
-            verifying: None,
-            held_writes: Vec::new(),
-            endpoint_judged: false,
-            left: false,
-            heard: false,
-            rewritten: None,
-            relayed_bytes: None,
-            mint_message_id: false,
-            member: String::new(),
-            refused: None,
-            holder: None,
-            mismatch: None,
-            gated: 0,
-            rejected: None,
+            ..Hop::default()
         }
     }
 
