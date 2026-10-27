@@ -263,7 +263,7 @@ fn settled(desk: &mut Desk, task: &TaskHop, how: &TaskSettled) -> usize {
         ALICE,
         400,
         &mut out,
-        &Latches::new(),
+        &Latches::default(),
     )
     .unwrap();
     desk.book.apply(&out);
@@ -303,7 +303,7 @@ fn the_answer_records_the_reported_state_and_a_failed_hop_ends_the_task_failed()
         BOB,
         400,
         &mut out,
-        &Latches::new(),
+        &Latches::default(),
     )
     .unwrap();
     desk.book.apply(&out);
@@ -647,7 +647,7 @@ fn ended_on_refusal(d: &mut Desk, task: &TaskHop) -> Vec<Write> {
         ALICE,
         300,
         &mut out,
-        &Latches::new(),
+        &Latches::default(),
     )
     .unwrap();
     out
@@ -1003,7 +1003,7 @@ fn refused_settle(how: &TaskSettled) -> (Result<Option<TaskRow>, Halt>, usize, V
             BOB,
             400,
             &mut out,
-            &Latches::new(),
+            &Latches::default(),
         )
     });
     let lines = heard.try_iter().map(|(_, line)| line).collect();
@@ -1094,7 +1094,7 @@ fn a_transition_the_store_refuses_is_surfaced_and_the_answer_stands() {
 #[test]
 fn a_refused_write_is_an_error_the_first_time_and_debug_after() {
     use tracing::Level;
-    let latches = Latches::new();
+    let latches = Latches::default();
     let (sent, heard) = std::sync::mpsc::channel();
     tracing::subscriber::with_default(Capture(sent), || {
         WriteRefused::Cursor.report(&latches, "t1", "no such task");

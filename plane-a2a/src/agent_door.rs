@@ -209,6 +209,32 @@ pub struct Hop {
     rejected: Option<String>,
 }
 
+impl AgentUnit {
+    /// A unit from its arrival, under the generation `generation` and its `section`: no hop, no
+    /// composed envelope, no pool yet.
+    fn new(
+        disposition: AgentDisposition,
+        agent: Option<String>,
+        section: Option<Arc<AgentsCfg>>,
+        generation: u64,
+    ) -> Self {
+        AgentUnit {
+            disposition,
+            agent,
+            section,
+            hop: None,
+            pass: crate::task_door::Pass::default(),
+            envelope: None,
+            framed: None,
+            generation,
+            unreadable_rewrite: false,
+            pool: None,
+            ticket: Ticket::NONE,
+            over: false,
+        }
+    }
+}
+
 impl Hop {
     /// A task-less hop answering the request `id`, declaring `version`.
     #[must_use]
@@ -370,17 +396,11 @@ impl Outbox {
         Some(Outbox {
             lent,
             live: true,
-            recall: false,
             to_far,
             done,
             head,
             bytes,
-            at: 0,
-            writes: Vec::new(),
-            queue: std::collections::VecDeque::new(),
-            messages: false,
-            final_status: None,
-            fault: FAULT_NONE,
+            ..Outbox::default()
         })
     }
 
@@ -405,19 +425,14 @@ impl Outbox {
                 let mut queue: std::collections::VecDeque<Vec<u8>> = messages.into();
                 let bytes = queue.pop_front().unwrap_or_default();
                 Some(Outbox {
-                    lent: false,
                     live: true,
-                    recall: false,
-                    to_far: false,
                     done: part.last || terminal.is_some(),
                     head: part.head.then_some(AnswerHead::Framed),
                     bytes,
-                    at: 0,
-                    writes: Vec::new(),
                     queue,
                     messages: emits,
                     final_status: terminal.map(Into::into),
-                    fault: FAULT_NONE,
+                    ..Outbox::default()
                 })
             }
             other => Self::of(other),
@@ -435,19 +450,13 @@ impl Outbox {
             (Vec::new(), Some(reply))
         };
         Outbox {
-            lent: false,
             live: true,
-            recall: false,
-            to_far: false,
             done: true,
             messages: ok,
             head: Some(AnswerHead::Framed),
             bytes,
-            at: 0,
-            writes: Vec::new(),
-            queue: std::collections::VecDeque::new(),
             final_status,
-            fault: FAULT_NONE,
+            ..Outbox::default()
         }
     }
 }
@@ -540,6 +549,7 @@ pub(crate) fn drive_mirror(
 /// One instance: the public base URL `open` was given, the host tables, every live generation's
 /// snapshot and section, the units in flight, whether (and when) the task records were restored,
 /// and the far end's own id for each relayed task busbar learnt it for.
+#[derive(Default)]
 pub struct A2aDoor {
     pub(crate) public_url: Option<String>,
     pub(crate) host: Option<Host>,
@@ -787,10 +797,10 @@ fn kept_records(plane: &A2aDoor, kind: &'static str, agent: &str, value: &[u8]) 
     writes
 }
 
-/// A trust verb's whole answer: `status`, the head `fields`, `body`, the `AUDIT_*` row, and the
-/// record `writes` it carries, every span in the one arena; a short buffer answers FAILED with
+/// A whole serve answer (a trust verb's, a push callback's): `status`, the head `fields`, `body`,
+/// the `AUDIT_*` row, and the record `writes` it carries, every span in the one arena; a short buffer answers FAILED with
 /// what each needs.
-fn verb_answer(
+pub(crate) fn verb_answer(
     input: &Lent<'_, ServeIn>,
     out: &mut Out<'_, ServeOut>,
     (status, head, body): (u32, &[(&str, &str)], &[u8]),
@@ -1044,24 +1054,7 @@ slot!(
                 .field(|i| &i.open)
                 .host()
                 .and_then(|h| Services::of(&h)),
-            generations: Generations::new(),
-            units: Keyed::new(),
-            restored: Keyed::new(),
-            latches: crate::task_hop::Latches::new(),
-            backends: BackendIds::default(),
-            cards: crate::cards::Cards::new(),
-            cards_warmed: Keyed::new(),
-            warm_refused: Keyed::new(),
-            record_parts: Keyed::new(),
-            warm_driving: Keyed::new(),
-            deliveries: crate::push::Deliveries::new(),
-            attempting: crate::push_door::Attempting::default(),
-            tokens: crate::push::Tokens::new(),
-            pushes: crate::push::PushLimiter::new(),
-            newest: Keyed::new(),
-            grown: Keyed::new(),
-            flights: Flights::default(),
-            trust: Keyed::new(),
+            ..A2aDoor::default()
         };
         plane.published(generation);
         let names: Vec<&str> = cfg.agents.keys().map(String::as_str).collect();
@@ -1435,23 +1428,12 @@ slot!(
             if matches!(disposition, AgentDisposition::Request { .. }) {
                 out.counted();
             }
-            plane.units.insert(
-                given.unit,
-                AgentUnit {
-                    disposition,
-                    agent,
-                    section,
-                    hop: None,
-                    pass: crate::task_door::Pass::default(),
-                    envelope,
-                    framed,
-                    generation,
-                    unreadable_rewrite: false,
-                    pool: None,
-                    ticket: Ticket::NONE,
-                    over: false,
-                },
-            );
+            let unit = AgentUnit {
+                envelope,
+                framed,
+                ..AgentUnit::new(disposition, agent, section, generation)
+            };
+            plane.units.insert(given.unit, unit);
             return Outcome::Ready;
         }
         let mut pool = None;
@@ -1544,18 +1526,11 @@ slot!(
             out.stream();
         }
         let unit = AgentUnit {
-            disposition,
-            agent,
-            section: plane.generations.current(),
             hop,
-            pass: crate::task_door::Pass::default(),
             envelope,
             framed,
-            generation,
-            unreadable_rewrite: false,
             pool,
-            ticket: Ticket::NONE,
-            over: false,
+            ..AgentUnit::new(disposition, agent, plane.generations.current(), generation)
         };
         plane.units.insert(given.unit, unit);
         Outcome::Ready
@@ -1623,23 +1598,9 @@ fn arrive_card(
             }
         }
     }
-    plane.units.insert(
-        unit,
-        AgentUnit {
-            disposition: AgentDisposition::Card(ask),
-            agent,
-            section: plane.generations.current(),
-            hop: None,
-            pass: crate::task_door::Pass::default(),
-            envelope: None,
-            framed: None,
-            generation,
-            unreadable_rewrite: false,
-            pool: None,
-            ticket: Ticket::NONE,
-            over: false,
-        },
-    );
+    let card = AgentDisposition::Card(ask);
+    let held = AgentUnit::new(card, agent, plane.generations.current(), generation);
+    plane.units.insert(unit, held);
     Outcome::Ready
 }
 

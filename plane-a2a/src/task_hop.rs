@@ -568,12 +568,6 @@ pub struct Latches {
 }
 
 impl Latches {
-    /// No latch tripped.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Trip latch `kind`; `true` when this is the first trip.
     fn first(&self, kind: u8) -> bool {
         self.tripped.with_all(|m| m.insert(kind, ()).is_none())
