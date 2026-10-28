@@ -30,8 +30,7 @@
 //!
 //! `unpinned` is accepted and named out loud rather than being spelled as an absent field, because
 //! an operator reading a list of registrations needs to SEE which entries have no root. It is legal
-//! to write and impossible to approve: the cap lives in the approval step, which is where the
-//! ruling belongs, and this file only refuses to let it carry key material it would
+//! to write and impossible to approve: the cap lives in the approval step, and this file only refuses to let it carry key material it would
 //! never use.
 //!
 //! ## The pin is the peer's identity; `client_identity:` is busbar's
@@ -198,7 +197,7 @@ pub struct AgentDefCfg {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recovery_backoff: Option<String>,
     /// The A2A protocol version an operator states for this registration. ACCEPTED AND READ BY
-    /// NOTHING: the key is the predev grammar's, so a config that states it still parses, but the
+    /// NOTHING: the key is accepted so a config that states it still parses, but the
     /// plane pins nothing on it: the card is fetched at both well-known paths, canonical first
     /// ([`crate::card_trust`]), whatever version it names.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -233,7 +232,7 @@ pub struct AgentDefCfg {
     /// plus its lease policy. Never the secret, never the caller's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upstream_credential: Option<super::creds::OutboundCredential>,
-    /// WHICH FRONTED AGENTS MAY DELEGATE HERE, as the predev grammar spelled the egress policy.
+    /// Which fronted agents may delegate here (the egress policy).
     /// Judged for shape only ([`validate_agent`] refuses an empty name) and READ BY NOTHING: the
     /// plane has no delegating-from path, so no request is ever judged against this list.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -296,7 +295,7 @@ impl<'de> Deserialize<'de> for AgentsCfg {
 
         // THE SECTION DEFAULT, refused here too until the kernel's judgement of the reserved key
         // (the declaration's `caller_credential_refusal`) runs on every path: the same sentence, so
-        // whichever refuses first the bytes are 1.5.5's. On the door path the reserved key arrives
+        // whichever refuses first the bytes are the same. On the door path the reserved key arrives
         // stripped and this never fires.
         if section.upstream_credentials == Some(busbar_contract::config::UpstreamCreds::Passthrough)
         {
