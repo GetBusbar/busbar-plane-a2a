@@ -315,7 +315,7 @@ pub fn open(
                     version: version.to_string(),
                 };
                 // A callback that cannot be registered leaves the task as it was: the hop goes on.
-                if let Ok(value) = serde_json::to_vec(&stored) {
+                if let Ok(value) = crate::push::record_value(&stored) {
                     out.push(Write {
                         kind: KIND_PUSH_CONFIG,
                         key: tasks::task_key(req.caller, &row.task_id),
