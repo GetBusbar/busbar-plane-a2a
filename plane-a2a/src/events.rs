@@ -19,6 +19,8 @@
 //!   artifact and the far end's own task id are read off it first, through the v1.0 wrappers as
 //!   well as the v0.3 bare shape (its `kind` naming the member that names the task).
 
+use std::borrow::Cow;
+
 use busbar_contract::jsonrpc::{read_response, Reply};
 use serde_json::Value;
 
@@ -130,7 +132,7 @@ pub fn read_event(
     let state = task_identity::reported_task_state(result);
     let backend_task_id = task_identity::backend_task_id(result);
     let names_no_task = task_identity::names_no_task(result);
-    // The far end's own `result` bytes with busbar's identity spliced in (Law 5; Q128 a2a M8).
+    // The far end's own `result` bytes with busbar's identity spliced in.
     let spliced = crate::answer_bytes::result_span(data.as_bytes()).and_then(|r| {
         crate::answer_bytes::rewrite_identity(
             &data.as_bytes()[r],
@@ -163,14 +165,12 @@ pub fn read_event(
 /// bare event, so it becomes `result` under `rpc_id`, the far end's own bytes
 /// ([`crate::answer_bytes::rewrap`]); a frame with no JSON payload passes as it is.
 #[must_use]
-pub fn rewrap(frame_text: String, rpc_id: &Value) -> String {
-    let wrapped = sse_data(&frame_text)
+pub fn rewrap<'f>(frame_text: &'f str, rpc_id: &Value) -> Cow<'f, str> {
+    sse_data(frame_text)
         .filter(|d| !d.trim().is_empty())
-        .and_then(|d| crate::answer_bytes::rewrap(d.as_bytes(), rpc_id).ok());
-    match wrapped {
-        Some(envelope) => String::from_utf8(data_event(&envelope)).unwrap_or(frame_text),
-        None => frame_text,
-    }
+        .and_then(|d| crate::answer_bytes::rewrap(d.as_bytes(), rpc_id).ok())
+        .and_then(|envelope| String::from_utf8(data_event(&envelope)).ok())
+        .map_or(Cow::Borrowed(frame_text), Cow::Owned)
 }
 
 /// THE HTTP+JSON LINE'S EVENTS: every event of `buf` whose data is a JSON-RPC `result` becomes the

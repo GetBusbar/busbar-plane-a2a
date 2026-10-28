@@ -33,3 +33,6 @@ busbar-test-kit = { workspace = true }
 # The both-ways op-by-op script (`tests/both_ways.rs`, moved here with the crate from busbar's
 # crates/busbar-plane-a2a) reads the door's answers as JSON.
 serde_json = { workspace = true }
+# The host-log test's host (`tests/both_ways.rs`, `CardRecords`): the shared host-services
+# double, dev-only, overriding only `records.list`.
+busbar-contract = { workspace = true, features = ["services-double"] }

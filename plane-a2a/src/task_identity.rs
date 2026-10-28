@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! BUSBAR'S TASK IDENTITY ON A RELAYED HOP (ARCHITECT ruling B1, 2026-10-02: the far end's task id
-//! rewritten to busbar's routable id is GOVERNED routing identity, the class of the mapped model).
-//! Ported from the served engine (`busbar-a2a` `receive` and `relay::rewrite_identity`, `idmap`),
-//! byte for byte; pure, so every rule is tested without a door.
+//! Busbar's task identity on a relayed hop: the far end's task id rewritten to busbar's routable
+//! id is governed routing identity, the class of the mapped model. Pure, so every rule is tested
+//! without a door.
 //!
 //! * A fresh task's id is `a2a-<agent>-<16 hex>` ([`mint`]), its eight bytes from the kernel's
 //!   `random.fill`; its `contextId` is the caller's, or the id when the caller named none.
@@ -370,8 +369,8 @@ pub const RESOURCE_INFO_TYPE: &str = "type.googleapis.com/google.rpc.ResourceInf
 /// The resource type a task's `ResourceInfo` names.
 pub const TASK_RESOURCE_TYPE: &str = "a2a.busbar/task";
 
-/// THE REFUSAL'S ENVELOPE, NAMING THE TASK: its error carries a `ResourceInfo` for `task_id` after
-/// its `ErrorInfo` (the engine's `rpcerror::about_task`).
+/// The refusal's envelope, naming the task: its error carries a `ResourceInfo` for `task_id` after
+/// its `ErrorInfo`.
 #[must_use]
 pub fn about_task(refusal: &AgentRefusal, task_id: &str) -> Value {
     let mut doc = refusal.envelope();
@@ -387,7 +386,7 @@ pub fn about_task(refusal: &AgentRefusal, task_id: &str) -> Value {
     doc
 }
 
-/// The HTTP status A2A section 5.4 binds an error `code` to, for the codes the engine re-emits from
+/// The HTTP status A2A section 5.4 binds an error `code` to, for the codes re-emitted from
 /// a far end's error; `None` for a code A2A does not define.
 #[must_use]
 pub const fn status_of_code(code: i64) -> Option<u32> {

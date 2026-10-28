@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! THE SKILL A REQUEST MATCHES on an agent's card (ARCHITECT ruling B2): busbar's own namespaced
-//! annotation, `metadata["busbar/skill"]` on the answer. Moved from the served engine
-//! (`busbar-a2a` `registry::judge` and `receive::shape_of`, which now read these), byte for byte.
+//! The skill a request matches on an agent's card: busbar's own namespaced annotation,
+//! `metadata["busbar/skill"]` on the answer.
 //!
 //! The fit is STRUCTURAL, never a score: an agent either can accept this shape of task or it
 //! cannot. A request that names a skill matches the card's skill of that id under the skill's own
@@ -79,8 +78,8 @@ impl TaskShape {
     }
 }
 
-/// WHY A CARD DOES NOT FIT A SHAPE. The arms keep the engine's `registry::Excluded` names, whose
-/// `Debug` rendering is the words its catalogue refusal carries.
+/// Why a card does not fit a shape. The arms' `Debug` rendering is the words its catalogue
+/// refusal carries.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Unfit {
     /// The card declares no skill with the requested id.
@@ -95,7 +94,7 @@ pub enum Unfit {
     NoCachedCard,
 }
 
-/// Why a held card cannot be read (the engine's `card::CardError` arm a read can fail with).
+/// Why a held card cannot be read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Unreadable {
     /// The document is not a card.
@@ -115,7 +114,7 @@ pub fn fit(card: &Value, shape: &TaskShape) -> Result<Option<String>, Unfit> {
 /// The status a request an agent's card does not fit is refused with.
 pub const STATUS_UNFIT: u32 = 403;
 
-/// THE REFUSAL of a request an agent's held card does not fit (the engine's catalogue exclusion):
+/// The refusal of a request an agent's held card does not fit:
 /// `403`, `-32004`, no id, the exclusion's own name as the message.
 #[must_use]
 pub fn refusal(unfit: &Unfit) -> crate::agent_arrival::AgentRefusal {
