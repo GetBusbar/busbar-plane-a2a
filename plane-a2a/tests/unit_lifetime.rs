@@ -52,8 +52,9 @@ use busbar_contract::abi::mechanism::ticket::{HostCtx, HostTables, Ticket};
 use busbar_contract::abi::plane::{
     slot, ArriveIn, ArriveOut, OnPieceIn, OnPieceOut, Ops, OutField, PlaneCancelIn, PlaneCancelOut,
     PlaneDriveIn, PlaneDriveOut, PlaneOpenIn, PlaneOpenOut, RecordWrite, RefusalCode, RefusalIn,
-    RefusalOut, ServeIn, ServeOut, UnitCount, EMIT_DONE, FROM_CALLER, FROM_FAR_END, FROM_KERNEL,
-    PIECE_HAS_STATUS, PIECE_LAST, PIECE_REFUSED, REFUSAL_KERNEL,
+    RefusalOut, ServeIn, ServeOut, UnitCount, CANCEL_ABORTED, CANCEL_OK_PARTIAL, EMIT_DONE,
+    FROM_CALLER, FROM_FAR_END, FROM_KERNEL, PIECE_HAS_STATUS, PIECE_LAST, PIECE_REFUSED,
+    REFUSAL_KERNEL,
 };
 use door_facts::{CLASS_BYTES_INDEX, CLASS_FEE_INDEX, DIALECT_DOCUMENT, MAX_UNITS};
 
@@ -968,6 +969,27 @@ impl Door {
         ret.outcome()
     }
 
+    /// The host's own cancel of `unit` (by its key and its ticket): the disposition the door
+    /// answered.
+    fn cancel_disposition(&self, unit: u64) -> u32 {
+        let mut i: PlaneCancelIn = z();
+        i.cancel = CancelIn {
+            head: head::<PlaneCancelIn>(life::CANCEL, Ticket::NONE),
+            ticket: ticket(unit),
+        };
+        i.unit = unit;
+        let mut o: PlaneCancelOut = z();
+        o.cancel.head = out_head::<PlaneCancelOut>();
+        let f = lifecycle().cancel.expect("cancel");
+        let ret = f(
+            self.instance,
+            std::ptr::from_ref(&i).cast(),
+            std::ptr::from_mut(&mut o).cast(),
+        );
+        assert_eq!(ret.outcome(), Outcome::Ready);
+        o.cancel.disposition
+    }
+
     /// Busbar's own card read on `unit`, its first window written into a reply buffer too small
     /// for the card: the unit is LIVE, part way through its answer.
     fn begin_own_card(&self, unit: u64) {
@@ -1151,6 +1173,44 @@ fn a_refusal_after_a_finished_hop_still_reads_its_unit() {
     assert_eq!(
         writes, 1,
         "the refusal read the finished hop's unit and wrote its audit row: {body}"
+    );
+}
+
+/// A CANCEL SAYS HOW FAR THE HOP GOT (owner billing rule R21: the ledger records what the dialect
+/// did): cut before the agent answered it is ABORTED (billed nothing); cut after the agent answered
+/// it is PARTIAL, so the units it reported bill when its answer was streamed, as the llm and
+/// decisions planes answer. RED before: both were ABORTED.
+#[test]
+fn a_cancel_after_the_agent_answered_is_partial() {
+    let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    let door = open();
+    let (outcome, status, body) = door.connect("vendor");
+    assert_eq!((outcome, status), (Outcome::Ready, 200), "{body}");
+    let route = ("POST", "/a2a/agents/{agent_id}");
+    let dialled = |unit: u64| {
+        assert_eq!(
+            door.arrive(unit, route, "/a2a/agents/vendor", CARD_READ),
+            (Outcome::Ready, 0)
+        );
+        let attempt = door.piece(unit, Given::attempt(b"vendor"), 1 << 16);
+        assert_eq!(attempt.outcome, Some(Outcome::Ready), "{attempt:?}");
+        let sent = door.piece(unit, Given::caller(CARD_READ), 1 << 16);
+        assert_eq!(sent.outcome, Some(Outcome::Ready), "{sent:?}");
+    };
+    dialled(20);
+    assert_eq!(
+        door.cancel_disposition(20),
+        CANCEL_ABORTED,
+        "cut before the agent answered: aborted"
+    );
+    dialled(21);
+    let empty: &[u8] = br#"{"jsonrpc":"2.0","id":1}"#;
+    let answered = door.piece(21, Given::far_end(200, empty), 1 << 16);
+    assert_eq!(answered.outcome, Some(Outcome::Ready), "{answered:?}");
+    assert_eq!(
+        door.cancel_disposition(21),
+        CANCEL_OK_PARTIAL,
+        "cut after the agent answered: partial"
     );
 }
 
