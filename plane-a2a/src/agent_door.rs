@@ -40,10 +40,10 @@ use busbar_contract::abi::plane::{
     ArriveIn, ArriveOut, OnPieceIn, OnPieceOut, OutField, PlaneCancelIn, PlaneCancelOut,
     PlaneDriveIn, PlaneDriveOut, PlaneOpenIn, PlaneOpenOut, PlaneRefreshOut, PlaneSnapshot,
     ProjectIn, ProjectOut, RecordWrite, RefusalIn, RefusalOut, ServeIn, ServeOut, UnitCount,
-    CANCEL_ABORTED, EMIT_DONE, EMIT_TO_FAR_END, FROM_CALLER, FROM_FAR_END, FROM_KERNEL,
-    PIECE_HAS_STATUS, PIECE_LAST, PIECE_REFUSED, PRINCIPAL_NONE, PRINCIPAL_REQUIRED, RECORD_PUT,
-    REFUSAL_ARRIVE, REFUSAL_KERNEL, ROUTE_DIRECT, ROUTE_POOL, ROUTE_SCOPE, ROUTE_SCOPE_LOCAL,
-    UNITS_REPORTED, VERDICT_RETRY,
+    CANCEL_ABORTED, CANCEL_OK_PARTIAL, EMIT_DONE, EMIT_TO_FAR_END, FROM_CALLER, FROM_FAR_END,
+    FROM_KERNEL, PIECE_HAS_STATUS, PIECE_LAST, PIECE_REFUSED, PRINCIPAL_NONE, PRINCIPAL_REQUIRED,
+    RECORD_PUT, REFUSAL_ARRIVE, REFUSAL_KERNEL, ROUTE_DIRECT, ROUTE_POOL, ROUTE_SCOPE,
+    ROUTE_SCOPE_LOCAL, UNITS_REPORTED, VERDICT_RETRY,
 };
 use busbar_contract::abi::sdk::conn::{Host, StaticHost};
 // THE ONE SHARED FAULT READING (ARCHITECT row 68): the breaker's vocabulary, stated on `OnPieceOut`.
@@ -1256,18 +1256,23 @@ slot!(
     /// caller that went away mid-answer stopped 1.5.5's relay without a task transition, and the
     /// task keeps the last state it reached.
     Cancel, PlaneCancelIn, PlaneCancelOut, |instance, input, mut out| {
+        let mut answered = false;
         if let Some(plane) = instance.get() {
             // The cancelled unit is over: a refusal may still render it, so it is kept until then,
             // the first to make room. The host's cancel of a unit names it by the key `arrive`
             // kept it under, which finds one cancelled before its first piece recorded its
             // ticket; a cancel naming no unit finds it by its ticket.
             let (ticket, cancelled) = (input.cancel().ticket(), input.unit());
+            let far_answered =
+                |u: &AgentUnit| u.hop.as_ref().is_some_and(|h| h.relay.far_answered());
             plane.units.with_all(|m| {
                 if let Some(u) = m.get_mut(&cancelled).filter(|_| cancelled != 0) {
                     u.over = true;
+                    answered = far_answered(u);
                 } else if ticket != Ticket::NONE {
                     for u in m.values_mut().filter(|u| u.ticket == ticket) {
                         u.over = true;
+                        answered |= far_answered(u);
                     }
                 }
             });
@@ -1278,7 +1283,13 @@ slot!(
                 }
             }
         }
-        out.set(|o| &o.cancel.disposition, CANCEL_ABORTED);
+        // A unit whose far end had begun its answer is PARTIAL, so the units it reported bill when
+        // its answer was streamed (owner billing rule R21: the ledger records what the dialect
+        // did); one cut before is ABORTED.
+        out.set(
+            |o| &o.cancel.disposition,
+            if answered { CANCEL_OK_PARTIAL } else { CANCEL_ABORTED },
+        );
         Outcome::Ready
     }
 );
