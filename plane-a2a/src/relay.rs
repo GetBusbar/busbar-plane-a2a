@@ -575,6 +575,11 @@ pub enum TaskSettled {
 }
 
 impl HopRelay {
+    /// Whether the far end has begun its answer: a status or a byte of it has arrived.
+    pub(crate) const fn far_answered(&self) -> bool {
+        self.status.is_some() || self.received != 0
+    }
+
     /// A hop answering the request `id`, declaring the `version` busbar's edge negotiated.
     #[must_use]
     pub fn new(id: Value, version: &'static str) -> Self {
