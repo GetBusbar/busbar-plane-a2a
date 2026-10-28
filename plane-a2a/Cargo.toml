@@ -53,6 +53,9 @@ serde = { workspace = true }
 # The object notation the codec speaks. The adapter hands values across the seam and never invents
 # a second parser.
 serde_json = { workspace = true }
+# The wiped buffers a push_config record's value passes through (it carries the caller's webhook
+# credential).
+zeroize = { workspace = true }
 # The `agents:` section keeps its registrations in the order an operator wrote them.
 indexmap = { workspace = true, features = ["serde"] }
 # The deployment's `public_url`, read once into the absolute URLs the plane publishes.

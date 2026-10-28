@@ -233,7 +233,7 @@ fn a_push_config_lives_as_a_record_of_its_task() {
     assert_eq!(body["result"], Value::Null, "idempotent, v0.3's null");
 }
 
-/// The credential is a sealed field of the stored record and appears in no answer.
+/// The credential rides the stored record (the SDK's record encoder) and appears in no answer.
 #[test]
 fn the_stored_credential_rides_the_record_and_never_an_answer() {
     let mut desk = desk();
@@ -249,7 +249,7 @@ fn the_stored_credential_rides_the_record_and_never_an_answer() {
         held.authentication,
         Some(DeliveryAuth {
             scheme: "Bearer".into(),
-            credentials: crate::push::PushCredential::new("s3cret".into()),
+            credentials: busbar_contract::abi::sdk::test_support::chip::cred("s3cret"),
         })
     );
     assert!(!format!("{held:?}").contains("s3cret"));
@@ -283,11 +283,12 @@ fn a_record_without_the_credential_field_reads_as_none() {
     let kept = PushConfig {
         authentication: Some(DeliveryAuth {
             scheme: "Basic".into(),
-            credentials: crate::push::PushCredential::new("abc".into()),
+            credentials: busbar_contract::abi::sdk::test_support::chip::cred("abc"),
         }),
         ..old
     };
-    let again: PushConfig = serde_json::from_slice(&serde_json::to_vec(&kept).unwrap()).unwrap();
+    let again: PushConfig =
+        serde_json::from_slice(&crate::push::record_value(&kept).unwrap()).unwrap();
     assert_eq!(again, kept);
 }
 

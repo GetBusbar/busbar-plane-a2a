@@ -1,4 +1,7 @@
 {
+  "credentials": [
+    "CANARY-a2a-url-3b9e"
+  ],
   "settings": {
     "vendor": {
       "url": "https://vendor.example/agent",
@@ -9,6 +12,14 @@
   },
   "plane": {
     "bad_settings": [
+      {
+        "vendor": {
+          "url": "https://conf:CANARY-a2a-url-3b9e@vendor.example/agent",
+          "pin": {
+            "mechanism": "unpinned"
+          }
+        }
+      },
       {
         "vendor": {
           "url": "ftp://vendor.example",
