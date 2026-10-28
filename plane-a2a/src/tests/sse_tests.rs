@@ -4,8 +4,39 @@
 //! Tests for the A2A relay's frame reader: the reader's own battery. Its warning capture and its
 //! catalog drift guard run where the host's testkit and the published catalog are reachable.
 
+use std::cell::Cell;
+use std::thread::LocalKey;
+
 use super::*;
 use crate::tests::capture::Capture;
+
+thread_local! {
+    /// The bytes every terminator scan on this thread has walked, so a test can assert the
+    /// reader's scanning work is linear in the bytes fed rather than in bytes × chunks.
+    pub(super) static SCANNED: Cell<usize> = const { Cell::new(0) };
+    /// The buffer length observed at each drain on this thread, so a test can assert the reader's
+    /// drain work is linear in the bytes fed rather than in bytes × frames-per-chunk. Taken AT the
+    /// drain: a tally taken once per `feed` would measure the same number however many drains
+    /// happened inside it, so the very regression the linearity test exists to catch (draining once
+    /// per FRAME) would leave the count unchanged.
+    pub(super) static DRAINED: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Add `n` to `tally` (the reader's own counting hook).
+pub(super) fn tally(tally: &'static LocalKey<Cell<usize>>, n: usize) {
+    tally.with(|t| t.set(t.get() + n));
+}
+
+/// Zero `tally` and return what it held.
+fn take(tally: &'static LocalKey<Cell<usize>>) -> usize {
+    tally.with(Cell::take)
+}
+
+/// Feed `chunk` and take the events it finished, owned.
+fn fed(r: &mut SseReader, chunk: &[u8]) -> Vec<String> {
+    r.feed(chunk);
+    r.frames().map(str::to_string).collect()
+}
 
 /// An event trickled across many chunks must cost work proportional to its BYTES, not to bytes ×
 /// chunks. Upstream responses are untrusted, and the relay bounds only `pending()` against the
@@ -22,11 +53,14 @@ fn test_feed_scan_work_is_linear_in_bytes_fed() {
     let payload = vec![b'x'; N]; // no terminator anywhere: every chunk leaves the buffer pending
 
     let mut r = SseReader::default();
-    let _ = r.take_scanned_bytes();
+    let _ = take(&SCANNED);
     for byte in payload.chunks(1) {
-        assert!(r.feed(byte).is_empty(), "no terminator yet, so no event");
+        assert!(
+            fed(&mut r, byte).is_empty(),
+            "no terminator yet, so no event"
+        );
     }
-    let scanned = r.take_scanned_bytes();
+    let scanned = take(&SCANNED);
 
     assert_eq!(
         r.pending(),
@@ -58,7 +92,7 @@ fn every_spec_line_terminator_pairing_ends_a_frame() {
     ];
     for (input, framed) in cases {
         let mut r = SseReader::default();
-        let out = r.feed(input.as_bytes());
+        let out = fed(&mut r, input.as_bytes());
         assert_eq!(out, vec![framed.to_string()], "input {input:?}");
     }
 
@@ -66,7 +100,7 @@ fn every_spec_line_terminator_pairing_ends_a_frame() {
     // returns nothing until more bytes arrive.
     let mut r = SseReader::default();
     assert!(
-        r.feed(b"data: a\r").is_empty(),
+        fed(&mut r, b"data: a\r").is_empty(),
         "a bare trailing CR must wait for more bytes, not frame early"
     );
 }
@@ -87,10 +121,10 @@ fn test_terminator_split_across_chunks_still_frames() {
     ] {
         let mut r = SseReader::default();
         assert!(
-            r.feed(head.as_bytes()).is_empty(),
+            fed(&mut r, head.as_bytes()).is_empty(),
             "a partial terminator waits for the rest ({head:?})"
         );
-        let out = r.feed(tail.as_bytes());
+        let out = fed(&mut r, tail.as_bytes());
         assert_eq!(
             out,
             vec![framed.to_string()],
@@ -109,10 +143,10 @@ fn test_terminator_split_across_chunks_still_frames() {
 /// rescan-from-zero AND a full-tail memmove, once per frame). One chunk of many trivial ("\n\n")
 /// events must cost work proportional to the chunk's BYTES, not to bytes × frames.
 ///
-/// The tally is taken AT the drain (`SseReader::drain_front`), so a second drain inside the same
-/// `feed` counts a second time and the assertion below is exact rather than a budget: one feed
-/// drains the buffer once, and that one drain walks exactly the bytes fed. A per-frame front-drain
-/// would walk ~N²/2 bytes for N frames.
+/// The tally is taken AT the drain (`SseReader::drain_front`), so a second drain counts a second
+/// time and the assertion below is exact rather than a budget: the framed bytes are drained once
+/// (by the next feed, after their borrowed frames are done with), and that one drain walks exactly
+/// the bytes fed. A per-frame front-drain would walk ~N²/2 bytes for N frames.
 #[test]
 fn test_feed_drain_work_is_linear_in_bytes_fed() {
     const N: usize = 4096;
@@ -120,9 +154,10 @@ fn test_feed_drain_work_is_linear_in_bytes_fed() {
     let total = chunk.len();
 
     let mut r = SseReader::default();
-    let _ = r.take_drained_bytes();
-    let out = r.feed(&chunk);
-    let drained = r.take_drained_bytes();
+    let _ = take(&DRAINED);
+    let out = fed(&mut r, &chunk);
+    assert!(fed(&mut r, b"").is_empty(), "nothing more was fed");
+    let drained = take(&DRAINED);
 
     assert_eq!(out.len(), N, "every \"\\n\\n\" pair is its own frame");
     assert_eq!(r.pending(), 0, "the whole chunk was framed");
@@ -170,8 +205,8 @@ fn test_non_utf8_frame_drop_carries_diag_code() {
     let (sent, heard) = std::sync::mpsc::channel();
     let out = tracing::subscriber::with_default(Capture(sent), || {
         let mut r = SseReader::default();
-        let first = r.feed(b"data: \xff\xfe\n\n");
-        let _ = r.feed(b"data: \xff\xfe\n\n");
+        let first = fed(&mut r, b"data: \xff\xfe\n\n");
+        let _ = fed(&mut r, b"data: \xff\xfe\n\n");
         first
     });
     assert!(
