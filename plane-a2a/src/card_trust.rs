@@ -3,8 +3,7 @@
 
 //! THE TRUST SURFACE, PLANE SIDE: what a registered agent's card was last seen to BE, judged
 //! against the identity the operator APPROVED, and the two admin answers that render it
-//! (`connect`, `approve`; ARCHITECT Q-L3B-VERBS). Moved from the served engine (`busbar-a2a`
-//! `verbs`, `pin`, `verify`, `fetch`), its words kept; pure: a fetched document, the kernel's
+//! (`connect`, `approve`). Pure: a fetched document, the kernel's
 //! signature verdict, the standing approval and the last sighting in, a state, a drift and the
 //! views out.
 //!
@@ -19,7 +18,7 @@
 //!   [`Handshake`]): a matching key is observed and approvable, none is refused as not observed,
 //!   another as a mismatch, and `mtls` over a hop that presented no client identity of busbar's as
 //!   one-way; `unpinned` has no root and no fingerprint.
-//! * **The decision is the KERNEL's** (ARCHITECT, FLIP-A2A; THE DESIGN: trust is the kernel's
+//! * **The decision is the KERNEL's** (trust is the kernel's
 //!   Approve step, pinning and demotion are kernel state): the plane SIGHTS each agent's verified
 //!   card fingerprint on the kernel's trust book (`trust.sight`, counterparty = the agent, the
 //!   fingerprint as its catalogue hash; an unreachable card is `trust.unreachable`, the last
@@ -130,12 +129,12 @@ pub struct TrustStanding {
     /// When verify-on-call last looked.
     pub ledger: Ledger,
     /// The skills (`id -> digest`) of the card the operator approved, held by `approve` for the
-    /// trust view's drift lists only (coordinator ruling Q2, 2026-10-07): what serves is the
+    /// trust view's drift lists only: what serves is the
     /// kernel's book, which pins the fingerprint and nothing per skill. `None` = nothing approved.
     pub approved: Option<BTreeMap<String, String>>,
 }
 
-/// THE RE-VERIFICATION LEDGER of one registration (the served engine's `reverify::Ledger`): when
+/// The re-verification ledger of one registration: when
 /// verify-on-call last looked. Drift and its recovery backoff are the kernel's trust book's.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Ledger {
@@ -168,7 +167,7 @@ impl Cadence {
         }
     }
 
-    /// Is a look due at `now_ms` (the served engine's `reverify::due`)? Never looked, a clock that
+    /// Is a look due at `now_ms`? Never looked, a clock that
     /// went backwards, and a lapsed `ttl_ms` are each due.
     #[must_use]
     pub fn due(&self, ledger: &Ledger, now_ms: u64) -> bool {
@@ -199,7 +198,7 @@ pub fn verdict_state(distrust: u64) -> State {
     }
 }
 
-/// THE REFUSAL OF A UNIT WHOSE AGENT IS NOT SERVING, in the served engine's words, at `status`:
+/// The refusal of a unit whose agent is not serving, at `status`:
 /// addressed to the agent (`addressed`), its admission refusal (`-32004`, `fronted agent `<id>` is
 /// not serving (<state>)`); routed by the caller's scope, the catalogue's (an agent that is not
 /// serving is in no caller's catalogue, so none reaches: `400`, `-32004`). The kernel's trust
@@ -265,16 +264,16 @@ pub fn scheme_refusal(url: &str, allow_private: bool) -> Option<String> {
     ))
 }
 
-/// How many redirects one card fetch follows (the engine's `FetchPolicy::max_redirects`).
+/// How many redirects one card fetch follows.
 pub const MAX_REDIRECTS: u8 = 3;
 
-/// THE NEXT HOP of a card fetch that answered `status` at `url` (the engine's `fetch_card`): `None`
+/// The next hop of a card fetch that answered `status` at `url`: `None`
 /// when it is not a redirect; the URL its `location` names, resolved against `url`, when it is and
 /// the chain has followed fewer than [`MAX_REDIRECTS`] (`redirects`).
 ///
 /// # Errors
 ///
-/// A redirect past the bound, or one with no usable `location`, in the engine's words.
+/// A redirect past the bound, or one with no usable `location`.
 pub fn next_hop(
     url: &str,
     status: u16,
@@ -302,7 +301,7 @@ pub fn next_hop(
         .map_err(|_| without())
 }
 
-/// THE HOST a card URL names, as the engine's guard judged it: an IPv6 literal unbracketed and a
+/// The host a card URL names: an IPv6 literal unbracketed and a
 /// trailing root dot dropped; `None` for a URL with no host.
 #[must_use]
 pub fn host_of(url: &str) -> Option<String> {
@@ -313,8 +312,8 @@ pub fn host_of(url: &str) -> Option<String> {
     Some(host.strip_suffix('.').unwrap_or(host).to_string())
 }
 
-/// THE GUARD'S REFUSAL OF A CARD HOST BY ITS NAME (the `DEST_*` verdict the destination judge gave
-/// the name alone), in the engine's words; `None` for a verdict that admits it.
+/// The guard's refusal of a card host by its name (the `DEST_*` verdict the destination judge gave
+/// the name alone); `None` for a verdict that admits it.
 #[must_use]
 pub fn refused_name(url: &str, verdict: u64) -> Option<String> {
     let host = host_of(url).unwrap_or_default();
@@ -342,7 +341,7 @@ pub fn refused_name(url: &str, verdict: u64) -> Option<String> {
     ))
 }
 
-/// THE GUARD'S REFUSAL OF AN ADDRESS a card host resolved to, in the engine's words (a
+/// The guard's refusal of an address a card host resolved to (a
 /// cloud-metadata address and an internal one alike: the sentence says which the knob speaks for).
 #[must_use]
 pub fn refused_address(url: &str, addr: &str) -> String {
@@ -365,7 +364,7 @@ pub fn literal_url(host: &str) -> Option<String> {
     }
 }
 
-/// A card host that resolved to nothing, in the engine's words.
+/// A card host that resolved to nothing.
 #[must_use]
 pub fn no_addresses(host: &str) -> String {
     format!(
@@ -374,7 +373,7 @@ pub fn no_addresses(host: &str) -> String {
     )
 }
 
-/// A card host that did not resolve, in the engine's words, naming the resolver's `reason` (none
+/// A card host that did not resolve, naming the resolver's `reason` (none
 /// named when the judge gave none).
 #[must_use]
 pub fn unresolvable(host: &str, reason: &str) -> String {
@@ -384,7 +383,7 @@ pub fn unresolvable(host: &str, reason: &str) -> String {
     format!("agent card host `{host}` did not resolve: {reason}")
 }
 
-/// THE GUARD'S REFUSAL OF A CARD HOP, in the engine's words, from the destination judge's
+/// The guard's refusal of a card hop, from the destination judge's
 /// `verdict` and what it named as deciding it (`detail`: the refused address, or the resolver's
 /// reason): an address refusal — a literal host's, or one the name resolved to, cloud-metadata or
 /// internal alike — names the address; a failed resolution names the resolver's reason; any other
@@ -405,13 +404,12 @@ pub fn refused_judgement(url: &str, verdict: u64, detail: Option<&str>) -> Strin
     }
 }
 
-/// The words the engine's HTTP client gave a hop whose deadline passed (predev
-/// `egress::engine::HOP_DEADLINE_CAUSE`).
+/// The words the HTTP client gives a hop whose deadline passed.
 pub const HOP_DEADLINE_CAUSE: &str = "governed egress hop exceeded its deadline";
 
-/// THE CONNECTION'S FAILURE IN THE ENGINE'S WORDS: what predev's card fetch printed after
-/// "failed: " — its HTTP client's error with the cause chain flattened (`egress::with_cause` over
-/// `EngineError`, `client error ({kind})`, then each cause): the socket's open failing as
+/// The connection's failure in words: what the card fetch prints after
+/// "failed: ", the HTTP client's error with the cause chain flattened (`client error ({kind})`,
+/// then each cause): the socket's open failing as
 /// `client error (Connect): tcp connect error: <the socket's error>`, connection security as
 /// `client error (Connect): <its error>`, the open connection as
 /// `client error (SendRequest): connection error: <the socket's error>`, the framer failing the
@@ -437,7 +435,7 @@ pub fn transport_err(cause: u64, failure: &busbar_contract::abi::sdk::conn::Conn
 
 /// THE CARD one fetch of `url` answered: `answer` is the far end's status and body, or why the
 /// connection failed. A status outside 2xx, a body over [`MAX_CARD_BYTES`] and a body that is not
-/// a JSON object are each refused in the served engine's words.
+/// a JSON object are each refused.
 ///
 /// # Errors
 ///
@@ -465,8 +463,8 @@ pub fn read_card(url: &str, answer: Result<(u16, &[u8]), String>) -> Result<Valu
 
 // ── THE VERIFICATION ─────────────────────────────────────────────────────────────────────────────
 
-/// WHAT THE HOP THAT SERVED A CARD OBSERVED, as the connector's facts say (the served engine's
-/// `Handshake`: `peer_key_pin` off the accepted handshake, `client_identity_offered`).
+/// What the hop that served a card observed, as the connector's facts say (`peer_key_pin` off the
+/// accepted handshake, `client_identity_offered`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Handshake {
     /// The far end's key pin; `None` = the hop carried no certificate.
@@ -475,7 +473,7 @@ pub struct Handshake {
     pub client_identity_offered: bool,
 }
 
-/// THE TRANSPORT-LAYER ROOT, checked (the served engine's `transport_pin`). Returns the OBSERVED
+/// The transport-layer root, checked. Returns the OBSERVED
 /// value, never the configured one: the pin recorded is a fact about the connection. The compare is
 /// on the trimmed strings and CASE-SENSITIVE (base64 is case-significant).
 fn transport_pin(
@@ -497,7 +495,7 @@ fn transport_pin(
     Ok(observed.to_string())
 }
 
-/// A transport-pinned fetch that observed no certificate, in the served engine's words.
+/// A transport-pinned fetch that observed no certificate.
 fn not_observed(mechanism: &str) -> String {
     format!(
         "`pin.mechanism: {mechanism}` binds the CARD ENDPOINT's certificate, and this fetch \
@@ -507,8 +505,7 @@ fn not_observed(mechanism: &str) -> String {
     )
 }
 
-/// `mtls` over a hop that presented no client certificate of busbar's, in the served engine's
-/// words.
+/// `mtls` over a hop that presented no client certificate of busbar's.
 const MUTUAL_TLS_NOT_PRESENTED: &str = "`pin.mechanism: mtls` requires busbar to present a client \
      certificate, and the hop that served this card carried none, so it arrived over a connection \
      authenticated in one direction only. The peer half is checked exactly as `cert_spki`'s is; \
@@ -518,7 +515,7 @@ const MUTUAL_TLS_NOT_PRESENTED: &str = "`pin.mechanism: mtls` requires busbar to
 
 /// THE REFUSAL A FAILED CARD FETCH OF A TRANSPORT-PINNED REGISTRATION READS AS, where the hop says
 /// why: the connector refused a far end serving another key than the pinned one (`hop` names the
-/// key it served: the served engine's mismatch), or refused a plaintext card URL (`url`), which
+/// key it served), or refused a plaintext card URL (`url`), which
 /// has no certificate to observe (its not-observed refusal). `None`: the fetch's own refusal
 /// stands.
 #[must_use]
@@ -595,8 +592,8 @@ pub fn jws_refusal(verdict: u64, named: &str, card: &Value) -> Option<String> {
 /// VERIFY one fetched card against the registration's declared pin. `signed` is the kernel's
 /// verdict on the card's signatures (`trust.verify`), asked only for a signed root: `Ok` when they
 /// verified, else the refusal in this plane's words. `hop` is what the connection that served the
-/// card observed: a transport-pinned mechanism's root (the served engine's order: the peer half
-/// first, then `mtls`'s mutual half).
+/// card observed: a transport-pinned mechanism's root (the peer half first, then `mtls`'s mutual
+/// half).
 ///
 /// # Errors
 ///
@@ -662,13 +659,11 @@ pub fn verify_card(
 
 // ── THE VERBS' ANSWERS ───────────────────────────────────────────────────────────────────────────
 
-/// THE TRUST VIEW of one registered agent, field for field the served engine's: what both verbs
-/// answer with. Its `state` is the kernel's verdict on the agent's trust key (or the plane's own
+/// The trust view of one registered agent: what both verbs answer with. Its `state` is the kernel's verdict on the agent's trust key (or the plane's own
 /// `error`), and `pin_changed` says the kernel quarantined a moved card. The per-skill queue
-/// (`added`, `changed`, `removed`) is the served engine's drift (predev
-/// `busbar-kernel/src/trust/mod.rs:310-327`, read by `busbar-a2a/src/a2a/verbs.rs:229,726`): the
-/// sighted card's skills against the skills of the card the operator approved, which the plane
-/// holds for this view only ([`TrustStanding::approved`]; coordinator ruling Q2, 2026-10-07).
+/// (`added`, `changed`, `removed`) is the drift: the sighted card's skills against the skills of
+/// the card the operator approved, which the plane holds for this view only
+/// ([`TrustStanding::approved`]).
 #[derive(serde::Serialize)]
 struct AgentTrustView<'a> {
     name: &'a str,
@@ -683,7 +678,7 @@ struct AgentTrustView<'a> {
     failure: Option<&'a str>,
 }
 
-/// THE DRIFT QUEUE of one sighting against what was approved, in the served engine's order: each
+/// The drift queue of one sighting against what was approved: each
 /// sighted skill nobody approved is `added`, each approved at another digest `changed` (both in
 /// skill-id order), then each approved skill the card no longer offers `removed`. Nothing approved
 /// (`approved` is `None`) approves no skill, so every sighted skill is `added`; a sighting that
@@ -781,7 +776,7 @@ pub fn registration_view(
 ///
 /// # Errors
 ///
-/// The refusal, in the served engine's words.
+/// The refusal.
 pub fn agrees(sighting: &Sighting, claimed: &str) -> Result<(), String> {
     if claimed.is_empty() {
         return Err(
@@ -811,8 +806,7 @@ pub fn agrees(sighting: &Sighting, claimed: &str) -> Result<(), String> {
     }
 }
 
-/// THE `approve` BODY, `{"fingerprint": "…"}`, read as the served engine's JSON extractor read it:
-/// a JSON media type first, then the one field and no other. The fingerprint, or the refusal.
+/// The `approve` body, `{"fingerprint": "…"}`: a JSON media type first, then the one field and no other. The fingerprint, or the refusal.
 ///
 /// # Errors
 ///

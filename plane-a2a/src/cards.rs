@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! THE AGENT CARDS THE PLANE HOLDS, in plugin-owned memory (ARCHITECT ruling B2, as amended): the
+//! The agent cards the plane holds, in plugin-owned memory: the
 //! mirror of the `card` host records ([`crate::records::KIND_CARD`], keyed by agent id, operator
-//! scope). The `connect` and `approve` answers write a card their look verified (`BUSBAR-1.6.0.md`
-//! l.290: record writes ride an answer, never a tick), and the first tick after `open` warms this
+//! scope). The `connect` and `approve` answers write a card their look verified (record
+//! writes ride an answer, never a tick), and the first tick after `open` warms this
 //! mirror from those records (`records.list`), so an instance opened again holds the cards its
 //! operator approved before. A held card is valid to the
 //! refresh generation it was held under: `arrive` does no I/O and reads only this memory, and a

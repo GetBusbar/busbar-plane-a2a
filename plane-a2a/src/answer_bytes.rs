@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! THE FAR END'S ANSWER, SPLICED, NEVER RE-SERIALISED (Law 5: "A RELAY ... sends the client's
-//! bytes with governed byte-level splices"; Q128 a2a M8). The relay reads off an answer's bytes
+//! The far end's answer, spliced, never re-serialised (a relay sends the client's bytes with
+//! governed byte-level splices). The relay reads off an answer's bytes
 //! what it is (its `result` or `error`; the task's state and the far end's ids from its `result`
 //! alone, as a value), and then
 //! sends the far end's own `result` bytes on, with busbar's identity members spliced in at their

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! THE CARDS BUSBAR SERVES, as the engine served them (`busbar-a2a`'s `serve.rs`, moved): busbar's
+//! The cards busbar serves: busbar's
 //! own card at the well-known path, and a fronted agent's card with every URL rewritten through
 //! busbar. Pure: the document is built here and signed by the caller's [`Signer`], which reaches the
 //! host's `sign` service (the plane holds no signing key).

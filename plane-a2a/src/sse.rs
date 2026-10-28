@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! THE A2A RELAY'S SSE (Server-Sent Events) FRAME READER — the plane's own (#83a, SD-5c).
+//! The A2A relay's SSE (Server-Sent Events) frame reader, the plane's own.
 //!
 //! Bytes in, whole events out: an SSE stream does not arrive one event per chunk, so bytes
 //! accumulate here and an event is emitted only on the blank line that terminates it. The relay's
@@ -10,7 +10,7 @@
 //! frames on is the contract's ([`busbar_contract::protocol::find_frame_terminator`] and
 //! [`busbar_contract::protocol::sse_lines`]), shared with every other SSE reader in the tree.
 //!
-//! The one coded diagnostic it prints, [`PLANE_SSE_FRAME_NOT_UTF8`], is the plane's too (#83a O4).
+//! The one coded diagnostic it prints, [`PLANE_SSE_FRAME_NOT_UTF8`], is the plane's too.
 //! Its number and text are the published catalog entry's, field for field (`docs/diagnostics.json`;
 //! the drift test beside this module fails if they part).
 

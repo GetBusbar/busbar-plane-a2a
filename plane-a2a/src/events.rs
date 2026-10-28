@@ -132,7 +132,7 @@ pub fn read_event(
     let state = task_identity::reported_task_state(result);
     let backend_task_id = task_identity::backend_task_id(result);
     let names_no_task = task_identity::names_no_task(result);
-    // The far end's own `result` bytes with busbar's identity spliced in (Law 5; Q128 a2a M8).
+    // The far end's own `result` bytes with busbar's identity spliced in.
     let spliced = crate::answer_bytes::result_span(data.as_bytes()).and_then(|r| {
         crate::answer_bytes::rewrite_identity(
             &data.as_bytes()[r],

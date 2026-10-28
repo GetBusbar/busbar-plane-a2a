@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! PUSH DELIVERY, IN PLANE MEMORY (`BUSBAR-1.6.0.md`, the a2a plane rulings: push delivery makes
+//! Push delivery, in plane memory: push delivery makes
 //! three attempts, two delays of 250/500 ms ±20 %, on a transport error, 5xx or 429 only, on an
 //! async timer, holding no slot, re-running the destination judge on every attempt; event-stream
 //! sink delivery through a per-task ordered bounded queue, 64, drop-oldest, counted).
@@ -31,8 +31,7 @@
 //! passed. busbar's own callback token ([`Tokens`]) is a capability for one task,
 //! `<task-id>.<signature>`, minted through the host's signing service (the plane never holds the
 //! key) and verified by signing again and comparing in constant time; it is never logged or
-//! audited. [`PushLimiter`] bounds how often one task's token may be spent, exactly as 1.5.5
-//! bounded it.
+//! audited. [`PushLimiter`] bounds how often one task's token may be spent.
 
 use std::collections::{BTreeMap, VecDeque};
 
@@ -63,10 +62,10 @@ pub const MAX_TOKENS: usize = 4096;
 /// id, so no other signature the instance asks for verifies as a token.
 pub const TOKEN_DOMAIN: &[u8] = b"busbar-a2a-push-token\0";
 
-/// The fixed push-rate window, seconds (1.5.5's `PUSH_RATE_WINDOW_SECS`).
+/// The fixed push-rate window, seconds.
 pub const PUSH_RATE_WINDOW_SECS: u64 = 60;
 
-/// The pushes one task's token may spend in one window (1.5.5's `PUSH_RATE_LIMIT`).
+/// The pushes one task's token may spend in one window.
 pub const PUSH_RATE_LIMIT: u32 = 60;
 
 /// The scheme busbar's callback token rides on: registered as the config's
@@ -78,7 +77,7 @@ pub const TOKEN_SCHEME: &str = "Bearer";
 /// counted.
 pub const MAX_OWED: usize = 4096;
 
-/// THE BOUND ON ONE ATTEMPT'S REQUEST, milliseconds (ARCHITECT ruling on a slow push receiver: each
+/// The bound on one attempt's request, milliseconds (each
 /// attempt is bounded by the destination's request deadline, the connector's default when none is
 /// set). A webhook names no pool, so it is the connector's default bound, ten seconds
 /// (`busbar-core-connector` `DEFAULT_OPEN_TIMEOUT`). A receiver that has not answered by then ends
@@ -91,8 +90,8 @@ pub const CONTENT_TYPE: (&str, &str) = ("content-type", "application/json");
 /// The field a webhook credential is presented on.
 pub const AUTHORIZATION: &str = "authorization";
 
-/// THE A2A PUSH NOTIFICATION BODY, in the shape of the version its callback was registered under
-/// ([`Task::push_version`]; Q128 a2a M13, ruled version-consistent), under busbar's ids. Not a
+/// The A2A push notification body, in the shape of the version its callback was registered under
+/// ([`Task::push_version`]), under busbar's ids. Not a
 /// JSON-RPC envelope: the receiver is not a JSON-RPC peer and correlates on the task id.
 /// `status.timestamp` is RFC 3339, as every revision types it.
 ///
@@ -377,8 +376,8 @@ impl Deliveries {
         })
     }
 
-    /// THE ONE DELIVERY TO ATTEMPT NOW, for one `tick` op: the tasks' queues are served IN TURN,
-    /// one attempt per task per turn (ARCHITECT ruling on a slow push receiver), so a slow receiver
+    /// The one delivery to attempt now, for one `tick` op: the tasks' queues are served in turn,
+    /// one attempt per task per turn, so a slow receiver
     /// delays another task's delivery by at most one attempt's deadline: of the heads whose time
     /// has come and no attempt is open on, the first after the task attempted last, in task-id
     /// order, wrapping round. Marked open until [`Deliveries::settle`]; `None` when none is due.
@@ -612,7 +611,7 @@ pub fn token_input(task_id: &str) -> Vec<u8> {
 }
 
 /// The signature bytes a token carries: its first [`TOKEN_MAC_BYTES`], so the token keeps
-/// predev's wire shape (`<task-id>.` and 64 lower-case hex digits).
+/// the wire shape (`<task-id>.` and 64 lower-case hex digits).
 pub const TOKEN_MAC_BYTES: usize = 32;
 
 /// A signature, as the lower-case hex a token carries it in (its first [`TOKEN_MAC_BYTES`]).
@@ -624,7 +623,7 @@ pub fn hex(signature: &[u8]) -> String {
 /// BUSBAR'S OWN CALLBACK TOKENS: `<task-id>.<hex signature>`, one per task, the signature the
 /// host's over [`token_input`]. A capability for that task alone. The instance remembers whose
 /// task each minted token names (a task's records are keyed under its caller), so a restart refuses
-/// every earlier token, as 1.5.5's process-local secret did.
+/// every earlier token (the secret is process-local).
 #[derive(Debug, Default)]
 pub struct Tokens {
     callers: Keyed<String, String>,
@@ -691,7 +690,7 @@ pub fn verified(signature: &[u8], presented: &str) -> bool {
     busbar_contract::constant_time_eq(&hex(signature), presented)
 }
 
-/// THE PUSH-VOLUME BOUND (1.5.5's `PushLimiter`, exactly): a fixed window of
+/// The push-volume bound: a fixed window of
 /// [`PUSH_RATE_WINDOW_SECS`], [`PUSH_RATE_LIMIT`] pushes per task in it, judged against the newest
 /// window ever seen (a wall clock that steps back cannot reopen a spent budget), every window older
 /// than the one judged dropped on each check.

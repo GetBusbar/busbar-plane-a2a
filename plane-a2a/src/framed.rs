@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! THE gRPC LINE'S CODEC: the a2aproject's own service, read and answered by the plane (the
-//! engine's `a2a/grpc.rs`, ported; ARCHITECT ruling on FOLD-A2A, 2026-10-04: protobuf is decoded
-//! and encoded in the plane; the grpc transport door owns the framing and the trailers).
+//! The gRPC line's codec: the a2aproject's own service, read and answered by the plane (protobuf
+//! is decoded and encoded in the plane; the grpc transport door owns the framing and the
+//! trailers).
 //!
 //! A2A's gRPC binding is the SAME protocol as its JSON-RPC binding: the rpc name IS the v1.0
 //! JSON-RPC method, and A2A v1.0's JSON representation of a request message IS its ProtoJSON. So
@@ -22,7 +22,7 @@
 //! No A2A wire fact is hand-written here: the messages, the method names and the ProtoJSON mapping
 //! are generated from the a2aproject's own `a2a.proto` ([`crate::proto::pb`]). The status a call ends with is the gRPC numbering ([`Code`]) and its details the
 //! `google.rpc.Status` message carrying the error's `google.rpc.ErrorInfo` ([`CallStatus::details`]),
-//! the bytes the engine's status carried as its details.
+//! the bytes the status carries as its details.
 
 use crate::proto::{pb, Normal};
 use prost::Message as _;
@@ -252,8 +252,7 @@ pub fn unimplemented() -> CallStatus {
 
 /// PROTOBUF IN, the JSON-RPC request OUT: `message` decoded as `rpc`'s request message and framed
 /// as the v1.0 JSON-RPC request it is. A message that does not decode is `INTERNAL` with the
-/// decoder's words (the gRPC status table's mapping of a protobuf parse error, as the engine's
-/// codec answered it); one whose ProtoJSON cannot be
+/// decoder's words (the gRPC status table's mapping of a protobuf parse error); one whose ProtoJSON cannot be
 /// written is `INVALID_ARGUMENT`.
 ///
 /// # Errors
@@ -426,7 +425,6 @@ pub fn event(frame: &str) -> Option<Result<Vec<u8>, CallStatus>> {
 /// The reply head field the status details ride in, its value the details' base64 (unpadded, as
 /// gRPC writes a binary field): the grpc transport renders it into the trailers verbatim, beside the
 /// status it renders from the reply's status and the message it renders from the reply's bytes
-/// (ARCHITECT ruling Q2, 2026-10-04).
 pub const DETAILS_FIELD: &str = "grpc-status-details-bin";
 
 /// Whether `target` (a request target, its query ignored) is a call on the gRPC service: a path
@@ -488,7 +486,7 @@ pub fn framed_reply(rpc: Rpc, status: u32, body: &[u8]) -> FramedReply {
 }
 
 /// A refusal the plane rendered as its JSON-RPC error envelope at neutral `status`, as the status
-/// the call ends with (the engine's bridge read the envelope its ingress answered the same way).
+/// the call ends with.
 #[must_use]
 pub fn refusal(envelope: &[u8], status: u32) -> FramedReply {
     let error = serde_json::from_slice::<Value>(envelope)
@@ -502,8 +500,8 @@ pub fn refusal(envelope: &[u8], status: u32) -> FramedReply {
 
 /// A reply's status as a CLOSING BLOCK (field lines, `name: value` CRLF each): `grpc-status`, then
 /// `grpc-message` where there is a message, then [`DETAILS_FIELD`] where there are details — the
-/// order and bytes 1.5.5's gRPC line closed a call with (tonic 0.14's `Status::add_header`). The
-/// message is percent-encoded as tonic encoded it: every control byte, every byte past ASCII, the
+/// order and bytes a gRPC call is closed with (tonic 0.14's `Status::add_header`). The
+/// message is percent-encoded as tonic encodes it: every control byte, every byte past ASCII, the
 /// space and each of `` "#%<>`?{}``, upper-case hex.
 #[must_use]
 pub fn status_block(reply: &FramedReply) -> Vec<u8> {
@@ -528,7 +526,7 @@ pub fn status_block(reply: &FramedReply) -> Vec<u8> {
 /// AN ANSWER IN EVENTS, as the messages it carries: every whole event-stream frame of `buf` that
 /// carries a result is one `StreamResponse` message, in order; an `error` frame (or a result the
 /// model refuses) ends the stream with its status, and nothing after it is read. A unary rpc
-/// answered in events was not a JSON-RPC answer to the engine's bridge: it ends with the status
+/// answered in events was not a JSON-RPC answer: it ends with the status
 /// gRPC's HTTP mapping gives a `200`.
 #[must_use]
 pub fn event_messages(rpc: Rpc, buf: &[u8]) -> (Vec<Vec<u8>>, Option<CallStatus>) {
@@ -552,7 +550,7 @@ pub fn event_messages(rpc: Rpc, buf: &[u8]) -> (Vec<Vec<u8>>, Option<CallStatus>
 }
 
 /// The next complete event-stream frame in `buffered`, consumed from it: a frame ends at a blank
-/// line, in any of the three line-ending spellings the grammar allows (the engine's `take_frame`).
+/// line, in any of the three line-ending spellings the grammar allows.
 fn take_frame(buffered: &mut Vec<u8>) -> Option<String> {
     const TERMINATORS: [&[u8]; 3] = [b"\r\n\r\n", b"\n\n", b"\r\r"];
     let (at, len) = TERMINATORS
@@ -569,7 +567,7 @@ fn take_frame(buffered: &mut Vec<u8>) -> Option<String> {
     Some(String::from_utf8_lossy(&frame[..at]).into_owned())
 }
 
-/// The neutral status an event's error is read under (the engine read a stream's error at `500`).
+/// The neutral status an event's error is read under (a stream's error reads at `500`).
 const STATUS_INTERNAL: u32 = 500;
 
 /// THE STATUS FOR A JSON-RPC ERROR OBJECT, read off the code rather than the message: the code
@@ -681,17 +679,17 @@ fn narrowed_to_the_proto(mut card: Value) -> Value {
     card
 }
 
-// ── THE OUTBOUND DIRECTION: busbar dialling an agent's gRPC binding ─────────────────────────────
+// The outbound direction, busbar dialling an agent's gRPC binding.
 //
-// The same codec the other way round (the engine's `relay::GrpcFraming`, ported; spec line
-// 2026-09-30: "transport de-frames, plane transcodes protobuf<->ProtoJSON"): the hop's JSON-RPC
+// The same codec the other way round (transport de-frames, plane transcodes
+// protobuf<->ProtoJSON): the hop's JSON-RPC
 // `params` ARE the rpc's request message in ProtoJSON, written as protobuf ([`request_message`]);
 // each message the far end answers is the rpc's response message, read back as the ProtoJSON
 // `result` it is ([`response_result`]). The grpc transport frames the request and hands the answer
 // back length-prefixed, message by message ([`take_message`]), its trailers as a field block
 // ([`ended`]).
 
-/// The `content-type` a dialled call carries, and the `accept` it declares (the engine's).
+/// The `content-type` a dialled call carries, and the `accept` it declares.
 pub const DIAL_CONTENT_TYPE: &str = "application/grpc+proto";
 
 /// The media type the gRPC line's answers carry, as the previous release's gRPC line (tonic)
@@ -818,8 +816,8 @@ where
     serde_json::to_value(&m).map_err(|e| format!("the answer could not be rendered: {e}"))
 }
 
-/// THE MESSAGE AT THE HEAD OF `buf`: its payload's length and how many bytes it takes with its
-/// prefix; `Ok(None)` while it is still arriving (the engine's `grpc_split`).
+/// The message at the head of `buf`: its payload's length and how many bytes it takes with its
+/// prefix; `Ok(None)` while it is still arriving.
 ///
 /// # Errors
 ///
@@ -891,7 +889,7 @@ impl Ended {
 
 /// HOW A DIALLED CALL ENDED (`block`, the field block the grpc transport hands back after the
 /// messages; `stated`, the `grpc-status` it read off them, which the kernel hands on beside the
-/// block, `BUSBAR-1.6.0.md` l.394, l.747): that code, with the `ErrorInfo` of the
+/// block): that code, with the `ErrorInfo` of the
 /// `google.rpc.Status` its [`DETAILS_FIELD`] carries, where it carries one. The details never
 /// state the code: `None` when no status was handed on.
 #[must_use]

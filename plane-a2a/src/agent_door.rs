@@ -46,7 +46,7 @@ use busbar_contract::abi::plane::{
     ROUTE_SCOPE_LOCAL, UNITS_REPORTED, VERDICT_RETRY,
 };
 use busbar_contract::abi::sdk::conn::{Host, StaticHost};
-// THE ONE SHARED FAULT READING (ARCHITECT row 68): the breaker's vocabulary, stated on `OnPieceOut`.
+// The one shared fault reading: the breaker's vocabulary, stated on `OnPieceOut`.
 use busbar_contract::abi::sdk::door::statement;
 use busbar_contract::abi::sdk::life::Refusal;
 use busbar_contract::abi::sdk::publish::{class_index, Generations, Keyed};
@@ -75,7 +75,7 @@ const MAX_INFLIGHT: u32 = 64;
 /// The version the Statement names: the crate's (a test pins the two equal).
 pub const VERSION: &str = "1.6.0";
 
-/// THE STATEMENT: the plane's name and version, the settings section it declares
+/// The Statement: the plane's name and version, the settings section it declares
 /// ([`door_statement::SECTIONS`]), its three outbound needs ([`door_statement::NEEDS`]), the secret references its
 /// section holds ([`door_statement::SECRET_REFS`]) and its tail ([`door_statement::TAIL`]).
 pub const STATEMENT: Statement = {
@@ -90,8 +90,8 @@ pub const STATEMENT: Statement = {
 };
 
 busbar_contract::statement_extensions!(
-    /// The Statement's extensions: this plugin's whole `declares` document (BUSBAR-1.6.0.md l.246).
-    /// It states the plane's breaker fact (ARCHITECT Q4): one transient failure below the trip
+    /// The Statement's extensions: this plugin's whole `declares` document.
+    /// It states the plane's breaker fact: one transient failure below the trip
     /// threshold never benches an agent's cell — the cell refuses on a TRIP and nothing less, an
     /// upstream `Retry-After` still honoured (docs/a2a.md, "These cells refuse on a trip and nothing
     /// less"). Why no bench: an A2A call's errors are mostly the agent's own answer (an agent says
@@ -134,14 +134,14 @@ pub struct AgentUnit {
     /// The refresh generation it arrived under: the held cards it reads are that generation's.
     pub generation: u64,
     /// `project` refused a committed rewrite it could not read back: `refusal` answers the unit
-    /// predev's internal error ([`unreadable_rewrite`]).
+    /// the internal error ([`unreadable_rewrite`]).
     pub unreadable_rewrite: bool,
     /// The failover pool the unit routes over (`ROUTE_POOL`): the pool its addressed agent is a
     /// member of. `None` for every other unit.
     pub pool: Option<String>,
     /// The unit's own ticket, as its pieces carry it: what the kernel's `cancel` names it by.
     pub ticket: Ticket,
-    /// THE DOOR IS DONE WITH IT: its answer is written whole, or the kernel cancelled it. Only a
+    /// The door is done with it: its answer is written whole, or the kernel cancelled it. Only a
     /// `refusal` may still read it (the kernel judges the plane's last answer after it returns), and
     /// that refusal forgets it; until then it makes room when the instance is full ([`room_for`]).
     pub over: bool,
@@ -212,14 +212,14 @@ pub struct Hop {
     left: bool,
     /// A piece of the far end's answer has come: the agent was reached.
     heard: bool,
-    /// THE ENVELOPE A REQUEST-STAGE REWRITE LEFT (`project`'s `rewrite`): what the hop relays
+    /// The envelope a request-stage rewrite left (`project`'s `rewrite`): what the hop relays
     /// (its task ids translated over it, its binding composed from it). Everything else the hop
     /// reads (the task it opens, the callback it carries, the admission) reads the caller's own
-    /// envelope, as the engine read the params its gate had already screened.
+    /// envelope, the params its gate had already screened.
     rewritten: Option<serde_json::Value>,
-    /// THE BYTES THE HOP RELAYS, kept when its task ids may be translated (the request names a
+    /// The bytes the hop relays, kept when its task ids may be translated (the request names a
     /// task, or a rewrite or a minted message id rewrote it): the translation splices the far
-    /// end's ids into these, every other byte as the caller wrote it (Law 5). `None`: nothing kept.
+    /// end's ids into these, every other byte as the caller wrote it. `None`: nothing kept.
     relayed_bytes: Option<Vec<u8>>,
     /// A gRPC send whose request carried no message: its first ATTEMPT mints the message's id
     /// ([`crate::framed::mints_message_id`]) before the task is opened.
@@ -240,9 +240,8 @@ pub struct Hop {
     /// The ATTEMPT the pool's gate let go (its number; `0` = none yet): its re-entries do not
     /// judge it again, so the host calls after it keep their handles.
     gated: u32,
-    /// THE TASK A BREAKER REFUSAL REJECTED (predev `receive::refuse_hop`: a fresh submission the
-    /// open breaker refused before the socket is opened and ended `rejected`, and the refusal names
-    /// its id): kept here on the refused piece, because `refusal` is ticketless and reads no store.
+    /// The task a breaker refusal rejected (a fresh submission the open breaker refused before
+    /// the socket is opened ends `rejected`, and the refusal names its id): kept here on the refused piece, because `refusal` is ticketless and reads no store.
     rejected: Option<String>,
 }
 
@@ -279,13 +278,13 @@ impl Hop {
         }
     }
 
-    /// Whether the hop's answer is a stream of events (the engine's streaming hop).
+    /// Whether the hop's answer is a stream of events (a streaming hop).
     #[must_use]
     pub fn streams(&self) -> bool {
         self.relay.expects_events()
     }
 
-    /// A hop about a task whose answer may be events (the engine's event-stream hop): `envelope`
+    /// A hop about a task whose answer may be events (an event-stream hop): `envelope`
     /// opens it at the first ATTEMPT; a `subscribe` answers busbar's own refusal first.
     #[must_use]
     pub fn events(
@@ -351,7 +350,7 @@ enum AnswerHead {
 /// The head field a whole answer states its length in.
 pub(crate) const H_CONTENT_LENGTH: &str = "content-length";
 
-/// The head fields an answer in events starts with (the engine's event-stream response).
+/// The head fields an answer in events starts with.
 const EVENTS_HEAD: [(&str, &str); 2] = [
     (relay::H_CONTENT_TYPE, crate::events::EVENTS_MEDIA_TYPE),
     ("cache-control", "no-store"),
@@ -391,7 +390,7 @@ impl Outbox {
         })
     }
 
-    /// The outbox for `answer` on the gRPC line, the rpc `rpc` (the engine's bridge): a whole
+    /// The outbox for `answer` on the gRPC line, the rpc `rpc`: a whole
     /// answer is the rpc's one message, or the status it ends with; an answer in events is one
     /// message per event, each on an answer of its own, an `error` event ending the stream (with its
     /// status when no message went before it). Everything bound for the far end is as on the
@@ -512,7 +511,7 @@ pub(crate) fn drive_originated(
     }
 }
 
-/// THE MIRROR ([`crate::mirror::Flight`]): each stage's request originated, until its last stage
+/// The mirror ([`crate::mirror::Flight`]): each stage's request originated, until its last stage
 /// is answered or one is refused for the agent's unavailable credential. Its outcome is only ever
 /// the next stage.
 pub(crate) fn drive_mirror(
@@ -545,7 +544,7 @@ pub struct A2aDoor {
     pub(crate) units: Keyed<u64, AgentUnit>,
     pub(crate) restored: Keyed<(), u64>,
     /// `<caller>/<busbar task id>` to the far end's own id for the task: plane memory, so a
-    /// restart forgets it (the engine's `idmap`, its bound included).
+    /// restart forgets it (its bound included).
     backends: BackendIds,
     /// The agents' verified cards, held in plugin memory to their refresh generation.
     pub(crate) cards: crate::cards::Cards,
@@ -611,17 +610,15 @@ impl A2aDoor {
     }
 }
 
-/// THE HELD CARDS, WARMED FROM THE `card` HOST RECORDS (ARCHITECT ruling B2, as amended: the
-/// `connect` and `approve` answers write them, `BUSBAR-1.6.0.md` l.290 "record writes ride
-/// `on_piece`'s answer" keeping every write on an answer): every agent's recorded card held under
+/// The held cards, warmed from the `card` host records (the `connect` and `approve` answers
+/// write them, keeping every write on an answer): every agent's recorded card held under
 /// the newest generation, so an instance opened again serves the agents its operator approved
 /// before. READY `true` once both listings have landed (no host has nothing to load); READY
 /// `false` when the host refused either, what did land held, so the caller leaves the cards
 /// unwarmed and the next warm lists them again; PENDING while one is in flight.
 ///
-/// THE APPROVED SKILLS come back with them, from the `card_approval` host records `approve` wrote
-/// (`BUSBAR-1.6.0.md` l.345-346: "what must survive a restart goes to its records through the
-/// store kind"), so the trust view's drift lists are judged against what the operator approved,
+/// The approved skills come back with them, from the `card_approval` host records `approve` wrote
+/// (what must survive a restart goes to its records), so the trust view's drift lists are judged against what the operator approved,
 /// never against nothing. A standing this instance already approved is left as it is.
 ///
 /// ITS HANDLES COUNT ON `ticket`'s OWN SEQUENCE from `issued` (`abi::mechanism::ticket`: a
@@ -742,7 +739,7 @@ fn approval_records(
         .unwrap_or_default()
 }
 
-/// THE PART RECORDS A KEY MAY HOLD in the store: those its last written value names (`current`),
+/// The part records a key may hold in the store: those its last written value names (`current`),
 /// and every other one this instance knows of (`retired`: a value's it replaced, and what the warm
 /// listed), which each write of the key tombstones. A write of the value `current` already names
 /// (an unchanged card, or the kernel's re-call of a short answer) tombstones `retired` again, so an
@@ -841,10 +838,10 @@ pub(crate) fn verb_answer(
     Outcome::Ready
 }
 
-/// The most far-end task ids the instance remembers (the engine's `idmap::CAPACITY`).
+/// The most far-end task ids the instance remembers.
 pub const MAX_BACKEND_IDS: usize = 100_000;
 
-/// THE FAR END'S OWN TASK IDS, by `<caller>/<busbar task id>`, bounded: past the bound the id
+/// The far end's own task ids, by `<caller>/<busbar task id>`, bounded: past the bound the id
 /// recorded longest ago is forgotten first, whichever caller it is for, so one caller's volume
 /// never pushes out another caller's newer ids because of how their references sort.
 #[derive(Debug, Default)]
@@ -873,7 +870,7 @@ impl BackendIds {
     }
 
     /// Hold `id` under `key`; past `cap`, the id recorded longest ago is forgotten. A key held
-    /// already keeps its place and forgets nothing (the engine's `idmap`: insertion order, its
+    /// already keeps its place and forgets nothing (insertion order, its
     /// bound included).
     pub(crate) fn record(&self, cap: usize, key: String, id: String) {
         self.0.with_all(|m| {
@@ -901,10 +898,10 @@ fn agents_section(bytes: &[u8]) -> Result<AgentsCfg, Refusal> {
     door_statement::read_agents_section(bytes).map_err(Refusal::refused)
 }
 
-/// WHETHER THE INSTANCE HAS ROOM for a unit under `key`, judged before `arrive` states anything:
+/// Whether the instance has room for a unit under `key`, judged before `arrive` states anything:
 /// below [`MAX_UNITS`] it has; at it, every unit the door is done with ([`AgentUnit::over`]) is
-/// dropped in the one pass, so the next arrivals find room without looking again. A LIVE UNIT IS
-/// NEVER DROPPED (THE DESIGN section 1: admission bounds live work, nothing evicts it): an
+/// dropped in the one pass, so the next arrivals find room without looking again. A live unit is
+/// never dropped (admission bounds live work, nothing evicts it): an
 /// instance full of live units has no room, and the arrival is refused
 /// ([`agent_arrival::units_full`]). The room is judged and the unit kept under two holds of the
 /// map, so arrivals in flight at once may each keep theirs past the bound, never more than the
@@ -978,7 +975,7 @@ fn unserved(out: &mut Out<'_, ArriveOut>) -> Outcome {
     out.fail(Refusal::bare())
 }
 
-/// A gRPC call's head field `name`, as the engine's bridge read the call (`Wire::for_grpc`) over
+/// A gRPC call's head field `name`, over
 /// the call's own fields (`field`): no media type and no `Origin` to judge, and the version its
 /// `a2a-version` names, the line's own (`1.0`) when it names none: absent, empty, or nothing but
 /// whitespace (the version is read trimmed, so a blank one would otherwise read as the JSON-RPC
@@ -1080,10 +1077,9 @@ slot!(
         let spec = door_statement::agents_snapshot_spec(plane.public_url.as_deref(), &names);
         let generation = input.generation();
         // THE CARDS A KEPT REGISTRATION HOLDS are held under the new generation too: the apply
-        // keeps the operator's approval (it is the kernel's trust book's, ARCHITECT
-        // Q-DEL-A2A-APPLY), and an approved agent whose registration the apply did not touch is
-        // served on the next unit, not refused for want of the card it was approved at (ruling
-        // (b), coordinator 2026-10-07). A registration the apply changed holds none until it is
+        // keeps the operator's approval (it is the kernel's trust book's), and an approved agent
+        // whose registration the apply did not touch is served on the next unit, not refused for
+        // want of the card it was approved at. A registration the apply changed holds none until it is
         // looked at again.
         let (before, held_at) = (plane.generations.current(), plane.newest());
         let mut approvals = std::collections::BTreeMap::new();
@@ -1103,8 +1099,8 @@ slot!(
         }
         out.publish_with(|o| &o.snapshot, &plane.generations, generation, &spec, cfg);
         plane.published(generation);
-        // EVERY REGISTRATION STARTS AGAIN at the fail-closed floor, as the engine rebuilt each one
-        // on a config apply (`from_config_carrying`): nothing sighted. A kept
+        // Every registration starts again at the fail-closed floor on a config apply: nothing
+        // sighted. A kept
         // registration keeps the skills its kept approval was made at.
         plane.trust.with_all(|m| {
             m.clear();
@@ -1253,9 +1249,8 @@ slot!(
 slot!(
     /// `cancel`: nothing the far end moved is in flight, so nothing moved; a card look the
     /// cancelled unit held is abandoned, and every unit waiting on it is woken at once to look for
-    /// itself (ARCHITECT Q-DEL-A2A-TIMED-WAKE: cancellation is a wake). No row is written: a
-    /// caller that went away mid-answer stopped 1.5.5's relay without a task transition, and the
-    /// task keeps the last state it reached.
+    /// itself (cancellation is a wake). No row is written: a caller that went away mid-answer
+    /// stops the relay without a task transition, and the task keeps the last state it reached.
     Cancel, PlaneCancelIn, PlaneCancelOut, |instance, input, mut out| {
         let mut answered = false;
         if let Some(plane) = instance.get() {
@@ -1285,7 +1280,7 @@ slot!(
             }
         }
         // A unit whose far end had begun its answer is PARTIAL, so the units it reported bill when
-        // its answer was streamed (owner billing rule R21: the ledger records what the dialect
+        // its answer was streamed (the ledger records what the dialect
         // did); one cut before is ABORTED.
         out.set(
             |o| &o.cancel.disposition,
@@ -1318,7 +1313,7 @@ slot!(
     /// spells ([`crate::rest::compose`]), or on the gRPC line as the JSON-RPC request its call's
     /// message composes ([`crate::framed::compose`]), decided and kept with the generation it
     /// arrived under, keyed by its unit; a refused one refused in its own words. A message whose
-    /// method the vocabulary does not list is classed as the hop the engine relays it on, never
+    /// method the vocabulary does not list is classed as the hop it relays on, never
     /// refused. A card read on the open line is decided by [`arrive_card`]. An instance holding as
     /// many live units as it keeps refuses the arrival ([`room_for`]).
     Arrive, ArriveIn, ArriveOut, |instance, input, mut out| {
@@ -1342,7 +1337,7 @@ slot!(
                 Err(refusal) => return refused(&mut out, &refusal),
             },
             Line::Open => return arrive_card(plane, route, target, given.unit(), &mut out),
-            // THE gRPC LINE (the engine's `grpc.rs`): the rpc the target names, its one request
+            // The gRPC line: the rpc the target names, its one request
             // message composed as the v1.0 JSON-RPC request it is, served from there as the
             // JSON-RPC line serves its own; a method the service does not have, or a message that
             // does not read, is refused in the status the service answered it with.
@@ -1407,12 +1402,10 @@ slot!(
         // The request the admission reads: the hop's, which took it, or the arrival's own.
         let request = hop.as_ref().map_or(request.as_ref(), |h| h.request.as_ref());
         // The entry the unit routes over: the addressed agent, its name inside the `agents:`
-        // section, routed directly (ARCHITECT Q-SW6/Q-FL3); an unaddressed unit is routed by the
-        // caller's scope, to the one agent its grant reaches, as 1.5.5 chose it (ARCHITECT
-        // Q-DEL-A2A-SELECT).
+        // section, routed directly; an unaddressed unit is routed by the
+        // caller's scope, to the one agent its grant reaches.
         //
-        // THE ADMISSION AND THE CATALOGUE AT ARRIVAL (the engine's `receive::admit`/`select`,
-        // ARCHITECT Q-DEL-A2A-GATE/-SCOPE-TRUST): an addressed agent that is not serving, or whose
+        // Admission and the catalogue at arrival: an addressed agent that is not serving, or whose
         // card the request does not fit, refuses the unit about that agent — the kernel judges the
         // caller's grant over it first and charges nothing; an unaddressed unit names the agents
         // that would serve it as its candidates, which the kernel intersects with the caller's
@@ -1422,8 +1415,8 @@ slot!(
         // is selected ([`answered_here`]).
         if answered_here(&disposition, agent.is_some()) {
             out.local();
-            // Busbar's extended card is an ADMITTED CALL on the plane's pool (the engine's
-            // `receive`: governance, admission, the request meter, then the card): it counts its
+            // Busbar's extended card is an ADMITTED CALL on the plane's pool (governance,
+            // admission, the request meter, then the card): it counts its
             // request; a notification moves nothing.
             if matches!(disposition, AgentDisposition::Request { .. }) {
                 out.counted();
@@ -1441,7 +1434,7 @@ slot!(
         match &agent {
             Some(agent) => {
                 out.route(ROUTE_DIRECT, agent);
-                // AN AGENT THIS DEPLOYMENT DOES NOT FRONT (1.5.5's `InboundRefusal::NoSuchAgent`):
+                // An agent this deployment does not front:
                 // a refusal about the entry it names, so the kernel judges the caller's identity
                 // and grant first and nothing is charged; `404`, never a `503`.
                 let Some(def) = section.as_ref().and_then(|s| s.agents.get(agent)) else {
@@ -1449,7 +1442,7 @@ slot!(
                 };
                 let pooled = section.as_ref().and_then(|s| s.pool_of(agent));
                 // A CARD READ ADDRESSED TO A POOLED AGENT has no one answer across the pool's
-                // members (predev `receive.rs:1841-1857`): refused about the agent it addressed, so
+                // members: refused about the agent it addressed, so
                 // the kernel judges the caller's grant on it first; an agent the kernel's trust
                 // book does not serve is refused for that first, its trust facts stated (a refusal
                 // about an entry states none, abi/plane "A refused arrival").
@@ -1465,12 +1458,11 @@ slot!(
                 {
                     return refused(&mut out, &refusal);
                 }
-                // AN AGENT IN A FAILOVER POOL (predev `receive.rs` `pool_of`): a relayed unit routes
+                // An agent in a failover pool: a relayed unit routes
                 // over the POOL, so the kernel's one walk picks the member, primary first (each
                 // member's declared tier); the caller's grant on the agent it addressed is judged
                 // on the trust counterparty it states. A verb the plane answers itself stays the
-                // addressed agent's, as predev answered it before the pool was read
-                // (`receive.rs:1590` before `:1839`).
+                // addressed agent's, answered before the pool is read.
                 if let Some((name, _)) = pooled {
                     if hop.is_some() {
                         out.route(ROUTE_POOL, name);
@@ -1492,12 +1484,9 @@ slot!(
                             .collect()
                     })
                     .unwrap_or_default();
-                // A VERB THE PLANE ANSWERS ITSELF, unaddressed (COORDINATOR ruling 2026-10-07,
-                // `ROUTE_SCOPE_LOCAL`): answered at the ONE agent the caller's grant reaches, with
-                // no route walked, as predev's `select` chose the agent (`receive.rs:1257-1260`),
-                // `admit` admitted it (`:1279`), and the local verbs were answered there before
-                // the egress gate and before any pool was read (`:1559-1593`, `pool_of` `:1839`).
-                // An admitted call, counted as predev metered it.
+                // A verb the plane answers itself, unaddressed (`ROUTE_SCOPE_LOCAL`): answered at
+                // the one agent the caller's grant reaches, with no route walked, before the
+                // egress gate and before any pool is read. An admitted call, counted.
                 scope_local = hop.is_none();
                 out.route(
                     if scope_local {
@@ -1509,7 +1498,7 @@ slot!(
                 );
             }
         }
-        // AT MOST ONCE (1.5.5's relay): an agent that ANSWERED with a failure is not retried on
+        // At most once: an agent that answered with a failure is not retried on
         // another; its failure is the unit's answer, surfaced per attempt, while the walk still
         // moves past a member whose breaker is open before anything was sent. Stated only on a
         // unit admitted here: a refusal about an entry states no route flags (abi/plane "A refused
@@ -1519,9 +1508,8 @@ slot!(
             out.counted();
         }
         // A STREAMED ANSWER (`message/stream`, `tasks/resubscribe`, their v1.0 names and an unlisted
-        // method named as a stream; predev `receive.rs` `reads_as_stream`): the kernel bounds it by
-        // the tail's stream ceiling, from the moment its route is known (ARCHITECT ruling
-        // 2026-10-07, STREAM-CEILING; predev's 600 s relay ceiling and stalled-consumer release).
+        // method named as a stream): the kernel bounds it by
+        // the tail's stream ceiling, from the moment its route is known.
         if hop.as_ref().is_some_and(Hop::streams) {
             out.stream();
         }
@@ -1539,8 +1527,8 @@ slot!(
 
 /// WHETHER THE PLANE ANSWERS AN ARRIVAL ITSELF, before any agent is selected: busbar's EXTENDED
 /// card on the plane's own endpoint (the caller named no agent, so the verb asks busbar about itself;
-/// the engine's `route::extended_agent_card`), and a NOTIFICATION wherever it arrived (received,
-/// never answered and never relayed: the engine answered it `202` with no body and moved nothing).
+/// busbar's extended card), and a notification wherever it arrived (received, never answered and
+/// never relayed: answered `202` with no body, moving nothing).
 pub(crate) fn answered_here(disposition: &AgentDisposition, addressed: bool) -> bool {
     match disposition {
         AgentDisposition::Request { row, .. } => !addressed && row.op == crate::ops::OP_AGENT_CARD,
@@ -1553,7 +1541,7 @@ pub(crate) fn answered_here(disposition: &AgentDisposition, addressed: bool) -> 
 /// the generation it arrived under. Busbar's own card (the well-known path) is unauthenticated and
 /// the plane's own to answer (`ROUTE_LOCAL`); a fronted agent's card (`GET /a2a/agents/{id}`) needs
 /// a principal and is routed to the addressed agent's entry, so the kernel judges the caller's grant
-/// over it, and the agent's admission (its trust and a held card, the engine's `receive::admit`)
+/// over it, and the agent's admission (its trust and a held card)
 /// refuses about that agent. Every other open route (the protected-resource document is the
 /// kernel's) is unserved here.
 fn arrive_card(
@@ -1604,8 +1592,7 @@ fn arrive_card(
     Outcome::Ready
 }
 
-/// The hop a unit's `on_piece` serves, as the engine relays it (`receive::unary_hop` and
-/// `receive::stream_hop`): the extended-card read addressed to one agent, task-less (its
+/// The hop a unit's `on_piece` serves: the extended-card read addressed to one agent, task-less (its
 /// `card_fetch` arm); a request whose answer is events (the vocabulary's multi-frame rows, and an
 /// unlisted method named as a stream), about a task, a subscribe answering busbar's own refusal
 /// first; and every other relayed one-reply request, about a task (`request` is its envelope: the
@@ -1998,8 +1985,7 @@ fn of_unit<T>(
     instance.get()?.units.with(&unit, |u| u.and_then(f))
 }
 
-/// THE KERNEL'S VERDICT ON `agent` (`trust.serves`: the kernel's Approve as a query, ARCHITECT
-/// FLIP-A2A; it never pends, so it rides no ticket): [`svc::DISTRUST_NONE`] serves, any other
+/// The kernel's verdict on `agent` (`trust.serves`: the kernel's Approve as a query; it never pends, so it rides no ticket): [`svc::DISTRUST_NONE`] serves, any other
 /// `DISTRUST_*` refuses. An instance opened without host services, or a service that does not
 /// answer, is trusted with nothing.
 pub(crate) fn verdict(plane: &A2aDoor, agent: &str) -> u64 {
@@ -2013,11 +1999,10 @@ pub(crate) fn verdict(plane: &A2aDoor, agent: &str) -> u64 {
         .unwrap_or(svc::DISTRUST_UNKNOWN)
 }
 
-/// AN ARRIVAL ADDRESSED TO `member` STATES ITS TRUST FACTS (the agent, as the counterparty, ARCHITECT
-/// FLIP-A2A): the kernel's Approve judges them and refuses an agent its trust book does not serve
+/// An arrival addressed to `member` states its trust facts (the agent, as the counterparty): the kernel's Approve judges them and refuses an agent its trust book does not serve
 /// (`untrusted`, rendered by `refusal` in the admission's words). Only an agent the book serves is
 /// held to the plane's own admission here ([`admit_unit`]: its card's fit), so
-/// trust is judged before the fit, as 1.5.5's admission ordered them.
+/// trust is judged before the fit.
 fn admit_addressed(
     plane: &A2aDoor,
     (member, def): (&str, &crate::a2a::config::AgentDefCfg),
@@ -2070,15 +2055,15 @@ pub(crate) fn admit_unit(
     crate::skill::fit(&card, &shape).map_err(excluded)
 }
 
-/// THE CALLER'S IDENTITY, the ordered gate's first step (1.5.5's `inbound::authorize`: a key that
+/// The caller's identity, the ordered gate's first step (a key that
 /// is disabled, deleted or past its row's `expires_at` is `KeyNotLive`, `401`, before anything
 /// else is judged), asked of the kernel at the unit's attempt: `entitlement.check` of the unit's
 /// caller for `member`'s agent scope, whose identity step refuses a principal that is not live (the
-/// kernel's own auth chain admits a key row past its `expires_at`, the 1.5.5 rule
-/// `key_expires_at_tests` pins; this plane's admission never did). The kernel already judged the
+/// kernel's own auth chain admits a key row past its `expires_at`; this plane's admission never
+/// did). The kernel already judged the
 /// caller's grant over the route, so a refused entitlement of the agent the unit addressed is the
 /// caller's identity: `401`, `this key is not live` ([`agent_arrival::not_live`]). Routed by scope, a
-/// caller that may reach no agent is answered as 1.5.5's catalogue answered one that reached none
+/// caller that may reach no agent is answered as the catalogue answers one that reaches none
 /// ([`agent_arrival::scope_refusal`]). A member of an addressed pool is judged on its own elsewhere.
 /// `None`: the caller stands. A check the host cannot answer is no entitlement.
 fn caller_stands(
@@ -2104,7 +2089,7 @@ fn caller_stands(
 /// declared order (the first the primary), the member the kernel's walk picked, the agent the unit
 /// addressed, and the caller's reference.
 struct PoolGate<'a> {
-    /// The pool, as its refusal names it (`agent:<pool>`, predev's walk key).
+    /// The pool, as its refusal names it (`agent:<pool>`, the walk key).
     pool: &'a str,
     members: &'a [String],
     member: &'a str,
@@ -2119,7 +2104,7 @@ enum Gate {
     /// The attempt goes on to the member.
     Go,
     /// The member is one this unit may not be sent to: declined, nothing sent, the walk moves on
-    /// (an empty `VERDICT_RETRY`, ARCHITECT round 4 Q-L3B-SURFACES (h)).
+    /// (an empty `VERDICT_RETRY`).
     Decline,
     /// The caller's whole answer, before anything is sent.
     Refuse(relay::RelayReply),
@@ -2127,8 +2112,8 @@ enum Gate {
     Pending,
 }
 
-/// THE POOL'S MEMBER FOR THIS ATTEMPT (predev `route.rs` `select_member` and `hop_facts`, over the
-/// kernel's one walk, which offers the members primary first):
+/// The pool's member for this attempt (over the kernel's one walk, which offers the members
+/// primary first):
 ///
 /// * a hop that already LEFT for a member is not sent to another: failover is an admission-time
 ///   choice, never a retry (docs/a2a.md "A reroute is not a retry");
@@ -2136,10 +2121,10 @@ enum Gate {
 ///   PINNED to the member holding it, as the caller's task records say ([`task_hop::holder`]):
 ///   every other member is declined, so a member the walk cannot admit refuses the verb in the
 ///   breaker's words and nothing migrates; pinned to a member other than the one addressed, it is
-///   judged on that member's grant, refused `403` before the socket (predev `hop_facts`);
+///   judged on that member's grant, refused `403` before the socket;
 /// * a FRESH submission takes the member the walk placed it on: a member other than the one
 ///   addressed is declined when the caller's grant does not reach it or the kernel's trust book
-///   does not serve it (predev's eligibility, pre-`tried`), and a member past the primary whose
+///   does not serve it, and a member past the primary whose
 ///   held card's fingerprint is not the primary's is refused once the task is open
 ///   ([`not_interchangeable`]).
 fn pool_gate(
@@ -2156,7 +2141,7 @@ fn pool_gate(
         Poll::Ready(holder) => holder,
     };
     // A member other than the one addressed; for an unaddressed unit, every member: each is judged
-    // on the caller's own grant, as predev's walk judged every candidate's eligibility.
+    // on the caller's own grant.
     let elsewhere = gate.addressed != Some(gate.member);
     match holder {
         Some(holder) if holder != gate.member => Gate::Decline,
@@ -2243,8 +2228,7 @@ fn entitled(reach: &Reach<'_>, pass: &mut crate::task_door::Pass, target: &str) 
         .is_some_and(|services| services.entitled(handle, target).unwrap_or(false))
 }
 
-/// THE APPROVED CARD FINGERPRINT of `agent` (predev's pin: the approved canonical card
-/// fingerprint): its held card's, when the kernel's trust book serves it; `None` (which never
+/// The approved card fingerprint of `agent` (the approved canonical card fingerprint): its held card's, when the kernel's trust book serves it; `None` (which never
 /// matches) when nothing is approved or held.
 fn approved_fingerprint(plane: &A2aDoor, agent: &str, generation: u64) -> Option<String> {
     if verdict(plane, agent) != busbar_contract::abi::host::service::DISTRUST_NONE {
@@ -2254,7 +2238,7 @@ fn approved_fingerprint(plane: &A2aDoor, agent: &str, generation: u64) -> Option
     crate::a2a::card::fingerprint(&card).ok()
 }
 
-/// THE NOT-INTERCHANGEABLE REFUSAL (predev `route::render_pin_mismatch`): `503`, `-32004`, the
+/// The not-interchangeable refusal: `503`, `-32004`, the
 /// walk's own words, naming the task the hop opened.
 fn not_interchangeable(hop: &Hop, reason: String) -> relay::RelayReply {
     let refusal = agent_arrival::AgentRefusal::new(
@@ -2341,8 +2325,7 @@ fn hop_piece(
         .and_then(|s| s.agents.get(member))
         .cloned();
     // AN UNADDRESSED UNIT THE KERNEL ROUTED OVER A POOL (the one agent its caller's grant reaches is
-    // a pool member, predev `receive.rs:1262-1268` converging with the addressed path at `:1839`):
-    // its attempt names the pool, and it is the pool's from then on.
+    // a pool member): its attempt names the pool, and it is the pool's from then on.
     if unit.agent.is_none() && unit.pool.is_none() {
         let given_pool = input.pool().as_str().unwrap_or_default();
         if unit
@@ -2386,7 +2369,7 @@ fn hop_piece(
             || (bytes.is_empty() && given.flags() == 0 && given.attempt_no() == 0));
     // A POOLED UNIT THE WALK FOUND NO MEMBER FOR (its caller's body, handed with no member before
     // the walk's refusal): the member holding its task is read, so the open breaker's refusal
-    // names the member it is pinned to (predev's pinned refusal), never the pool.
+    // names the member it is pinned to, never the pool.
     if let (false, Some((_, members))) = (continues, pooled.as_ref()) {
         let memberless = given.from() == FROM_CALLER && given_member.is_empty();
         if (memberless || (refused && breaker_refused))
@@ -2395,7 +2378,7 @@ fn hop_piece(
             return (Outcome::Pending, false);
         }
     }
-    // THE PINNED MEMBER'S OWN WAIT (predev `relay.rs:1659`: a pinned hop's breaker refusal reads the
+    // The pinned member's own wait (a pinned hop's breaker refusal reads the
     // pinned member's cell, never the pool's soonest): on the walk's exhausted refused piece, a
     // unit pinned to a member of its pool names it, and the refusal answers that member's cooldown.
     let wait_member = (refused && breaker_refused)
@@ -2408,7 +2391,7 @@ fn hop_piece(
         let mut pool_refusal = None;
         let ungated = attempt && hop.gated != given.attempt_no();
         if let (true, Some((name, members))) = (ungated, pooled.as_ref()) {
-            // The pool as predev's walk named it: its breaker key, `agent:<pool>`.
+            // The pool as the walk names it: its breaker key, `agent:<pool>`.
             let pool = door_statement::agent_resource(name);
             let gate = PoolGate {
                 pool: &pool,
@@ -2467,7 +2450,7 @@ fn hop_piece(
         let opened = if let Some(reply) = pool_refusal.or(admission) {
             Some(reply)
         } else if attempt {
-            // The skill the agent's held card matched at admission (ARCHITECT ruling B2).
+            // The skill the agent's held card matched at admission.
             let skill = hop.skill.clone();
             let request = (caller, member, addressed.as_deref());
             match open_task(reach, hop, pass, request, skill, &mut writes) {
@@ -2475,9 +2458,8 @@ fn hop_piece(
                 Ok(refused) => refused,
             }
         } else if refused && breaker_refused && !hop.left {
-            // THE WALK EXHAUSTED WITH NOTHING SENT (R-REJECTED, coordinator 2026-10-07, extends
-            // gap-2): no ATTEMPT came, so the task is opened here, as predev opened it before the
-            // hop (`receive::refuse_hop`), for the refusal to name and `rejected` to end. A store
+            // The walk exhausted with nothing sent: no ATTEMPT came, so the task is opened here,
+            // before the hop, for the refusal to name and `rejected` to end. A store
             // that refuses the opening leaves the refusal without an id.
             let agent = match member {
                 "" => addressed
@@ -2494,8 +2476,7 @@ fn hop_piece(
         } else {
             None
         };
-        // A FRESH SUBMISSION ON A MEMBER NOT INTERCHANGEABLE WITH THE POOL'S PRIMARY (predev
-        // `route::render_pin_mismatch`): refused once its task is open, so the caller keeps an id,
+        // A fresh submission on a member not interchangeable with the pool's primary: refused once its task is open, so the caller keeps an id,
         // and the task ends `rejected` ("we did not accept this work").
         let opened = match (opened, hop.mismatch.take()) {
             (None, Some(reason)) if attempt => {
@@ -2572,7 +2553,7 @@ fn hop_piece(
                 } else if breaker_refused && hop.rejected.is_none() {
                     // A FRESH SUBMISSION THE BREAKER REFUSED BEFORE THE SOCKET ends `rejected`, the
                     // spec's own "we did not accept this work", and the refusal names its id
-                    // (predev `receive.rs:3332-3345`); an addressed task keeps its last state.
+                    // an addressed task keeps its last state.
                     if let Some(task) = hop.relay.task().filter(|t| !t.addressed) {
                         hop.rejected = Some(task.task_id.clone());
                         hop.settle.push(TaskSettled::Reported {
@@ -2626,9 +2607,8 @@ fn hop_piece(
         };
         hop.outbox = outbox;
         hop.outbox.writes = writes;
-        // THE BREAKER'S READING (ARCHITECT ruling, FAULT_HEALTHY): the far end's answer read where
-        // its structure still exists — on the piece holding the whole answer, or on a stream's
-        // first event — the engine's `classify_hop` table; none stated, the kernel's table reads it.
+        // The breaker's reading: the far end's answer read where its structure still exists, on
+        // the piece holding the whole answer or on a stream's first event; none stated, the kernel's table reads it.
         hop.outbox.fault = hop.relay.take_reading().map_or(FAULT_NONE, fault_of);
         hop.settle.extend(hop.relay.take_settled());
         // Until it is written, a re-call of this piece is served from what is owed.
@@ -2651,8 +2631,8 @@ fn hop_piece(
     if matches!(hop.outbox.head, Some(AnswerHead::Attempt(_))) {
         hop.left = true;
     }
-    // A HOP THE KERNEL NEVER DIALLED (BUSBAR-1.6.0.md l.1126: "a hop refused before the socket
-    // ledgers nothing"): its ATTEMPT left the plane, then the kernel's send found the agent's
+    // A hop the kernel never dialled (a hop refused before the socket
+    // ledgers nothing): its ATTEMPT left the plane, then the kernel's send found the agent's
     // credential unavailable and dialled nothing, and the far end said nothing. It never left: its
     // refused piece reports every class at `0`, the unit's last counts, so its end ledgers no bytes
     // and refunds the fee.
@@ -2665,7 +2645,7 @@ fn hop_piece(
     let left = hop.left;
     let admitted = hop.admitted;
     let need = attempt_need(hop.relay.binding());
-    // The transport axis's word for the binding (predev `framed_leg`: `framing.leg().name()`, the
+    // The transport axis's word for the binding (`framing.leg().name()`, the
     // lower-case wire word, never the card's upper-case one), as the tail declares it.
     let binding_word = match hop.relay.binding() {
         crate::binding::Binding::JsonRpc => crate::binding::BINDING_DOCUMENT,
@@ -2773,13 +2753,11 @@ fn hop_piece(
         ));
     }
     // THE UNIT'S LEDGER LANE (SEAM-L(j)): the agent it reached, as the engine's meter named it
-    // (`agent:<id>`), so the agent's rate card prices it and the metering rows read as 1.5.5's.
+    // (`agent:<id>`), so the agent's rate card prices it and the metering rows read the same.
     let lane =
         (!member.is_empty()).then(|| arena.span(door_statement::agent_resource(member).as_bytes()));
     let wait_member = wait_member.map(|h| arena.span(h.as_bytes()));
-    // THE ATTEMPT'S COUNTER LABELS, as the served engine counted each hop it sent (predev
-    // relay.rs:1705 `upstream_attempt_on(call.agent_id, framed_leg(call.framing))`, and its
-    // failures at :1737-1741): the agent the attempt went to as its `pool`, the binding the hop goes
+    // The attempt's counter labels: the agent the attempt went to as its `pool`, the binding the hop goes
     // out on as its `lane` (one of the words the tail declares, `metric_lanes`).
     let metric =
         (matches!(ob.head, Some(AnswerHead::Attempt(_))) && !member.is_empty()).then(|| {
@@ -3068,7 +3046,7 @@ slot!(
     RefusalSlot, RefusalIn, RefusalOut, |instance, input, mut out| {
         let given = input;
         // An unaddressed unit no one agent of the caller's grant reaches (the kernel's
-        // `no_destination` for a unit routed by scope): 1.5.5's own words, the several agents it
+        // `no_destination` for a unit routed by scope): the words naming the several agents it
         // reaches named from the kernel's text.
         let scoped = given.reason() == busbar_contract::abi::plane::RefusalCode::NoDestination.code()
             && of_unit(&instance, given.unit(), |u| u.agent.is_none().then_some(())).is_some();
@@ -3084,7 +3062,7 @@ slot!(
             _ => return Outcome::Refused,
         };
         let text = input.text().bytes();
-        // A unit its agent's open breaker refused before it dialled: 1.5.5's words for it, naming
+        // A unit its agent's open breaker refused before it dialled: the words naming
         // the agent and the seconds until it may be dialled again, which `Retry-After` repeats.
         let retry_after = given.retry_after_s().max(1);
         let breaker =
@@ -3102,8 +3080,8 @@ slot!(
                         let u = u?;
                         let id = u.disposition.rpc_id();
                         // A unit over a failover pool names the member its task is pinned to
-                        // (predev's pinned hop: the member's own breaker), else the POOL, whose
-                        // walk found nothing admissible (predev `route.rs`: `agent_id: pool_name`).
+                        // (a pinned hop: the member's own breaker), else the pool, whose
+                        // walk found nothing admissible.
                         let pinned = u.hop.as_ref().and_then(|h| h.holder.clone()).flatten();
                         let named = match (&u.pool, pinned) {
                             (Some(_), Some(holder)) => Some(holder),
@@ -3113,7 +3091,7 @@ slot!(
                         Some((id, named))
                     })?;
                     // An unaddressed unit names the agent the engine would have selected for it:
-                    // the one serving agent of its catalogue (1.5.5's `select`, before the breaker).
+                    // the one serving agent of its catalogue (before the breaker).
                     // An unaddressed unit whose one agent is a pool member was walked over the pool
                     // (the kernel routes it as an addressed one): the walk's refusal names the pool.
                     let agent = agent.or_else(|| {
@@ -3143,7 +3121,7 @@ slot!(
             })
         })
         .flatten();
-        // A unit `project` refused for a committed rewrite it could not read back: predev's
+        // A unit `project` refused for a committed rewrite it could not read back: a
         // conformant internal error, echoing the request id.
         let unreadable = instance.get().and_then(|plane| {
             plane.units.with(&given.unit(), |u| {
@@ -3165,7 +3143,7 @@ slot!(
         .then(|| of_unit(&instance, given.unit(), |u| u.pass.unrecorded.clone()))
         .flatten();
         // A KERNEL REFUSAL WITH NO UNIT (no credential, a body over the cap: refused before any
-        // unit was made) answers the bytes v1.5.5 answered on the route, a JSON-RPC error with no
+        // unit was made) answers the bytes the route answers, a JSON-RPC error with no
         // id, at the kernel's own status, on every line. The bytes live once, in the contract's
         // JSON-RPC module, beside the envelope they are an instance of.
         let unitless = (given.unit() == 0 && given.cause() == REFUSAL_KERNEL)
@@ -3189,7 +3167,7 @@ slot!(
                 content_type: reply.content_type,
             }
         } else if let Some(refusal) = &tripped {
-            // A FRESH SUBMISSION'S REFUSAL NAMES THE TASK IT REJECTED (predev `rpcerror::about_task`),
+            // A fresh submission's refusal names the task it rejected,
             // read off the unit's own memory: this slot is ticketless.
             let rejected = of_unit(&instance, given.unit(), |u| u.hop.as_ref()?.rejected.clone());
             match rejected {
@@ -3274,7 +3252,7 @@ slot!(
             ]
             .iter()
             .any(|c| c.code() == given.reason())
-            // predev audited an unreadable rewrite's refusal `rejected`, as a hook's own.
+            // An unreadable rewrite's refusal is audited `rejected`, as a hook's own.
             || unreadable.is_some();
         let audited = after_admission
             .then(|| {
@@ -3330,7 +3308,7 @@ slot!(
     }
 );
 
-// ── THE TRUST VERBS (ARCHITECT Q-L3B-VERBS) ──────────────────────────────────────────────────────
+// The trust verbs.
 
 /// The agent a trust verb's target names: the segment its route's `{name}` stands at.
 fn verb_agent(route: &str, target: &[u8]) -> Option<String> {
@@ -3577,7 +3555,7 @@ fn fetch_card(
                         method: b"GET".to_vec(),
                         target: target.into_bytes(),
                         // No field of the plane's own: the engine's card fetch named only the
-                        // host its connection carries (the predev fence's bytes). It presents no
+                        // host its connection carries. It presents no
                         // credential either: the agent's own credential rides its hops, never its
                         // card fetch, so the fetch waives the member's binding (the host's field,
                         // stripped before anything is encoded).
@@ -3750,7 +3728,7 @@ fn look(
         },
     };
     let issued = sight_seq + 1;
-    // THE SIGHTING ON THE KERNEL'S TRUST BOOK (ARCHITECT FLIP-A2A: the plane reports, the kernel
+    // The sighting on the kernel's trust book (the plane reports, the kernel
     // pins and demotes): the verified fingerprint as the agent's catalogue hash; a card that did
     // not verify against its pin as [`UNVERIFIED_CARD`], which is never an approved catalogue, so
     // an approved agent whose card stopped verifying is quarantined; an agent that could not be
@@ -3799,8 +3777,7 @@ fn verify_agent_on_call(
         return Poll::Ready(false);
     };
     // SERVING is the kernel's verdict on the agent's key.
-    // A CARD THE LAST LOOK COULD NOT REACH OR VERIFY FAILS THE HOP CLOSED (ARCHITECT 2026-10-07,
-    // predev baseline: `receive::verify_agent_on_call` recorded `Error`, which its hop gate refused):
+    // A card the last look could not reach or verify fails the hop closed:
     // the hop is refused here without asking `trust.serves`, and the kernel's last verdict, which
     // the look's `trust.unreachable` kept, is left untouched.
     let serves = |standing: &crate::card_trust::TrustStanding| {
@@ -3868,8 +3845,7 @@ fn verify_agent_on_call(
 /// unit's ticket), run as `look`. A panic in it is never caught here: it unwinds out of `on_piece`,
 /// which the SDK's boundary answers FAULT and the kernel ends the unit on as `PlanePanic`
 /// (`busbar-kernel/src/plane_driver/route.rs`), so the unit is refused and no verdict is recorded
-/// (predev `ingress_tests.rs::a_panicking_reverify_reraises_and_latches_unreachable_never_swallowed`:
-/// a panicking reverify re-raised and was never folded into a verdict). On its way out it releases
+/// (a panicking reverify is re-raised and never folded into a verdict). On its way out it releases
 /// the flight it held, landing nothing, and wakes every unit that waited on it to look for itself,
 /// as a cancelled unit's look does: the kernel sends a faulted unit no `cancel`, and a flight left
 /// held by it would wedge every later unit for the agent behind a look that never lands.
@@ -4024,9 +4000,8 @@ fn verb_refused(
 }
 
 slot!(
-    /// `serve`: the trust verbs over the section's registrations (ARCHITECT Q-L3B-VERBS), in the
-    /// served engine's order and words, over the KERNEL'S trust book (ARCHITECT FLIP-A2A: the
-    /// plane holds no approval; the book pins, quarantines and keeps the operator's decision):
+    /// `serve`: the trust verbs over the section's registrations, over the kernel's trust book
+    /// (the plane holds no approval; the book pins, quarantines and keeps the operator's decision):
     ///
     /// * an unregistered name is `404` before anything else, audited nowhere;
     /// * `approve` reads its body (`{"fingerprint": "…"}`) next, and a malformed one is `400`
@@ -4101,7 +4076,7 @@ slot!(
         };
         let mut standing = plane.trust.get(&name).unwrap_or_default();
         let state_now = |plane: &A2aDoor| crate::card_trust::verdict_state(verdict(plane, &name));
-        // THE CARD RECORD (ruling B2, as amended): a card this look verified rides the verb's
+        // The card record: a card this look verified rides the verb's
         // answer as the agent's `card` host records (split under the host's record ceiling),
         // which a later `open` warms the held cards from.
         let writes: Vec<Write> = looked
@@ -4144,7 +4119,7 @@ slot!(
         if let Some(card) = looked.card {
             plane.cards.hold(&name, plane.newest(), card);
         }
-        // THE SKILLS APPROVED, held for the trust view's drift lists (ruling Q2): the card this
+        // The skills approved, held for the trust view's drift lists: the card this
         // approval adopted, which `agrees` matched to the fingerprint the operator named.
         standing.approved = looked.sighting.seen().map(|seen| seen.skills.clone());
         // ... and written as the agent's `card_approval` host record, so a restart keeps them.
@@ -4242,8 +4217,7 @@ pub fn projection(envelope: &[u8]) -> Option<Vec<u8>> {
 
 /// THE SESSION a request's hook view carries: the `contextId` its message names, which groups an
 /// A2A conversation's tasks (the engine keyed its gate's incremental scan on it); `None` when the
-/// message names none, so the request is screened whole. ARCHITECT RULING 2026-10-03
-/// (Q-FOLD-A2A-2-PROJECT-POOL, session half): `project` writes it into the view's opaque session.
+/// message names none, so the request is screened whole. `project` writes it into the view's opaque session.
 #[must_use]
 pub fn context_session(envelope: &[u8]) -> Option<String> {
     let envelope: serde_json::Value = serde_json::from_slice(envelope).ok()?;
@@ -4251,9 +4225,8 @@ pub fn context_session(envelope: &[u8]) -> Option<String> {
     (!context.is_empty()).then(|| context.to_string())
 }
 
-/// A REQUEST-STAGE HOOK'S REWRITE, read as the served engine read a `prompt: rw` reply to an A2A
-/// submission (the invoke rewrite contract, in rule; busbar's kernel copy of it left with its plane
-/// hosting, status row 82, so this function is the contract's one home): the hook stage hands the plane the reply as `{"messages": [...], "tools": ...}`; an A2A request
+/// A request-stage hook's rewrite, read as a `prompt: rw` reply to an A2A submission (the invoke
+/// rewrite contract): the hook stage hands the plane the reply as `{"messages": [...], "tools": ...}`; an A2A request
 /// has one untrusted content member, its `params` object, and the rewrite REPLACES it: a
 /// `messages` entry's `content` (an object verbatim, or a JSON string that parses to an object) or,
 /// for an entry with no `role`, the entry itself; the LAST entry that yields an object wins.
@@ -4263,10 +4236,10 @@ pub fn context_session(envelope: &[u8]) -> Option<String> {
 ///
 /// # Errors
 ///
-/// A COMMITTED REWRITE BUSBAR CANNOT READ BACK (bytes that are not JSON, or a reply that is not the
+/// A committed rewrite busbar cannot read back (bytes that are not JSON, or a reply that is not the
 /// stage's `{"messages": [...]}`): the reason. The unit is REFUSED on it, never relayed with the
-/// params the hook said it had replaced (predev `receive::committed_params` and its apply site: a
-/// redaction hook that reported its rewrite applied is never silently undone).
+/// params the hook said it had replaced (a redaction hook that reported its rewrite applied is
+/// never silently undone).
 pub fn rewritten_params(rewrite: &[u8]) -> Result<Option<serde_json::Value>, String> {
     use serde_json::Value;
     let reply: Value =
@@ -4296,7 +4269,7 @@ pub fn rewritten_params(rewrite: &[u8]) -> Result<Option<serde_json::Value>, Str
     Ok(params)
 }
 
-/// The sentence a committed rewrite busbar cannot read back is refused with (predev's, verbatim).
+/// The sentence a committed rewrite busbar cannot read back is refused with.
 pub const UNREADABLE_REWRITE: &str = "a rewrite hook attached to this agent committed a rewrite \
      that busbar could not read back. The submission is refused rather than relayed with the \
      params the hook said it had replaced.";
@@ -4305,8 +4278,8 @@ pub const UNREADABLE_REWRITE: &str = "a rewrite hook attached to this agent comm
 /// `InternalError` row.
 pub const UNREADABLE_REWRITE_STATUS: u32 = 500;
 
-/// THE REFUSAL OF A COMMITTED REWRITE BUSBAR CANNOT READ BACK, as predev answered it: a conformant
-/// A2A internal error (`-32603` at `500`, one row of section 5.4) echoing the request id `id`.
+/// The refusal of a committed rewrite busbar cannot read back: a conformant
+/// A2A internal error (`-32603` at `500`) echoing the request id `id`.
 #[must_use]
 pub fn unreadable_rewrite(id: Option<serde_json::Value>) -> agent_arrival::AgentRefusal {
     agent_arrival::AgentRefusal::new(
@@ -4385,8 +4358,8 @@ slot!(
                     None => return Outcome::Refused,
                 }
             }
-            // A card read on the open line carries no request to screen (1.5.5 answered it with no
-            // hook in the way): its view names no entry and no turn, so no entry's hooks bind.
+            // A card read on the open line carries no request to screen (no
+            // hook is in the way): its view names no entry and no turn, so no entry's hooks bind.
             Line::Open => {
                 let mut arena = input.arena_buf();
                 let dialect = arena.span(crate::PLANE_KEY.as_bytes());
@@ -4407,9 +4380,9 @@ slot!(
         } else {
             rewritten_params(rewrite)
         };
-        // A COMMITTED REWRITE BUSBAR CANNOT READ BACK, OR WRITE BACK, REFUSES THE UNIT (predev's
-        // apply site): it is never relayed with the params the hook said it had replaced. The
-        // unit is marked, and `refusal` answers it predev's internal error.
+        // A committed rewrite busbar cannot read back, or write back, refuses the unit: it is
+        // never relayed with the params the hook said it had replaced. The unit is marked, and
+        // `refusal` answers it the internal error.
         let applied = match read.and_then(|params| {
             params
                 .map(|params| {
