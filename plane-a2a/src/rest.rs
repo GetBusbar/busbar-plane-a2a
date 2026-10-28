@@ -399,21 +399,23 @@ pub fn compose_from(
 /// ([`crate::answer_bytes::result_span`]: member order and number spellings as the far end wrote
 /// them, busbar's identity already spliced in by the relay); an `error` becomes the AIP-193
 /// document at `status` ([`crate::agent_arrival::aip193`]); anything else (not JSON, or neither
-/// member) passes untouched.
+/// member) passes untouched. Read off the answer's bytes: only an `error` is read into a value.
 #[must_use]
 pub fn reframe(status: u32, body: &[u8]) -> Vec<u8> {
-    let Ok(envelope) = serde_json::from_slice::<Value>(&crate::answer_bytes::readable(body)) else {
+    use crate::answer_bytes::{is_json, member_span, readable, result_span};
+    if !is_json(&readable(body)) {
         return body.to_vec();
-    };
-    match (envelope.get("result"), envelope.get("error")) {
-        (Some(result), _) => crate::answer_bytes::result_span(body).map_or_else(
-            || serde_json::to_vec(result).unwrap_or_default(),
-            |span| body[span].to_vec(),
-        ),
-        (None, Some(error)) if !error.is_null() => {
-            serde_json::to_vec(&crate::agent_arrival::aip193(status, error)).unwrap_or_default()
+    }
+    if let Some(result) = result_span(body) {
+        return body[result].to_vec();
+    }
+    // A JSON value spelled from `n` is `null`.
+    match member_span(body, "error").filter(|error| body[error.start] != b'n') {
+        Some(error) => {
+            let error: Value = serde_json::from_slice(&readable(&body[error])).unwrap_or_default();
+            serde_json::to_vec(&crate::agent_arrival::aip193(status, &error)).unwrap_or_default()
         }
-        _ => body.to_vec(),
+        None => body.to_vec(),
     }
 }
 

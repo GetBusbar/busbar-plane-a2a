@@ -289,56 +289,38 @@ impl HopRefusal {
     }
 }
 
-/// The far end's whole answer, read AS THE ANSWER TO `id`: its `result`, or why it is refused (the
-/// engine's `relay_once` checks after the send, then `read_reply`).
+/// The far end's whole answer, read AS THE ANSWER TO `id`: the span of its `result` in `body`, or
+/// why it is refused (the engine's `relay_once` checks after the send, then `read_reply`). Read off
+/// its bytes, never into a value: checked whole as a parse checks it, through the reading copy (a
+/// number past `f64`'s range is still JSON, [`crate::answer_bytes::readable`]), and judged by the
+/// contract's reader on the members it reads ([`crate::answer_bytes::envelope_reading`]).
 ///
 /// # Errors
 ///
 /// The [`HopRefusal`] the answer earns.
-pub fn read_answer(status: u32, body: &[u8], id: &Value) -> Result<Value, HopRefusal> {
+pub fn read_answer(
+    status: u32,
+    body: &[u8],
+    id: &Value,
+) -> Result<std::ops::Range<usize>, HopRefusal> {
     if !(200..300).contains(&status) {
         return Err(HopRefusal::Status);
     }
     if body.len() > MAX_REPLY_BYTES {
         return Err(HopRefusal::BodyTooLarge);
     }
-    // Read through the reading copy: a number past `f64`'s range is still JSON
-    // ([`crate::answer_bytes::readable`]); the caller's bytes keep its spelling.
-    let envelope: Value = serde_json::from_slice(&crate::answer_bytes::readable(body))
-        .map_err(|_| HopRefusal::NotJson)?;
-    match read_response(&envelope, id) {
-        Ok(RpcReply::Result(result)) => Ok(result),
+    if !crate::answer_bytes::is_json(&crate::answer_bytes::readable(body)) {
+        return Err(HopRefusal::NotJson);
+    }
+    let (judged, result) =
+        crate::answer_bytes::envelope_reading(body).ok_or(HopRefusal::NotJson)?;
+    match read_response(&judged, id) {
+        Ok(RpcReply::Result(_)) => result.ok_or(HopRefusal::NotJson),
         Ok(RpcReply::Error { .. }) => Err(HopRefusal::BackendError),
         Err(e) => Err(match e.kind {
             NotAnAnswerKind::Uncorrelated => HopRefusal::Uncorrelated,
             NotAnAnswerKind::NotAResponse => HopRefusal::NotJson,
         }),
-    }
-}
-
-/// An HTTP+JSON far end's whole answer, read as the answer to `id` once re-wrapped into the
-/// JSON-RPC envelope ([`crate::answer_bytes::rewrap`]); `None` when a 2xx body is not JSON (unframable).
-fn read_rest_answer(status: u32, body: &[u8], id: &Value) -> Option<Result<Value, HopRefusal>> {
-    if !(200..300).contains(&status) {
-        return Some(Err(HopRefusal::Status));
-    }
-    if body.len() > MAX_REPLY_BYTES {
-        return Some(Err(HopRefusal::BodyTooLarge));
-    }
-    let envelope = crate::answer_bytes::rewrap(body, id).ok()?;
-    Some(read_answer(status, &envelope, id))
-}
-
-/// The caller's answer to a relayed `result` as the reading holds it, under the caller's own `id`:
-/// written again from the value, so only where the far end's own bytes could not be cut out
-/// ([`relayed_bytes`] otherwise).
-#[must_use]
-pub fn relayed(id: &Value, result: Value) -> RelayReply {
-    RelayReply {
-        status: STATUS_OK,
-        content_type: JSON_MEDIA_TYPE,
-        body: serde_json::to_vec(&json!({ "jsonrpc": "2.0", "id": id, "result": result }))
-            .unwrap_or_default(),
     }
 }
 
@@ -436,25 +418,6 @@ pub enum Reading {
     Transient,
     /// The destination refuses busbar itself.
     Hard,
-}
-
-/// The reading of a far end's whole answer at `status`, its body `body`, on `binding`, read as the
-/// answer to `id` ([`Reading`]).
-#[must_use]
-pub fn reading_of(status: u32, body: &[u8], id: &Value, binding: Binding) -> Option<Reading> {
-    if !(200..300).contains(&status) {
-        return Some(status_reading(status));
-    }
-    let answer = match binding {
-        // A gRPC answer is read once transcoded to the JSON-RPC envelope it is.
-        Binding::JsonRpc | Binding::Grpc => read_answer(status, body, id),
-        // A 2xx body that is not JSON cannot be framed: the engine recorded nothing for it.
-        Binding::HttpJson => read_rest_answer(status, body, id)?,
-    };
-    Some(match answer {
-        Ok(_) | Err(HopRefusal::BackendError) => Reading::Healthy,
-        Err(_) => Reading::Transient,
-    })
 }
 
 /// THE STATUS TABLE: the reading of an answer at a status outside `2xx`, its body unread (predev
@@ -1035,16 +998,26 @@ impl HopRelay {
     /// no event (its bytes kept, as one document's are); else the events for the caller, or the
     /// refusal they earn with the events read before it.
     fn events_read(&mut self, bytes: &[u8]) -> EventsRead {
-        let (frames, pending, framed) = {
-            let events = self.events.as_mut()?;
-            let frames = events.reader.feed(bytes);
-            (frames, events.reader.pending(), events.framed)
-        };
+        // The reader is held apart while its frames, borrowed from it, are read.
+        let mut reader = std::mem::take(&mut self.events.as_mut()?.reader);
+        reader.feed(bytes);
+        let read = self.frames_read(&reader, bytes);
+        if let Some(events) = self.events.as_mut() {
+            events.reader = reader;
+        }
+        read
+    }
+
+    /// The events `reader`'s last feed (`bytes`) finished, read ([`Self::events_read`]).
+    fn frames_read(&mut self, reader: &SseReader, bytes: &[u8]) -> EventsRead {
+        let (mut frames, pending) = (reader.frames().peekable(), reader.pending());
+        let framed = self.events.as_ref()?.framed;
         if !framed {
             // Until a first event is framed the answer may be one document: its bytes are kept.
             // A first frame that is no event (a document with a blank line in it) settles it.
-            let document = frames.first().is_some_and(|f| !is_event(f));
-            if frames.is_empty() || document {
+            let first = frames.peek();
+            let document = first.is_some_and(|f| !is_event(f));
+            if first.is_none() || document {
                 self.keep(bytes);
                 if let Some(events) = self.events.as_mut() {
                     events.document = document || pending > MAX_REPLY_BYTES;
@@ -1076,7 +1049,7 @@ impl HopRelay {
             let frame = if rest {
                 events::rewrap(frame, &id)
             } else {
-                frame
+                std::borrow::Cow::Borrowed(frame)
             };
             let read = events::read_event(
                 &frame,
@@ -1306,7 +1279,37 @@ impl HopRelay {
         } else {
             status
         };
-        self.reading = head.or_else(|| reading_of(status, &self.far, &self.id, self.binding));
+        // THE ENVELOPE THE ANSWER IS READ FROM, as bytes: the far end's own, or an HTTP+JSON
+        // body re-framed around its own bytes. The caller's `result` is spliced out of it.
+        let rewrapped = match self.binding {
+            Binding::HttpJson
+                if (200..300).contains(&status) && self.far.len() <= MAX_REPLY_BYTES =>
+            {
+                crate::answer_bytes::rewrap(&self.far, &self.id).ok()
+            }
+            _ => None,
+        };
+        // `None`: a 2xx HTTP+JSON body that is not JSON cannot be framed.
+        let answer = match self.binding {
+            Binding::JsonRpc | Binding::Grpc => Some(read_answer(status, &self.far, &self.id)),
+            Binding::HttpJson => match &rewrapped {
+                Some(envelope) => Some(read_answer(status, envelope, &self.id)),
+                None if !(200..300).contains(&status) => Some(Err(HopRefusal::Status)),
+                None if self.far.len() > MAX_REPLY_BYTES => Some(Err(HopRefusal::BodyTooLarge)),
+                None => None,
+            },
+        };
+        // THE READING: the status table's outside 2xx, else what the answer is (the engine
+        // recorded nothing for an unframable one).
+        self.reading = head.or_else(|| {
+            if !(200..300).contains(&status) {
+                return Some(status_reading(status));
+            }
+            answer.as_ref().map(|answer| match answer {
+                Ok(_) | Err(HopRefusal::BackendError) => Reading::Healthy,
+                Err(_) => Reading::Transient,
+            })
+        });
         if let Some(ended) = self
             .grpc
             .ended
@@ -1318,44 +1321,39 @@ impl HopRelay {
                 self.reading = Some(Reading::Hard);
             }
         }
-        // THE ENVELOPE THE ANSWER IS READ FROM, as bytes: the far end's own, or an HTTP+JSON
-        // body re-framed around its own bytes. The caller's `result` is spliced out of it.
-        let rewrapped = match self.binding {
-            Binding::HttpJson
-                if (200..300).contains(&status) && self.far.len() <= MAX_REPLY_BYTES =>
-            {
-                crate::answer_bytes::rewrap(&self.far, &self.id).ok()
-            }
-            _ => None,
-        };
-        let answer = match self.binding {
-            Binding::JsonRpc | Binding::Grpc => read_answer(status, &self.far, &self.id),
-            Binding::HttpJson => match &rewrapped {
-                Some(envelope) => read_answer(status, envelope, &self.id),
-                None if !(200..300).contains(&status) => Err(HopRefusal::Status),
-                None if self.far.len() > MAX_REPLY_BYTES => Err(HopRefusal::BodyTooLarge),
-                None => return self.unframable(),
-            },
+        let Some(answer) = answer else {
+            return self.unframable();
         };
         self.answered = true;
         if let Err(refusal) = &answer {
             self.journal(*refusal, false);
         }
         let envelope: &[u8] = rewrapped.as_deref().unwrap_or(&self.far);
-        let result_bytes = crate::answer_bytes::result_span(envelope).map(|r| &envelope[r]);
+        let answer = answer.map(|result| &envelope[result]);
         let Some(task) = &self.task else {
             return PieceAnswer::ToCaller(match answer {
-                Ok(result) => match result_bytes {
-                    Some(bytes) => relayed_bytes(&self.id, bytes),
-                    None => relayed(&self.id, result),
-                },
+                Ok(result) => relayed_bytes(&self.id, result),
                 Err(refusal) => refusal.reply(&self.id),
             });
         };
-        PieceAnswer::ToCaller(match answer {
+        // The far end's bytes with busbar's identity spliced in: `None` for a result that is no
+        // object.
+        let spliced = answer.map(|result| {
+            let skill = task.skill.as_deref();
+            let spliced = crate::answer_bytes::rewrite_identity(
+                result,
+                (&task_identity::WRAPPERS, &task_identity::KINDS),
+                &task.task_id,
+                &task.context_id,
+                skill.map(|s| (task_identity::SKILL_METADATA_KEY, s)),
+                &task.references,
+            );
+            (result, spliced)
+        });
+        PieceAnswer::ToCaller(match spliced {
             // A result that is no object is no answer about a task: the plane cannot read it, and
             // refuses it as it refuses an answer that is not JSON, never inventing one.
-            Ok(result) if !result.is_object() => {
+            Ok((_, None)) => {
                 self.journal(HopRefusal::NotJson, false);
                 let (reply, failed) = task_refusal(None, task, &self.id);
                 if failed {
@@ -1363,7 +1361,11 @@ impl HopRelay {
                 }
                 reply
             }
-            Ok(mut result) => {
+            Ok((result, Some(spliced))) => {
+                // The task's state and the far end's id are read off the result as a value.
+                let result =
+                    serde_json::from_slice::<Value>(&crate::answer_bytes::readable(result))
+                        .unwrap_or_default();
                 // A message naming no task ends the task this hop opened: there is no other. A
                 // result that reports no state this build can read leaves the task working: a
                 // relay that guessed `completed` from an unread token would close a running task.
@@ -1376,34 +1378,7 @@ impl HopRelay {
                     state,
                     backend_id: task_identity::backend_task_id(&result),
                 });
-                // The far end's bytes with busbar's identity spliced in; the value path only should
-                // the bytes not be sliced where the reading found an object.
-                let spliced = result_bytes.and_then(|bytes| {
-                    crate::answer_bytes::rewrite_identity(
-                        bytes,
-                        (&task_identity::WRAPPERS, &task_identity::KINDS),
-                        &task.task_id,
-                        &task.context_id,
-                        task.skill
-                            .as_deref()
-                            .map(|s| (task_identity::SKILL_METADATA_KEY, s)),
-                        &task.references,
-                    )
-                });
-                match spliced {
-                    Some(bytes) => relayed_bytes(&self.id, &bytes),
-                    None => {
-                        // The result is an object (refused above otherwise): it takes the identity.
-                        let _ = task_identity::rewrite_identity(
-                            &mut result,
-                            &task.task_id,
-                            &task.context_id,
-                            task.skill.as_deref(),
-                            &task.references,
-                        );
-                        relayed(&self.id, result)
-                    }
-                }
+                relayed_bytes(&self.id, &spliced)
             }
             Err(refusal) => {
                 let code = (refusal == HopRefusal::BackendError)
@@ -1419,11 +1394,16 @@ impl HopRelay {
     }
 }
 
-/// The far end's JSON-RPC error `code`, when it answered one A2A defines.
+/// The far end's JSON-RPC error `code`, when it answered one A2A defines, read off the bytes of an
+/// answer [`read_answer`] read. One holding a number past `f64`'s range states none: the code is
+/// read as a parse of the answer, which reads no such number, would read it.
 fn backend_error_code(body: &[u8]) -> Option<i64> {
-    serde_json::from_slice::<Value>(body)
+    if let std::borrow::Cow::Owned(_) = crate::answer_bytes::readable(body) {
+        return None;
+    }
+    let error = &body[crate::answer_bytes::member_span(body, "error")?];
+    serde_json::from_slice::<Value>(&error[crate::answer_bytes::member_span(error, "code")?])
         .ok()?
-        .pointer("/error/code")?
         .as_i64()
         .filter(|c| task_identity::status_of_code(*c).is_some())
 }

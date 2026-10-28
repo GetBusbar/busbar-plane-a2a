@@ -16,7 +16,9 @@
 
 pub use crate::diagnostics::PLANE_SSE_FRAME_NOT_UTF8;
 
-/// THE SSE FRAME READER: bytes in, whole events out.
+use std::ops::Range;
+
+/// THE SSE FRAME READER: bytes in, whole events out, borrowed from its own buffer.
 ///
 /// A separate type rather than a closure because an SSE stream does NOT arrive one event per chunk.
 /// A single TCP read can carry three events, half an event, or the tail of one and the head of the
@@ -26,20 +28,17 @@ pub use crate::diagnostics::PLANE_SSE_FRAME_NOT_UTF8;
 #[derive(Debug, Clone, Default)]
 pub struct SseReader {
     buf: Vec<u8>,
+    /// The spans in `buf` of the events the last [`Self::feed`] finished ([`Self::frames`]).
+    frames: Vec<Range<usize>>,
+    /// The front of `buf` the last feed framed: dropped by the next feed, once its frames are done
+    /// with.
+    framed: usize,
     /// How far into `buf` a terminator scan has already looked and found nothing. A stream that
     /// trickles one event across many chunks would otherwise re-walk the WHOLE accumulated buffer on
     /// every chunk — quadratic in the event's size, on a relay thread fed by an untrusted upstream
-    /// whose only bound is the megabyte-scale body cap. Reset to zero whenever a framed event is
-    /// drained, because the bytes that follow it have never been scanned in their new positions.
+    /// whose only bound is the megabyte-scale body cap. Moved back with the front-drain, because the
+    /// bytes after the framed front have never been scanned in their new positions.
     scanned: usize,
-    /// Test-only tally of the bytes every terminator scan has walked, so a test can assert the
-    /// reader's scanning work is linear in the bytes fed rather than in bytes × chunks.
-    #[cfg(test)]
-    scan_tally: usize,
-    /// Test-only tally of the buffer length observed at each drain, so a test can assert the
-    /// reader's drain work is linear in the bytes fed rather than in bytes × frames-per-chunk.
-    #[cfg(test)]
-    drain_tally: usize,
 }
 
 /// The longest terminator (`\r\n\r\n`) is four bytes, so a scan that resumes THREE bytes behind the
@@ -47,82 +46,69 @@ pub struct SseReader {
 const TERMINATOR_REWIND: usize = 3;
 
 impl SseReader {
-    /// Feed a chunk and take every COMPLETE event it finished.
+    /// Feed a chunk: every COMPLETE event it finished is then [`Self::frames`].
     ///
-    /// Walks a local `consumed` cursor across `buf` and applies ONE `drain` at the end, rather than
+    /// Walks the framed front across `buf` and drains it ONCE, at the next feed, rather than
     /// draining from the front once PER FRAME: `Vec::drain` from the front memmoves the entire
     /// remaining tail, so draining per frame cost O(frames × bytes) on a chunk carrying many small
-    /// events (the same shape the AWS event-stream framing fixed). Nothing
-    /// else observes `buf` mid-loop (this method holds the only `&mut`), so tracking a position and
-    /// draining once at the end is behavior-identical.
-    pub fn feed(&mut self, chunk: &[u8]) -> Vec<String> {
+    /// events (the same shape the AWS event-stream framing fixed).
+    pub fn feed(&mut self, chunk: &[u8]) {
+        self.drain_front();
+        self.frames.clear();
         self.buf.extend_from_slice(chunk);
-        let mut out = Vec::new();
-        let mut consumed = 0usize;
         // Resume where the last scan stopped (minus the rewind): nothing before this point can hold
         // the earliest terminator, since that region was already searched and every terminator it
-        // could still complete extends into the rewind window. `buf` is not mutated mid-loop (the
-        // drain happens once, after), so this absolute position stays valid across every iteration.
+        // could still complete extends into the rewind window.
         let mut scan_from = self.scanned.saturating_sub(TERMINATOR_REWIND);
         while let Some((rel, len)) = {
             #[cfg(test)]
-            {
-                self.scan_tally += self.buf.len() - scan_from;
-            }
+            tests::tally(&tests::SCANNED, self.buf.len() - scan_from);
             busbar_contract::protocol::find_frame_terminator(&self.buf[scan_from..])
         } {
             let end = scan_from + rel + len;
-            let frame = self.buf[consumed..end].to_vec();
-            match String::from_utf8(frame) {
-                Ok(s) => out.push(s),
+            let frame = self.framed..end;
+            match std::str::from_utf8(&self.buf[frame.clone()]) {
+                Ok(_) => self.frames.push(frame),
                 // The event-stream format is UTF-8 by definition, so a non-UTF-8 frame is a
                 // malformed backend. Dropping it (rather than lossily corrupting the payload) is
                 // correct, but doing so SILENTLY hid the malformed stream — surface it so the drop
                 // is diagnosable rather than a mystery missing event.
-                Err(e) => busbar_contract::diag_warn!(
+                Err(_) => busbar_contract::diag_warn!(
                     PLANE_SSE_FRAME_NOT_UTF8,
-                    bytes = e.as_bytes().len(),
+                    bytes = frame.len(),
                     "dropping a non-UTF-8 SSE frame (the event-stream format requires UTF-8)"
                 ),
             }
-            consumed = end;
+            self.framed = end;
             scan_from = end;
         }
-        self.scanned = self.buf.len() - consumed;
-        self.drain_front(consumed);
-        out
+        self.scanned = self.buf.len();
     }
 
-    /// Drop the consumed prefix — THE ONE front-drain in this reader.
-    ///
-    /// The drained-work tally lives HERE, on the drain, rather than at the end of `feed`: a tally
-    /// taken once per `feed` call measures the same number however many drains happened inside it,
-    /// so the very regression the linearity test exists to catch (draining once per FRAME) would
-    /// have left the count unchanged. Counted at the drain, a second drain counts a second time.
-    fn drain_front(&mut self, upto: usize) {
-        #[cfg(test)]
-        {
-            self.drain_tally += self.buf.len();
+    /// Drop the framed front — THE ONE front-drain in this reader, once per feed at most.
+    fn drain_front(&mut self) {
+        if self.framed == 0 {
+            return;
         }
-        self.buf.drain(..upto);
+        #[cfg(test)]
+        tests::tally(&tests::DRAINED, self.buf.len());
+        self.buf.drain(..self.framed);
+        self.scanned -= self.framed;
+        self.framed = 0;
+    }
+
+    /// The events the last [`Self::feed`] finished, in order, each borrowed from the reader's
+    /// buffer (none copied out).
+    pub fn frames(&self) -> impl Iterator<Item = &str> {
+        self.frames
+            .iter()
+            .filter_map(|frame| std::str::from_utf8(&self.buf[frame.clone()]).ok())
     }
 
     /// How many bytes are held waiting for a terminator. The ceiling check reads this: a backend
     /// that streams megabytes with no blank line is an unbounded allocation it chose the size of.
     pub fn pending(&self) -> usize {
-        self.buf.len()
-    }
-}
-#[cfg(test)]
-impl SseReader {
-    /// Zero the scan tally and return what it held (test-only).
-    fn take_scanned_bytes(&mut self) -> usize {
-        std::mem::take(&mut self.scan_tally)
-    }
-
-    /// Zero the drain tally and return what it held (test-only).
-    fn take_drained_bytes(&mut self) -> usize {
-        std::mem::take(&mut self.drain_tally)
+        self.buf.len() - self.framed
     }
 }
 

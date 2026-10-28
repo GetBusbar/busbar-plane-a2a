@@ -119,16 +119,13 @@ fn an_uncorrelated_frame_is_refused_and_an_error_frame_relayed() {
 /// request so the one reader reads it; a frame with no JSON payload passes as it is.
 #[test]
 fn a_bare_event_is_wrapped_as_the_result_of_the_request() {
-    let wrapped = rewrap(
-        "data: {\"kind\":\"status-update\"}\n\n".to_string(),
-        &json!("rest"),
-    );
+    let wrapped = rewrap("data: {\"kind\":\"status-update\"}\n\n", &json!("rest"));
     let doc = data_of(wrapped.as_bytes());
     assert_eq!(
         doc,
         json!({ "jsonrpc": "2.0", "id": "rest", "result": { "kind": "status-update" } })
     );
-    assert_eq!(rewrap(": ping\n\n".to_string(), &json!(1)), ": ping\n\n");
+    assert_eq!(rewrap(": ping\n\n", &json!(1)), ": ping\n\n");
 }
 
 /// The HTTP+JSON line answers each event's bare result; an error frame and a keep-alive pass, and
@@ -195,10 +192,10 @@ fn an_event_keeps_the_far_ends_bytes_and_its_lines() {
 fn a_bare_event_is_wrapped_around_its_own_bytes() {
     let bare = "data: {\"z\":1,\"kind\":\"status-update\",\"n\":123456789012345678901234567890,\"big\":1e400}\n\n";
     assert_eq!(
-        rewrap(bare.to_string(), &json!(7)),
+        rewrap(bare, &json!(7)),
         "data: {\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{\"z\":1,\"kind\":\"status-update\",\"n\":123456789012345678901234567890,\"big\":1e400}}\n\n"
     );
-    assert_eq!(rewrap("data: \n\n".to_string(), &json!(7)), "data: \n\n");
+    assert_eq!(rewrap("data: \n\n", &json!(7)), "data: \n\n");
 }
 
 /// THE HTTP+JSON LINE'S EVENT IS THE RESULT'S OWN BYTES, cut out of the JSON-RPC event, over as
