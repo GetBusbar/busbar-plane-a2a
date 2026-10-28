@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! THE TASK A RELAYED HOP IS FOR (ARCHITECT ruling B1): opened at the unit's first ATTEMPT over the
-//! task store's host records, and settled on the far end's answer. Ported from the served engine's
-//! unary hop (`busbar-a2a` `receive`: `addressed_task`, `resumable_task`, the mint, the submit and
-//! `record_dispatch`, `record_state`, `end_task`), in its order and with its answers.
+//! The task a relayed hop is for: opened at the unit's first ATTEMPT over the task store's host
+//! records, and settled on the far end's answer.
 //!
 //! * ADDRESSED: the request's `params`, or its message's `taskId` (a second turn), name a task the
 //!   caller holds ([`task_identity::translatable`]): the hop reuses its identity and opens nothing.
@@ -36,11 +34,11 @@
 //! A push callback the request carries INLINE (its `configuration`, in any of the three spellings
 //! [`CALLBACK_CONFIG_POINTERS`] names) is judged before anything is opened, by the same floor the
 //! push-config verbs use ([`local::judge_callback`]), and a callback or a credential busbar cannot
-//! honour refuses the request `400` in the engine's words. One that passes is the task's
+//! honour refuses the request `400`. One that passes is the task's
 //! `push_callback`, on the row it opens or resumes (in that change's own claimed write); on a task
 //! it addresses it is the task's push config, put as the push-config verbs put one, the later set
 //! winning. Its credential rides back to the door ([`Callback`]), which holds it in plane memory as
-//! the engine's delivery does.
+//! the delivery does.
 
 use std::collections::BTreeMap;
 
@@ -71,14 +69,13 @@ pub const TASK_UNNAMED: &str = "a task verb must name its task: `params.id` is r
 const STATUS_UNAVAILABLE: u32 = 503;
 /// The status an interrupted task that cannot resume answers with.
 const STATUS_CONFLICT: u32 = 409;
-/// The engine's words for a task it could not record (`busbar-a2a` `receive.rs:2032-2049`).
+/// The words for a task that could not be recorded.
 pub const TASK_UNRECORDED: &str = "the task could not be recorded";
 /// The plane's words for a cancel of a task it holds as terminal (in the style of the subscribe
 /// refusal, `local::subscribe_refusal`).
 pub const TASK_NOT_CANCELABLE: &str =
     "this task has reached a terminal state, so it cannot be canceled";
-/// The engine's words for an interrupted task it could not move back to `working`
-/// (`busbar-a2a` `receive.rs:1985-2001`).
+/// The words for an interrupted task that could not be moved back to `working`.
 pub const TASK_UNRESUMED: &str = "this task cannot be resumed";
 
 /// The host's reach opening a task needs beyond the records and the destination judge: the
@@ -107,8 +104,8 @@ pub struct Request<'a> {
     pub caller: &'a str,
     /// The agent the kernel picked.
     pub member: &'a str,
-    /// The agent the caller ADDRESSED, a fresh task's id is minted for (predev `receive.rs`:
-    /// `a2a-{admitted agent}-…`, the agent admitted, not the pool member the walk placed it on);
+    /// The agent the caller addressed, a fresh task's id is minted for (`a2a-{admitted agent}-…`,
+    /// the agent admitted, not the pool member the walk placed it on);
     /// `None` = the member.
     pub addressed: Option<&'a str>,
     /// Now, in seconds.
@@ -137,12 +134,10 @@ pub enum Opened {
         instead: Option<Vec<u8>>,
         /// The push callback the request carried inline, registered on the task.
         callback: Option<Callback>,
-        /// THE CALLER'S ANSWER IF THE STORE REFUSES THE OPENING'S RECORD WRITES (the kernel ends the
-        /// unit `durability_unavailable` and the door's `refusal` renders it): the engine's answer
-        /// for the write it made before the hop. A fresh task: `503`, `-32603`
+        /// The caller's answer if the store refuses the opening's record writes (the kernel ends
+        /// the unit `durability_unavailable` and the door's `refusal` renders it). A fresh task: `503`, `-32603`
         /// ([`TASK_UNRECORDED`]); a resumed one: `409`, `-32002` ([`TASK_UNRESUMED`]). `None` for an
-        /// addressed task, whose hop the engine sent whether or not its callback was recorded
-        /// (`busbar-a2a` `receive.rs:2080-2096`).
+        /// addressed task, whose hop is sent whether or not its callback was recorded.
         unrecorded: Option<AgentRefusal>,
     },
     /// The hop does not go ahead: the caller's whole answer.
@@ -154,7 +149,7 @@ fn refusal(status: u32, rpc_id: &Value, code: i64, message: &str) -> AgentRefusa
     AgentRefusal::new(status, Some(rpc_id.clone()), code, message.to_string())
 }
 
-/// The answer a refused opening gives, in the engine's `rpcerror::body` words.
+/// The answer a refused opening gives.
 fn refused(status: u32, rpc_id: &Value, code: i64, message: &str) -> Opened {
     Opened::Refused(RelayReply::refused(
         &refusal(status, rpc_id, code, message),
@@ -162,7 +157,7 @@ fn refused(status: u32, rpc_id: &Value, code: i64, message: &str) -> Opened {
     ))
 }
 
-/// A read that failed reads as nothing (the engine's scoped reads collapse an error to absent); a
+/// A read that failed reads as nothing (an error collapses to absent); a
 /// pending one pends.
 fn or_absent<T>(read: Result<T, Halt>, absent: T) -> Result<T, Halt> {
     match read {
@@ -186,8 +181,7 @@ fn resumable(rows: Vec<TaskRow>, context_id: &str, member: &str) -> Option<TaskR
     candidates.pop()
 }
 
-/// THE MEMBER HOLDING THE TASK a request to a failover pool is about (predev `receive.rs:1858-1868`
-/// and `route.rs` `select_member`), read off the caller's task records: the `agent_id` of the task
+/// The member holding the task a request to a failover pool is about, read off the caller's task records: the `agent_id` of the task
 /// the request names (in its `params` or its message) and the caller holds, else of the newest of the caller's interrupted tasks
 /// under the `contextId` it names held by ANY of the pool's `members` (it resumes AT that member).
 /// `None` = the request is a fresh submission, which the pool's walk places. A read that failed
@@ -315,7 +309,7 @@ pub fn open(
                     version: version.to_string(),
                 };
                 // A callback that cannot be registered leaves the task as it was: the hop goes on.
-                if let Ok(value) = serde_json::to_vec(&stored) {
+                if let Ok(value) = crate::push::record_value(&stored) {
                     out.push(Write {
                         kind: KIND_PUSH_CONFIG,
                         key: tasks::task_key(req.caller, &row.task_id),
@@ -549,9 +543,7 @@ fn translated(
 /// translated, and each translated task as the far end's id then busbar's, for the answer.
 type Translated = (Option<Vec<u8>>, Vec<(String, String)>);
 
-/// The error-once latches of the refused record writes, one per condition as predev held them
-/// (`receive.rs` `RELAYED_OUTCOME_UNRECORDED_WARNED`, `STREAM_OUTCOME_UNRECORDED_WARNED`,
-/// `RESUME_CURSOR_UNRECORDED_WARNED`, `FAILURE_UNRECORDED_WARNED`): a store outage persists across
+/// The error-once latches of the refused record writes, one per condition: a store outage persists across
 /// every relayed outcome, so the first refusal of a kind is an error and the rest hold at debug.
 /// Plane memory of the door instance (a restart forgets it), never a process global.
 #[derive(Debug, Default)]
@@ -578,15 +570,15 @@ macro_rules! latched {
 }
 
 /// A record write the store refused, reported and never fatal: the hop SUCCEEDED, the caller is
-/// owed its answer, and the stream keeps flowing. The words are predev's, line for line.
+/// owed its answer, and the stream keeps flowing.
 pub(crate) enum WriteRefused {
-    /// The unary hop's reported state (predev `receive.rs` `record_state`, l.3239).
+    /// The unary hop's reported state.
     Relayed,
-    /// A streamed event's state (predev l.2965).
+    /// A streamed event's state.
     Streamed(TaskState),
-    /// The hop's task ended `failed` (predev `end_task`, l.3508).
+    /// The hop's task ended `failed`.
     Failure,
-    /// The artifact resume cursor (predev `advance_resume_cursor`, l.3198).
+    /// The artifact resume cursor.
     Cursor,
 }
 

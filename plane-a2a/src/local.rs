@@ -4,9 +4,8 @@
 //! THE VERBS THE PLANE ANSWERS ITSELF, over the task store ([`crate::tasks`]): `ListTasks`, the
 //! push-notification config CRUD, and the two refusals of `SubscribeToTask`. Every other method is
 //! relayed; these answer a fact about busbar (its task rows, the ids it issued, the callback it
-//! delivers), so a backend cannot answer them. The engine's `busbar-a2a` `local.rs` is the
-//! behaviour, byte for byte, with one difference that is the point of the move: a config lives in
-//! a host record, so it survives a restart rather than living in one process's map.
+//! delivers), so a backend cannot answer them. A push config lives in a host record, so it
+//! survives a restart.
 //!
 //! * `ListTasks` answers the caller's own rows, newest first, cut by a cursor; no `status.timestamp`,
 //!   no `artifacts`, no `history` (busbar holds none of them).
@@ -23,6 +22,8 @@ use crate::agent_arrival::AgentRefusal;
 use crate::push::DeliveryAuth;
 use crate::records::KIND_PUSH_CONFIG;
 use crate::tasks::{self, task_key, Halt, Records, Write};
+use busbar_contract::abi::sdk::cred::Cred;
+use zeroize::Zeroizing;
 
 /// WHICH SPELLING OF THE PUSH-CONFIG VERBS A CALLER USED: v0.3 nests the config under
 /// `pushNotificationConfig`, v1.0 flattens it, so the dialect decides the envelope.
@@ -152,20 +153,19 @@ fn err(rpc_id: &Value, code: i64, message: impl Into<String>) -> LocalAnswer {
     }
 }
 
-/// The engine's words when the store would not take a push config's registration
-/// (`busbar-a2a` `local.rs:592-607`).
+/// The words when the store would not take a push config's registration.
 pub const CONFIG_UNRECORDED: &str = "the push notification config could not be recorded";
 
-/// The engine's words when the store would not take a push config's removal: the config stays and
-/// the caller retries (`busbar-a2a` `local.rs:729-745`).
+/// The words when the store would not take a push config's removal: the config stays and the
+/// caller retries.
 pub const CONFIG_UNDELETED: &str =
     "the push notification config could not be deleted; retry the delete";
 
-/// THE ANSWER WHEN THE STORE REFUSES VERB `verb`'S OWN RECORD WRITE (the kernel ends its unit
-/// `durability_unavailable`, and the door's `refusal` renders this): the engine's internal error,
+/// The answer when the store refuses verb `verb`'s own record write (the kernel ends its unit
+/// `durability_unavailable`, and the door's `refusal` renders this): the internal error,
 /// `500` with `-32603`, echoing `rpc_id`, for the push config it could not register
-/// ([`CONFIG_UNRECORDED`]) or remove ([`CONFIG_UNDELETED`]). `None` for a verb whose answer the
-/// engine never made depend on a write.
+/// ([`CONFIG_UNRECORDED`]) or remove ([`CONFIG_UNDELETED`]). `None` for a verb whose answer does
+/// not depend on a write.
 #[must_use]
 pub fn unrecorded(verb: LocalVerb, rpc_id: &Value) -> Option<AgentRefusal> {
     let message = match verb {
@@ -351,8 +351,9 @@ fn list_tasks(
 // ══ PUSH-NOTIFICATION CONFIG CRUD ════════════════════════════════════════════════════════════════
 
 /// ONE registered push config: the push_config host record's value. A read verb answers with
-/// `id` and `url` only; the `authentication` credential is a sealed field of the record, never a
-/// member of any answer, and its `Debug` is redacted.
+/// `id` and `url` only; the `authentication` credential is a [`Cred`] the SDK's record encoder
+/// alone writes ([`crate::push::record_value`]), never a member of any answer, and its `Debug` is
+/// redacted.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PushConfig {
     /// The caller's id for it.
@@ -441,8 +442,7 @@ pub fn delivery_auth(cfg: &Value) -> Result<Option<DeliveryAuth>, String> {
         .get("credentials")
         .and_then(Value::as_str)
         .unwrap_or_default()
-        .trim()
-        .to_string();
+        .trim();
     if credentials
         .bytes()
         .any(|b| !b.is_ascii_graphic() && b != b' ')
@@ -455,17 +455,17 @@ pub fn delivery_auth(cfg: &Value) -> Result<Option<DeliveryAuth>, String> {
     }
     Ok(Some(DeliveryAuth {
         scheme,
-        credentials: crate::push::PushCredential::new(credentials),
+        // CAPTURED where the caller's body is read: the plane keeps no `String` of it.
+        credentials: Cred::captured(Zeroizing::new(credentials.as_bytes().to_vec())),
     }))
 }
 
-/// THE CALLBACK FLOOR: the engine's push-notification guard, its WORDS rendered here and its
-/// DECISION the host's. The plane reads the URL only far enough to word a refusal (a string that is
+/// The callback floor: the push-notification guard, its words rendered here and its
+/// decision the host's. The plane reads the URL only far enough to word a refusal (a string that is
 /// not a URL, or one whose authority names a user, is malformed; one with no host says so); whether
 /// the destination may be reached at all (its scheme, an alternate spelling of an address, an
 /// internal or metadata address, a name that resolves to nothing) is the host's destination judge,
-/// the ONE check every outbound connection passes (`BUSBAR-1.6.0.md`, the destination guard: "ONE
-/// check for every outbound connection"), asked here at registration as push delivery asks it again
+/// the one check every outbound connection passes, asked here at registration as push delivery asks it again
 /// on every attempt. `Ok` is the URL as registered.
 ///
 /// # Errors
@@ -476,7 +476,7 @@ pub fn judge_callback(reach: &mut dyn Reach, url: &str) -> Result<Result<(), Str
         DEST_SCHEME, DEST_UNRESOLVABLE,
     };
     use busbar_contract::net::{parse_url, UrlRefusal};
-    // The refusal repeats the URL as predev did, but never a userinfo it carried: a credential in
+    // The refusal repeats the URL, but never a userinfo it carried: a credential in
     // the URL is not echoed into an error body.
     let malformed = || {
         Ok(Err(format!(
@@ -556,7 +556,7 @@ pub(crate) fn held_config(
 ) -> Result<Option<PushConfig>, Halt> {
     Ok(rec
         .get(KIND_PUSH_CONFIG, &task_key(caller, task_id))?
-        .and_then(|b| serde_json::from_slice(&b).ok()))
+        .and_then(|b| serde_json::from_slice(&Zeroizing::new(b)).ok()))
 }
 
 /// `CreateTaskPushNotificationConfig` / `tasks/pushNotificationConfig/set`.
@@ -621,7 +621,7 @@ fn create_push_config(
     out.push(Write {
         kind: KIND_PUSH_CONFIG,
         key: task_key(caller, &task.task_id),
-        value: serde_json::to_vec(&stored).map_err(|e| Halt::Failed(e.to_string()))?,
+        value: crate::push::record_value(&stored).map_err(|e| Halt::Failed(e.to_string()))?,
     });
     Ok(ok(rpc_id, config_json(dialect, &task.task_id, &stored)))
 }

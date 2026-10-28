@@ -71,7 +71,7 @@ mod task_identity;
 mod tasks;
 mod wkt;
 
-/// THE DOOR: this plugin's one public item (BUSBAR-1.6.0.md l.3567, Crate shape).
+/// The door: this plugin's one public item.
 pub use agent_door::door;
 
 /// The task and task-event row structs at the crate root, where the task type names them.

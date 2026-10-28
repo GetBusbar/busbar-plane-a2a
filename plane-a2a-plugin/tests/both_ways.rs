@@ -867,4 +867,127 @@ mod both_ways {
             "an unusable rewrite is not applied: the request projects as it came"
         );
     }
+
+    // ── the host log ────────────────────────────────────────────────────────────────────────────
+
+    /// The host's envelope sink, keeping the text of every diagnostic and log record a call
+    /// carried: what the host writes to the plugin's own log file.
+    #[derive(Default)]
+    struct HostLog(std::sync::Mutex<Vec<String>>);
+
+    impl busbar_plugin_loader::dispatch::EnvelopeSink for HostLog {
+        fn metric(&self, _: busbar_plugin_loader::dispatch::Metric<'_>) {}
+        fn diag(&self, d: busbar_plugin_loader::dispatch::Diagnostic<'_>) {
+            self.0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(String::from_utf8_lossy(d.text).into_owned());
+        }
+        fn dropped(&self, _: busbar_plugin_loader::dispatch::Dropped) {}
+    }
+
+    /// A HOST WHOSE STORE HOLDS ONE STRAY CARD PART: `records.list` of the `card` kind answers one
+    /// part record no whole card names (`vendor/<digest>/0`); every other kind lists empty, and
+    /// every other service is the shared double's unserved host.
+    struct CardRecords;
+
+    impl busbar_contract::services::double::ServicesDouble for CardRecords {
+        fn records_list(
+            &self,
+            _: &busbar_contract::services::Caller,
+            list: busbar_contract::services::RecordsList,
+            _: busbar_contract::services::Later,
+        ) -> busbar_contract::services::Ran {
+            let rows: &[(&[u8], &[u8])] = if list.kind == "card" && list.after.is_none() {
+                &[(b"vendor/0123456789abcdef/0", b"{}")]
+            } else {
+                &[]
+            };
+            let mut s = busbar_contract::services::Stored::ready(0);
+            for (key, value) in rows {
+                let n = |x: usize| u32::try_from(x).expect("a small row");
+                let key_at = s.bytes.len();
+                s.bytes.extend_from_slice(key);
+                let value_at = s.bytes.len();
+                s.bytes.extend_from_slice(value);
+                s.spans.push(busbar_contract::abi::host::service::ItemSpan {
+                    key: Span {
+                        offset: n(key_at),
+                        len: n(key.len()),
+                    },
+                    value: Span {
+                        offset: n(value_at),
+                        len: n(value.len()),
+                    },
+                });
+            }
+            busbar_contract::services::Ran::Now(s)
+        }
+    }
+
+    /// `open` over [`GOOD`] on `d`, then `ready` (the held cards warmed from the host's `card`
+    /// records), into a fresh host log: the log's lines.
+    fn ready_lines(d: &Dispatcher, dropped_in: bool) -> Vec<String> {
+        let log = Arc::new(HostLog::default());
+        let bound = Bind {
+            sink: log.clone(),
+            ..bind(d)
+        };
+        let stated =
+            LinkedRow::of_loaded(crate::loaded_door()).expect("the door renders its Statement");
+        let p: Plugin<Plane> = if dropped_in {
+            let exe = std::env::current_exe().expect("the test binary has a path");
+            let deps = exe.parent().expect("target/<profile>/deps").to_path_buf();
+            let profile = deps.parent().expect("target/<profile>").to_path_buf();
+            let file = busbar_plugin_loader::plugin_library_filename("busbar_plane_a2a_plugin");
+            let path = [profile.join(&file), deps.join(&file)]
+                .into_iter()
+                .find(|p| p.exists())
+                .unwrap_or_else(|| panic!("this crate's cdylib ({file}) is not built"));
+            load_dropped(&path, &stated.statement, bound).expect("the dropped door loads")
+        } else {
+            load_linked(&stated, bound).expect("the linked door loads")
+        };
+        let mut o: Frame<PlaneOpenIn, PlaneOpenOut> = Frame::new(z(), z());
+        (o.input.open.head, o.out.open.head) = (in_head(), out_head());
+        (o.input.open.generation, o.input.open.settings) = (1, octets(GOOD));
+        o.input.public_url = text(PUBLIC);
+        assert_eq!(p.open(&mut o).0.outcome, Outcome::Ready);
+        p.ready(d, std::time::Duration::from_secs(30))
+            .expect("the instance is ready");
+        let lines = log
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        lines.clone()
+    }
+
+    /// THE PLANE'S LOG REACHES THE HOST'S LOG, DROPPED IN AS LINKED (owner ruling 2026-10-27): the
+    /// line `ready` raises for a stray card part in the host's store (the plane's in-process
+    /// `tracing`) is carried by the door's call capture in the answer's envelope to the host's sink,
+    /// the one that writes the plugin's own log file, from the dropped-in image as from the linked
+    /// door. RED ARM, kept: over a host whose store serves nothing, no such line reaches the log,
+    /// so the line is the stray part's and the check can fail.
+    #[test]
+    fn a_stray_card_part_line_reaches_the_host_log_dropped_in_as_linked() {
+        let stray = |l: &String| l.contains("part records that no whole record names were found");
+        let unserved = Dispatcher::with_services(
+            DispatchConfig::default(),
+            Arc::new(busbar_contract::services::double::Unserved),
+        );
+        let held = Dispatcher::with_services(DispatchConfig::default(), Arc::new(CardRecords));
+        for dropped_in in [false, true] {
+            let quiet = ready_lines(&unserved, dropped_in);
+            assert!(
+                !quiet.iter().any(stray),
+                "dropped-in {dropped_in}: RED ARM: no stray part, no line: {quiet:?}"
+            );
+            let lines = ready_lines(&held, dropped_in);
+            assert_eq!(
+                lines.iter().filter(|l| stray(l)).count(),
+                1,
+                "dropped-in {dropped_in}: the plane's line reaches the host log: {lines:?}"
+            );
+        }
+    }
 }

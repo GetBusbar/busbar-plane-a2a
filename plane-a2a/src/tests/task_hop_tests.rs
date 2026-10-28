@@ -407,8 +407,12 @@ fn an_inline_callback_that_passes_is_the_opened_tasks_callback() {
     let callback = callback.expect("the callback rides back");
     assert_eq!(callback.url, "https://hook.example/cb?k=v");
     assert_eq!(
-        callback.auth.map(|a| a.header_value()),
-        Some("Bearer tok".to_string())
+        callback.auth.map(
+            |a| busbar_contract::abi::sdk::test_support::chip::sealed_bytes(
+                &a.authorization("https://hook.example/cb?k=v")
+            )
+        ),
+        Some(b"Bearer tok".to_vec())
     );
     let held = get(&mut desk.book, ALICE, &task.task_id, 300)
         .unwrap()

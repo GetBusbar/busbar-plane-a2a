@@ -49,27 +49,18 @@ const NULL_MAP_FIELDS: usize = 7;
 
 fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=proto");
-    // THE METHOD INVENTORY a unit test holds the plane's JSON-RPC names to: busbar's
-    // `qa/method-inventory.json` at `.busbar-ref`, read HERE, at build time, from the busbar
-    // checkout plugin CI exports (`BUSBAR_CHECKOUT`), and included by the test as generated source,
-    // so no test of the plane reads the environment or a file at run time. Unset (a build that is
-    // not CI, busbar's own workspace build), it is `None` and the test refuses.
-    println!("cargo:rerun-if-env-changed=BUSBAR_CHECKOUT");
-    let inventory = match std::env::var_os("BUSBAR_CHECKOUT") {
-        Some(busbar) => {
-            let path = PathBuf::from(busbar).join("qa/method-inventory.json");
-            println!("cargo:rerun-if-changed={}", path.display());
-            Some(std::fs::read_to_string(&path)?)
-        }
-        None => None,
-    };
-    let body = inventory.map_or_else(|| "None".to_string(), |text| format!("Some({text:?})"));
+    // THE METHOD INVENTORY a unit test holds the plane's JSON-RPC names to:
+    // `tests/data/method-inventory.json`, read HERE, at build time, and included by the test as
+    // generated source, so no test of the plane reads a file at run time.
+    let path = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR")?)
+        .join("tests/data/method-inventory.json");
+    println!("cargo:rerun-if-changed={}", path.display());
+    let text = std::fs::read_to_string(&path)?;
     std::fs::write(
         PathBuf::from(std::env::var("OUT_DIR")?).join("method_inventory.rs"),
         format!(
-            "/// busbar's `qa/method-inventory.json` at `.busbar-ref`, read at build time; `None` when\n\
-             /// the build had no busbar checkout.\n\
-             pub(crate) const METHOD_INVENTORY: Option<&str> = {body};\n"
+            "/// `tests/data/method-inventory.json`, read at build time.\n\
+             pub(crate) const METHOD_INVENTORY: &str = {text:?};\n"
         ),
     )?;
     // THE ROOT CELLS' ADDRESS (this crate's `links` row): the composition root compiles this

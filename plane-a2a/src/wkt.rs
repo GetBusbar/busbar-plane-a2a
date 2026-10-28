@@ -4,13 +4,13 @@
 //! THE WELL-KNOWN TYPES the gRPC line's messages name (`google.protobuf.Struct`, `Value`,
 //! `ListValue`, `NullValue`, `Timestamp`), with their protobuf JSON mapping.
 //!
-//! Ported from `pbjson-types` 0.9.0 (MIT OR Apache-2.0), whose mapping the engine's messages were
-//! written and read in, so the bytes are its bytes, but one: a timestamp is written Z-normalised,
+//! Ported from `pbjson-types` 0.9.0 (MIT OR Apache-2.0), so the bytes are its bytes, but one: a
+//! timestamp is written Z-normalised,
 //! as the protobuf JSON mapping states, where `pbjson-types` wrote `+00:00`. The one thing not
 //! taken is `chrono`: the timestamp's RFC 3339 form is written and read here as `chrono` 0.4 wrote
 //! (`DateTime<Utc>::to_rfc3339`) and read (`DateTime::parse_from_rfc3339`) it for `pbjson-types`,
 //! because the calendar crate's clock half reaches the OS, and a plane's closure reaches nothing
-//! (the dependency wall; ARCHITECT ruling Q1 (C), 2026-10-04).
+//! (the dependency wall).
 
 use std::collections::HashMap;
 use std::fmt::Write as _;

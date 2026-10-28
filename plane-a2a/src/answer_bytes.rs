@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! THE FAR END'S ANSWER, SPLICED, NEVER RE-SERIALISED (Law 5: "A RELAY ... sends the client's
-//! bytes with governed byte-level splices"; Q128 a2a M8). The relay reads an answer as a JSON value
-//! to decide what it is (its `result` or `error`, the task's state, the far end's ids), and then
+//! The far end's answer, spliced, never re-serialised (a relay sends the client's bytes with
+//! governed byte-level splices). The relay reads off an answer's bytes
+//! what it is (its `result` or `error`; the task's state and the far end's ids from its `result`
+//! alone, as a value), and then
 //! sends the far end's own `result` bytes on, with busbar's identity members spliced in at their
 //! byte spans ([`rewrite_identity`], the byte twin of `task_identity::rewrite_identity`). Member
 //! order, number spellings (an integer past 64 bits included) and every member busbar does not
@@ -130,8 +131,93 @@ pub fn readable(b: &[u8]) -> Cow<'_, [u8]> {
 /// The span of `result` in the JSON-RPC envelope `envelope` (its last `result` member).
 #[must_use]
 pub fn result_span(envelope: &[u8]) -> Option<Range<usize>> {
-    let span = document(envelope)?;
-    last(&object_members(envelope, &span)?, "result").map(|m| m.value.clone())
+    member_span(envelope, "result")
+}
+
+/// The span of the object `doc`'s last `key` member.
+#[must_use]
+pub fn member_span(doc: &[u8], key: &str) -> Option<Range<usize>> {
+    let span = document(doc)?;
+    last(&object_members(doc, &span)?, key).map(|m| m.value.clone())
+}
+
+/// WHETHER `b` IS THE JSON A PARSE TO A VALUE READS (every token, every string, the parse's depth
+/// bound), read through and dropped: no value is built.
+#[must_use]
+pub fn is_json(b: &[u8]) -> bool {
+    serde_json::from_slice::<Shape>(b).is_ok()
+}
+
+/// A JSON value read and dropped, at every level as a value's parse reads it.
+struct Shape;
+
+impl<'de> serde::Deserialize<'de> for Shape {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        d.deserialize_any(Shape)
+    }
+}
+
+impl<'de> serde::de::Visitor<'de> for Shape {
+    type Value = Shape;
+    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("a JSON value")
+    }
+    fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<Shape, E> {
+        Ok(Shape)
+    }
+    fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<Shape, E> {
+        Ok(Shape)
+    }
+    fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<Shape, E> {
+        Ok(Shape)
+    }
+    fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<Shape, E> {
+        Ok(Shape)
+    }
+    fn visit_str<E: serde::de::Error>(self, _: &str) -> Result<Shape, E> {
+        Ok(Shape)
+    }
+    fn visit_unit<E: serde::de::Error>(self) -> Result<Shape, E> {
+        Ok(Shape)
+    }
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut s: A) -> Result<Shape, A::Error> {
+        while s.next_element::<Shape>()?.is_some() {}
+        Ok(Shape)
+    }
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut m: A) -> Result<Shape, A::Error> {
+        while m.next_entry::<Shape, Shape>()?.is_some() {}
+        Ok(Shape)
+    }
+}
+
+/// THE JSON-RPC ANSWER `envelope` AS THE CONTRACT'S READER JUDGES IT, read off its bytes: its
+/// `jsonrpc` and `id` as values (through the reading copy), its `error` as present (`null` kept
+/// `null`) and its `result` as present, and the span of its `result`. Nothing else is read into a
+/// value. `None` when `envelope` is no JSON object.
+#[must_use]
+pub fn envelope_reading(envelope: &[u8]) -> Option<(Value, Option<Range<usize>>)> {
+    let members = object_members(envelope, &document(envelope)?)?;
+    let mut judged = serde_json::Map::new();
+    for key in ["jsonrpc", "id"] {
+        if let Some(m) = last(&members, key) {
+            let value = serde_json::from_slice(&readable(&envelope[m.value.clone()])).ok()?;
+            judged.insert(key.to_string(), value);
+        }
+    }
+    if let Some(m) = last(&members, "error") {
+        // A JSON value spelled from `n` is `null`.
+        let error = if envelope[m.value.start] == b'n' {
+            Value::Null
+        } else {
+            Value::Bool(true)
+        };
+        judged.insert("error".to_string(), error);
+    }
+    let result = last(&members, "result").map(|m| m.value.clone());
+    if result.is_some() {
+        judged.insert("result".to_string(), Value::Null);
+    }
+    Some((Value::Object(judged), result))
 }
 
 /// The caller's reply: `result` (the far end's bytes, spliced) under the caller's own `id`.

@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! THE TASK STORE, OVER HOST RECORDS (`BUSBAR-1.6.0.md` B.3.1: "the task store is host records";
-//! ARCHITECT C2c ruling S2). The plane holds no store: it reads through `records.get` /
+//! The task store, over host records. The plane holds no store: it reads through `records.get` /
 //! `records.list`, decides a write with `records.claim`, and says every write as a `RECORD_PUT` in
 //! its `on_piece` answer. [`Records`] is that reach; the door serves it through the SDK connector,
 //! a test through a map.
@@ -15,24 +14,22 @@
 //! * A CHANGE IS RACE-SAFE: every write of a task consumes the next sequence of its chain, and the
 //!   sequence is won with `records.claim` on `<caller>/<task>/<seq>` before anything is written. A
 //!   writer that loses re-reads and tries the next one.
-//! * THE HASH CHAIN IS THE HOST'S (ARCHITECT ruling B1, 2026-10-07; `BUSBAR-1.6.0.md` Part 3, the chain section):
-//!   the task-event kind is declared chained, length-prefixed with its scope digested
-//!   (`crate::door_statement`'s `RECORD_CHAINS`; B1 ruling 1, coordinator 2026-10-07). An event is an APPEND
+//! * The hash chain is the host's: the task-event kind is declared chained, length-prefixed with
+//!   its scope digested (`crate::door_statement`'s `RECORD_CHAINS`). An event is an append
 //!   to the chain keyed `<caller>/<task>` (`<caller>` the kernel's opaque caller reference, never
 //!   the principal) carrying only its own fields ([`suffix`]); the host frames `prev, scope, seq`
 //!   ahead of them,
 //!   seals, keeps and verifies the chain. The task record carries the chain's next sequence, which
 //!   a change claims to stay race-safe.
-//! * RESTORE ([`restore`]) is the engine's boot rehydrate over the records: the tasks counted
+//! * Restore ([`restore`]) is the boot rehydrate over the records: the tasks counted
 //!   active, terminal or unreadable, and each active task's chain, and only those, read back
 //!   verified by the host, a break named so the door reports it.
 //! * A DELETE IS A TOMBSTONE: a put with an empty value, which the kernel's reads treat as absent;
 //!   on the chained kind it drops the whole chain.
-//! * RETENTION bounds only SETTLED handles ([`TERMINAL_TTL_SECS`], [`MAX_RETAINED`]; spec
-//!   docs/design/BUSBAR-1.6.0.md :198-203, Q128 K2-H5, coordinator 2026-10-07): a read never answers
-//!   a terminal task past its window, and [`retention_sweep`] tombstones it and holds the cap over
-//!   terminal tasks. THE SWEEP RUNS FROM A SUBMIT, never from a read or a timer (the spec's "the
-//!   sweep runs from a submit"): the task-opening write ([`crate::task_hop::open`]'s fresh task)
+//! * Retention bounds only settled handles ([`TERMINAL_TTL_SECS`], [`MAX_RETAINED`]): a read never
+//!   answers a terminal task past its window, and [`retention_sweep`] tombstones it and holds the
+//!   cap over terminal tasks. The sweep runs from a submit, never from a read or a timer: the
+//!   task-opening write ([`crate::task_hop::open`]'s fresh task)
 //!   carries it, at most [`SWEEP_BUDGET`] tasks per submit, so the settled tasks a submit leaves
 //!   are retired faster than submits make them. An active task is never evicted however long it
 //!   sits idle; live tasks are bounded at admission by the kernel's `work.max_live`.
@@ -225,12 +222,11 @@ fn encode<T: Serialize>(v: &T) -> Result<Vec<u8>, Halt> {
     serde_json::to_vec(v).map_err(|e| Halt::Failed(e.to_string()))
 }
 
-/// ONE EVENT'S OWN BYTES on its task's chain, in the declared length-prefixed framing (B1 ruling
-/// 1, coordinator 2026-10-07): `ts` (its eight big-endian bytes), `kind`, `context_id`,
+/// One event's own bytes on its task's chain, in the declared length-prefixed framing: `ts` (its eight big-endian bytes), `kind`, `context_id`,
 /// `principal`, `agent_id`, `state`, each after its length as eight big-endian bytes. The host
 /// frames `prev_hash`, the chain's scope (`<caller>/<task>`) and `seq` the same way ahead of them,
-/// so the digest covers the engine's fields in the engine's order and no byte can cross a field
-/// boundary unseen. `request_id` is a join key nothing reads back, and is not kept (B1 ruling 2).
+/// so the digest covers the fields in order and no byte can cross a field boundary unseen.
+/// `request_id` is a join key nothing reads back, and is not kept.
 #[must_use]
 pub fn suffix(ev: &TaskEventRow) -> Vec<u8> {
     let mut out = Vec::new();
@@ -315,7 +311,7 @@ pub fn list(rec: &mut dyn Records, caller: &str, now: u64) -> Result<Vec<TaskRow
     Ok(rows)
 }
 
-/// What a [`restore`] found: the engine's boot rehydrate counts, over the records.
+/// What a [`restore`] found: the boot rehydrate counts, over the records.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Restored {
     /// Tasks in flight: their chains were read back verified.
@@ -331,7 +327,7 @@ pub struct Restored {
     pub chain_breaks: Vec<(String, String)>,
 }
 
-/// THE RESTORE (the engine's `restore_from_store`, over host records): every task row read and
+/// The restore, over host records: every task row read and
 /// counted active, terminal or unreadable; then each in-flight task's chain, and no other, read
 /// back through the host, which verifies the chains it lists, and a break it announces on that
 /// task's chain is named. Nothing is written.
@@ -426,8 +422,7 @@ fn submit_held(
 }
 
 /// OPEN a relayed task: SUBMIT `row` for the caller, then record its DISPATCH to `agent_id` on the
-/// chain the submit just started (the engine's submit then `record_dispatch`, both before the
-/// hop). Both events are written in this one answer, so the dispatch is sealed over the genesis
+/// chain the submit just started (both before the hop). Both events are written in this one answer, so the dispatch is sealed over the genesis
 /// held here rather than read back. A dispatch that cannot be recorded leaves the submitted task.
 ///
 /// # Errors
@@ -512,7 +507,7 @@ pub fn transition(
     change(rec, at, task, &mut plan, out)
 }
 
-/// ADVANCE the artifact cursor by one chunk, with a `task.artifact` event: the engine's advance per
+/// ADVANCE the artifact cursor by one chunk, with a `task.artifact` event, per
 /// relayed artifact event, counted on from where the task left off (a resumed stream does not count
 /// from zero).
 ///
@@ -553,7 +548,7 @@ pub fn record_push_delivery(
 /// declares no retention, so the plane holds it), over the TERMINAL tasks this instance holds and
 /// no others: one past its window is tombstoned with its events and its push config; while
 /// [`MAX_RETAINED`] or more terminal ones are held, the oldest go too. An active task is never
-/// touched, however long it has been idle (Q128 K2-H5, coordinator 2026-10-07; spec :198-203). At
+/// touched, however long it has been idle. At
 /// most `budget` tasks are touched; the rest wait for the next sweep. Its one caller is a submit
 /// ([`crate::task_hop::open`]), never a read or a timer.
 ///
