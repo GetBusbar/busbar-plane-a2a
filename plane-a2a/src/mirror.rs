@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! BUSBAR'S OWN CALLBACK, MIRRORED ONTO THE AGENT (the engine's `originate::mirror_push_config`;
-//! ARCHITECT ruling Q3, 2026-10-04: sent over the agent's need from the local verb's `on_piece`).
+//! Busbar's own callback, mirrored onto the agent (sent over the agent's need from the local
+//! verb's `on_piece`).
 //!
 //! Whatever the caller did to the push config busbar holds for it, busbar does to the config BUSBAR
 //! holds at the agent: a create arms the agent with busbar's own callback (`<public_url>/a2a/push`)
@@ -157,9 +157,8 @@ pub fn answered(
     Some((200, serde_json::to_vec(&envelope).ok()?))
 }
 
-/// A REQUEST BUSBAR ORIGINATES THAT MADE NO HOP: the agent's `upstream_credential`, re-resolved for
-/// it, is unavailable, so the host sent nothing (the engine's `originate` returning `None` once it
-/// had logged `A2A_OUTBOUND_CRED_UNLEASED`, before any of its requests). Nothing follows it.
+/// A request busbar originates that made no hop: the agent's `upstream_credential`, re-resolved for
+/// it, is unavailable, so the host sent nothing. Nothing follows it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Unleased;
 
@@ -167,9 +166,9 @@ pub struct Unleased;
 /// or [`Unleased`].
 pub type Landed = Result<Option<(u16, Vec<u8>)>, Unleased>;
 
-/// WHAT ONE ORIGINATED REQUEST CAME TO, out of its exchange's `answer`: the status and body
+/// What one originated request came to, out of its exchange's `answer`: the status and body
 /// [`answered`] reads (`None` for a request that was not answered), or [`Unleased`] for one the host
-/// refused for an unavailable credential, logged as the engine logged a lease it could not mint
+/// refused for an unavailable credential, logged as a lease it could not mint
 /// (`A2A_OUTBOUND_CRED_UNLEASED`, naming `agent`).
 ///
 /// # Errors
@@ -313,7 +312,7 @@ impl Flight {
     }
 
     /// The stage after this one's request came to `landed`: an [`Unleased`] request ends the mirror
-    /// (the engine originated none of it, re-arm included); else [`Flight::advance`].
+    /// (none of it is originated, re-arm included); else [`Flight::advance`].
     pub fn land(&mut self, landed: Result<Option<(u16, &[u8])>, Unleased>) {
         match landed {
             Err(Unleased) => self.stage = Stage::Done,
@@ -341,8 +340,7 @@ impl Flight {
     }
 }
 
-/// `ListTasks`, as busbar issues it to refresh its own rows from the agent (the engine's
-/// `originate::refresh_listed_tasks`): no paging members, the agent's default page.
+/// `ListTasks`, as busbar issues it to refresh its own rows from the agent: no paging members, the agent's default page.
 pub const LIST_TASKS: &str = "ListTasks";
 
 /// WHAT A LISTING TAUGHT BUSBAR: for each entry of the agent's answer whose id is the agent's own

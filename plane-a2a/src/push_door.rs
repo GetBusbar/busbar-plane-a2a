@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! PUSH DELIVERY, DRIVEN BY THE DOOR: the host's half of [`crate::push`] (`BUSBAR-1.6.0.md`, the a2a
-//! plane rulings on push delivery; TODO TRANSITIONAL row "A2A-PUSH's kernel reach", drained by
-//! push delivery folding into the plane).
+//! Push delivery, driven by the door: the host's half of [`crate::push`].
 //!
 //! * A relayed task that MOVES queues its notification ([`queue`]): to the push_config host record
 //!   the caller registered for it, or else to the callback its row carries (an inline config). A
@@ -12,18 +10,16 @@
 //!   byte for the retry's jitter, then the destination judge over the callback, its name resolved,
 //!   then one exchange over the plane's outbound `open-web` need
 //!   ([`crate::door_statement::NEED_OPEN_WEB`]) landing only on the addresses it judged. Judging a
-//!   destination is the host's (THE DESIGN, its connections section: the connector judges every
+//!   destination is the host's (the connector judges every
 //!   open); the plane keeps no address rule of its own. An attempt whose exchange pends ends its `tick` PENDING (a driver ticket's op is never resumed) and goes on
 //!   through `drive` ([`drive`]), held in plane memory across the entries, each making the same host
 //!   calls in the same order (the replay rule). Its end settles the queue and is OWED to the task's
 //!   chain. A queued notification wakes the driver ticket ([`queue`]), so the kernel runs `drive`
-//!   and then re-polls `tick` (R-PUSH) to attempt it at once.
+//!   and then re-polls `tick` to attempt it at once.
 //! * A relayed piece of the same caller FILES what is owed ([`file_owed`]), one chain change per
 //!   task, never on the task the piece itself moves. A plane's record writes ride `on_piece`'s
-//!   answer and nothing else (`BUSBAR-1.6.0.md`, the design's host services and the plane's journal
-//!   writes), so a `tick` writes
-//!   none and an attempt's outcome reaches its chain on its caller's next relayed answer
-//!   (QUESTIONS row Q-FOLD-A2A-2-PUSH-CHAIN, answered by the spec).
+//!   answer and nothing else, so a `tick` writes none and an attempt's outcome reaches its chain
+//!   on its caller's next relayed answer.
 
 use std::task::Poll;
 
@@ -45,7 +41,7 @@ use crate::tasks::{self, Halt, Records, Stamp, Write};
 use crate::TaskRow;
 
 /// The jitter byte that moves a retry's wait by nothing: used when the host lends no random byte
-/// (a delay is a timing nicety, not a security property, as the engine's delivery reads it).
+/// (a delay is a timing nicety, not a security property).
 const NO_JITTER: u8 = 128;
 
 /// QUEUE the notification `row`'s move owes: to `config` (the push_config record of the task) when
@@ -87,9 +83,9 @@ pub fn ended(tokens: &Tokens, row: &TaskRow) {
     }
 }
 
-/// FORGET the webhook credential of every push config `writes` deletes for `caller` (the tombstone
+/// Forget the webhook credential of every push config `writes` deletes for `caller` (the tombstone
 /// of its task's config record): a secret with no config left to present it for does not stay in
-/// plane memory (the engine's delete dropped it with the config, `pushdeliver::forget`).
+/// plane memory.
 pub fn forget_deleted(deliveries: &Deliveries, caller: &str, writes: &[Write]) {
     let prefix = tasks::task_key(caller, "");
     for w in writes
@@ -117,8 +113,8 @@ pub fn queue_moved(
     Ok(queue(deliveries, row, config.as_ref()))
 }
 
-/// FILE `owed` on the chains it names, for `caller`, stamped `now_s`; the writes go to `out`. One
-/// that cannot be filed is dropped: a delivery's record is best-effort, as the engine's is.
+/// File `owed` on the chains it names, for `caller`, stamped `now_s`; the writes go to `out`. One
+/// that cannot be filed is dropped: a delivery's record is best-effort.
 ///
 /// # Errors
 /// [`Halt::Pending`] when a records call pends: the piece runs again with the same `owed`.
@@ -130,7 +126,7 @@ pub fn file_owed(
     out: &mut Vec<Write>,
 ) -> Result<(), Halt> {
     for o in owed.iter().filter(|o| o.caller == caller) {
-        // No inbound request originates a delivery: the request id is empty, as the engine's.
+        // No inbound request originates a delivery: the request id is empty.
         let at = Stamp {
             caller,
             request_id: "",
@@ -280,11 +276,10 @@ impl Attempting {
     }
 }
 
-/// THE TIME A WHOLE DELIVERY ATTEMPT MAY TAKE, from the tick that began it: judge, open, write and
-/// response together, [`crate::push::ATTEMPT_TIMEOUT_MS`], ten seconds (ARCHITECT ruling on a slow
-/// push receiver; 1.5.5 had no A2A push client, so it has no value of its own to keep). An attempt
+/// The time a whole delivery attempt may take, from the tick that began it: judge, open, write and
+/// response together, [`crate::push::ATTEMPT_TIMEOUT_MS`], ten seconds. An attempt
 /// still held then is abandoned, its connection closed, and settles as a transport error under the
-/// three-attempt rule (spec l.391-393).
+/// three-attempt rule.
 const DELIVERY_TIMEOUT_NS: u64 = crate::push::ATTEMPT_TIMEOUT_MS * 1_000_000;
 
 /// When the lifecycle tick is next wanted: while an attempt is held, ONLY the moment it is

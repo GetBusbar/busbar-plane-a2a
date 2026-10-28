@@ -6,10 +6,8 @@
 //! plane ABI's words, and its `refusal` renders a refused one ([`render`]); this module is the
 //! disposition and the words, so both are tested without a door.
 //!
-//! The order is the served engine's (`busbar-a2a` `receive::invoke_inner`, then the shared
-//! JSON-RPC sequence it runs). The steps before it are the kernel's: whether the plane is present,
-//! and governance (spec ruling log 2026-09-30, a2a plane: the kernel owns admission). What the plane
-//! decides (spec ruling log 2026-09-30, new-plane refusals follow predev bytes):
+//! The steps before it are the kernel's: whether the plane is present, and governance (the kernel
+//! owns admission). What the plane decides:
 //!
 //! 0. An `Origin` that is neither loopback nor listed is `403` + `-32004`, judged first, by the
 //!    contract's one rule ([`busbar_contract::jsonrpc::origin_admitted`]); this plane lists none.
@@ -22,7 +20,7 @@
 //!    contract's reader, echoing the id it could read).
 //! 4. A NOTIFICATION is acknowledged and never answered.
 //! 5. A request names a method; [`crate::ops::relay_class`] classes it, a method the vocabulary
-//!    does not list included: the engine relays that one verbatim, so it is never refused here.
+//!    does not list included: that one is relayed verbatim, so it is never refused here.
 //!
 //! Every refusal before the body is read carries the id `null` (JSON-RPC 2.0 section 5).
 
@@ -33,8 +31,7 @@ use crate::ops::{self, MethodRow};
 /// The media type the JSON-RPC binding names.
 pub const JSON_MEDIA_TYPE: &str = "application/json";
 
-/// The A2A protocol versions this endpoint speaks, oldest first (the engine's
-/// `SUPPORTED_A2A_VERSIONS`).
+/// The A2A protocol versions this endpoint speaks, oldest first.
 pub const SUPPORTED_VERSIONS: &[&str] = &["0.3", "1.0"];
 
 /// The version a caller that names none speaks: A2A's own default.
@@ -153,8 +150,7 @@ impl AgentRefusal {
         ))
     }
 
-    /// The JSON-RPC error object, with the `google.rpc.ErrorInfo` entry an A2A-defined code carries
-    /// (the engine's `rpcerror::body`, member for member).
+    /// The JSON-RPC error object, with the `google.rpc.ErrorInfo` entry an A2A-defined code carries.
     #[must_use]
     pub fn error(&self) -> Value {
         let mut error = json!({ "code": self.code, "message": self.message });
@@ -178,8 +174,7 @@ impl AgentRefusal {
         })
     }
 
-    /// The HTTP+JSON line's body: the AIP-193 error document the engine's `rest::reframe` turns a
-    /// JSON-RPC error into (`rpcerror::aip193`).
+    /// The HTTP+JSON line's body: the AIP-193 error document a JSON-RPC error is turned into.
     #[must_use]
     pub fn aip193(&self) -> Value {
         aip193(self.status, &self.error())
@@ -187,7 +182,7 @@ impl AgentRefusal {
 }
 
 /// A JSON-RPC `error` object at `http_status` as the AIP-193 error document the HTTP+JSON line
-/// answers (the engine's `rpcerror::aip193`): the status name is the error code's when it has one,
+/// answers: the status name is the error code's when it has one,
 /// else the HTTP status's; `details` is the error's `data` array, only when there is one.
 #[must_use]
 pub fn aip193(http_status: u32, error: &Value) -> Value {
@@ -235,8 +230,7 @@ pub fn status_name_of(code: i64) -> Option<&'static str> {
     })
 }
 
-/// The canonical status name of an HTTP status, for a code with none of its own (the engine's
-/// `rpcerror::status_for_http`).
+/// The canonical status name of an HTTP status, for a code with none of its own.
 fn status_name_of_http(status: u32) -> &'static str {
     match status {
         400 | 415 => "INVALID_ARGUMENT",
@@ -263,7 +257,7 @@ pub enum AgentDisposition {
         /// The version it negotiated, restated on the hop.
         version: &'static str,
     },
-    /// A request whose method the vocabulary does not class; the engine relays it verbatim.
+    /// A request whose method the vocabulary does not class; it is relayed verbatim.
     Unlisted {
         /// The method.
         method: String,
@@ -308,7 +302,7 @@ impl AgentDisposition {
     }
 
     /// The operation class an admitted arrival is a unit of: its row's, or for a method the
-    /// vocabulary does not list, the class the engine relays it as ([`crate::ops::relay_class`]).
+    /// vocabulary does not list, the class it is relayed as ([`crate::ops::relay_class`]).
     /// `None` for a refused arrival.
     #[must_use]
     pub fn op_class(&self) -> Option<busbar_contract::ids::OpClassId> {
@@ -460,8 +454,7 @@ pub enum Dialect {
     /// The HTTP+JSON line: the AIP-193 document.
     RestJson,
     /// The gRPC line: the JSON-RPC error envelope, which the plane's refusal then reads as the
-    /// status the call ends with ([`crate::framed::refusal`]), exactly as the engine's gRPC bridge
-    /// read the envelope its ingress answered.
+    /// status the call ends with ([`crate::framed::refusal`]).
     Framed,
 }
 
@@ -480,8 +473,7 @@ pub fn render(dialect: Dialect, refusal: &AgentRefusal, own_status: bool) -> Ren
     }
 }
 
-/// Render `refusal` in `dialect`, NAMING THE TASK it is about (`task_id`) as the engine's
-/// `rpcerror::about_task` did: its `ResourceInfo` after the `ErrorInfo` in `error.data`, which the
+/// Render `refusal` in `dialect`, naming the task it is about (`task_id`): its `ResourceInfo` after the `ErrorInfo` in `error.data`, which the
 /// HTTP+JSON line carries as `details`.
 #[must_use]
 pub fn render_about_task(dialect: Dialect, refusal: &AgentRefusal, task_id: &str) -> Rendered {
@@ -497,12 +489,12 @@ pub fn render_about_task(dialect: Dialect, refusal: &AgentRefusal, task_id: &str
     }
 }
 
-/// The engine's words for a call its caller's governance refused (a spent budget, a request limit):
-/// `receive`'s `govern_admit_reason` refusal, `429`, `-32004`.
+/// The words for a call its caller's governance refused (a spent budget, a request limit): `429`,
+/// `-32004`.
 pub const BUDGET_SPENT: &str = "this key's budget is spent";
 
 /// A refusal the kernel made (a key not live, a scope not held, a budget spent, a gate's no), as
-/// the plane words it: the engine's admission rendering, `-32004` with the kernel's text and no id,
+/// the plane words it: `-32004` with the kernel's text and no id,
 /// at the kernel's status.
 #[must_use]
 pub fn kernel_refusal(status: u32, text: &str) -> AgentRefusal {
@@ -514,7 +506,7 @@ pub fn kernel_refusal(status: u32, text: &str) -> AgentRefusal {
 /// contract's one classification ([`busbar_contract::abi::plane::RefusalCode::class`]); this plane
 /// says only how each class reads on its wire. A node fault is this node breaking and is rendered
 /// as the internal error; every other class is a refusal the caller is owed by name, under the
-/// engine's admission code. The match has no `_` arm: a class with no row does not compile.
+/// admission code. The match has no `_` arm: a class with no row does not compile.
 #[must_use]
 pub const fn class_code(class: busbar_contract::abi::plane::RefusalClass) -> i64 {
     use busbar_contract::abi::plane::RefusalClass as C;
@@ -537,7 +529,7 @@ pub const fn class_code(class: busbar_contract::abi::plane::RefusalClass) -> i64
 
 /// A KERNEL REFUSAL OF WIRE REASON `reason` at `status` in the words `text`: [`kernel_refusal`]
 /// under its class's code ([`class_code`]). A number the wire table does not hold is rendered as
-/// the engine's admission refusal.
+/// the admission refusal.
 #[must_use]
 pub fn kernel_refusal_of(reason: u32, status: u32, text: &str) -> AgentRefusal {
     let code = busbar_contract::abi::plane::RefusalCode::of(reason)
@@ -545,9 +537,9 @@ pub fn kernel_refusal_of(reason: u32, status: u32, text: &str) -> AgentRefusal {
     AgentRefusal::unnamed(status, code, text)
 }
 
-/// THE UNGRANTED CALLER'S SENTENCE (1.5.5's `InboundRefusal::NotInScope`): the caller's grant does
-/// not reach `resource` (`agent:<id>`). 1.5.5 named the key's id where this says `this key`: the
-/// refusal the kernel hands a plane carries no principal.
+/// The ungranted caller's sentence: the caller's grant does not reach `resource` (`agent:<id>`).
+/// It says `this key` rather than the key's id: the refusal the kernel hands a plane carries no
+/// principal.
 #[must_use]
 pub fn not_granted_sentence(resource: &str) -> String {
     format!("this key is not granted `{resource}`")
@@ -556,7 +548,7 @@ pub fn not_granted_sentence(resource: &str) -> String {
 /// The status a unit addressed to an agent this deployment does not front answers with.
 pub const STATUS_NO_SUCH_AGENT: u32 = 404;
 
-/// THE UNKNOWN AGENT'S REFUSAL (1.5.5's `InboundRefusal::NoSuchAgent`): `404`, `-32004`, no id,
+/// The unknown agent's refusal: `404`, `-32004`, no id,
 /// "no fronted agent `<agent>`".
 #[must_use]
 pub fn no_such_agent(agent: &str) -> AgentRefusal {
@@ -566,9 +558,8 @@ pub fn no_such_agent(agent: &str) -> AgentRefusal {
 /// The status a unit whose caller's key is no longer live answers with.
 pub const STATUS_NOT_LIVE: u32 = 401;
 
-/// THE CALLER WHOSE KEY IS NO LONGER LIVE (1.5.5's `InboundRefusal::KeyNotLive`): `401`, `-32004`,
-/// no id. 1.5.5 named the key's id where this says `this key`: a plane never sees the raw principal
-/// (BUSBAR-1.6.0.md l.2639-2641; ruling (B), coordinator 2026-10-07), as [`not_granted_sentence`] words it.
+/// The caller whose key is no longer live: `401`, `-32004`, no id. It says `this key` rather than
+/// the key's id: a plane never sees the raw principal, as [`not_granted_sentence`] words it.
 #[must_use]
 pub fn not_live() -> AgentRefusal {
     kernel_refusal(STATUS_NOT_LIVE, "this key is not live")
@@ -578,8 +569,8 @@ pub fn not_live() -> AgentRefusal {
 /// ([`crate::agent_door::MAX_UNITS`]): the caller may try again once one ends.
 pub const STATUS_TOO_MANY_REQUESTS: u32 = 429;
 
-/// THE FULL INSTANCE'S REFUSAL: every unit the instance keeps is live work, and none is ever pushed
-/// out for a new one (THE DESIGN section 1: admission bounds live work, nothing evicts it), so the
+/// The full instance's refusal: every unit the instance keeps is live work, and none is ever pushed
+/// out for a new one (admission bounds live work, nothing evicts it), so the
 /// arrival is refused, as the kernel refuses one past the calls it keeps in flight: the busy
 /// class's code (`-32004`, [`class_code`]), no id, at `429` (an `arrive` refusal is the caller's
 /// to act on, so it wears a `4xx` status, never the kernel's `503`).
@@ -594,8 +585,7 @@ pub fn units_full() -> AgentRefusal {
 /// The status a unit refused by its agent's open breaker answers with.
 pub const STATUS_UNAVAILABLE: u32 = 503;
 
-/// THE OPEN BREAKER'S REFUSAL (1.5.5's `RelayRefusal::BreakerOpen`, rendered by its
-/// `client_text`): the agent `agent` the unit addressed is not dialled while its breaker is open,
+/// The open breaker's refusal: the agent `agent` the unit addressed is not dialled while its breaker is open,
 /// and the caller is told the seconds until it may be, `retry_after_s` (the same figure the
 /// `Retry-After` field carries); `503`, `-32004`, echoing the request id `id`.
 #[must_use]
@@ -612,7 +602,7 @@ pub fn breaker_refusal(agent: &str, id: Option<Value>, retry_after_s: u32) -> Ag
     )
 }
 
-/// THE POOLED AGENT'S CARD READ, refused (predev `receive.rs:1846-1857`): a pool's members are
+/// The pooled agent's card read, refused: a pool's members are
 /// distinct backends that may each present a different extended card, so there is no one card to
 /// relay; `400`, `-32004`, echoing the request id `id`.
 #[must_use]
@@ -627,12 +617,12 @@ pub fn pooled_card(id: Value) -> AgentRefusal {
     )
 }
 
-/// THE PINNED HOP'S GRANT REFUSAL (predev `route::hop_facts`, `creds::AgentEgressDenied`): a
+/// The pinned hop's grant refusal: a
 /// request about a task held by a pool member other than the one addressed is judged on that
 /// member's grant, `resource` (`agent:<id>`), and one the caller's key does not reach (or a key
 /// that is no longer live) is refused before the socket: `403`, `-32004`, echoing the request id
-/// `id`. predev named the key's id where this says `this key`: the plane never sees the raw
-/// principal (ruling (B), coordinator 2026-10-07, as [`not_granted_sentence`] words it).
+/// `id`. It says `this key`: the plane never sees the raw principal, as
+/// [`not_granted_sentence`] words it.
 #[must_use]
 pub fn pinned_ungranted(id: Value, resource: &str, live: bool) -> AgentRefusal {
     let message = if live {
@@ -652,8 +642,7 @@ pub fn pinned_ungranted(id: Value, resource: &str, live: bool) -> AgentRefusal {
     )
 }
 
-/// THE WALK'S WORDS for a pool member not interchangeable with its primary (predev
-/// `failover::Refusal::NotInterchangeable`): their approved card fingerprints differ (or one has
+/// The walk's words for a pool member not interchangeable with its primary: their approved card fingerprints differ (or one has
 /// none), so a request is not moved between them.
 #[must_use]
 pub fn not_interchangeable(
@@ -673,7 +662,7 @@ pub fn not_interchangeable(
 /// `-32602`: the request's parameters cannot be served as given.
 pub const CODE_INVALID_PARAMS: i64 = -32602;
 
-/// THE UNADDRESSED UNIT'S REFUSAL (1.5.5's `select`, ARCHITECT Q-DEL-A2A-SELECT): `reachable` is
+/// The unaddressed unit's refusal: `reachable` is
 /// the agents the caller's grant reaches, joined by
 /// [`busbar_contract::abi::plane::ROUTE_SCOPE_SEPARATOR`] (empty = none). None reach: the same
 /// answer a caller with no grant gets for a named agent, so this endpoint is no inventory oracle;

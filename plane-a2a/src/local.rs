@@ -4,9 +4,8 @@
 //! THE VERBS THE PLANE ANSWERS ITSELF, over the task store ([`crate::tasks`]): `ListTasks`, the
 //! push-notification config CRUD, and the two refusals of `SubscribeToTask`. Every other method is
 //! relayed; these answer a fact about busbar (its task rows, the ids it issued, the callback it
-//! delivers), so a backend cannot answer them. The engine's `busbar-a2a` `local.rs` is the
-//! behaviour, byte for byte, with one difference that is the point of the move: a config lives in
-//! a host record, so it survives a restart rather than living in one process's map.
+//! delivers), so a backend cannot answer them. A push config lives in a host record, so it
+//! survives a restart.
 //!
 //! * `ListTasks` answers the caller's own rows, newest first, cut by a cursor; no `status.timestamp`,
 //!   no `artifacts`, no `history` (busbar holds none of them).
@@ -154,20 +153,19 @@ fn err(rpc_id: &Value, code: i64, message: impl Into<String>) -> LocalAnswer {
     }
 }
 
-/// The engine's words when the store would not take a push config's registration
-/// (`busbar-a2a` `local.rs:592-607`).
+/// The words when the store would not take a push config's registration.
 pub const CONFIG_UNRECORDED: &str = "the push notification config could not be recorded";
 
-/// The engine's words when the store would not take a push config's removal: the config stays and
-/// the caller retries (`busbar-a2a` `local.rs:729-745`).
+/// The words when the store would not take a push config's removal: the config stays and the
+/// caller retries.
 pub const CONFIG_UNDELETED: &str =
     "the push notification config could not be deleted; retry the delete";
 
-/// THE ANSWER WHEN THE STORE REFUSES VERB `verb`'S OWN RECORD WRITE (the kernel ends its unit
-/// `durability_unavailable`, and the door's `refusal` renders this): the engine's internal error,
+/// The answer when the store refuses verb `verb`'s own record write (the kernel ends its unit
+/// `durability_unavailable`, and the door's `refusal` renders this): the internal error,
 /// `500` with `-32603`, echoing `rpc_id`, for the push config it could not register
-/// ([`CONFIG_UNRECORDED`]) or remove ([`CONFIG_UNDELETED`]). `None` for a verb whose answer the
-/// engine never made depend on a write.
+/// ([`CONFIG_UNRECORDED`]) or remove ([`CONFIG_UNDELETED`]). `None` for a verb whose answer does
+/// not depend on a write.
 #[must_use]
 pub fn unrecorded(verb: LocalVerb, rpc_id: &Value) -> Option<AgentRefusal> {
     let message = match verb {
@@ -462,13 +460,12 @@ pub fn delivery_auth(cfg: &Value) -> Result<Option<DeliveryAuth>, String> {
     }))
 }
 
-/// THE CALLBACK FLOOR: the engine's push-notification guard, its WORDS rendered here and its
-/// DECISION the host's. The plane reads the URL only far enough to word a refusal (a string that is
+/// The callback floor: the push-notification guard, its words rendered here and its
+/// decision the host's. The plane reads the URL only far enough to word a refusal (a string that is
 /// not a URL, or one whose authority names a user, is malformed; one with no host says so); whether
 /// the destination may be reached at all (its scheme, an alternate spelling of an address, an
 /// internal or metadata address, a name that resolves to nothing) is the host's destination judge,
-/// the ONE check every outbound connection passes (`BUSBAR-1.6.0.md`, the destination guard: "ONE
-/// check for every outbound connection"), asked here at registration as push delivery asks it again
+/// the one check every outbound connection passes, asked here at registration as push delivery asks it again
 /// on every attempt. `Ok` is the URL as registered.
 ///
 /// # Errors
@@ -479,7 +476,7 @@ pub fn judge_callback(reach: &mut dyn Reach, url: &str) -> Result<Result<(), Str
         DEST_SCHEME, DEST_UNRESOLVABLE,
     };
     use busbar_contract::net::{parse_url, UrlRefusal};
-    // The refusal repeats the URL as predev did, but never a userinfo it carried: a credential in
+    // The refusal repeats the URL, but never a userinfo it carried: a credential in
     // the URL is not echoed into an error body.
     let malformed = || {
         Ok(Err(format!(

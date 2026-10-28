@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! THE OUTBOUND BINDING (ARCHITECT ruling B4): which of A2A's bindings a hop speaks to an agent,
-//! read off the agent's held card (JSON-RPC when no card is held), and the HTTP+JSON framing the
-//! relay composes in that binding. Ported from the served engine (`busbar-a2a` `relay::binding_of`,
-//! `framing_for`, `HttpJsonFraming`, `refusal_client::bounded_word`), byte for byte.
+//! The outbound binding: which of A2A's bindings a hop speaks to an agent, read off the agent's
+//! held card (JSON-RPC when no card is held), and the HTTP+JSON framing the relay composes in
+//! that binding.
 //!
 //! The card says HOW, the operator's `url:` says WHERE: a binding's own URL on the card is never
-//! dialled. All three of A2A's bindings are spoken (spec line 2026-09-30: "JSON-RPC/REST/gRPC are
-//! its lines"): gRPC is dialled over the door's own gRPC need, at the operator's origin, its request
+//! dialled. All three of A2A's bindings are spoken (JSON-RPC, REST and gRPC are
+//! its lines): gRPC is dialled over the door's own gRPC need, at the operator's origin, its request
 //! the rpc's message ([`crate::framed::request_message`]).
 
 use serde_json::{Map, Value};
@@ -54,8 +53,7 @@ impl Binding {
     }
 }
 
-/// THE LOOKUP: the binding a card word names, if the plane frames it (the engine's
-/// `relay::framing_for`): an unknown word is `None`, and the hop is refused naming it.
+/// The lookup: the binding a card word names, if the plane frames it: an unknown word is `None`, and the hop is refused naming it.
 #[must_use]
 pub fn speakable(word: &str) -> Option<Binding> {
     match word.trim().to_ascii_uppercase().as_str() {
@@ -212,8 +210,7 @@ pub struct Framed {
 /// members on the query string, what is left as the body.
 ///
 /// # Errors
-/// Why the request cannot be carried on this binding, in the engine's words (never shown to the
-/// caller).
+/// Why the request cannot be carried on this binding (never shown to the caller).
 pub fn compose(base: &str, method: &str, params: &Value) -> Result<Framed, String> {
     let op = rest_op(method).ok_or_else(|| {
         format!("`{method}` is not one of the eleven operations A2A's HTTP+JSON binding defines")

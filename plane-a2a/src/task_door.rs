@@ -48,7 +48,7 @@ pub struct Pass {
     /// The reply bytes the last window did not hold.
     rest: Vec<u8>,
     /// The plane answered the verb itself (the admission passed): the unit is served, and every
-    /// window reports its fee unit, as the served engine kept the fee of a verb it answered.
+    /// window reports its fee unit.
     served: bool,
     /// A card read's answer was written: a later piece answers nothing more.
     answered: bool,
@@ -65,19 +65,19 @@ pub struct Pass {
     message: bool,
     /// The audit row the unit's answer writes with its first window: its resource, and whether
     /// the unit was served ([`crate::door_statement::AUDIT_ACTION`]); its resource is also the unit's ledger
-    /// lane (SEAM-L(j)).
+    /// lane.
     pub(crate) audit: Option<(String, bool)>,
     /// The agent the unit's ATTEMPT reached.
     member: String,
     /// The instance's restore this unit ran was reported: a re-entry re-reads it, and says nothing.
     restore_reported: bool,
-    /// THE CALLER'S ANSWER IF THE STORE REFUSES THE RECORD WRITES THE UNIT'S PIECE IN HAND CARRIES
-    /// (the kernel ends the unit `durability_unavailable`): the engine's answer for the write its
-    /// verb could not make durable, which the door's `refusal` renders in place of the kernel's
+    /// The caller's answer if the store refuses the record writes the unit's piece in hand carries
+    /// (the kernel ends the unit `durability_unavailable`): the answer for the write its verb
+    /// could not make durable, which the door's `refusal` renders in place of the kernel's
     /// words. Set by the piece that carries a verb's own write (a push config registered or
     /// removed, [`local::unrecorded`]; a task opened or resumed,
-    /// [`crate::task_hop::Opened::Hop`]); `None` for a piece whose writes the engine never failed
-    /// a verb over.
+    /// [`crate::task_hop::Opened::Hop`]); `None` for a piece whose writes never fail
+    /// a verb.
     pub(crate) unrecorded: Option<crate::agent_arrival::AgentRefusal>,
 }
 
@@ -384,10 +384,9 @@ const JUDGED_BYTES: usize = 512;
 /// One span per judged address.
 const JUDGED_ADDRESSES: usize = 16;
 
-/// THE OPEN-WEB JUDGEMENT of a caller-named destination (a push callback) on `handle`: its
+/// The open-web judgement of a caller-named destination (a push callback) on `handle`: its
 /// `DEST_*` verdict and the set a dial must land within. Private reach is refused whatever the
-/// deployment's private-address setting (the engine's callback and delivery guards had no knob that
-/// admitted one); the allow-list stands.
+/// deployment's private-address setting (no knob admits one); the allow-list stands.
 pub(crate) fn judge_open_web(
     services: &StaticServices,
     handle: CompletionHandle,
@@ -430,7 +429,7 @@ fn claim_restore(restored: &Keyed<(), u64>, now: u64) -> bool {
     })
 }
 
-/// SAY WHAT THE RESTORE FOUND, once per unit (the engine's boot hook's words): the counts, a row
+/// Say what the restore found, once per unit: the counts, a row
 /// this build cannot read at WARN, each in-flight task's broken chain at ERROR as tamper evidence,
 /// and a restore that could not read the records at WARN.
 fn report_restore(plane: &A2aDoor, unit: u64, restored: Result<tasks::Restored, Halt>) {
@@ -478,7 +477,7 @@ fn report_restore(plane: &A2aDoor, unit: u64, restored: Result<tasks::Restored, 
 }
 
 /// The answer a NOTIFICATION gets: received, never answered (JSON-RPC 2.0 section 4.1: the server
-/// MUST NOT reply), so `202` and no body at all, as the engine's `jsonrpc::accepted` answered it.
+/// MUST NOT reply), so `202` and no body at all.
 pub(crate) const fn notice_answer() -> (u32, &'static [u8]) {
     (crate::agent_arrival::STATUS_ACCEPTED, b"")
 }
@@ -500,7 +499,7 @@ pub fn on_piece(
 ) -> Option<Outcome> {
     let unit = input.unit();
     // A NOTIFICATION, acknowledged on the caller's piece: `202` and no body, nothing moved, no
-    // fee kept and no audit row (the engine answered it before anything was admitted).
+    // fee kept and no audit row (it is answered before anything is admitted).
     if plane.units.with(&unit, |u| {
         u.is_some_and(|u| matches!(u.disposition, AgentDisposition::Notice { .. }))
     }) {
@@ -609,9 +608,8 @@ pub fn on_piece(
             restored => report_restore(plane, unit, restored),
         }
     }
-    // THE ADMISSION AND THE CATALOGUE (the engine's `receive::admit`, ahead of its local verbs): a
-    // verb routed to an agent that is not `approved`, holds no card, or whose card the request does
-    // not fit, is refused in the engine's words.
+    // The admission and the catalogue, ahead of the local verbs: a verb routed to an agent that
+    // is not `approved`, holds no card, or whose card the request does not fit, is refused.
     let given_member = input.member().as_str().unwrap_or_default();
     let held_member = plane
         .units
@@ -641,8 +639,7 @@ pub fn on_piece(
             status: refusal.status,
             body: serde_json::to_vec(&refusal.envelope()).unwrap_or_default(),
         })),
-        // `ListTasks` refreshes this caller's rows on the agent from the agent's own list first (the
-        // engine's `refresh_listed_tasks`), then answers busbar's rows as they now stand.
+        // `ListTasks` refreshes this caller's rows on the agent from the agent's own list first, then answers busbar's rows as they now stand.
         None if verb == local::LocalVerb::ListTasks => {
             match refresh_listed(
                 plane,
@@ -687,12 +684,11 @@ pub fn on_piece(
     plane.on_unit(unit, |u| {
         u.pass.unrecorded = unrecorded;
         u.pass.served = served;
-        // An admitted verb the plane answered is the caller's call, audited as served (the
-        // engine's local arm, after its admission).
+        // An admitted verb the plane answered is the caller's call, audited as served (after its
+        // admission).
         u.pass.audit = served.then(|| (crate::door_statement::agent_resource(member), true));
     });
-    // BUSBAR'S OWN CALLBACK, MIRRORED ONTO THE AGENT before the answer goes (the engine awaited it
-    // there): only on a successful local answer about a live task the agent has named.
+    // Busbar's own callback, mirrored onto the agent before the answer goes: only on a successful local answer about a live task the agent has named.
     let mirrored = crate::mirror::mirrored_verb(verb).filter(|_| served && answer.status == 200);
     let flight = match mirrored {
         Some(method) => match mirror_flight(
@@ -747,8 +743,7 @@ pub fn on_piece(
     ))
 }
 
-/// REFRESH WHAT BUSBAR LAST SAW from the agent doing the work (the engine's
-/// `originate::refresh_listed_tasks`): the caller's live rows on this agent whose agent ids busbar
+/// Refresh what busbar last saw from the agent doing the work: the caller's live rows on this agent whose agent ids busbar
 /// learnt are the whitelist; the agent is asked `ListTasks` (its default page) only when there is
 /// one; each matched entry's strictly-read state moves its row through the one transition table,
 /// and each move queues its delivery. Nothing from the answer is rendered. Across PENDING entries
@@ -831,7 +826,7 @@ fn refresh_listed<'h>(
                     return Err(Halt::Pending);
                 }
                 // A listing refused for the agent's unavailable credential made no hop and
-                // refreshes nothing, as the engine's `originate` returned `None` (logged there).
+                // refreshes nothing.
                 Poll::Ready(landed) => {
                     let done = (hop.seq, landed.ok().flatten());
                     plane.on_unit(unit, |u| {
@@ -1064,7 +1059,7 @@ fn framed_window(
     reply: &crate::framed::FramedReply,
     writes: &[Write],
 ) -> Outcome {
-    // THE gRPC LINE'S ANSWER (SEAM-4l): the head is the listener's `200` and the line's media type;
+    // The gRPC line's answer: the head is the listener's `200` and the line's media type;
     // an `OK` reply is its one message, and any other status is no message but the call's final
     // status (its message and details), which the stream's framer renders on its close.
     let ok = reply.code == crate::framed::Code::Ok as u32;
@@ -1132,8 +1127,7 @@ fn window_core(
                 value: arena.span(value.as_bytes()),
             });
         }
-        // A whole answer states its length, so it is sent under it (never chunked), as the
-        // engine sent its buffered JSON answer.
+        // A whole answer states its length, so it is sent under it (never chunked).
         if head.length {
             fields.push(OutField {
                 name: arena.span(crate::agent_door::H_CONTENT_LENGTH.as_bytes()),
@@ -1160,8 +1154,8 @@ fn window_core(
             &mut arena, resource, *applied,
         ));
     }
-    // THE UNIT'S LEDGER LANE (SEAM-L(j)): the resource its row names (`agent:<id>`, or the plane
-    // pool for busbar's extended card), as the engine's meter named it.
+    // The unit's ledger lane: the resource its row names (`agent:<id>`, or the plane pool for
+    // busbar's extended card).
     let lane = audit
         .as_ref()
         .map(|(resource, _)| arena.span(resource.as_bytes()));
@@ -1280,7 +1274,7 @@ impl crate::served_card::Signer for HostSigner<'_> {
     }
 }
 
-/// BUSBAR'S EXTENDED CARD for the unit's caller (the engine's `route::extended_agent_card`): one
+/// Busbar's extended card for the unit's caller: one
 /// skill per fronted agent the caller's own catalogue holds (granted, approved, its card held),
 /// signed, in a JSON-RPC answer; a deployment fronting no agent answers
 /// `ExtendedAgentCardNotConfigured`, a card that cannot be built `Internal`.
@@ -1348,15 +1342,14 @@ fn extended_card(
     }
 }
 
-/// An error document of the engine's card routes: `{"error": {"code", "message"}}`.
+/// An error document of the card routes: `{"error": {"code", "message"}}`.
 fn card_error(code: &str, message: &str) -> Vec<u8> {
     serde_json::to_vec(&serde_json::json!({ "error": { "code": code, "message": message } }))
         .unwrap_or_default()
 }
 
 /// `on_piece` for a card read ([`crate::agent_arrival::CardAsk`]): its first piece (the caller's, for
-/// busbar's own card; the ATTEMPT naming the agent, for a fronted agent's) is answered whole, in the
-/// engine's words and heads (`receive::well_known_card` and `receive::card`), the card signed with
+/// busbar's own card; the ATTEMPT naming the agent, for a fronted agent's) is answered whole, the card signed with
 /// busbar's key through the host's `sign`; a card read is never metered, so it reports no fee unit.
 pub fn card_piece(
     plane: &A2aDoor,
