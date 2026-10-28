@@ -94,7 +94,8 @@ busbar_contract::statement_extensions!(
     /// It states the plane's breaker fact (ARCHITECT Q4): one transient failure below the trip
     /// threshold never benches an agent's cell — the cell refuses on a TRIP and nothing less, an
     /// upstream `Retry-After` still honoured (docs/a2a.md, "These cells refuse on a trip and nothing
-    /// less").
+    /// less"). Why no bench: an A2A call's errors are mostly the agent's own answer (an agent says
+    /// no), not a sign the agent is unhealthy, so only a trip benches it.
     EXTENSIONS: [(
         busbar_contract::abi::mechanism::extensions::EXT_DECLARES,
         include_bytes!("../declares.json")
