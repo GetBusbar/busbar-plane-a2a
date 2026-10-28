@@ -8,11 +8,10 @@
 //! the JSON-RPC `params` verbatim, and the success body IS the `result` verbatim. So nothing about
 //! the operation differs between the two lines but where the method NAME comes from (the request
 //! line) and how the answer is wrapped. This module is the first half: [`compose`] builds the
-//! envelope the served engine's `rest.rs` composed (member for member, the same fixed id), and the
-//! door decides it with [`crate::agent_arrival::decide_and_read`] under the caller's own head fields, which is the
-//! order the engine ran (its route handler composed, then `receive::invoke` judged the head and
-//! parsed the composed body). The one refusal composing can earn, a `POST /tasks/{id}:<verb>`
-//! naming no verb, comes first, as it did in the engine's handler.
+//! envelope (member for member, with a fixed id), and the
+//! door decides it with [`crate::agent_arrival::decide_and_read`] under the caller's own head
+//! fields: composed first, then the head judged and the composed body parsed. The one refusal
+//! composing can earn, a `POST /tasks/{id}:<verb>` naming no verb, comes first.
 
 use std::collections::HashMap;
 
@@ -39,7 +38,7 @@ pub mod method {
     pub const LIST_TASKS: &str = "ListTasks";
     /// `POST /tasks/{id}:cancel`.
     pub const CANCEL_TASK: &str = "CancelTask";
-    /// `GET /tasks/{id}:subscribe` (and `POST`, as the served engine spelled it).
+    /// `GET /tasks/{id}:subscribe` (and `POST`).
     pub const SUBSCRIBE_TO_TASK: &str = "SubscribeToTask";
     /// `POST /tasks/{id}/pushNotificationConfigs`.
     pub const CREATE_PUSH_CONFIG: &str = "CreateTaskPushNotificationConfig";
@@ -224,7 +223,7 @@ pub fn json_body(body: &[u8]) -> Value {
 }
 
 /// The refusal for a `POST /tasks/…` that names no verb this binding defines: `404` +
-/// `MethodNotFound`, in the engine's words.
+/// `MethodNotFound`.
 #[must_use]
 pub fn not_a_verb(addressed: &str) -> AgentRefusal {
     AgentRefusal::new(
@@ -266,10 +265,9 @@ fn query_of(target: &str) -> Option<&str> {
     rest.split_once('?').map(|(_, q)| q)
 }
 
-/// COMPOSE THE ENVELOPE a request on the HTTP+JSON line spells: `route` is the line's route the
+/// Compose the envelope a request on the HTTP+JSON line spells: `route` is the line's route the
 /// arrival matched, `target` the request target as sent (its path captures and query read here),
-/// `body` the request body. The envelope's bytes are what the line's unit relays, as the engine
-/// relayed the envelope it composed.
+/// `body` the request body. The envelope's bytes are what the line's unit relays.
 ///
 /// # Errors
 ///
@@ -394,7 +392,7 @@ pub fn compose_from(
     Ok(Some(serde_json::to_vec(&envelope).unwrap_or_default()))
 }
 
-/// RE-FRAME A JSON-RPC ANSWER for the HTTP+JSON line, by what it is (the engine's `rest::reframe`):
+/// Re-frame a JSON-RPC answer for the HTTP+JSON line, by what it is:
 /// a `result` becomes the body, the answer's own `result` bytes cut out of it
 /// ([`crate::answer_bytes::result_span`]: member order and number spellings as the far end wrote
 /// them, busbar's identity already spliced in by the relay); an `error` becomes the AIP-193

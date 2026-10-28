@@ -6,8 +6,8 @@
 //!
 //! ## Why the type is ours
 //!
-//! Same ruling the rest of this plane obeys: protocol in, canonical type, protocol out. A2A is
-//! versioned and moving, and a task row is the LONGEST-LIVED thing this plane writes — it outlives
+//! This plane works protocol in, canonical type, protocol out. A2A is
+//! versioned and moving, and a task row is the longest-lived thing this plane writes — it outlives
 //! the process, and after a durable store is configured it outlives the release. A generated wire
 //! type in that row would mean a specification revision rewriting rows an operator has on disk.
 //!
@@ -353,12 +353,10 @@ impl Task {
     }
 }
 
-/// MAP AN A2A STATE TRANSITION TO ITS PROVENANCE EVENT KIND. A2A DOMAIN LOGIC that moved to the a2a
-/// side at the D4 codec inversion: the neutral core engine only hash-chains and persists whatever
-/// `kind` it is handed, so the classification — which needs the [`TaskState`] enum — lives here and
-/// the resulting `&'static str` is passed INTO the engine's record path. The kind CONSTANTS are still
-/// the neutral audit vocabulary's (`busbar_contract::vocab::EV_*`), so the emitted strings are unchanged; only the mapping
-/// moved.
+/// Map an A2A state transition to its provenance event kind. The neutral core only hash-chains and
+/// persists whatever `kind` it is handed, so the classification, which needs the [`TaskState`]
+/// enum, lives here. The kind constants are the neutral audit vocabulary's
+/// (`busbar_contract::vocab::EV_*`).
 ///
 /// `from` is the state BEFORE the move and it is load-bearing: an `interrupted → working` move is a
 /// RESUME, a distinct event from a fresh `working`, and the two are only separable by looking at the
@@ -377,11 +375,9 @@ pub fn event_kind_for_transition(from: TaskState, to: TaskState) -> &'static str
 /// THE TRANSITION PLAN the neutral engine applies under its working-set lock. Given the CURRENT
 /// persisted [`TaskRow`](crate::TaskRow), reconstruct the canonical [`Task`], VALIDATE the move
 /// against the state machine, choose the provenance event `kind`, and project the new row back — all
-/// A2A domain logic the engine must not name. Returns the new row + kind on success, or the codec's rendered message
-/// on refusal (an illegal move, an unreadable current row), which the engine wraps into its neutral
-/// `Domain` error byte-identically to the pre-cleave `TaskStoreError::Task(TaskError)`. The new row's
-/// `updated_at` is `now` (the move's timestamp), which the engine also uses as the event `ts` — the
-/// same value the pre-cleave `transition(.., now, ..)` argument carried.
+/// A2A domain logic the neutral core must not name. Returns the new row + kind on success, or the
+/// codec's rendered message on refusal (an illegal move, an unreadable current row). The new row's
+/// `updated_at` is `now` (the move's timestamp), which is also the event `ts`.
 pub fn plan_transition(
     to: TaskState,
     now: u64,
@@ -395,11 +391,9 @@ pub fn plan_transition(
     }
 }
 
-/// THE RESTORE-ROW READABILITY PREDICATE the neutral engine's rehydrate consults. Answers `Ok(())`
+/// The restore-row readability predicate the neutral rehydrate consults. Answers `Ok(())`
 /// when the row parses as a canonical [`Task`] (a known state + direction token and a present
-/// identity) and `Err(rendered message)` otherwise — the exact classification the pre-cleave
-/// `restore_from_store` made inline with `Task::from_row`, moved to the a2a side so core names no
-/// codec. The terminal/active split is the task store's (the task store's neutral token check),
+/// identity) and `Err(rendered message)` otherwise, so core names no codec. The terminal/active split is the task store's (the task store's neutral token check),
 /// applied only after this predicate confirms the token is one this binary knows.
 pub fn readable_row(row: &crate::TaskRow) -> Result<(), String> {
     Task::from_row(row).map(|_| ()).map_err(|e| e.to_string())

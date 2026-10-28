@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! THE TWO HASHES TAKEN OVER AN AGENT CARD, and the per-skill digests (moved from `busbar-a2a`'s
-//! card reader, ARCHITECT C2c S7 2026-10-01 move). The plane computes them and reports them to the
-//! kernel's `trust.*`, which judges them (`BUSBAR-1.6.0.md` B.3.3).
+//! The two hashes taken over an agent card, and the per-skill digests. The plane computes them and
+//! reports them to the kernel's `trust.*`, which judges them.
 //!
 //! [`signing_payload`] is what a card's JWS signature covers: the canonical card with the
 //! `signatures` member removed, because a signature cannot cover itself.

@@ -5,8 +5,8 @@
 //!
 //! A host record is at most [`MAX_RECORD_BYTES`] by design (`busbar_contract::kinds::RecordBytes`:
 //! a journal of fixed-size records replays by arithmetic), and an agent's card or the skills its
-//! operator approved are routinely longer. What must survive a restart goes to its records
-//! (`BUSBAR-1.6.0.md` l.345-346), so a value past the ceiling is kept as several records of its
+//! operator approved are routinely longer. What must survive a restart goes to its records,
+//! so a value past the ceiling is kept as several records of its
 //! kind:
 //!
 //! * a value that fits is ONE record under its key, as it always was;

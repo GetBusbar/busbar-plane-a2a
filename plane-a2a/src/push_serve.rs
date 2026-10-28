@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! `POST /a2a/push`: AN AGENT REPORTING A TASK IT MOVED, to the callback busbar registered with it
-//! (the engine's `pushback::push_notification`; ARCHITECT ruling Q3, 2026-10-04: a public route of
-//! the plane, served by its `serve` op, authorised by busbar's own per-task capability, bounded by
-//! 1.5.5's push-volume limit).
+//! `POST /a2a/push`: an agent reporting a task it moved, to the callback busbar registered with it
+//! (a public route of the plane, served by its `serve` op, authorised by busbar's own per-task
+//! capability, bounded by the push-volume limit).
 //!
-//! In the engine's order, every step a refusal that costs nothing further:
+//! Every step is a refusal that costs nothing further:
 //!
 //! 1. the presented token names a task this instance minted it for, and the host's signature of
 //!    that task is the one presented, or `401`;
@@ -32,7 +31,7 @@ use crate::a2a::task::{Task, TaskState};
 use crate::agent_door::A2aDoor;
 use crate::tasks::{self, Halt, Stamp, Write};
 
-/// The ceiling on a pushed body: one task document (the engine's `MAX_PUSH_BODY`).
+/// The ceiling on a pushed body: one task document.
 pub const MAX_PUSH_BODY: usize = 64 * 1024;
 
 /// The one sentence every authorisation refusal answers with.
@@ -60,7 +59,7 @@ fn refused(
 }
 
 /// `202`, with no document: the report was taken, the move it recorded written to the task's
-/// chain with the answer (SEAM-L(t)).
+/// chain with the answer.
 fn accepted(input: &Lent<'_, ServeIn>, out: &mut Out<'_, ServeOut>, writes: &[Write]) -> Outcome {
     crate::agent_door::verb_answer(input, out, (202, &[], b""), AUDIT_NONE, writes)
 }
