@@ -872,10 +872,7 @@ fn served_core(
         &Arc::new(super::DemotionRecord::default()),
         &[],
     );
-    let dispatcher = Arc::new(crate::root::dispatch::build(
-        1,
-        Arc::clone(&services) as Arc<dyn busbar_contract::services::HostServices>,
-    ));
+    let dispatcher = Arc::new(crate::root::dispatch::build(1, &services));
     // Its connection reads through a ticket (a trust verb's card fetch) wake on the dispatcher.
     let settings = busbar_contract::transport::TransportSettings::default();
     let connector = match root {
