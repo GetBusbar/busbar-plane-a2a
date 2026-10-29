@@ -218,23 +218,6 @@ impl Refusing {
 }
 
 impl busbar_contract::store_calls::StoreCalls for Refusing {
-    fn reserve<'a>(
-        &'a self,
-        op: busbar_contract::abi::store::OpId,
-        epoch: u64,
-        cells: &'a [busbar_contract::abi::sdk::store::Cell<'a>],
-    ) -> busbar_contract::store_calls::StoreCall<'a, Vec<busbar_contract::abi::sdk::store::Grant>>
-    {
-        self.inner.reserve(op, epoch, cells)
-    }
-    fn slice_release<'a>(
-        &'a self,
-        op: busbar_contract::abi::store::OpId,
-        epoch: u64,
-        items: &'a [(u64, u64)],
-    ) -> busbar_contract::store_calls::StoreCall<'a, Vec<u64>> {
-        self.inner.slice_release(op, epoch, items)
-    }
     fn add_usage_batch<'a>(
         &'a self,
         op: busbar_contract::abi::store::OpId,
@@ -248,51 +231,6 @@ impl busbar_contract::store_calls::StoreCalls for Refusing {
         deltas: &'a [busbar_contract::records::MeteringDelta],
     ) -> busbar_contract::store_calls::StoreCall<'a, ()> {
         self.inner.add_metering_batch(op, deltas)
-    }
-    fn append_audit_batch<'a>(
-        &'a self,
-        op: busbar_contract::abi::store::OpId,
-        entries: &'a [busbar_contract::records::AuditRecord],
-    ) -> busbar_contract::store_calls::StoreCall<'a, ()> {
-        self.inner.append_audit_batch(op, entries)
-    }
-    fn window_caps<'a>(
-        &'a self,
-        op: busbar_contract::abi::store::OpId,
-        caps: &'a [busbar_contract::abi::sdk::store::Cap<'a>],
-    ) -> busbar_contract::store_calls::StoreCall<'a, ()> {
-        self.inner.window_caps(op, caps)
-    }
-    fn append_batch<'a>(
-        &'a self,
-        op: busbar_contract::abi::store::OpId,
-        stream: &'a str,
-        records: &'a [busbar_contract::kinds::RecordBytes],
-    ) -> busbar_contract::store_calls::StoreCall<'a, busbar_contract::kinds::Head> {
-        self.inner.append_batch(op, stream, records)
-    }
-    fn heads(
-        &self,
-    ) -> busbar_contract::store_calls::StoreCall<'_, Vec<(String, busbar_contract::kinds::Head)>>
-    {
-        self.inner.heads()
-    }
-    fn session_put<'a>(
-        &'a self,
-        session: u64,
-        node: &'a str,
-        principal: &'a str,
-    ) -> busbar_contract::store_calls::StoreCall<'a, ()> {
-        self.inner.session_put(session, node, principal)
-    }
-    fn session_remove(&self, session: u64) -> busbar_contract::store_calls::StoreCall<'_, ()> {
-        self.inner.session_remove(session)
-    }
-    fn sessions_for<'a>(
-        &'a self,
-        principal: &'a str,
-    ) -> busbar_contract::store_calls::StoreCall<'a, Vec<(u64, String)>> {
-        self.inner.sessions_for(principal)
     }
     fn record_put<'a>(
         &'a self,
@@ -956,7 +894,7 @@ fn served_core(
         let live = Arc::clone(&live);
         compose = compose.hooks(
             Arc::new(move || {
-                busbar_kernel::plane_host::engine_host(
+                busbar_kernel::plane_driver::engine_host(
                     live.get().expect("the App is built before a unit runs"),
                 )
             }),
@@ -1009,7 +947,7 @@ fn served_core(
             builder.mount_plane(
                 surface("plane_key"),
                 path,
-                busbar_kernel::plane::WIRE_JSONRPC,
+                busbar_kernel::plane_driver::dispatch::WIRE_JSONRPC,
             );
         }
         builder.admit_plane(surface("plane_key"), admission);
@@ -2322,7 +2260,7 @@ async fn a_hop_refused_before_the_socket_keeps_no_fee() {
 fn a_present_agents_card_silent_about_an_agent_refuses_the_config() {
     let folded =
         rig::folded_door(door(), "serve-agent-card-row").expect("the door binds and folds");
-    let _registry = busbar_kernel::plane::registry::TestRegistryIsolation::seeded(&[
+    let _registry = busbar_kernel::test_support::planes::TestRegistryIsolation::seeded(&[
         busbar_kernel::test_support::neutral_fallback_plane(),
         folded,
     ]);
@@ -3407,7 +3345,7 @@ async fn a_config_apply_keeps_the_operators_approval() {
     // test registered process-wide would read a runtime slot this composition never seeded, so
     // the swap sees exactly this composition's planes (the door serves none of them).
     {
-        let _registry = busbar_kernel::plane::registry::TestRegistryIsolation::empty();
+        let _registry = busbar_kernel::test_support::planes::TestRegistryIsolation::empty();
         s.handle.swap(Arc::clone(&s.app));
     }
     let (status, body) = answered(&s.router, send()).await;
@@ -7821,7 +7759,7 @@ async fn a_backend_that_cannot_be_reached_is_counted_as_a_transient_upstream_fai
     assert!(
         lines.iter().any(|l| l.contains(&format!(
             "disposition=\"{}\"",
-            busbar_kernel::proxy::DISPOSITION_TRANSIENT
+            busbar_kernel::telemetry::DISPOSITION_TRANSIENT
         ))),
         "the failure carries the model plane's own disposition word: {lines:?}"
     );
@@ -8931,8 +8869,8 @@ async fn a_config_apply_keeps_the_pool_walking() {
     if let Some(map) = written.as_mapping_mut() {
         map.remove(busbar_contract::section::RESERVED_POOLS_KEY);
     }
-    let slot = busbar_kernel::plane::door::DoorSlot {
-        section: busbar_kernel::plane::door::DoorSection::new(surface("section"), written),
+    let slot = busbar_kernel::plane_driver::door::DoorSlot {
+        section: busbar_kernel::plane_driver::door::DoorSection::new(surface("section"), written),
         facing: busbar_contract::plane_calls::DoorFacing {
             claims: Vec::new(),
             admission: None,
@@ -8949,7 +8887,7 @@ async fn a_config_apply_keeps_the_pool_walking() {
     next.install_plane_runtime(surface("plane_key"), Arc::new(slot));
     let next = next.build();
     {
-        let _registry = busbar_kernel::plane::registry::TestRegistryIsolation::empty();
+        let _registry = busbar_kernel::test_support::planes::TestRegistryIsolation::empty();
         s.handle.swap(next);
     }
     let mut log = Vec::new();
