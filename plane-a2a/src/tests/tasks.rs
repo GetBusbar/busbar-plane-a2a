@@ -947,6 +947,73 @@ fn a_tampered_chain_is_reported_on_restore_and_the_task_is_still_restored() {
     );
 }
 
+/// ENTRIES CUT FROM THE END ARE CAUGHT. Dropping a chain's last events leaves every remaining link
+/// correct, so the host's verified read alone cannot see it (busbar's generic chain verifier pins
+/// that limit: `audit/tests/chain_tests.rs::truncating_the_tail_verifies_and_that_limit_is_deliberate`).
+/// The other half is the task row, which holds the sequence its chain's next event takes: a chain
+/// whose last event falls short of it was cut, and the restore reports that break, naming both
+/// sequences, while the task stays held. RED before the fix: the cut chain restored clean.
+#[test]
+fn dropping_the_last_event_is_a_reported_break() {
+    let mut book = process_one();
+    let held = get(&mut book, BOB, "t-paused", 105).unwrap().unwrap();
+    let last = held.next_seq - 1;
+    book.rows
+        .remove(&(
+            KIND_TASK_EVENT.to_string(),
+            event_key(BOB, "t-paused", last),
+        ))
+        .expect("the chain's last event was held");
+    let out = restore(&mut book).unwrap();
+    assert_eq!(out.active, 2, "both tasks are still restored");
+    assert_eq!(out.chain_breaks.len(), 1, "exactly the cut chain is named");
+    let (scope, words) = &out.chain_breaks[0];
+    assert_eq!(*scope, task_key(BOB, "t-paused"));
+    assert!(
+        words.contains(&format!("seq {}", last - 1)) && words.contains(&format!("seq {last}")),
+        "the break names where the chain ends and what the task row committed: {words}"
+    );
+    assert!(
+        get(&mut book, BOB, "t-paused", 105).unwrap().is_some(),
+        "the task survived; the BREAK is what is reported, not a deletion"
+    );
+}
+
+/// An in-flight task whose WHOLE chain is gone is a cut chain too: its row committed events the
+/// store no longer holds. RED before the fix: it restored clean.
+#[test]
+fn dropping_every_event_of_an_in_flight_task_is_a_reported_break() {
+    let mut book = process_one();
+    book.apply(&[Write {
+        kind: KIND_TASK_EVENT,
+        key: task_key(ALICE, "t-work"),
+        value: Vec::new(),
+    }]);
+    let out = restore(&mut book).unwrap();
+    assert_eq!(out.active, 2);
+    assert_eq!(
+        out.chain_breaks
+            .iter()
+            .map(|(scope, _)| scope.as_str())
+            .collect::<Vec<_>>(),
+        [task_key(ALICE, "t-work").as_str()]
+    );
+}
+
+/// An untouched store still restores clean: a chain whose last event is the one its task row
+/// committed is no break, and another task's chain the scope's prefix also reaches (`t-work`
+/// reaches `t-work2`) is never counted as this one's.
+#[test]
+fn a_whole_chain_is_no_break_whatever_its_neighbours() {
+    let mut book = process_one();
+    submitted(&mut book, ALICE, "t-work2", 100);
+    moved_to(&mut book, "t-work2", TaskState::Working, 101);
+    moved_to(&mut book, "t-work2", TaskState::InputRequired, 102);
+    let out = restore(&mut book).unwrap();
+    assert_eq!(out.active, 3);
+    assert!(out.chain_breaks.is_empty(), "{:?}", out.chain_breaks);
+}
+
 /// Ported from busbar-a2a a2a/tests/taskstore_tests.rs::a_terminal_task_is_counted_on_restore_and_deliberately_not_loaded.
 /// A terminal task is counted, its chain not read: nothing resumes it. Its row is kept for the
 /// provenance window.
