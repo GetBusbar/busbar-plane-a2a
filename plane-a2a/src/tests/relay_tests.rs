@@ -234,6 +234,38 @@ fn a_reply_that_is_not_a_json_rpc_answer_is_refused() {
     }
 }
 
+/// A REDIRECTING RELAY PEER IS A FAILURE, NEVER FOLLOWED (docs/security.md: no surface follows an
+/// upstream's redirect): every 3xx the agent answers a relayed hop with is the backend-status
+/// refusal, its `Location` named nowhere in the caller's answer, and the relay asks for no second
+/// attempt at it.
+#[test]
+fn a_redirecting_relay_peer_is_a_failure() {
+    for status in [301, 302, 303, 307, 308] {
+        let mut r = sent();
+        let reply = answered(&mut r, status, b"");
+        assert_eq!(reply.status, 502, "{status}");
+        assert_eq!(
+            reply.body,
+            refused(
+                "a2a.hop.backend_status",
+                "this agent's backend refused busbar's request"
+            ),
+            "{status}"
+        );
+        assert!(
+            !String::from_utf8_lossy(&reply.body).contains("elsewhere.example"),
+            "{status}: the redirect's target is named nowhere"
+        );
+        assert!(
+            !matches!(
+                r.on_piece(kernel(Some("https://elsewhere.example/a2a"))),
+                PieceAnswer::Attempt(_)
+            ),
+            "{status}: an answered hop makes no second attempt"
+        );
+    }
+}
+
 #[test]
 fn a_reply_over_the_ceiling_is_refused_and_a_refused_status_is_judged_first() {
     let mut big = br#"{"jsonrpc":"2.0","id":7,"result":""#.to_vec();

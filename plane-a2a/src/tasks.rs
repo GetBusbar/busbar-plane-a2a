@@ -330,7 +330,10 @@ pub struct Restored {
 /// The restore, over host records: every task row read and
 /// counted active, terminal or unreadable; then each in-flight task's chain, and no other, read
 /// back through the host, which verifies the chains it lists, and a break it announces on that
-/// task's chain is named. Nothing is written.
+/// task's chain is named. A chain the host verified is then held to its task row: the row holds
+/// the sequence the chain's next event takes, so a chain whose last event falls short of it had
+/// entries cut from its end (every remaining link still verifies, so the chain alone cannot show
+/// it), and that is named as its break too. Nothing is written.
 ///
 /// # Errors
 /// [`Halt`].
@@ -346,20 +349,36 @@ pub fn restore(rec: &mut dyn Records) -> Result<Restored, Halt> {
             out.terminal += 1;
         } else {
             out.active += 1;
-            active.push(key);
+            active.push((key, held.next_seq));
         }
     }
-    for scope in active {
+    for (scope, next_seq) in active {
         // The chain's own scope is its records' key prefix. A record's key ends in its sequence; a
         // span keyed by the bare scope announces the chain's break. Another chain the prefix also
         // reaches (`t1` reaches `t10`) is named on its own task's read, if it is in flight.
-        let found = rec
-            .list(KIND_TASK_EVENT, &scope)?
-            .into_iter()
-            .find(|(key, _)| *key == scope);
-        if let Some((_, words)) = found {
+        let listed = rec.list(KIND_TASK_EVENT, &scope)?;
+        if let Some((_, words)) = listed.iter().find(|(key, _)| *key == scope) {
             out.chain_breaks
-                .push((scope, String::from_utf8_lossy(&words).into_owned()));
+                .push((scope, String::from_utf8_lossy(words).into_owned()));
+            continue;
+        }
+        // THE TAIL: the last sequence this chain's own records reach, held to the last one its
+        // task row committed.
+        let reached = listed
+            .iter()
+            .filter_map(|(key, _)| busbar_contract::services::chain_key_parts(key.as_bytes()))
+            .filter(|(chain, _)| *chain == scope.as_bytes())
+            .map(|(_, seq)| seq)
+            .max()
+            .unwrap_or(0);
+        let committed = next_seq.saturating_sub(1);
+        if reached < committed {
+            let words = format!(
+                "the chain for scope `{scope}` ends at seq {reached}, but its task row committed \
+                 events through seq {committed}: entries are missing from the chain's end (cut \
+                 from it, or never written to it)"
+            );
+            out.chain_breaks.push((scope, words));
         }
     }
     Ok(out)

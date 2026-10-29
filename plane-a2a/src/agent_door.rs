@@ -460,6 +460,13 @@ pub(crate) fn drive_originated(
 ) -> Poll<crate::mirror::Landed> {
     use busbar_contract::abi::sdk::exchange::{exchange, Exchange};
     if hop.exchange.is_none() {
+        // THE TRUST GATE, as every relayed hop is held to it ([`verify_agent_on_call`]): an agent
+        // the kernel's trust book does not serve (quarantined, its card changed, never approved)
+        // or whose last look failed is sent nothing busbar originates either.
+        let standing = plane.trust.get(&hop.agent).unwrap_or_default();
+        if !kernel_serves(plane, &hop.agent, &standing) {
+            return Poll::Ready(Ok(None));
+        }
         let at = LookAt {
             plane,
             ticket,
@@ -3763,6 +3770,20 @@ fn look(
     Ok((looked, issued))
 }
 
+/// WHETHER `member` SERVES, on its `standing` (read here, never decided): SERVING is the kernel's
+/// verdict on the agent's key. A card the last look could not reach or verify fails the hop
+/// closed: the hop is refused here
+/// without asking `trust.serves`, and the kernel's last verdict, which the look's
+/// `trust.unreachable` kept, is left untouched.
+fn kernel_serves(
+    plane: &A2aDoor,
+    member: &str,
+    standing: &crate::card_trust::TrustStanding,
+) -> bool {
+    !matches!(standing.sighting, crate::card_trust::Sighting::Failed(_))
+        && verdict(plane, member) == busbar_contract::abi::host::service::DISTRUST_NONE
+}
+
 /// VERIFY-ON-CALL (the served engine's `receive::verify_agent_on_call` and `verify::reverify_once`):
 /// a relayed unit's agent whose last look is older than its `reverify_ttl` is looked at again
 /// before the hop, and what the look found is folded into its standing by the recovery rule
@@ -3783,14 +3804,8 @@ fn verify_agent_on_call(
     let Some(now_ms) = reach.now_ms() else {
         return Poll::Ready(false);
     };
-    // SERVING is the kernel's verdict on the agent's key.
-    // A card the last look could not reach or verify fails the hop closed:
-    // the hop is refused here without asking `trust.serves`, and the kernel's last verdict, which
-    // the look's `trust.unreachable` kept, is left untouched.
-    let serves = |standing: &crate::card_trust::TrustStanding| {
-        !matches!(standing.sighting, crate::card_trust::Sighting::Failed(_))
-            && verdict(plane, member) == busbar_contract::abi::host::service::DISTRUST_NONE
-    };
+    let serves =
+        |standing: &crate::card_trust::TrustStanding| kernel_serves(plane, member, standing);
     // A UNIT WAITING ON ANOTHER'S LOOK takes its verdict, never a look of its own — unless that
     // look was abandoned before it landed, when the waiter looks again (the engine's gate,
     // released by its dropped holder, re-checks and fetches).
@@ -4010,9 +4025,9 @@ slot!(
     /// `serve`: the trust verbs over the section's registrations, over the kernel's trust book
     /// (the plane holds no approval; the book pins, quarantines and keeps the operator's decision):
     ///
-    /// * an unregistered name is `404` before anything else, audited nowhere;
+    /// * an unregistered name is `404` before anything else, audited rejected;
     /// * `approve` reads its body (`{"fingerprint": "…"}`) next, and a malformed one is `400`
-    ///   (the malformed-body condition), audited nowhere;
+    ///   (the malformed-body condition), audited rejected;
     /// * both then LOOK ([`look`]): the card fetched over the agent's own connection need,
     ///   verified against its pin and SIGHTED on the kernel's trust book;
     /// * `connect` answers its preview and decides nothing; the card it verified is held for the
@@ -4047,7 +4062,7 @@ slot!(
         let found = verb_agent(route, input.target().bytes())
             .and_then(|name| registered(&name).map(|def| (name, def)));
         let Some((name, def)) = found else {
-            return verb_refused(&input, &mut out, STATUS_NOT_FOUND, "", None, AUDIT_NONE);
+            return verb_refused(&input, &mut out, STATUS_NOT_FOUND, "", None, AUDIT_REJECTED);
         };
         let claimed = if approving {
             let fields = input.fields();
@@ -4063,7 +4078,14 @@ slot!(
                 Ok(fingerprint) => Some(fingerprint),
                 Err(refusal) => {
                     let condition = Some(MALFORMED_BODY);
-                    return verb_refused(&input, &mut out, 400, &refusal, condition, AUDIT_NONE);
+                    return verb_refused(
+                        &input,
+                        &mut out,
+                        400,
+                        &refusal,
+                        condition,
+                        AUDIT_REJECTED,
+                    );
                 }
             }
         } else {
@@ -4518,6 +4540,10 @@ pub fn invocation_of(envelope: &[u8]) -> busbar_contract::ir::invoke::InvokeReq 
 #[cfg(test)]
 #[path = "tests/agent_door_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/originated_trust_tests.rs"]
+mod originated_trust_tests;
 
 busbar_contract::plugin_door! {
     ops: busbar_contract::abi::plane::Ops,

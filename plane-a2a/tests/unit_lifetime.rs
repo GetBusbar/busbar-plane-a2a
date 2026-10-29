@@ -827,6 +827,18 @@ impl Door {
         fields: &[Field],
         body: &[u8],
     ) -> (Outcome, u32, String) {
+        let (outcome, status, body, _) = self.verb_audited(route, target, fields, body);
+        (outcome, status, body)
+    }
+
+    /// [`Self::verb`], and the `AUDIT_*` row the answer asks the kernel to audit it with.
+    fn verb_audited(
+        &self,
+        route: u32,
+        target: &str,
+        fields: &[Field],
+        body: &[u8],
+    ) -> (Outcome, u32, String, u32) {
         let mut reply = vec![0_u8; 1 << 14];
         let mut out_fields = [z::<OutField>(); 8];
         let mut arena = vec![0_u8; 1 << 14];
@@ -875,7 +887,7 @@ impl Door {
             }
         }
         let body = String::from_utf8_lossy(&reply[..o.reply_written as usize]).into_owned();
-        (ret.outcome(), status, body)
+        (ret.outcome(), status, body, o.audit)
     }
 
     /// The kernel's `tick` of the instance, on its driver ticket: when it wants the next.
@@ -1783,4 +1795,48 @@ fn a_warmed_ready_arrival_allocates_its_pinned_count() {
         allocations, READY_ARRIVAL_ALLOCATIONS,
         "a warmed READY arrival allocated {allocations}, pinned {READY_ARRIVAL_ALLOCATIONS}"
     );
+}
+
+/// EVERY REFUSED TRUST VERB IS AUDITED AS REJECTED (docs/a2a.md: both verbs audited, refusals as
+/// rejected): a `connect` or an `approve` naming an agent the section does not register, and an
+/// `approve` whose body is not the one-field `{"fingerprint": …}` document, are refused and
+/// audited `AUDIT_REJECTED`, as an approval whose fingerprint disagrees already is. RED before the
+/// fix: the 404s and the malformed body were audited nowhere (`AUDIT_NONE`).
+#[test]
+fn a_malformed_or_unknown_approval_is_audited_rejected() {
+    use busbar_contract::abi::plane::AUDIT_REJECTED;
+    let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    store().clear();
+    let door = open();
+    let json = [Field {
+        name: str_of(b"content-type"),
+        value: str_of(b"application/json"),
+    }];
+    let fingerprint = br#"{"fingerprint": "sha256:aa"}"#;
+    let cases: [(&str, u32, &str, &[u8], u32); 3] = [
+        ("unknown connect", 0, "/agents/nope/connect", b"", 404),
+        (
+            "unknown approve",
+            1,
+            "/agents/nope/approve",
+            fingerprint,
+            404,
+        ),
+        (
+            "malformed approve",
+            1,
+            "/agents/vendor/approve",
+            br#"{"fingerprint": "sha256:aa", "and": "more"}"#,
+            400,
+        ),
+    ];
+    for (case, route, target, body, refused) in cases {
+        let (outcome, status, answered, audit) = door.verb_audited(route, target, &json, body);
+        assert_eq!(
+            (outcome, status),
+            (Outcome::Ready, refused),
+            "{case}: {answered}"
+        );
+        assert_eq!(audit, AUDIT_REJECTED, "{case} is audited rejected");
+    }
 }
