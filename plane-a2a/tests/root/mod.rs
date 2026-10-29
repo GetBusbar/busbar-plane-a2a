@@ -1710,8 +1710,8 @@ struct Counted {
 }
 
 /// Every unit the caller ran, oldest first, as its one audit record carries it: the node keeps no
-/// money line (busbar MONEY-DESIGN §3); a unit's counts are the governance ledger's, and its record
-/// names them. Each cell runs one agent, `_agent`.
+/// money line (busbar's money design, the section on what a node keeps); a unit's counts are the
+/// governance ledger's, and its record names them. Each cell runs one agent, `_agent`.
 fn agent_counts(s: &Served, _agent: &str) -> Vec<Counted> {
     let caller = busbar_kernel_audit::Subject::PrincipalId(s.key.id.clone());
     s.book
