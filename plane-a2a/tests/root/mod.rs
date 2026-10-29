@@ -39,7 +39,7 @@ mod root_facts;
 // THE ROOT, THROUGH ITS DOOR CELLS' RIG ALONE (`root::serve::door_rig`): the one surface these
 // cells may reach the composition root through, so a root refactor keeps this file compiling.
 use super::door_rig as rig;
-use rig::{LinkedRow, Node, NodeEndPost, Published, PUBLISHING};
+use rig::{LinkedRow, Node, NodeEndPost, PUBLISHING};
 
 /// The deployment's dated card history, billing off (one entry, no price).
 static CARD: std::sync::LazyLock<rig::RootHistory> =
@@ -877,6 +877,9 @@ fn served_core(
         Arc::clone(&riding) as Arc<dyn busbar_contract::conn::PollConns>,
         Arc::clone(&post) as Arc<dyn busbar_kernel_egress::ports::Journal>,
     );
+    // THE ADMIN TABLE the door is published into, lent to the App built below as the root lends
+    // the boot generation its own (busbar #1834): the admin router answers the door's routes off it.
+    let tables = busbar_kernel::plane_driver::serve::ServeTables::default();
     let mut compose = rig::DoorCompose::new(
         vec![(instance.to_string(), plane)],
         &dispatcher,
@@ -884,6 +887,7 @@ fn served_core(
         &sections,
         &plane_money,
     )
+    .tables(&tables)
     .public_url("https://gw.example")
     .egress(&egress)
     .post(post)
