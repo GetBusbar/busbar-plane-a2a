@@ -314,14 +314,65 @@ negative_tck() {
 # SUBJECT: busbar at the pin, this plane patched in, built here, booted by the repo's own boot.sh.
 # ------------------------------------------------------------------------------------------------
 build_subject() {
+  # THE BINARY THAT SHIPS THE PLANE IS THE DEFAULT DISTRIBUTION. busbar's root crate names no
+  # plugin; `dist/default` (its own workspace, package `busbar-default`, bin `busbar`) is the one
+  # manifest that links the standard plugins, this plane among them. A pin older than that split
+  # linked the plane from the root workspace, and is built there.
+  local dir="$BUSBAR_CHECKOUT" pkg=busbar manifest
+  if [ -f "$BUSBAR_CHECKOUT/dist/default/Cargo.toml" ]; then
+    dir="$BUSBAR_CHECKOUT/dist/default"; pkg=busbar-default
+  fi
+  manifest="$dir/Cargo.toml"
+  grep -q '^busbar-plane-a2a = { git = "https://github.com/GetBusbar/busbar-plane-a2a"' "$manifest" \
+    || { echo "$manifest pulls no busbar-plane-a2a from its git source, so this plane cannot be patched in"; return 1; }
+  # THE PLANE'S OWN ROWS name items of THIS checkout's plane, so they follow it. Its door is the
+  # crate root's one public item (`busbar_plane_a2a::door`), and it exports no `DECLARES` item: its
+  # declares document rides its Statement (EXT_DECLARES). A pin whose rows still name
+  # `busbar_plane_a2a::agent_door` / `busbar_plane_a2a::DECLARES` gets the entry row pointed at the
+  # crate root and the declares row dropped, which is the dist row change the crate-root door needs
+  # (busbar dist/default). Only these two rows of this one plane are touched; every other row and
+  # every line of busbar's source is the pin's.
+  plane_rows "$manifest" || return 1
   # The plane busbar links is a git dependency at a rev; this checkout's plane-a2a replaces it by a
   # run-time `--config` patch (nothing committed). busbar's own [patch] already routes the busbar
   # crates the plane names to BUSBAR_CHECKOUT.
-  ( cd "$BUSBAR_CHECKOUT" && cargo build -p busbar \
+  ( cd "$dir" && cargo build -p "$pkg" --bin busbar \
       --config "patch.\"https://github.com/GetBusbar/busbar-plane-a2a\".busbar-plane-a2a.path=\"$ROOT/plane-a2a\"" ) \
     || return 1
-  SUBJECT_BIN="${CARGO_TARGET_DIR:-$BUSBAR_CHECKOUT/target}/debug/busbar"
+  SUBJECT_BIN="${CARGO_TARGET_DIR:-$dir/target}/debug/busbar"
   [ -x "$SUBJECT_BIN" ] || return 1
+}
+
+# plane_rows <Cargo.toml>: point the a2a door row's `linked-entry` at the crate root and drop its
+# `linked-declares` row; refuse a row spelled any way this script does not know (a layout it does not
+# know is a red, never a guess).
+plane_rows() {
+  python3 -I - "$1" <<'PY'
+import re, sys
+path = sys.argv[1]
+text = open(path).read()
+ROW = r'(?m)^plane-a2a-door = (.*)\n'
+def table(name):
+    m = re.search(r"(?ms)^\[package\.metadata\.busbar\.%s\]\n(.*?)(?=^\[)" % re.escape(name), text)
+    if m is None:
+        sys.exit("%s: no [package.metadata.busbar.%s] table" % (path, name))
+    return m
+def edit(name, old, new):
+    global text
+    m = table(name)
+    row = re.search(ROW, m.group(1))
+    if row is None or row.group(1).strip() == new:
+        return
+    have = row.group(1).strip()
+    if have != old:
+        sys.exit("[package.metadata.busbar.%s] plane-a2a-door = %s: not a spelling this script knows" % (name, have))
+    line = "" if new is None else "plane-a2a-door = %s\n" % new
+    text = text[:m.start(1) + row.start()] + line + text[m.start(1) + row.end():]
+    print("%s: plane-a2a-door = %s -> %s" % (name, have, new or "(row dropped)"))
+edit("linked-entry", '"busbar_plane_a2a::agent_door"', '"busbar_plane_a2a"')
+edit("linked-declares", '"busbar_plane_a2a::DECLARES"', None)
+open(path, "w").write(text)
+PY
 }
 
 subject_tck()     { A2A_SUBJECT_BUSBAR_BIN="$SUBJECT_BIN" A2A_SUBJECT_WORKDIR="$W/subject-tck" scripts/a2a-subject/boot.sh --tck; }
