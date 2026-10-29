@@ -58,13 +58,13 @@ use busbar_contract::abi::plane::{
 };
 use door_facts::{CLASS_BYTES_INDEX, CLASS_FEE_INDEX, DIALECT_DOCUMENT, MAX_UNITS};
 
-// ── the allocation count: busbar-contract's test-only counter, this test binary's allocator ──────
+// ── the allocation count: busbar-test-kit's test-only counter, this test binary's allocator ──────
 
-use busbar_contract::alloc_counter::allocations_with as allocations_of;
+use busbar_test_kit::alloc_counter::allocations_with as allocations_of;
 
 #[global_allocator]
-static A: busbar_contract::alloc_counter::Counting =
-    busbar_contract::alloc_counter::Counting::new();
+static A: busbar_test_kit::alloc_counter::Counting =
+    busbar_test_kit::alloc_counter::Counting::new();
 
 // ── the host's services ─────────────────────────────────────────────────────────────────────────
 
