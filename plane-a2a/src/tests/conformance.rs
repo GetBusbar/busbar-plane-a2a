@@ -18,16 +18,13 @@ use crate::ops;
 /// method this plane does not carry must fail HERE, at build time, rather than in a battery run that
 /// someone has to interpret.
 fn rig_vocabulary(table: &str) -> Vec<(String, String)> {
-    // busbar's rig at the pin this repo names (`BUSBAR_CHECKOUT`, a checkout of GetBusbar/busbar at
-    // `.busbar-ref`, which plugin CI exports). An unset variable is a failure, never a skip.
-    let busbar = std::env::var_os("BUSBAR_CHECKOUT").expect(
-        "BUSBAR_CHECKOUT is unset: the rig is busbar's testing/a2a-supplement at .busbar-ref \
-         (plugin CI exports it; locally, point it at a busbar checkout)",
+    // The rig is this repo's own `testing/a2a-supplement` (busbar 7f43d8a777 moved it here out of
+    // busbar's tree). A missing file is a failure, never a skip.
+    let rig =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../testing/a2a-supplement");
+    let source = std::fs::read_to_string(rig.join("a2asup/transport.py")).expect(
+        "the rig's vocabulary table is readable (testing/a2a-supplement/a2asup/transport.py)",
     );
-    let source = std::fs::read_to_string(
-        std::path::PathBuf::from(busbar).join("testing/a2a-supplement/a2asup/transport.py"),
-    )
-    .expect("the rig's vocabulary table is readable");
     let start = source
         .find(&format!("{table} = {{"))
         .unwrap_or_else(|| panic!("the rig no longer declares {table}"));

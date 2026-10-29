@@ -28,7 +28,8 @@ busbar-contract = { workspace = true }
 # dev-only, never in the shipped artifact. `conformance` is busbar's published suite
 # (`tests/conformance.rs`, `conformance_suite!`), which moved here with the crate from busbar's
 # crates/busbar-plane-a2a.
-busbar-plugin-loader = { workspace = true, features = ["conformance"] }
+busbar-plugin-loader = { workspace = true }
+busbar-test-kit = { workspace = true }
 # The both-ways op-by-op script (`tests/both_ways.rs`, moved here with the crate from busbar's
 # crates/busbar-plane-a2a) reads the door's answers as JSON.
 serde_json = { workspace = true }
