@@ -4003,9 +4003,9 @@ slot!(
     /// `serve`: the trust verbs over the section's registrations, over the kernel's trust book
     /// (the plane holds no approval; the book pins, quarantines and keeps the operator's decision):
     ///
-    /// * an unregistered name is `404` before anything else, audited nowhere;
+    /// * an unregistered name is `404` before anything else, audited rejected;
     /// * `approve` reads its body (`{"fingerprint": "…"}`) next, and a malformed one is `400`
-    ///   (the malformed-body condition), audited nowhere;
+    ///   (the malformed-body condition), audited rejected;
     /// * both then LOOK ([`look`]): the card fetched over the agent's own connection need,
     ///   verified against its pin and SIGHTED on the kernel's trust book;
     /// * `connect` answers its preview and decides nothing; the card it verified is held for the
@@ -4040,7 +4040,7 @@ slot!(
         let found = verb_agent(route, input.target().bytes())
             .and_then(|name| registered(&name).map(|def| (name, def)));
         let Some((name, def)) = found else {
-            return verb_refused(&input, &mut out, STATUS_NOT_FOUND, "", None, AUDIT_NONE);
+            return verb_refused(&input, &mut out, STATUS_NOT_FOUND, "", None, AUDIT_REJECTED);
         };
         let claimed = if approving {
             let fields = input.fields();
@@ -4056,7 +4056,14 @@ slot!(
                 Ok(fingerprint) => Some(fingerprint),
                 Err(refusal) => {
                     let condition = Some(MALFORMED_BODY);
-                    return verb_refused(&input, &mut out, 400, &refusal, condition, AUDIT_NONE);
+                    return verb_refused(
+                        &input,
+                        &mut out,
+                        400,
+                        &refusal,
+                        condition,
+                        AUDIT_REJECTED,
+                    );
                 }
             }
         } else {
