@@ -4512,6 +4512,10 @@ pub fn invocation_of(envelope: &[u8]) -> busbar_contract::ir::invoke::InvokeReq 
 #[path = "tests/agent_door_tests.rs"]
 mod tests;
 
+#[cfg(test)]
+#[path = "tests/originated_trust_tests.rs"]
+mod originated_trust_tests;
+
 busbar_contract::plugin_door! {
     ops: busbar_contract::abi::plane::Ops,
     statement: STATEMENT,
