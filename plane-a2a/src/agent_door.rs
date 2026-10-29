@@ -5,7 +5,7 @@
 //! surface. [`door`] is the LINKED door; the same function is the DROPPED door once a `cdylib`
 //! exports it (`busbar_contract::export_door!`), so the two cannot answer differently.
 //!
-//! The lifecycle is this plane's own:
+//! The lifecycle is this plane's own, on the SDK's `PlaneLife` (`lifecycle: plane_life(A2aDoor)`):
 //!
 //! * `validate` reads the settings blob as the `agents:` section ([`door_statement::read_agents_section`]) and
 //!   refuses in the grammar's words;
@@ -31,24 +31,23 @@
 //! * `drive` has no session with unsolicited output, `cancel` finds nothing in flight, and
 //!   `release`/`close` hold nothing the SDK does not already drop.
 
-use busbar_contract::abi::mechanism::call::{InHead, OutHead, Outcome};
+use busbar_contract::abi::mechanism::call::{OutHead, Outcome};
 use busbar_contract::abi::mechanism::door::Statement;
-use busbar_contract::abi::mechanism::lifecycle::{
-    GenIn, ReadyIn, RefreshIn, ReleaseIn, TickIn, TickOut, ValidateIn,
-};
+use busbar_contract::abi::mechanism::lifecycle::{GenIn, ReadyIn, RefreshIn, TickIn, TickOut};
 use busbar_contract::abi::plane::{
     ArriveIn, ArriveOut, OnPieceIn, OnPieceOut, OutField, PlaneCancelIn, PlaneCancelOut,
-    PlaneDriveIn, PlaneDriveOut, PlaneOpenIn, PlaneOpenOut, PlaneRefreshOut, PlaneSnapshot,
-    ProjectIn, ProjectOut, RecordWrite, RefusalIn, RefusalOut, ServeIn, ServeOut, UnitCount,
-    CANCEL_ABORTED, CANCEL_OK_PARTIAL, EMIT_DONE, EMIT_TO_FAR_END, FROM_CALLER, FROM_FAR_END,
-    FROM_KERNEL, PIECE_HAS_STATUS, PIECE_LAST, PIECE_REFUSED, PRINCIPAL_NONE, PRINCIPAL_REQUIRED,
-    RECORD_PUT, REFUSAL_ARRIVE, REFUSAL_KERNEL, ROUTE_DIRECT, ROUTE_POOL, ROUTE_SCOPE,
-    ROUTE_SCOPE_LOCAL, UNITS_REPORTED, VERDICT_RETRY,
+    PlaneDriveIn, PlaneDriveOut, PlaneOpenIn, PlaneSnapshot, ProjectIn, ProjectOut, RecordWrite,
+    RefusalIn, RefusalOut, ServeIn, ServeOut, UnitCount, CANCEL_ABORTED, CANCEL_OK_PARTIAL,
+    EMIT_DONE, EMIT_TO_FAR_END, FROM_CALLER, FROM_FAR_END, FROM_KERNEL, PIECE_HAS_STATUS,
+    PIECE_LAST, PIECE_REFUSED, PRINCIPAL_NONE, PRINCIPAL_REQUIRED, RECORD_PUT, REFUSAL_ARRIVE,
+    REFUSAL_KERNEL, ROUTE_DIRECT, ROUTE_POOL, ROUTE_SCOPE, ROUTE_SCOPE_LOCAL, UNITS_REPORTED,
+    VERDICT_RETRY,
 };
 use busbar_contract::abi::sdk::conn::{Host, StaticHost};
 // The one shared fault reading: the breaker's vocabulary, stated on `OnPieceOut`.
 use busbar_contract::abi::sdk::door::statement;
 use busbar_contract::abi::sdk::life::Refusal;
+use busbar_contract::abi::sdk::plane_life::{self, PlaneLife, Published};
 use busbar_contract::abi::sdk::publish::{class_index, Generations, Keyed};
 use busbar_contract::abi::sdk::{Instance, Lent, Out, Safe, SafeSlot, Services, StaticServices};
 use busbar_contract::abi::transport::{
@@ -578,6 +577,10 @@ pub struct A2aDoor {
     pub(crate) pushes: crate::push::PushLimiter,
     /// The newest refresh generation published.
     newest: Keyed<(), u64>,
+    /// The approvals a `refresh` keeps (`agent -> the skills it was approved at`), for the trust
+    /// reset its `published` makes once the generation is published; `open` keeps none.
+    kept_approvals:
+        Keyed<(), std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>>,
     /// The sizes short host-records answers named, per handle ([`crate::task_door::Grown`]).
     pub(crate) grown: crate::task_door::Grown,
     /// Each agent's verify-on-call flight: one look at a time.
@@ -607,13 +610,49 @@ impl A2aDoor {
         self.newest.get(&()).unwrap_or(0)
     }
 
-    /// `generation` is published: the newest when it is newer.
-    fn published(&self, generation: u64) {
-        self.newest.with_all(|m| {
-            if m.get(&()).is_none_or(|n| *n < generation) {
-                m.insert((), generation);
+    /// `refresh`: the new section judged, the applied `agent_push:` section (`owned`, the
+    /// document's other owned sections) judged as `open` judges it, and the next generation's
+    /// snapshot over the same public base URL.
+    fn refreshed(
+        &self,
+        settings: &[u8],
+        owned: &[u8],
+        generation: u64,
+    ) -> Result<Published<AgentsCfg>, Refusal> {
+        let plane = self;
+        let cfg = agents_section(settings)?;
+        door_statement::read_push_section(owned).map_err(Refusal::refused)?;
+        let names: Vec<&str> = cfg.agents.keys().map(String::as_str).collect();
+        let spec = door_statement::agents_snapshot_spec(plane.public_url.as_deref(), &names);
+        // THE CARDS A KEPT REGISTRATION HOLDS are held under the new generation too: the apply
+        // keeps the operator's approval (it is the kernel's trust book's), and an approved agent
+        // whose registration the apply did not touch is served on the next unit, not refused for
+        // want of the card it was approved at. A registration the apply changed holds none until it is
+        // looked at again.
+        let (before, held_at) = (plane.generations.current(), plane.newest());
+        let mut approvals = std::collections::BTreeMap::new();
+        for (name, def) in &cfg.agents {
+            let kept = before
+                .as_ref()
+                .and_then(|b| b.agents.get(name))
+                .is_some_and(|was| was == def);
+            if let Some(card) = plane.cards.at(name, held_at).filter(|_| kept) {
+                plane.cards.hold(name, generation, (*card).clone());
             }
-        });
+            // The skills it was approved at go with the kept approval, for the trust view's drift.
+            if let Some(approved) = plane
+                .trust
+                .get(name)
+                .and_then(|s| s.approved)
+                .filter(|_| kept)
+            {
+                approvals.insert(name.clone(), approved);
+            }
+        }
+        // The trust reset the apply makes once its generation is published
+        // ([`PlaneLife::published`]).
+        plane.kept_approvals.insert((), approvals);
+        Ok(Published { spec, held: cfg })
     }
 }
 
@@ -1018,112 +1057,6 @@ macro_rules! slot {
 }
 
 slot!(
-    /// `validate`: the settings read as the section, or refused in the grammar's words.
-    Validate, ValidateIn, OutHead, |_, input, mut out| {
-        match agents_section(&door_statement::dealt_section(input.settings().bytes())) {
-            Ok(_) => Outcome::Ready,
-            Err(refusal) => out.fail(refusal),
-        }
-    }
-);
-
-slot!(
-    /// `open`: the instance over the section and the public base URL, and the first generation's
-    /// snapshot.
-    Open, PlaneOpenIn, PlaneOpenOut, |instance, input, mut out| {
-        let cfg = match agents_section(input.open().settings().bytes()) {
-            Ok(cfg) => cfg,
-            Err(refusal) => return out.fail(refusal),
-        };
-        // ITS OWN `agent_push:` SECTION, judged for its shape (the host reads the CA itself).
-        if let Err(words) = door_statement::read_push_section(input.owned().bytes()) {
-            return out.fail(Refusal::refused(words));
-        }
-        let generation = input.open().generation();
-        let plane = A2aDoor {
-            public_url: input.public_url().stated(),
-            host: input.open().host().map(|h| Host::of(&h)),
-            services: input
-                .open()
-                .host()
-                .and_then(|h| Services::of(&h)),
-            ..A2aDoor::default()
-        };
-        plane.published(generation);
-        let names: Vec<&str> = cfg.agents.keys().map(String::as_str).collect();
-        let spec = door_statement::agents_snapshot_spec(plane.public_url.as_deref(), &names);
-        out.publish_with(|o| &o.snapshot, &plane.generations, generation, &spec, cfg);
-        instance.open(plane);
-        Outcome::Ready
-    }
-);
-
-slot!(
-    /// `refresh`: the new section judged, and the next generation's snapshot over the same public base
-    /// URL.
-    Refresh, RefreshIn, PlaneRefreshOut, |instance, input, mut out| {
-        let Some(plane) = instance.get() else {
-            return Outcome::Failed;
-        };
-        let cfg = match agents_section(input.settings().bytes()) {
-            Ok(cfg) => cfg,
-            Err(refusal) => return out.fail(refusal),
-        };
-        // The applied `agent_push:` section rides the refresh's extensions blob
-        // (`abi::plane::EXT_OWNED`), judged as `open` judges it.
-        let extensions = input.head().extensions().bytes();
-        let owned = busbar_contract::abi::mechanism::extensions::get(
-            extensions,
-            busbar_contract::abi::plane::EXT_OWNED,
-        )
-        .unwrap_or_default();
-        if let Err(words) = door_statement::read_push_section(owned) {
-            return out.fail(Refusal::refused(words));
-        }
-        let names: Vec<&str> = cfg.agents.keys().map(String::as_str).collect();
-        let spec = door_statement::agents_snapshot_spec(plane.public_url.as_deref(), &names);
-        let generation = input.generation();
-        // THE CARDS A KEPT REGISTRATION HOLDS are held under the new generation too: the apply
-        // keeps the operator's approval (it is the kernel's trust book's), and an approved agent
-        // whose registration the apply did not touch is served on the next unit, not refused for
-        // want of the card it was approved at. A registration the apply changed holds none until it is
-        // looked at again.
-        let (before, held_at) = (plane.generations.current(), plane.newest());
-        let mut approvals = std::collections::BTreeMap::new();
-        for (name, def) in &cfg.agents {
-            let kept = before
-                .as_ref()
-                .and_then(|b| b.agents.get(name))
-                .is_some_and(|was| was == def);
-            if let Some(card) = plane.cards.at(name, held_at).filter(|_| kept) {
-                plane.cards.hold(name, generation, (*card).clone());
-            }
-            // The skills it was approved at go with the kept approval, for the trust view's drift.
-            if let Some(approved) = plane.trust.get(name).and_then(|s| s.approved).filter(|_| kept)
-            {
-                approvals.insert(name.clone(), approved);
-            }
-        }
-        out.publish_with(|o| &o.snapshot, &plane.generations, generation, &spec, cfg);
-        plane.published(generation);
-        // Every registration starts again at the fail-closed floor on a config apply: nothing
-        // sighted. A kept
-        // registration keeps the skills its kept approval was made at.
-        plane.trust.with_all(|m| {
-            m.clear();
-            for (name, approved) in approvals {
-                let standing = crate::card_trust::TrustStanding {
-                    approved: Some(approved),
-                    ..Default::default()
-                };
-                m.insert(name, standing);
-            }
-        });
-        Outcome::Ready
-    }
-);
-
-slot!(
     /// `ready` (after `open`, before any unit arrives; boot awaits it): the held CARDS are warmed
     /// from the `card` host records ([`warm_cards`]), on the op's real ticket, so the agents the
     /// operator approved before are served from the first unit, their arrival admitted against the
@@ -1148,21 +1081,97 @@ slot!(
     }
 );
 
-slot!(
-    /// `retire`: the generation's snapshot is dropped.
-    Retire, GenIn, OutHead, |instance, input, _| {
-        if let Some(plane) = instance.get() {
-            plane.generations.retire(input.generation());
-            plane.cards.retire(input.generation());
-        }
-        Outcome::Ready
-    }
-);
+/// THE LIFECYCLE on the SDK's [`PlaneLife`] (`lifecycle: plane_life(A2aDoor)`): `validate`, `open`
+/// and `refresh` read the section; `published`, `retire`, `tick`, `drive` and `cancel` are this
+/// plane's own; `release` and `close` are the SDK's READY.
+impl PlaneLife for A2aDoor {
+    type Held = AgentsCfg;
 
-slot!(
+    fn generations(&self) -> &Generations<PlaneSnapshot, AgentsCfg> {
+        &self.generations
+    }
+
+    /// `validate`: the settings read as the section, or refused in the grammar's words.
+    fn validate(settings: &[u8]) -> Result<(), Refusal> {
+        agents_section(&door_statement::dealt_section(settings)).map(|_| ())
+    }
+
+    /// `open`: the instance over the section and the public base URL, and the first generation's
+    /// snapshot.
+    fn open(input: &Lent<'_, PlaneOpenIn>) -> Result<plane_life::Opened<Self>, Refusal> {
+        let cfg = agents_section(input.open().settings().bytes())?;
+        // ITS OWN `agent_push:` SECTION, judged for its shape (the host reads the CA itself).
+        door_statement::read_push_section(input.owned().bytes()).map_err(Refusal::refused)?;
+        let plane = A2aDoor {
+            public_url: input.public_url().stated(),
+            host: input.open().host().map(|h| Host::of(&h)),
+            services: input.open().host().and_then(|h| Services::of(&h)),
+            ..A2aDoor::default()
+        };
+        let names: Vec<&str> = cfg.agents.keys().map(String::as_str).collect();
+        let spec = door_statement::agents_snapshot_spec(plane.public_url.as_deref(), &names);
+        Ok(plane_life::Opened {
+            plane,
+            first: Published { spec, held: cfg },
+        })
+    }
+
+    /// `refresh` with no other owned section applied ([`A2aDoor::refreshed`]). The slot calls
+    /// [`Self::refresh_in`], which reads the applied ones.
+    fn refresh(&self, settings: &[u8], generation: u64) -> Result<Published<AgentsCfg>, Refusal> {
+        self.refreshed(settings, &[], generation)
+    }
+
+    /// `refresh` from the whole lent `in` ([`A2aDoor::refreshed`]): the applied `agent_push:`
+    /// section rides the refresh's extensions blob (`abi::plane::EXT_OWNED`), absent when the
+    /// document writes none.
+    fn refresh_in(&self, input: &Lent<'_, RefreshIn>) -> Result<Published<AgentsCfg>, Refusal> {
+        let extensions = input.head().extensions().bytes();
+        let owned = busbar_contract::abi::mechanism::extensions::get(
+            extensions,
+            busbar_contract::abi::plane::EXT_OWNED,
+        )
+        .unwrap_or_default();
+        self.refreshed(input.settings().bytes(), owned, input.generation())
+    }
+
+    /// After `generation` was published, by `open` or `refresh`: the newest when it is newer. After
+    /// a `refresh`, every registration starts again at the fail-closed floor on the config apply:
+    /// nothing sighted, and a kept registration keeps the skills its kept approval was made at (the
+    /// approvals `refresh` kept); `open` kept none, and resets nothing.
+    fn published(&self, generation: u64) {
+        self.newest.with_all(|m| {
+            if m.get(&()).is_none_or(|n| *n < generation) {
+                m.insert((), generation);
+            }
+        });
+        let Some(approvals) = self.kept_approvals.remove(&()) else {
+            return;
+        };
+        self.trust.with_all(|m| {
+            m.clear();
+            for (name, approved) in approvals {
+                let standing = crate::card_trust::TrustStanding {
+                    approved: Some(approved),
+                    ..Default::default()
+                };
+                m.insert(name, standing);
+            }
+        });
+    }
+
+    /// `retire`, after the generation's snapshot is dropped: the cards held to it go too.
+    fn retire(&self, generation: u64) {
+        self.cards.retire(generation);
+    }
+
     /// `tick`: one due push notification attempted ([`crate::push_door::tick_deliveries`]), and the next
     /// tick wanted when the earliest waiting one is due (`0`: none waits).
-    Tick, TickIn, TickOut, |instance, input, mut out| {
+    fn tick(
+        instance: Instance<'_, Self>,
+        input: Lent<'_, TickIn>,
+        mut out: Out<'_, TickOut>,
+    ) -> Outcome {
         let Some(plane) = instance.get() else {
             out.set(|o| &o.next_tick_ns, 0);
             return Outcome::Ready;
@@ -1224,12 +1233,14 @@ slot!(
         out.set(|o| &o.next_tick_ns, next);
         outcome
     }
-);
 
-slot!(
     /// `drive`: no session has unsolicited output; a push delivery the last `tick` left PENDING
     /// goes on ([`crate::push_door::drive`]).
-    Drive, PlaneDriveIn, PlaneDriveOut, |instance, _, _| {
+    fn drive(
+        instance: Instance<'_, Self>,
+        _: Lent<'_, PlaneDriveIn>,
+        _: Out<'_, PlaneDriveOut>,
+    ) -> Outcome {
         let Some(plane) = instance.get() else {
             return Outcome::Ready;
         };
@@ -1251,14 +1262,16 @@ slot!(
         }
         crate::push_door::drive(plane, &instance)
     }
-);
 
-slot!(
     /// `cancel`: nothing the far end moved is in flight, so nothing moved; a card look the
     /// cancelled unit held is abandoned, and every unit waiting on it is woken at once to look for
     /// itself (cancellation is a wake). No row is written: a caller that went away mid-answer
     /// stops the relay without a task transition, and the task keeps the last state it reached.
-    Cancel, PlaneCancelIn, PlaneCancelOut, |instance, input, mut out| {
+    fn cancel(
+        instance: Instance<'_, Self>,
+        input: Lent<'_, PlaneCancelIn>,
+        mut out: Out<'_, PlaneCancelOut>,
+    ) -> Outcome {
         let mut answered = false;
         if let Some(plane) = instance.get() {
             // The cancelled unit is over: a refusal may still render it, so it is kept until then,
@@ -1291,21 +1304,15 @@ slot!(
         // did); one cut before is ABORTED.
         out.set(
             |o| &o.cancel.disposition,
-            if answered { CANCEL_OK_PARTIAL } else { CANCEL_ABORTED },
+            if answered {
+                CANCEL_OK_PARTIAL
+            } else {
+                CANCEL_ABORTED
+            },
         );
         Outcome::Ready
     }
-);
-
-slot!(
-    /// `release`: this plane answers under no lease.
-    Release, ReleaseIn, OutHead, |_, _, _| { Outcome::Ready }
-);
-
-slot!(
-    /// `close`: the SDK drops the instance and every snapshot it still holds.
-    Close, InHead, OutHead, |_, _, _| { Outcome::Ready }
-);
+}
 
 // ── the request path ──────────────────────────────────────────────────────────────────────────
 //
@@ -4550,11 +4557,7 @@ mod originated_trust_tests;
 busbar_contract::plugin_door! {
     ops: busbar_contract::abi::plane::Ops,
     statement: STATEMENT,
-    lifecycle: {
-        validate: Safe<Validate>, open: Safe<Open>, refresh: Safe<Refresh>, retire: Safe<Retire>,
-        tick: Safe<Tick>, drive: Safe<Drive>, cancel: Safe<Cancel>, release: Safe<Release>,
-        close: Safe<Close>,
-    },
+    lifecycle: plane_life(A2aDoor),
     ready: Safe<ReadyOp>,
     kind_ops: {
         arrive: Safe<Arrive>, on_piece: Safe<OnPiece>, refusal: Safe<RefusalSlot>,

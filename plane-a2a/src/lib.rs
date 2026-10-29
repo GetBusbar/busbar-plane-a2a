@@ -189,11 +189,11 @@ const ERROR_INFO_DOMAIN: &str = "a2a-protocol.org";
 /// because the crate's only public item is the door.
 #[cfg(test)]
 mod tests {
-    /// The crate's one `#[global_allocator]`, every allocation gate's count: busbar-contract's
-    /// test-only `alloc-counter` (a dev-dependency feature), so this crate holds no `unsafe`.
+    /// The crate's one `#[global_allocator]`, every allocation gate's count: busbar-test-kit's
+    /// `alloc_counter` (a dev-dependency), so this crate holds no `unsafe`.
     #[global_allocator]
-    static A: busbar_contract::alloc_counter::Counting =
-        busbar_contract::alloc_counter::Counting::new();
+    static A: busbar_test_kit::alloc_counter::Counting =
+        busbar_test_kit::alloc_counter::Counting::new();
 
     mod alloc_gate;
     pub(crate) mod capture;

@@ -634,6 +634,80 @@ mod both_ways {
         );
     }
 
+    /// `refresh` of [`GOOD`] to `generation`, the applied document's other owned sections `owned`
+    /// riding the head's extensions under `EXT_OWNED` as the loader's `refresh_door` lays them
+    /// (absent when empty): one line, the plane's own words on a refusal.
+    fn refresh_owning(p: &Plugin<Plane>, generation: u64, owned: &[u8]) -> String {
+        use busbar_contract::abi::mechanism::call::Blob;
+        let extensions = if owned.is_empty() {
+            Vec::new()
+        } else {
+            busbar_contract::abi::mechanism::extensions::encode(&[(
+                busbar_contract::abi::plane::EXT_OWNED,
+                owned,
+            )])
+        };
+        let mut r: Frame<RefreshIn, PlaneRefreshOut> = Frame::new(z(), z());
+        (r.input.head, r.out.head) = (in_head(), out_head());
+        if !extensions.is_empty() {
+            // SAFETY: `extensions` outlives the call the blob is lent to.
+            r.input.head.extensions = unsafe {
+                Blob::from_raw_parts(extensions.as_ptr(), extensions.len(), BLOB_OCTETS, 0)
+            };
+        }
+        (r.input.generation, r.input.settings) = (generation, octets(GOOD));
+        let (c, s) = p.refresh(&mut r);
+        format!(
+            "refresh {:?} {} {}",
+            c.outcome,
+            snapshot(s),
+            String::from_utf8_lossy(&c.error.unwrap_or_default())
+        )
+    }
+
+    /// AN APPLY CARRYING A MALFORMED `agent_push:` IS REFUSED AT `refresh`, in the push section's
+    /// own words, linked and dropped in alike, and publishes nothing; the same apply with a
+    /// well-formed section refreshes. The applied section rides the refresh's extensions under
+    /// `EXT_OWNED` (the refresh-time twin of `PlaneOpenIn::owned`), judged as `open` judges it.
+    /// The root cell `an_apply_carrying_a_malformed_agent_push_ca_is_refused_and_deliveries_keep_the_anchor`
+    /// proves it through busbar's apply; this proves it in this repo's own `cargo test`.
+    #[test]
+    fn an_apply_carrying_a_malformed_agent_push_section_is_refused_at_refresh() {
+        let d = Dispatcher::new(DispatchConfig::default());
+        for (how, p) in [("linked", linked(&d)), ("dropped in", dropped(&d))] {
+            let mut o: Frame<PlaneOpenIn, PlaneOpenOut> = Frame::new(z(), z());
+            (o.input.open.head, o.out.open.head) = (in_head(), out_head());
+            (o.input.open.generation, o.input.open.settings) = (1, octets(GOOD));
+            o.input.public_url = text(PUBLIC);
+            assert_eq!(p.open(&mut o).0.outcome, Outcome::Ready, "{how}: open");
+            assert_eq!(
+                refresh_owning(&p, 2, br#"{"agent_push":"pem"}"#),
+                format!(
+                    "refresh {:?} no snapshot `agent_push:` must be a mapping, `{{ca: <PEM>}}`",
+                    Outcome::Refused
+                ),
+                "{how}: a malformed `agent_push:` refuses the refresh in its own words"
+            );
+            assert_eq!(
+                refresh_owning(&p, 3, br#"{"agent_push":{"ca":""}}"#),
+                format!(
+                    "refresh {:?} no snapshot `agent_push.ca` must be the operator CA as PEM text",
+                    Outcome::Refused
+                ),
+                "{how}: an empty `agent_push.ca` refuses the refresh in its own words"
+            );
+            let well_formed = refresh_owning(
+                &p,
+                4,
+                br#"{"agent_push":{"ca":"-----BEGIN CERTIFICATE-----"}}"#,
+            );
+            assert!(
+                well_formed.starts_with(&format!("refresh {:?} gen=4", Outcome::Ready)),
+                "{how}: a well-formed `agent_push:` refreshes: {well_formed}"
+            );
+        }
+    }
+
     /// The linked transcript says what the plane's own functions say the door answers.
     #[test]
     fn the_door_answers_what_the_plane_says() {
