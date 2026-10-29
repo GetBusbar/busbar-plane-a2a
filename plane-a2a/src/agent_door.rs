@@ -3393,8 +3393,13 @@ fn judge_hop(
     };
     use busbar_contract::abi::host::service::{DEST_ALLOWED, DEST_EXPLAIN, DEST_REFUSE_PRIVATE};
 
+    // FAIL CLOSED: with no host services there is no judgement to ask, and a hop no judgement
+    // admitted is never dialled.
     let Some(services) = at.plane.services else {
-        return Poll::Ready(Ok((base, String::new())));
+        return Poll::Ready(Err(format!(
+            "agent card fetch of `{url}` refused: no destination judgement is available (the \
+             host lent no services)"
+        )));
     };
     // A REACHED agent (`allow_private: true`) is judged as the operator's own destination: its
     // private or loopback address passes, a metadata host and the deployment's extra refusals never
