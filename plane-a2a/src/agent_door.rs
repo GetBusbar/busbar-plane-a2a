@@ -33,7 +33,7 @@
 
 use busbar_contract::abi::mechanism::call::{OutHead, Outcome};
 use busbar_contract::abi::mechanism::door::Statement;
-use busbar_contract::abi::mechanism::lifecycle::{GenIn, ReadyIn, TickIn, TickOut};
+use busbar_contract::abi::mechanism::lifecycle::{GenIn, ReadyIn, RefreshIn, TickIn, TickOut};
 use busbar_contract::abi::plane::{
     ArriveIn, ArriveOut, OnPieceIn, OnPieceOut, OutField, PlaneCancelIn, PlaneCancelOut,
     PlaneDriveIn, PlaneDriveOut, PlaneOpenIn, PlaneSnapshot, ProjectIn, ProjectOut, RecordWrite,
@@ -602,6 +602,51 @@ impl A2aDoor {
     fn newest(&self) -> u64 {
         self.newest.get(&()).unwrap_or(0)
     }
+
+    /// `refresh`: the new section judged, the applied `agent_push:` section (`owned`, the
+    /// document's other owned sections) judged as `open` judges it, and the next generation's
+    /// snapshot over the same public base URL.
+    fn refreshed(
+        &self,
+        settings: &[u8],
+        owned: &[u8],
+        generation: u64,
+    ) -> Result<Published<AgentsCfg>, Refusal> {
+        let plane = self;
+        let cfg = agents_section(settings)?;
+        door_statement::read_push_section(owned).map_err(Refusal::refused)?;
+        let names: Vec<&str> = cfg.agents.keys().map(String::as_str).collect();
+        let spec = door_statement::agents_snapshot_spec(plane.public_url.as_deref(), &names);
+        // THE CARDS A KEPT REGISTRATION HOLDS are held under the new generation too: the apply
+        // keeps the operator's approval (it is the kernel's trust book's), and an approved agent
+        // whose registration the apply did not touch is served on the next unit, not refused for
+        // want of the card it was approved at. A registration the apply changed holds none until it is
+        // looked at again.
+        let (before, held_at) = (plane.generations.current(), plane.newest());
+        let mut approvals = std::collections::BTreeMap::new();
+        for (name, def) in &cfg.agents {
+            let kept = before
+                .as_ref()
+                .and_then(|b| b.agents.get(name))
+                .is_some_and(|was| was == def);
+            if let Some(card) = plane.cards.at(name, held_at).filter(|_| kept) {
+                plane.cards.hold(name, generation, (*card).clone());
+            }
+            // The skills it was approved at go with the kept approval, for the trust view's drift.
+            if let Some(approved) = plane
+                .trust
+                .get(name)
+                .and_then(|s| s.approved)
+                .filter(|_| kept)
+            {
+                approvals.insert(name.clone(), approved);
+            }
+        }
+        // The trust reset the apply makes once its generation is published
+        // ([`PlaneLife::published`]).
+        plane.kept_approvals.insert((), approvals);
+        Ok(Published { spec, held: cfg })
+    }
 }
 
 /// The held cards, warmed from the `card` host records (the `connect` and `approve` answers
@@ -1064,41 +1109,23 @@ impl PlaneLife for A2aDoor {
         })
     }
 
-    /// `refresh`: the new section judged, and the next generation's snapshot over the same public base
-    /// URL.
+    /// `refresh` with no other owned section applied ([`A2aDoor::refreshed`]). The slot calls
+    /// [`Self::refresh_in`], which reads the applied ones.
     fn refresh(&self, settings: &[u8], generation: u64) -> Result<Published<AgentsCfg>, Refusal> {
-        let plane = self;
-        let cfg = agents_section(settings)?;
-        let names: Vec<&str> = cfg.agents.keys().map(String::as_str).collect();
-        let spec = door_statement::agents_snapshot_spec(plane.public_url.as_deref(), &names);
-        // THE CARDS A KEPT REGISTRATION HOLDS are held under the new generation too: the apply
-        // keeps the operator's approval (it is the kernel's trust book's), and an approved agent
-        // whose registration the apply did not touch is served on the next unit, not refused for
-        // want of the card it was approved at. A registration the apply changed holds none until it is
-        // looked at again.
-        let (before, held_at) = (plane.generations.current(), plane.newest());
-        let mut approvals = std::collections::BTreeMap::new();
-        for (name, def) in &cfg.agents {
-            let kept = before
-                .as_ref()
-                .and_then(|b| b.agents.get(name))
-                .is_some_and(|was| was == def);
-            if let Some(card) = plane.cards.at(name, held_at).filter(|_| kept) {
-                plane.cards.hold(name, generation, (*card).clone());
-            }
-            // The skills it was approved at go with the kept approval, for the trust view's drift.
-            if let Some(approved) = plane
-                .trust
-                .get(name)
-                .and_then(|s| s.approved)
-                .filter(|_| kept)
-            {
-                approvals.insert(name.clone(), approved);
-            }
-        }
-        // The trust reset the apply makes once its generation is published ([`Self::published`]).
-        plane.kept_approvals.insert((), approvals);
-        Ok(Published { spec, held: cfg })
+        self.refreshed(settings, &[], generation)
+    }
+
+    /// `refresh` from the whole lent `in` ([`A2aDoor::refreshed`]): the applied `agent_push:`
+    /// section rides the refresh's extensions blob (`abi::plane::EXT_OWNED`), absent when the
+    /// document writes none.
+    fn refresh_in(&self, input: &Lent<'_, RefreshIn>) -> Result<Published<AgentsCfg>, Refusal> {
+        let extensions = input.head().extensions().bytes();
+        let owned = busbar_contract::abi::mechanism::extensions::get(
+            extensions,
+            busbar_contract::abi::plane::EXT_OWNED,
+        )
+        .unwrap_or_default();
+        self.refreshed(input.settings().bytes(), owned, input.generation())
     }
 
     /// After `generation` was published, by `open` or `refresh`: the newest when it is newer. After
