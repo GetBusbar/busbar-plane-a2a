@@ -29,7 +29,7 @@ use busbar_kernel::{
     plane_routes::ListenerScheme,
 };
 
-use super::planes_tests::{Published, PUBLISHING};
+use super::planes_tests::PUBLISHING;
 use super::{compose_planes, door_routes};
 use crate::root::loader::dispatch::kinds::plane::Plane;
 use crate::root::loader::dispatch::{load_linked, Bind, LinkedRow, NoSink};
@@ -979,6 +979,7 @@ fn served_core(
         crate::root::loader::dispatch::ConnTable::Host(
             Arc::clone(&connector) as Arc<dyn DeclaredConns>
         ),
+        busbar_kernel::diagnostics::Catalogue::NEUTRAL,
     );
     // The walk reaches the far ends through the cell's connector, every open it makes recorded.
     let riding = Arc::new(Riding {
@@ -995,6 +996,9 @@ fn served_core(
         upgrades: Vec::new(),
         models: None,
     };
+    // THE ADMIN TABLE the door is published into, lent to the App built below as the root lends
+    // the boot generation its own: the admin router answers the door's routes off it.
+    let tables = busbar_kernel::plane_driver::serve::ServeTables::default();
     let mut composed = compose_planes(
         &[(instance.to_string(), Arc::new(plane))],
         &dispatcher,
@@ -1021,6 +1025,7 @@ fn served_core(
                 journal: None,
             })
             .as_ref(),
+        &tables,
     )
     .expect("the agent door composes");
     composed.post = Some(post);
@@ -1080,6 +1085,7 @@ fn served_core(
     );
     busbar_kernel::test_support::install_root_auth_axis(crate::root::dispatch::auth_axis);
     let mut builder = busbar_kernel::test_support::TestApp::new()
+        .serve_tables(tables.clone())
         .keys_chain()
         .admin_chain(vec![busbar_kernel::config::operator_provider().to_string()])
         .governance(Arc::clone(&gov));
@@ -1209,7 +1215,6 @@ async fn answered(
 async fn an_agent_unit_served_through_its_door_charges_the_presenting_key() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door";
-    let _published = Published(instance);
     let agent = Agent::start(200, ANSWER).await;
     let s = served(instance, &agent.entry("planner", "1h"), false, None);
     approve(&s, "planner").await;
@@ -1427,7 +1432,6 @@ async fn an_agent_unit_dials_only_the_address_the_guard_admits() {
     let section = agent.entry("planner", "1h");
 
     let blocked = "serve-agent-door-guarded";
-    let published = Published(blocked);
     let s = served(blocked, &section, true, None);
     let (status, preview) = admin(&s, "/agents/planner/connect", "").await;
     assert_eq!(status, StatusCode::OK, "{preview}");
@@ -1447,10 +1451,8 @@ async fn an_agent_unit_dials_only_the_address_the_guard_admits() {
         "a refused address is never served: {body}"
     );
     assert!(!agent.relayed(), "the far agent was never dialled");
-    drop(published);
 
     let open = "serve-agent-door-open";
-    let _published = Published(open);
     let s = served(open, &section, false, None);
     approve(&s, "planner").await;
     let (status, body) = answered(
@@ -1473,7 +1475,6 @@ async fn an_agent_unit_dials_only_the_address_the_guard_admits() {
 async fn a_relayed_agent_unit_charges_the_presenting_key() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-charged";
-    let _published = Published(instance);
     let mut agent = Agent::start(200, ANSWER).await;
     let s = served(instance, &agent.entry("planner", "1h"), false, None);
     approve(&s, "planner").await;
@@ -1508,7 +1509,6 @@ fn chain() -> Vec<busbar_kernel::audit_ring::AuditEntry> {
 async fn a_relayed_agent_unit_is_audited_on_the_chain_and_posts_one_line_once() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-audited";
-    let _published = Published(instance);
     let mut agent = Agent::start(200, ANSWER).await;
     let s = served(instance, &agent.entry("auditor", "1h"), false, None);
     approve(&s, "auditor").await;
@@ -1554,7 +1554,6 @@ async fn a_relayed_agent_unit_is_audited_on_the_chain_and_posts_one_line_once() 
 async fn an_agent_unit_past_its_callers_request_limit_is_refused_before_it_dials() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-limited";
-    let _published = Published(instance);
     let mut agent = Agent::start(200, ANSWER).await;
     let s = served_limited(instance, &agent.entry("rationed", "1h"), 1);
     approve(&s, "rationed").await;
@@ -1587,7 +1586,6 @@ async fn an_agent_unit_past_its_callers_request_limit_is_refused_before_it_dials
 async fn an_agent_unit_whose_body_is_not_json_is_refused_at_its_arrival() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-undecoded";
-    let _published = Published(instance);
     let mut agent = Agent::start(200, ANSWER).await;
     let s = served(instance, &agent.entry("parser", "1h"), false, None);
     approve(&s, "parser").await;
@@ -1613,7 +1611,6 @@ async fn an_agent_unit_whose_body_is_not_json_is_refused_at_its_arrival() {
 async fn an_agent_notification_is_acknowledged_202_with_no_body_and_dials_nothing() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-notified";
-    let _published = Published(instance);
     let mut agent = Agent::start(200, ANSWER).await;
     let s = served(instance, &agent.entry("notified", "1h"), false, None);
     approve(&s, "notified").await;
@@ -1639,7 +1636,6 @@ async fn an_agent_notification_is_acknowledged_202_with_no_body_and_dials_nothin
 async fn an_unaddressed_agent_unit_is_routed_to_the_one_agent_the_grant_reaches() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-select-one";
-    let _published = Published(instance);
     let mut agent = Agent::start(200, ANSWER).await;
     let s = served(instance, &agent.entry("planner", "1h"), false, None);
     approve(&s, "planner").await;
@@ -1661,7 +1657,6 @@ async fn an_unaddressed_agent_unit_is_routed_to_the_one_agent_the_grant_reaches(
 async fn an_unaddressed_agent_unit_several_agents_reach_is_refused_naming_them() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-select-several";
-    let _published = Published(instance);
     let mut agent = Agent::start(200, ANSWER).await;
     let section = format!(
         "{}\n{}",
@@ -1710,7 +1705,6 @@ async fn an_unaddressed_agent_unit_several_agents_reach_is_refused_naming_them()
 async fn an_unaddressed_agent_unit_no_agent_reaches_is_refused_in_its_1_5_5_words() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-select-none";
-    let _published = Published(instance);
     let (port, mut heard) = far_agent().await;
     let s = served(instance, &agents(port, true), false, Some(Vec::new()));
     let (status, body) = answered(&s.router, rpc("", "message/send", SEND, Some(&s.token))).await;
@@ -1750,7 +1744,6 @@ fn assert_not_granted(status: StatusCode, body: &str, agent: &str) {
 async fn an_agent_unit_outside_the_callers_grant_is_refused_before_it_dials() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-ungranted";
-    let _published = Published(instance);
     let (port, mut heard) = far_agent().await;
     let s = served(instance, &agents(port, false), false, Some(Vec::new()));
     let (status, body) = answered(
@@ -1770,7 +1763,6 @@ async fn an_agent_unit_outside_the_callers_grant_is_refused_before_it_dials() {
 async fn an_agent_unit_from_a_key_that_is_no_longer_live_never_dials() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-key-gone";
-    let _published = Published(instance);
     let mut agent = Agent::start(200, ANSWER).await;
     let s = served(instance, &agent.entry("planner", "1h"), false, None);
     approve(&s, "planner").await;
@@ -1801,7 +1793,6 @@ async fn an_agent_unit_from_a_key_that_is_no_longer_live_never_dials() {
 async fn a_relayed_agent_unit_to_an_agent_that_is_down_ends_inside_its_unit() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-down";
-    let _published = Published(instance);
     let agent = Agent::start(200, ANSWER).await;
     let s = served(instance, &agent.entry("planner", "1h"), false, None);
     approve(&s, "planner").await;
@@ -1833,7 +1824,6 @@ async fn a_relayed_agent_unit_to_an_agent_that_is_down_ends_inside_its_unit() {
 async fn a_failing_agent_trips_its_breaker_and_the_next_unit_is_refused_before_it_dials() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-breaker";
-    let _published = Published(instance);
     let mut agent = Agent::start(503, r#"{"error":"down"}"#).await;
     let s = served(instance, &agent.entry("planner", "1h"), false, None);
     approve(&s, "planner").await;
@@ -1912,7 +1902,6 @@ fn counted(counts: &Counted, class: &str) -> u64 {
 async fn an_agent_hop_ledgers_the_bodies_it_moved_and_its_fee_unit_once() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-billed-bytes";
-    let _published = Published(instance);
     let mut agent = Agent::start(200, ANSWER).await;
     let s = served(instance, &agent.entry("planner", "1h"), false, None);
     approve(&s, "planner").await;
@@ -1944,7 +1933,6 @@ async fn an_agent_hop_ledgers_the_bodies_it_moved_and_its_fee_unit_once() {
 async fn an_agent_hop_refused_before_the_socket_counts_no_bytes_and_keeps_no_fee() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-refused-unbilled";
-    let _published = Published(instance);
     let failing = r#"{"error":"down"}"#;
     let mut agent = Agent::start(503, failing).await;
     let s = served(instance, &agent.entry("planner", "1h"), false, None);
@@ -2006,7 +1994,6 @@ async fn an_agent_hop_refused_before_the_socket_counts_no_bytes_and_keeps_no_fee
 async fn an_agent_sections_per_request_fee_validates_and_per_session_is_refused() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-fees";
-    let _published = Published(instance);
     let agent = Agent::start(200, ANSWER).await;
     // Composing the door registers its folded declaration, as boot installs it.
     let _s = served(instance, &agent.entry("planner", "1h"), false, None);
@@ -2062,7 +2049,6 @@ async fn an_agent_sections_per_request_fee_validates_and_per_session_is_refused(
 async fn an_agent_answering_protocol_errors_under_a_502_trips_its_breaker() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-breaker-protocol-error";
-    let _published = Published(instance);
     let mut agent = Agent::start(
         502,
         r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32001,"message":"Task not found"}}"#,
@@ -2102,7 +2088,6 @@ async fn an_agent_answering_protocol_errors_under_a_502_trips_its_breaker() {
 async fn an_agent_answering_protocol_errors_under_a_200_never_trips_its_breaker() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-breaker-protocol-error-2xx";
-    let _published = Published(instance);
     let mut agent = Agent::start(
         200,
         r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32001,"message":"Task not found"}}"#,
@@ -2176,7 +2161,6 @@ impl Billed {
 async fn a_hop_the_breaker_refused_counts_its_request_and_bills_no_fee_no_bytes_no_spend() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-breaker-billed";
-    let _published = Published(instance);
     let mut agent = Agent::start(503, r#"{"error":"down"}"#).await;
     let s = served(instance, &agent.entry("planner", "1h"), false, None);
     approve(&s, "planner").await;
@@ -2248,7 +2232,6 @@ fn body_bytes(heard: &str) -> u64 {
 async fn a_hop_ledgers_its_request_and_response_body_bytes_and_no_card_reads_zero() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-bytes-no-card";
-    let _published = Published(instance);
     let mut agent = Agent::start(200, ANSWER).await;
     let priced = Priced {
         bytes_rate: None,
@@ -2292,7 +2275,6 @@ async fn a_hop_ledgers_its_request_and_response_body_bytes_and_no_card_reads_zer
 async fn an_agents_card_prices_the_bytes_and_a_budget_cap_trips() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-bytes-priced";
-    let _published = Published(instance);
     let mut agent = Agent::start(200, ANSWER).await;
     let priced = Priced {
         bytes_rate: Some(10_000),
@@ -2338,7 +2320,6 @@ async fn an_agents_card_prices_the_bytes_and_a_budget_cap_trips() {
 async fn agents_fees_per_request_charges_once_per_served_hop() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-fee-charges";
-    let _published = Published(instance);
     let agent = Agent::start(200, ANSWER).await;
     let priced = Priced {
         bytes_rate: None,
@@ -2372,7 +2353,6 @@ async fn agents_fees_per_request_charges_once_per_served_hop() {
 async fn a_hop_refused_before_the_socket_keeps_no_fee() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-refused-no-fee";
-    let _published = Published(instance);
     let mut agent = Agent::start(503, r#"{"error":"down"}"#).await;
     let priced = Priced {
         bytes_rate: None,
@@ -2487,7 +2467,6 @@ fn a_present_agents_card_silent_about_an_agent_refuses_the_config() {
 async fn a_relayed_agent_unit_never_hands_the_agent_the_callers_token() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-egress-auth";
-    let _published = Published(instance);
     let mut agent = Agent::start(200, ANSWER).await;
     let s = served(instance, &agent.entry("planner", "1h"), false, None);
     approve(&s, "planner").await;
@@ -2946,7 +2925,6 @@ impl AgentTls {
 async fn a_cert_spki_agent_is_observed_approved_served_and_refused_once_its_key_changes() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-door-spki";
-    let _published = Published(instance);
     let tls = AgentTls::new();
     let pin = tls.rekey();
     let mut agent = Agent::start_over(200, ANSWER, Some(tls.acceptor())).await;
@@ -3044,7 +3022,6 @@ async fn decide_key(s: &Served, name: &str, decision: &str) -> (StatusCode, serd
 async fn the_kernel_trust_book_pins_an_agent_card_and_the_relay_serves_only_the_approved_one() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-trust";
-    let _published = Published(instance);
     let mut agent = Agent::start(200, ANSWER).await;
     let fingerprint = agent.fingerprint();
     let scout = "allow_private: true, pin: {mechanism: unpinned}";
@@ -3217,7 +3194,6 @@ async fn the_kernel_trust_book_pins_an_agent_card_and_the_relay_serves_only_the_
 async fn an_approved_agents_card_resigned_by_another_key_stops_it_being_served() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-lookalike";
-    let _published = Published(instance);
     let mut agent = Agent::start(200, ANSWER).await;
     let s = served(instance, &agent.entry("planner", "0s"), false, None);
     approve(&s, "planner").await;
@@ -3260,7 +3236,6 @@ async fn an_approved_agents_card_resigned_by_another_key_stops_it_being_served()
 async fn concurrent_units_due_on_one_agent_share_one_card_look() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-single-flight";
-    let _published = Published(instance);
     let agent = Agent::start(200, ANSWER).await;
     let s = served(instance, &agent.entry("planner", "0s"), false, None);
     approve(&s, "planner").await;
@@ -3289,7 +3264,6 @@ async fn a_card_fetch_follows_redirects_and_is_guarded_in_its_1_5_5_words() {
     use std::sync::atomic::Ordering;
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-card-fetch";
-    let _published = Published(instance);
     let agent = Agent::start(200, ANSWER).await;
     let section = format!(
         "{}\nscout: {{url: 'https://127.0.0.1:{}/scout', pin: {{mechanism: jws_issuer_key, \
@@ -3347,7 +3321,6 @@ async fn a_card_fetch_redirected_at_cloud_metadata_is_refused_at_the_hop_that_na
     use std::sync::atomic::Ordering;
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-card-redirect-metadata";
-    let _published = Published(instance);
     let agent = Agent::start(200, ANSWER).await;
     let s = served(instance, &agent.entry("planner", "1h"), false, None);
     for (mode, words) in [
@@ -3383,7 +3356,6 @@ async fn every_hop_of_a_legal_chain_is_followed_to_the_card() {
     use std::sync::atomic::Ordering;
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-card-redirect-chain";
-    let _published = Published(instance);
     let agent = Agent::start(200, ANSWER).await;
     let s = served(instance, &agent.entry("planner", "1h"), false, None);
     agent.redirect.store(5, Ordering::SeqCst);
@@ -3403,7 +3375,6 @@ async fn every_hop_of_a_legal_chain_is_followed_to_the_card() {
 async fn a_request_the_card_does_not_fit_is_judged_after_the_trust_gate() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-fit-order";
-    let _published = Published(instance);
     let mut agent = Agent::start(200, ANSWER).await;
     let s = served(instance, &agent.entry("planner", "1h"), false, None);
     let fly = r#"{"message":{"kind":"message","messageId":"m-2","role":"user","parts":[{"kind":"text","text":"go"}]},"metadata":{"skill":"fly"}}"#;
@@ -3437,7 +3408,6 @@ async fn a_request_the_card_does_not_fit_is_judged_after_the_trust_gate() {
 async fn a_unit_to_an_agent_that_is_not_serving_is_refused_after_its_grant_and_charges_nothing() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-gate";
-    let _published = Published(instance);
     let mut agent = Agent::start(200, ANSWER).await;
     let s = served(instance, &agent.entry("planner", "1h"), false, None);
     for (method, params) in [("message/send", SEND), ("tasks/list", "{}")] {
@@ -3454,10 +3424,8 @@ async fn a_unit_to_an_agent_that_is_not_serving_is_refused_after_its_grant_and_c
     assert!(!agent.relayed(), "never dialled");
     assert_eq!(admitted(&s), 0, "a refused unit is charged nothing");
     drop(s);
-    drop(_published);
 
     let ungranted = "serve-agent-door-gate-ungranted";
-    let _published = Published(ungranted);
     let s = served(
         ungranted,
         &agent.entry("planner", "1h"),
@@ -3485,7 +3453,6 @@ async fn a_unit_to_an_agent_that_is_not_serving_is_refused_after_its_grant_and_c
 async fn an_unaddressed_unit_is_routed_to_the_one_granted_agent_that_serves() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-scope-trust";
-    let _published = Published(instance);
     let mut agent = Agent::start(200, ANSWER).await;
     let section = format!(
         "{}\n{}",
@@ -3512,7 +3479,6 @@ async fn an_unaddressed_unit_is_routed_to_the_one_granted_agent_that_serves() {
 async fn a_config_apply_keeps_the_operators_approval() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-apply";
-    let _published = Published(instance);
     let mut agent = Agent::start(200, ANSWER).await;
     let s = served(instance, &agent.entry("planner", "1h"), false, None);
     approve(&s, "planner").await;
@@ -3544,7 +3510,6 @@ async fn a_config_apply_keeps_the_operators_approval() {
 async fn a_card_fetch_is_refused_in_1_5_5_words_whatever_the_deployment_private_stance() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-guard-words";
-    let _published = Published(instance);
     let agent = Agent::start(200, ANSWER).await;
     let pin = format!(
         "pin: {{mechanism: jws_issuer_key, key: '{}'}}",
@@ -3608,7 +3573,6 @@ async fn a_card_fetch_whose_far_end_closes_unanswered_fails_in_predev_words() {
     use tokio::io::AsyncReadExt;
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-closed-unanswered";
-    let _published = Published(instance);
     let agent = Agent::start(200, ANSWER).await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -3655,7 +3619,6 @@ async fn a_card_fetch_whose_far_end_closes_unanswered_fails_in_predev_words() {
 async fn a_card_fetch_to_a_closed_port_fails_in_predev_words() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-closed-port";
-    let _published = Published(instance);
     let agent = Agent::start(200, ANSWER).await;
     let closed = std::net::TcpListener::bind("127.0.0.1:0")
         .expect("a port")
@@ -3698,7 +3661,6 @@ async fn a_card_fetch_to_a_closed_port_fails_in_predev_words() {
 async fn the_agent_doors_trust_verbs_refuse_in_their_declared_taxonomy() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-verb-errors";
-    let _published = Published(instance);
     let closed = std::net::TcpListener::bind("127.0.0.1:0")
         .expect("a port")
         .local_addr()
@@ -3751,7 +3713,6 @@ async fn an_abandoned_card_look_wakes_its_waiters_at_once() {
     use std::time::Duration;
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-abandoned-look";
-    let _published = Published(instance);
     let agent = Agent::start(200, ANSWER).await;
     let s = served(instance, &agent.entry("planner", "0s"), false, None);
     approve(&s, "planner").await;
@@ -3791,7 +3752,6 @@ async fn an_abandoned_card_look_wakes_its_waiters_at_once() {
 async fn an_unreachable_card_at_verify_fails_closed_on_the_call_path() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-unreachable-on-call";
-    let _published = Published(instance);
     let mut agent = Agent::start(200, ANSWER).await;
     let s = served(instance, &agent.entry("planner", "0s"), false, None);
     approve(&s, "planner").await;
@@ -3851,7 +3811,6 @@ async fn an_unreachable_card_at_verify_fails_closed_on_the_call_path() {
 async fn a_card_signed_by_the_wrong_key_is_refused_and_recorded_as_a_failed_contact() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-wrong-key";
-    let _published = Published(instance);
     let mut agent = Agent::start(200, ANSWER).await;
     let operator = ed25519_dalek::SigningKey::from_bytes(&[9u8; 32]);
     let section = format!(
@@ -3904,7 +3863,6 @@ async fn the_legacy_well_known_path_is_tried_only_when_the_canonical_one_served_
     const LEGACY_PATH: &str = "GET /.well-known/agent.json ";
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-legacy-path";
-    let _published = Published(instance);
     let issuer = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
     let impostor = ed25519_dalek::SigningKey::from_bytes(&[2u8; 32]);
     // `split` false: the canonical path answers 404; true: it serves the impostor's card.
@@ -4050,7 +4008,6 @@ fn hooked(instance: &'static str, agent: &Agent, name: &str, def: serde_json::Va
 async fn an_agents_gate_refuses_a_submission_in_its_own_words_before_the_hop() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-gate";
-    let _published = Published(instance);
     let mut agent = Agent::start(200, ANSWER).await;
     let s = hooked(
         instance,
@@ -4086,7 +4043,6 @@ async fn an_agents_gate_refuses_a_submission_in_its_own_words_before_the_hop() {
 async fn the_messages_own_parts_reach_the_agents_gate() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-gate-content";
-    let _published = Published(instance);
     let mut agent = Agent::start(200, ANSWER).await;
     let s = hooked(
         instance,
@@ -4130,7 +4086,6 @@ async fn the_messages_own_parts_reach_the_agents_gate() {
 async fn an_agents_rewrite_replaces_the_params_the_agent_receives() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-rewrite";
-    let _published = Published(instance);
     let mut agent = Agent::start(200, ANSWER).await;
     let s = hooked(
         instance,
@@ -4199,7 +4154,6 @@ async fn busbars_own_card_is_served_at_the_well_known_path_signed_and_naming_no_
     use tower::ServiceExt as _;
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-own-card";
-    let _published = Published(instance);
     let agent = Agent::start(200, ANSWER).await;
     let s = served(instance, &agent.entry("planner", "1h"), false, None);
     let response = s
@@ -4244,7 +4198,6 @@ async fn busbars_own_card_is_served_at_the_well_known_path_signed_and_naming_no_
 async fn a_fronted_agents_card_is_served_rewritten_through_busbar_behind_its_grant() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-agent-card";
-    let _published = Published(instance);
     let agent = Agent::start(200, ANSWER).await;
     let s = served(instance, &agent.entry("planner", "1h"), false, None);
     let (status, _) = answered(&s.router, get(&format!("{}/agents/planner", mount()), None)).await;
@@ -4284,7 +4237,6 @@ async fn a_fronted_agents_card_is_served_rewritten_through_busbar_behind_its_gra
 async fn a_gated_agents_card_is_still_served_and_its_submission_refused() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-gated-card";
-    let _published = Published(instance);
     let mut agent = Agent::start(200, ANSWER).await;
     let s = hooked(
         instance,
@@ -4321,7 +4273,6 @@ async fn a_gated_agents_card_is_still_served_and_its_submission_refused() {
 async fn the_extended_card_on_the_planes_endpoint_names_the_callers_agents() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-extended-card";
-    let _published = Published(instance);
     let mut agent = Agent::start(200, ANSWER).await;
     let s = served(instance, &agent.entry("planner", "1h"), false, None);
     approve(&s, "planner").await;
@@ -4349,7 +4300,6 @@ async fn the_extended_card_on_the_planes_endpoint_names_the_callers_agents() {
 async fn an_agent_unit_to_an_unregistered_agent_is_a_404() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-unregistered";
-    let _published = Published(instance);
     let (port, mut heard) = far_agent().await;
     let s = served(instance, &agents(port, false), false, None);
     let (status, body) = answered(
@@ -4377,7 +4327,6 @@ async fn an_agent_unit_to_an_unregistered_agent_is_a_404() {
 async fn an_agent_unit_from_a_restricted_key_to_an_unregistered_agent_is_a_404() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-unregistered-restricted";
-    let _published = Published(instance);
     let (port, mut heard) = far_agent().await;
     let s = served(instance, &agents(port, false), false, Some(Vec::new()));
     let (status, body) = answered(
@@ -4412,7 +4361,6 @@ async fn a_tripped_agent_refuses_a_fresh_submission_with_503_and_retry_after() {
     use tower::ServiceExt as _;
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-breaker-503";
-    let _published = Published(instance);
     let mut agent = Agent::start(503, r#"{"error":"down"}"#).await;
     let s = served(instance, &agent.entry("planner", "1h"), false, None);
     approve(&s, "planner").await;
@@ -4609,7 +4557,6 @@ async fn rejected_battery(
 async fn a_tripped_agent_rejects_fresh_submissions_on_the_jsonrpc_binding() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-breaker-rejected-jsonrpc";
-    let _published = Published(instance);
     let mut agent = Agent::start(401, r#"{"error":"denied"}"#).await;
     let s = served(instance, &agent.entry("planner", "1h"), false, None);
     approve(&s, "planner").await;
@@ -4630,7 +4577,6 @@ async fn a_tripped_agent_rejects_fresh_submissions_on_the_jsonrpc_binding() {
 async fn a_tripped_agent_rejects_fresh_submissions_on_the_httpjson_binding() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-breaker-rejected-httpjson";
-    let _published = Published(instance);
     let mut agent = Agent::start(401, r#"{"error":"denied"}"#).await;
     let s = served(instance, &agent.entry("planner", "1h"), false, None);
     approve(&s, "planner").await;
@@ -4651,7 +4597,6 @@ async fn a_tripped_agent_rejects_fresh_submissions_on_the_httpjson_binding() {
 async fn a_tripped_agent_rejects_fresh_submissions_on_the_grpc_binding() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-breaker-rejected-grpc";
-    let _published = Published(instance);
     let mut agent = GrpcAgent::serving(Vec::new(), "16", 200, None).await;
     let s = served(instance, &agent.entry("planner"), false, None);
     approve(&s, "planner").await;
@@ -4680,7 +4625,6 @@ async fn a_tripped_agent_rejects_fresh_submissions_on_the_grpc_binding() {
 async fn the_extended_card_is_metered_as_one_request_and_no_tokens() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-extended-card-metered";
-    let _published = Published(instance);
     let mut agent = Agent::start(200, ANSWER).await;
     let s = served(instance, &agent.entry("planner", "1h"), false, None);
     approve(&s, "planner").await;
@@ -4926,7 +4870,6 @@ async fn a_deployment_writing_no_agents_section_mounts_no_agent_route_at_all() {
     };
 
     let configured = "serve-agent-door-configured";
-    let published = Published(configured);
     let s = served_facing(configured, &section, Facing::Routes);
     let mounted = agent_routes(&s.routes);
     assert!(
@@ -4938,10 +4881,8 @@ async fn a_deployment_writing_no_agents_section_mounts_no_agent_route_at_all() {
         "the control: a written section mounts the door's routes: {:?}",
         s.routes
     );
-    drop(published);
 
     let absent = "serve-agent-door-unconfigured";
-    let _published = Published(absent);
     let s = served_facing(absent, &section, Facing::Unconfigured);
     assert!(
         agent_routes(&s.routes).is_empty(),
@@ -4991,13 +4932,10 @@ async fn a_section_carrying_only_the_reserved_keys_is_still_no_plane() {
     }
 
     let absent = "serve-agent-door-no-section";
-    let published = Published(absent);
     let unconfigured = served_facing(absent, &agent.entry("planner", "1h"), Facing::Unconfigured);
     let baseline = asked(&unconfigured, &metadata, card).await;
-    drop(published);
 
     let reserved = "serve-agent-door-reserved-keys-only";
-    let _published = Published(reserved);
     let s = served_facing(
         reserved,
         "hooks: [audit]\nupstream_credentials: own",
@@ -5033,7 +4971,6 @@ async fn an_anonymous_caller_is_refused_and_told_where_to_get_a_token() {
     use tower::ServiceExt as _;
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-anonymous";
-    let _published = Published(instance);
     let mut agent = Agent::start(200, ANSWER).await;
     let s = served_facing(instance, &agent.entry("planner", "1h"), Facing::Admitted);
     let response = s
@@ -5069,7 +5006,6 @@ async fn an_anonymous_caller_is_refused_and_told_where_to_get_a_token() {
 async fn the_metadata_document_advertises_the_audience_the_verifier_demands() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-metadata";
-    let _published = Published(instance);
     let agent = Agent::start(200, ANSWER).await;
     let s = served_facing(instance, &agent.entry("planner", "1h"), Facing::Admitted);
     approve(&s, "planner").await;
@@ -5117,7 +5053,6 @@ async fn a_credential_of_another_kind_is_refused_with_401_and_never_names_a_back
     use base64::Engine as _;
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-other-kind";
-    let _published = Published(instance);
     let mut agent = Agent::start(200, ANSWER).await;
     let s = served(instance, &agent.entry("planner", "1h"), false, None);
     approve(&s, "planner").await;
@@ -5175,7 +5110,6 @@ async fn a_credential_of_another_kind_is_refused_with_401_and_never_names_a_back
 async fn the_callers_busbar_key_is_absent_from_the_stream_wire_too() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-stream-scan";
-    let _published = Published(instance);
     let mut agent = Agent::start_with(
         200,
         STREAMED,
@@ -5224,7 +5158,6 @@ async fn the_callers_busbar_key_is_absent_from_the_stream_wire_too() {
 async fn a_stream_hop_that_fails_before_its_first_event_is_a_busbar_attributed_error() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-stream-down";
-    let _published = Published(instance);
     let agent = Agent::start_with(
         200,
         STREAMED,
@@ -5271,7 +5204,6 @@ async fn a_stream_hop_that_fails_before_its_first_event_is_a_busbar_attributed_e
 async fn scope_decides_visibility_and_a_pool_only_key_sees_nothing() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-visibility";
-    let _published = Published(instance);
     let mut agent = Agent::start(200, ANSWER).await;
     let s = served(instance, &two_agents(&agent), false, None);
     approve(&s, "planner").await;
@@ -5306,7 +5238,6 @@ async fn scope_decides_visibility_and_a_pool_only_key_sees_nothing() {
 async fn no_principal_sees_another_principals_agents() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-principals";
-    let _published = Published(instance);
     let mut agent = Agent::start(200, ANSWER).await;
     let s = served(instance, &two_agents(&agent), false, None);
     approve(&s, "planner").await;
@@ -5355,7 +5286,6 @@ async fn no_principal_sees_another_principals_agents() {
 async fn a_key_that_is_no_longer_live_sees_no_agent_at_all() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-not-live";
-    let _published = Published(instance);
     let mut agent = Agent::start(200, ANSWER).await;
     let s = served(instance, &two_agents(&agent), false, None);
     approve(&s, "planner").await;
@@ -5424,7 +5354,6 @@ async fn a_key_that_is_no_longer_live_sees_no_agent_at_all() {
 async fn a_card_signed_by_another_key_than_the_pinned_one_is_refused_and_never_served() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-wrong-key";
-    let _published = Published(instance);
     let mut agent = Agent::start(200, ANSWER).await;
     let other = ed25519_dalek::SigningKey::from_bytes(&[8u8; 32]);
     let section = format!(
@@ -5605,7 +5534,6 @@ mod upstream_credential {
     async fn the_agents_own_bearer_rides_its_hops_and_never_its_card_fetches() {
         let _one = PUBLISHING.lock().await;
         let instance = "serve-agent-cred-bearer";
-        let _published = Published(instance);
         let path = secret_file("bearer", "vendor-token-1\n");
         let agent = Recorded::start(WORKING).await;
         let s = served(
@@ -5699,7 +5627,6 @@ mod upstream_credential {
     async fn a_named_header_placement_carries_the_secret_verbatim() {
         let _one = PUBLISHING.lock().await;
         let instance = "serve-agent-cred-header";
-        let _published = Published(instance);
         let path = secret_file("header", "abc123");
         let agent = Recorded::start(WORKING).await;
         let s = served(
@@ -5734,7 +5661,6 @@ mod upstream_credential {
     async fn an_agent_with_no_upstream_credential_is_dialled_with_none() {
         let _one = PUBLISHING.lock().await;
         let instance = "serve-agent-cred-none";
-        let _published = Published(instance);
         let agent = Recorded::start(WORKING).await;
         let s = served(instance, &agent.entry("1h", None), false, None);
         approve(&s, "planner").await;
@@ -5763,7 +5689,6 @@ mod upstream_credential {
     async fn agents_sharing_an_origin_each_present_only_their_own_credential() {
         let _one = PUBLISHING.lock().await;
         let instance = "serve-agent-cred-shared-origin";
-        let _published = Published(instance);
         let planner = secret_file("shared-planner", "planner-secret");
         let summarizer = secret_file("shared-summarizer", "summarizer-secret");
         let agent = Recorded::start(WORKING).await;
@@ -5846,7 +5771,6 @@ mod upstream_credential {
     async fn a_rotated_secret_is_presented_on_the_first_hop_after_the_next_refresh() {
         let _one = PUBLISHING.lock().await;
         let instance = "serve-agent-cred-rotate";
-        let _published = Published(instance);
         let path = secret_file("rotate", "before-rotation");
         let agent = Recorded::start(WORKING).await;
         let s = served(
@@ -5907,7 +5831,6 @@ mod upstream_credential {
     async fn a_vanished_secret_refuses_each_hop_after_the_next_refresh() {
         let _one = PUBLISHING.lock().await;
         let instance = "serve-agent-cred-vanished";
-        let _published = Published(instance);
         let path = secret_file("vanished", "soon-gone");
         let agent = Recorded::start(WORKING).await;
         let s = served(
@@ -6069,7 +5992,6 @@ mod upstream_credential {
             ),
         ];
         for (instance, credential, secret) in cases {
-            let _published = Published(instance);
             std::env::set_var(&var, "agent-own-token");
             std::fs::write(&path, "agent-own-token").expect("write the secret");
             let agent = Recorded::start(WORKING).await;
@@ -6271,7 +6193,6 @@ impl GrpcAgent {
 async fn an_agent_whose_card_names_only_grpc_is_dialled_over_grpc() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-grpc";
-    let _published = Published(instance);
     let mut agent = GrpcAgent::start(grpc_working_answer()).await;
     let s = served(instance, &agent.entry("planner"), false, None);
     approve(&s, "planner").await;
@@ -6327,7 +6248,6 @@ async fn an_a2a_hop_rides_the_hosts_grpc_need_to_an_in_process_grpc_agent() {
     use prost::Message as _;
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-grpc-need";
-    let _published = Published(instance);
     let mut agent = GrpcAgent::start(grpc_working_answer()).await;
     let s = served(instance, &agent.entry("planner"), false, None);
     approve(&s, "planner").await;
@@ -6413,7 +6333,6 @@ async fn a_grpc_callers_send_message_is_answered_ok_with_its_status_in_the_trail
     use tower::ServiceExt as _;
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-grpc-inbound";
-    let _published = Published(instance);
     // The agent answers in the protocol's current shape, the one the gRPC line's messages carry.
     let mut agent = Agent::start(
         200,
@@ -6494,7 +6413,6 @@ async fn a_grpc_call_naming_a_version_this_endpoint_does_not_speak_is_unimplemen
     use tower::ServiceExt as _;
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-grpc-version";
-    let _published = Published(instance);
     let mut agent = Agent::start(200, ANSWER).await;
     let s = served(instance, &agent.entry("planner", "1h"), false, None);
     approve(&s, "planner").await;
@@ -6556,7 +6474,6 @@ async fn a_grpc_call_refused_before_any_message_closes_trailers_only_as_predev()
     use tower::ServiceExt as _;
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-grpc-trailers-only";
-    let _published = Published(instance);
     // The agent refuses the task in A2A's own words (`TaskNotFoundError`), which the caller's
     // answer carries as its status.
     let agent = Agent::start(
@@ -6637,7 +6554,6 @@ async fn a_grpc_call_refused_before_any_message_closes_trailers_only_as_predev()
 async fn a_grpc_hop_ledgers_predevs_bytes_and_a_record_served_answer_none() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-grpc-billed";
-    let _published = Published(instance);
     let answer = grpc_working_answer();
     let mut agent = GrpcAgent::start(answer.clone()).await;
     let s = served(instance, &agent.entry("planner"), false, None);
@@ -6698,7 +6614,6 @@ async fn a_grpc_hop_ledgers_predevs_bytes_and_a_record_served_answer_none() {
 async fn a_grpc_agents_error_status_is_relayed_as_the_error_it_binds_and_never_trips_it() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-grpc-status";
-    let _published = Published(instance);
     let mut agent = GrpcAgent::ending(Vec::new(), "5").await;
     let s = served(instance, &agent.entry("planner"), false, None);
     approve(&s, "planner").await;
@@ -6836,7 +6751,6 @@ fn push(token: &str, state: &str) -> axum::http::Request<axum::body::Body> {
 async fn a_pushed_state_reaches_the_callers_own_webhook_through_busbar() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-push-delivery";
-    let _published = Published(instance);
     let tls = AgentTls::new();
     tls.rekey();
     let mut hook = Agent::start_over(200, "{}", Some(tls.acceptor())).await;
@@ -6941,7 +6855,6 @@ async fn delivered_within(
 async fn a_delivery_to_a_webhook_under_the_operators_agent_push_ca_is_made() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-push-ca";
-    let _published = Published(instance);
     let tls = AgentTls::new();
     tls.rekey();
     let mut hook = Agent::start_over(200, "{}", Some(tls.acceptor())).await;
@@ -6966,7 +6879,6 @@ async fn a_delivery_to_a_webhook_under_the_operators_agent_push_ca_is_made() {
 async fn a_delivery_to_a_webhook_under_another_ca_is_refused() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-push-other-ca";
-    let _published = Published(instance);
     let tls = AgentTls::new();
     tls.rekey();
     let other = AgentTls::new();
@@ -6999,7 +6911,6 @@ async fn a_delivery_to_a_webhook_under_another_ca_is_refused() {
 async fn without_an_agent_push_section_a_delivery_trusts_the_public_roots_alone() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-push-no-ca";
-    let _published = Published(instance);
     let tls = AgentTls::new();
     tls.rekey();
     let mut hook = Agent::start_over(200, "{}", Some(tls.acceptor())).await;
@@ -7031,7 +6942,6 @@ async fn without_an_agent_push_section_a_delivery_trusts_the_public_roots_alone(
 async fn a_malformed_agent_push_ca_refuses_the_boot() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-push-bad-ca";
-    let _published = Published(instance);
     let agent =
         Agent::start_answering(200, Arc::new(|r: &str| far_answer(r, "working", "working"))).await;
     let section = agent.entry("planner", "1h");
@@ -7076,7 +6986,6 @@ async fn a_malformed_agent_push_ca_refuses_the_boot() {
 async fn an_apply_carrying_a_malformed_agent_push_ca_is_refused_and_deliveries_keep_the_anchor() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-push-apply-ca";
-    let _published = Published(instance);
     let tls = AgentTls::new();
     tls.rekey();
     let mut hook = Agent::start_over(200, "{}", Some(tls.acceptor())).await;
@@ -7143,7 +7052,6 @@ async fn an_apply_carrying_a_malformed_agent_push_ca_is_refused_and_deliveries_k
 async fn a_pushed_state_reaches_the_callers_own_webhook_exactly_once() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-push-once";
-    let _published = Published(instance);
     let tls = AgentTls::new();
     tls.rekey();
     let mut hook = Agent::start_over(200, "{}", Some(tls.acceptor())).await;
@@ -7217,7 +7125,6 @@ async fn a_pushed_state_reaches_the_callers_own_webhook_exactly_once() {
 async fn a_refreshed_transition_reaches_the_callers_own_webhook_at_once() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-refresh-delivery";
-    let _published = Published(instance);
     let tls = AgentTls::new();
     tls.rekey();
     let mut hook = Agent::start_over(200, "{}", Some(tls.acceptor())).await;
@@ -7293,7 +7200,6 @@ async fn listed_state(s: &Served, task: &str) -> String {
 async fn the_refreshed_state_reaches_the_callers_own_list() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-refresh";
-    let _published = Published(instance);
     let mut agent = Agent::start_answering(
         200,
         Arc::new(|r: &str| far_answer(r, "working", "completed")),
@@ -7322,7 +7228,6 @@ async fn the_refreshed_state_reaches_the_callers_own_list() {
 async fn a_list_with_no_open_task_of_this_callers_makes_no_hop() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-list-no-hop";
-    let _published = Published(instance);
     let mut agent = Agent::start(200, ANSWER).await;
     let s = served(instance, &agent.entry("planner", "1h"), false, None);
     approve(&s, "planner").await;
@@ -7345,7 +7250,6 @@ async fn a_list_with_no_open_task_of_this_callers_makes_no_hop() {
 async fn a_terminal_task_is_not_armed_at_the_backend() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-terminal-unarmed";
-    let _published = Published(instance);
     let mut agent = Agent::start_answering(
         200,
         Arc::new(|r: &str| far_answer(r, "completed", "completed")),
@@ -7380,7 +7284,6 @@ async fn a_terminal_task_is_not_armed_at_the_backend() {
 async fn a_token_is_not_spent_by_being_used_while_the_task_is_live() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-token-live";
-    let _published = Published(instance);
     let mut agent =
         Agent::start_answering(200, Arc::new(|r: &str| far_answer(r, "working", "working"))).await;
     let s = served(instance, &agent.entry("planner", "1h"), false, None);
@@ -7415,7 +7318,6 @@ async fn a_token_is_not_spent_by_being_used_while_the_task_is_live() {
 async fn a_token_for_a_task_that_has_ended_authorises_nothing() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-token-ended";
-    let _published = Published(instance);
     let mut agent =
         Agent::start_answering(200, Arc::new(|r: &str| far_answer(r, "working", "working"))).await;
     let s = served(instance, &agent.entry("planner", "1h"), false, None);
@@ -7469,7 +7371,6 @@ async fn document(
 async fn a_delete_whose_durable_clear_fails_keeps_the_config_and_returns_the_error() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-delete-refused";
-    let _published = Published(instance);
     let agent =
         Agent::start_answering(200, Arc::new(|r: &str| far_answer(r, "working", "working"))).await;
     let s = served(instance, &agent.entry("planner", "1h"), false, None);
@@ -7567,7 +7468,6 @@ async fn a_delete_whose_durable_clear_fails_keeps_the_config_and_returns_the_err
 async fn a_registration_the_store_refuses_answers_the_engines_internal_error() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-create-refused";
-    let _published = Published(instance);
     let agent =
         Agent::start_answering(200, Arc::new(|r: &str| far_answer(r, "working", "working"))).await;
     let s = served(instance, &agent.entry("planner", "1h"), false, None);
@@ -7623,7 +7523,6 @@ async fn a_registration_the_store_refuses_answers_the_engines_internal_error() {
 async fn a_submission_whose_task_the_store_refuses_answers_the_engines_503() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-submit-refused";
-    let _published = Published(instance);
     let mut agent = Agent::start(200, ANSWER).await;
     agent.streams();
     let s = served(instance, &agent.entry("planner", "1h"), false, None);
@@ -7657,7 +7556,6 @@ async fn a_submission_whose_task_the_store_refuses_answers_the_engines_503() {
 async fn a_resumption_the_store_refuses_answers_the_engines_409() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-resume-refused";
-    let _published = Published(instance);
     let mut agent = Agent::start_answering(
         200,
         Arc::new(|r: &str| far_answer(r, "input-required", "input-required")),
@@ -7710,7 +7608,6 @@ async fn a_resumption_the_store_refuses_answers_the_engines_409() {
 async fn an_agent_outside_this_callers_catalogue_appears_nowhere_in_the_extended_card() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-extended-outside";
-    let _published = Published(instance);
     let mut agent = Agent::start(200, ANSWER).await;
     let section = format!(
         "{}\n{}",
@@ -7752,7 +7649,6 @@ async fn an_agent_outside_this_callers_catalogue_appears_nowhere_in_the_extended
 async fn a_caller_entitled_to_no_agent_gets_an_empty_extended_card_rather_than_a_refusal() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-extended-empty";
-    let _published = Published(instance);
     let mut agent = Agent::start(200, ANSWER).await;
     let s = served(
         instance,
@@ -7816,7 +7712,6 @@ fn card_signature_verifies(card: &serde_json::Value) -> Result<String, &'static 
 async fn the_signature_is_taken_over_the_document_that_is_actually_served() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-signed-card";
-    let _published = Published(instance);
     let agent = Agent::start(200, ANSWER).await;
     let s = served(instance, &agent.entry("planner", "1h"), false, None);
     approve(&s, "planner").await;
@@ -7885,7 +7780,6 @@ async fn a_relayed_task_counts_an_upstream_attempt_naming_the_agent_it_was_issue
     busbar_kernel::snapshot::init();
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-metered";
-    let _published = Published(instance);
     let mut agent = Agent::start(200, ANSWER).await;
     let s = served(instance, &agent.entry("metered", "1h"), false, None);
     approve(&s, "metered").await;
@@ -7928,7 +7822,6 @@ async fn a_backend_that_cannot_be_reached_is_counted_as_a_transient_upstream_fai
     busbar_kernel::snapshot::init();
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-unreachable";
-    let _published = Published(instance);
     let mut agent = Agent::start(200, ANSWER).await;
     let s = served(instance, &agent.entry("unreached", "1h"), false, None);
     approve(&s, "unreached").await;
@@ -8020,7 +7913,6 @@ async fn the_verb_layers_probe_fetches_a_mutual_tls_vendors_card_with_that_regis
 ) {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-door-mtls-probe";
-    let _published = Published(instance);
     let tls = AgentTls::new();
     let pin = tls.rekey();
     let (client_root, cert, key) = client_identity_files(instance, "planner");
@@ -8062,7 +7954,6 @@ async fn the_verb_layers_probe_fetches_a_mutual_tls_vendors_card_with_that_regis
 async fn each_registration_presents_its_own_certificate_and_not_another_registrations() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-door-mtls-isolation";
-    let _published = Published(instance);
     let tls = AgentTls::new();
     let pin = tls.rekey();
     let (planner_root, planner_cert, planner_key) = client_identity_files(instance, "planner");
@@ -8241,7 +8132,6 @@ async fn reroute_battery(
 async fn a_tripped_pool_primary_reroutes_a_fresh_submission_to_the_twin_and_stays_untouched() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-pool-reroute";
-    let _published = Published(instance);
     let (mut agent, section) = twins(Arc::new(primary_refused)).await;
     let s = served(instance, &section, false, None);
     approve(&s, "planner-a").await;
@@ -8270,7 +8160,6 @@ async fn a_tripped_pool_primary_reroutes_a_fresh_submission_to_the_twin_and_stay
 async fn a_tripped_pool_primary_reroutes_a_fresh_submission_on_the_grpc_binding() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-pool-reroute-grpc";
-    let _published = Published(instance);
     // UNAUTHENTICATED (16): the gRPC binding's refusal of busbar itself, as a 401 is on
     // JSON-RPC.
     let mut primary = GrpcAgent::serving(Vec::new(), "16", 200, None).await;
@@ -8323,7 +8212,6 @@ async fn an_accepted_task_stays_pinned_to_its_member_and_a_tripped_pin_refuses_t
     use std::sync::atomic::{AtomicU16, Ordering};
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-pool-pinned";
-    let _published = Published(instance);
     let twin_status = Arc::new(AtomicU16::new(200));
     let status = Arc::clone(&twin_status);
     let (mut agent, section) = twins(Arc::new(move |request: &str| {
@@ -8455,7 +8343,6 @@ async fn an_accepted_task_stays_pinned_to_its_member_and_a_tripped_pin_refuses_t
 async fn a_member_approved_under_a_different_card_fingerprint_is_refused_never_dispatched() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-pool-pin";
-    let _published = Published(instance);
     let mut primary = Agent::start(401, "denied").await;
     let mut twin = Agent::start(200, TASK_ANSWER).await;
     let entries = format!(
@@ -8511,7 +8398,6 @@ async fn a_member_approved_under_a_different_card_fingerprint_is_refused_never_d
 async fn a_client_fault_answer_never_penalizes_the_agent() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-pool-client-fault";
-    let _published = Published(instance);
     let (mut agent, section) = twins(Arc::new(|request: &str| {
         if to_member(request, "planner-a") {
             400
@@ -8551,7 +8437,6 @@ async fn a_client_fault_answer_never_penalizes_the_agent() {
 async fn a_hop_pinned_to_a_member_the_caller_may_not_reach_keeps_no_fee() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-pool-pinned-fee";
-    let _published = Published(instance);
     let (mut agent, section) = twins(Arc::new(primary_refused)).await;
     let s = served(instance, &section, false, None);
     approve(&s, "planner-a").await;
@@ -8632,7 +8517,6 @@ async fn a_hop_pinned_to_a_member_the_caller_may_not_reach_keeps_no_fee() {
 async fn a_pooled_member_outside_the_callers_grant_is_refused_before_anything_is_charged() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-pool-ungranted";
-    let _published = Published(instance);
     let (mut agent, section) = twins(Arc::new(|_: &str| 200)).await;
     let s = served(instance, &section, false, None);
     approve(&s, "planner-a").await;
@@ -8663,7 +8547,6 @@ async fn a_pooled_member_outside_the_callers_grant_is_refused_before_anything_is
 async fn an_interrupted_task_on_any_member_resumes_at_the_member_holding_it() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-pool-resume";
-    let _published = Published(instance);
     let mut agent = Agent::start_answering(
         200,
         Arc::new(|_: &str| {
@@ -8734,7 +8617,6 @@ async fn an_interrupted_task_on_any_member_resumes_at_the_member_holding_it() {
 async fn a_card_read_addressed_to_a_pooled_agent_is_refused_in_predevs_words() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-pool-card";
-    let _published = Published(instance);
     let (mut agent, section) = twins(Arc::new(|_: &str| 200)).await;
     let s = served(instance, &section, false, None);
     approve(&s, "planner-a").await;
@@ -8766,7 +8648,6 @@ async fn a_card_read_addressed_to_a_pooled_agent_is_refused_in_predevs_words() {
 async fn a_task_placed_on_the_twin_is_named_for_the_agent_addressed() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-pool-task-name";
-    let _published = Published(instance);
     let (mut agent, section) = twins(Arc::new(primary_refused)).await;
     let s = served(instance, &section, false, None);
     approve(&s, "planner-a").await;
@@ -8810,7 +8691,6 @@ async fn a_task_placed_on_the_twin_is_named_for_the_agent_addressed() {
 async fn an_unaddressed_unit_whose_one_agent_is_pooled_is_walked_over_the_pool() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-pool-unaddressed";
-    let _published = Published(instance);
     let (mut agent, section) = twins(Arc::new(|request: &str| {
         if to_member(request, "planner-a") {
             503
@@ -8881,7 +8761,6 @@ fn audited(before: u64, agent: &str) -> usize {
 async fn an_unaddressed_local_verb_is_answered_at_the_tripped_agent_its_grant_reaches() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-pool-local-tripped";
-    let _published = Published(instance);
     let (mut agent, section) = twins(Arc::new(|request: &str| {
         if to_member(request, "planner-a") {
             503
@@ -8958,7 +8837,6 @@ async fn an_unaddressed_local_verb_is_answered_at_the_tripped_agent_its_grant_re
 async fn an_unaddressed_local_verb_never_walks_to_a_healthy_primary_outside_the_grant() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-pool-local-healthy";
-    let _published = Published(instance);
     let (mut agent, section) = twins(Arc::new(|_: &str| 200)).await;
     let s = served(instance, &section, false, None);
     approve(&s, "planner-a").await;
@@ -9003,7 +8881,6 @@ async fn an_unaddressed_local_verb_never_walks_to_a_healthy_primary_outside_the_
 async fn an_unaddressed_local_verb_bills_what_predev_billed_on_the_agents_own_line() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-local-billed";
-    let _published = Published(instance);
     let mut agent = Agent::start(200, ANSWER).await;
     let priced = Priced {
         bytes_rate: None,
@@ -9061,7 +8938,6 @@ async fn an_unaddressed_local_verb_bills_what_predev_billed_on_the_agents_own_li
 async fn a_config_apply_keeps_the_pool_walking() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-pool-apply";
-    let _published = Published(instance);
     let (mut agent, section) = twins(Arc::new(primary_refused)).await;
     let s = served(instance, &section, false, None);
     approve(&s, "planner-a").await;
@@ -9073,8 +8949,17 @@ async fn a_config_apply_keeps_the_pool_walking() {
     if let Some(map) = written.as_mapping_mut() {
         map.remove(busbar_contract::section::RESERVED_POOLS_KEY);
     }
+    // The section is parsed through the door that declares it: the row the registry holds for it.
+    let row = busbar_kernel::plane_driver::registry::plane_decl_for_config_section(surface(
+        "section",
+    ))
+    .expect("the registry holds the door's row");
     let slot = busbar_kernel::plane_driver::door::DoorSlot {
-        section: busbar_kernel::plane_driver::door::DoorSection::new(surface("section"), written),
+        section: busbar_kernel::plane_driver::door::DoorSection::new(
+            row.door,
+            surface("section"),
+            written,
+        ),
         facing: busbar_contract::plane_calls::DoorFacing {
             claims: Vec::new(),
             admission: None,
@@ -9082,7 +8967,10 @@ async fn a_config_apply_keeps_the_pool_walking() {
         },
         opened: true,
     };
+    // It carries the running generation's admin table, as every generation an apply builds
+    // carries its prior's.
     let mut next = busbar_kernel::test_support::TestApp::new()
+        .serve_tables(s.app.serve_tables.clone())
         .keys_chain()
         .admin_chain(vec![busbar_kernel::config::operator_provider().to_string()])
         .governance(Arc::clone(&s.gov))
@@ -9123,7 +9011,6 @@ async fn a_pinned_refusal_answers_the_pinned_members_own_wait() {
     use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-pool-pinned-wait";
-    let _published = Published(instance);
     let twin_status = Arc::new(AtomicU16::new(200));
     let primary_calls = Arc::new(AtomicUsize::new(0));
     let (twin, calls) = (Arc::clone(&twin_status), Arc::clone(&primary_calls));
