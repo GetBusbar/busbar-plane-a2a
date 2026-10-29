@@ -218,23 +218,6 @@ impl Refusing {
 }
 
 impl busbar_contract::store_calls::StoreCalls for Refusing {
-    fn reserve<'a>(
-        &'a self,
-        op: busbar_contract::abi::store::OpId,
-        epoch: u64,
-        cells: &'a [busbar_contract::abi::sdk::store::Cell<'a>],
-    ) -> busbar_contract::store_calls::StoreCall<'a, Vec<busbar_contract::abi::sdk::store::Grant>>
-    {
-        self.inner.reserve(op, epoch, cells)
-    }
-    fn slice_release<'a>(
-        &'a self,
-        op: busbar_contract::abi::store::OpId,
-        epoch: u64,
-        items: &'a [(u64, u64)],
-    ) -> busbar_contract::store_calls::StoreCall<'a, Vec<u64>> {
-        self.inner.slice_release(op, epoch, items)
-    }
     fn add_usage_batch<'a>(
         &'a self,
         op: busbar_contract::abi::store::OpId,
@@ -248,51 +231,6 @@ impl busbar_contract::store_calls::StoreCalls for Refusing {
         deltas: &'a [busbar_contract::records::MeteringDelta],
     ) -> busbar_contract::store_calls::StoreCall<'a, ()> {
         self.inner.add_metering_batch(op, deltas)
-    }
-    fn append_audit_batch<'a>(
-        &'a self,
-        op: busbar_contract::abi::store::OpId,
-        entries: &'a [busbar_contract::records::AuditRecord],
-    ) -> busbar_contract::store_calls::StoreCall<'a, ()> {
-        self.inner.append_audit_batch(op, entries)
-    }
-    fn window_caps<'a>(
-        &'a self,
-        op: busbar_contract::abi::store::OpId,
-        caps: &'a [busbar_contract::abi::sdk::store::Cap<'a>],
-    ) -> busbar_contract::store_calls::StoreCall<'a, ()> {
-        self.inner.window_caps(op, caps)
-    }
-    fn append_batch<'a>(
-        &'a self,
-        op: busbar_contract::abi::store::OpId,
-        stream: &'a str,
-        records: &'a [busbar_contract::kinds::RecordBytes],
-    ) -> busbar_contract::store_calls::StoreCall<'a, busbar_contract::kinds::Head> {
-        self.inner.append_batch(op, stream, records)
-    }
-    fn heads(
-        &self,
-    ) -> busbar_contract::store_calls::StoreCall<'_, Vec<(String, busbar_contract::kinds::Head)>>
-    {
-        self.inner.heads()
-    }
-    fn session_put<'a>(
-        &'a self,
-        session: u64,
-        node: &'a str,
-        principal: &'a str,
-    ) -> busbar_contract::store_calls::StoreCall<'a, ()> {
-        self.inner.session_put(session, node, principal)
-    }
-    fn session_remove(&self, session: u64) -> busbar_contract::store_calls::StoreCall<'_, ()> {
-        self.inner.session_remove(session)
-    }
-    fn sessions_for<'a>(
-        &'a self,
-        principal: &'a str,
-    ) -> busbar_contract::store_calls::StoreCall<'a, Vec<(u64, String)>> {
-        self.inner.sessions_for(principal)
     }
     fn record_put<'a>(
         &'a self,
@@ -1009,7 +947,7 @@ fn served_core(
             builder.mount_plane(
                 surface("plane_key"),
                 path,
-                busbar_kernel::plane::WIRE_JSONRPC,
+                busbar_kernel::plane_driver::dispatch::WIRE_JSONRPC,
             );
         }
         builder.admit_plane(surface("plane_key"), admission);
@@ -1395,8 +1333,8 @@ fn chain() -> Vec<busbar_kernel::audit_ring::AuditEntry> {
 
 /// The root cells `audit-chain × a2a`, and the teller steps AUDIT, METER and EXIT over the
 /// agent door: one relayed unit lands exactly ONE audit row on the kernel's chain (its action
-/// the plane's, applied, naming the agent it reached), sealed to the row before it; posts
-/// exactly ONE line on the node's book under that agent's lane; and ends once, every fact of it
+/// the plane's, applied, naming the agent it reached), sealed to the row before it; seals
+/// exactly ONE record on the node's journal for the caller's unit; and ends once, every fact of it
 /// closed at its end.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_relayed_agent_unit_is_audited_on_the_chain_and_posts_one_line_once() {
@@ -1435,16 +1373,8 @@ async fn a_relayed_agent_unit_is_audited_on_the_chain_and_posts_one_line_once() 
             "the row is chained to the one before it"
         );
     }
-    let lines = s.book.lock().expect("unpoisoned").read_back();
-    let ours: Vec<_> = lines
-        .iter()
-        .filter(|l| {
-            l.counts
-                .as_ref()
-                .is_some_and(|c| c.lane.ends_with(resource.as_str()))
-        })
-        .collect();
-    assert_eq!(ours.len(), 1, "one line on the node's book: {lines:?}");
+    let ours = agent_counts(&s, "auditor");
+    assert_eq!(ours.len(), 1, "one record for the unit: {ours:?}");
     assert_eq!(s.post.open_units(), 0, "the unit's facts closed at its end");
     assert_eq!(admitted(&s), 1, "one admitted request");
 }
@@ -1778,10 +1708,18 @@ fn agent_counts(s: &Served, agent: &str) -> Vec<rig::UnitCounts> {
     s.book
         .lock()
         .expect("unpoisoned")
-        .read_back()
-        .into_iter()
-        .filter_map(|l| l.counts)
-        .filter(|c| c.lane.ends_with(resource.as_str()))
+        .audit_records
+        .iter()
+        .filter(|r| r.subject == caller)
+        .map(|r| Counted {
+            classes: r
+                .usage
+                .lines
+                .iter()
+                .map(|l| (l.class.as_str().to_string(), l.quantity))
+                .collect(),
+            fee_count: r.usage.fee_count,
+        })
         .collect()
 }
 
@@ -1817,8 +1755,7 @@ async fn an_agent_hop_ledgers_the_bodies_it_moved_and_its_fee_unit_once() {
         (sent + ANSWER.len()) as u64,
         "the request body sent and the response body read: {lines:?}"
     );
-    // The fee unit rides the line as its billable count (`UnitCounts::fee_count`, priced as
-    // the card's fee line): a fee unit is no usage class (`report_of`).
+    // The fee unit rides the record as its fee count, not a usage class (`report_of`).
     assert_eq!(lines[0].fee_count, 1, "the fee unit, once: {lines:?}");
 }
 
@@ -2026,12 +1963,9 @@ impl Billed {
             .usage_for(&s.app.cost, &s.key.id, now)
             .expect("a read")
             .expect("the key exists");
-        let lanes = s.gov.bucket_model_tokens(
-            &s.app.cost,
-            &s.key.id,
-            busbar_kernel::governance::WINDOW_TOTAL,
-            now,
-        );
+        let lanes =
+            s.gov
+                .bucket_model_tokens(&s.key.id, busbar_kernel::governance::WINDOW_TOTAL, now);
         let sum = |class: &str| -> u64 {
             lanes
                 .iter()
@@ -3407,7 +3341,7 @@ async fn a_config_apply_keeps_the_operators_approval() {
     // test registered process-wide would read a runtime slot this composition never seeded, so
     // the swap sees exactly this composition's planes (the door serves none of them).
     {
-        let _registry = busbar_kernel::plane::registry::TestRegistryIsolation::empty();
+        let _registry = busbar_kernel::plane_driver::registry::TestRegistryIsolation::empty();
         s.handle.swap(Arc::clone(&s.app));
     }
     let (status, body) = answered(&s.router, send()).await;
@@ -4581,19 +4515,22 @@ async fn the_extended_card_is_metered_as_one_request_and_no_tokens() {
     // wrote it (its metering row's `model`, `busbar-a2a`
     // `a2a/tests/metered_verbs_tests.rs:104`, `rows[0].model == "agents"`), never an
     // `agent:<id>` member line.
+    // On the one ledger: the key's counts sit on the plane's own lane, never a member's.
     let lanes: Vec<String> = s
-        .book
-        .lock()
-        .expect("unpoisoned")
-        .read_back()
+        .gov
+        .bucket_model_tokens(
+            &s.key.id,
+            busbar_kernel::governance::WINDOW_TOTAL,
+            busbar_kernel::store::now(),
+        )
         .into_iter()
-        .filter_map(|l| l.counts)
-        .map(|c| c.lane)
+        .map(|(lane, _)| lane)
         .collect();
-    assert_eq!(
-        lanes,
-        vec![surface("section").to_string()],
-        "the card is billed to the plane pool, on no member line"
+    let member = format!("{}:", surface("resource_kind"));
+    assert_eq!(lanes.len(), 1, "one lane: {lanes:?}");
+    assert!(
+        !lanes[0].contains(member.as_str()),
+        "the card is billed to the plane pool, on no member line: {lanes:?}"
     );
     assert!(
         !agent.relayed(),
@@ -7821,7 +7758,7 @@ async fn a_backend_that_cannot_be_reached_is_counted_as_a_transient_upstream_fai
     assert!(
         lines.iter().any(|l| l.contains(&format!(
             "disposition=\"{}\"",
-            busbar_kernel::proxy::DISPOSITION_TRANSIENT
+            busbar_kernel::telemetry::DISPOSITION_TRANSIENT
         ))),
         "the failure carries the model plane's own disposition word: {lines:?}"
     );
@@ -8468,10 +8405,10 @@ async fn a_hop_pinned_to_a_member_the_caller_may_not_reach_keeps_no_fee() {
     );
     hear(&mut agent, &mut log);
     assert_eq!(log.len(), sent, "no member saw the refused hop");
-    let fees: u64 = ["planner-a", "planner-b"]
+    // Every hop the caller made, to either member: its one record each.
+    let fees: u64 = agent_counts(&s, "planner-a")
         .iter()
-        .flat_map(|m| agent_counts(&s, m))
-        .map(|c| c.fee_count)
+        .map(|c| u64::from(c.fee_count))
         .sum();
     assert_eq!(
         fees, 2,
@@ -8931,8 +8868,8 @@ async fn a_config_apply_keeps_the_pool_walking() {
     if let Some(map) = written.as_mapping_mut() {
         map.remove(busbar_contract::section::RESERVED_POOLS_KEY);
     }
-    let slot = busbar_kernel::plane::door::DoorSlot {
-        section: busbar_kernel::plane::door::DoorSection::new(surface("section"), written),
+    let slot = busbar_kernel::plane_driver::door::DoorSlot {
+        section: busbar_kernel::plane_driver::door::DoorSection::new(surface("section"), written),
         facing: busbar_contract::plane_calls::DoorFacing {
             claims: Vec::new(),
             admission: None,
@@ -8949,7 +8886,7 @@ async fn a_config_apply_keeps_the_pool_walking() {
     next.install_plane_runtime(surface("plane_key"), Arc::new(slot));
     let next = next.build();
     {
-        let _registry = busbar_kernel::plane::registry::TestRegistryIsolation::empty();
+        let _registry = busbar_kernel::plane_driver::registry::TestRegistryIsolation::empty();
         s.handle.swap(next);
     }
     let mut log = Vec::new();
