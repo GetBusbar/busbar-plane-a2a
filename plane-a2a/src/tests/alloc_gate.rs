@@ -18,9 +18,9 @@
 
 use crate::binding::Binding;
 use crate::relay::{From, HopRelay, Piece, PieceAnswer};
-// How many allocations one call made on this thread (the crate's one counter, busbar-contract's
+// How many allocations one call made on this thread (the crate's one counter, busbar-test-kit's
 // `alloc_counter`).
-use busbar_contract::alloc_counter::allocations_of;
+use busbar_test_kit::alloc_counter::allocations_of;
 
 /// One well-formed request of this protocol, carrying no task identifier to rewrite: the request
 /// the retired engine's pin measured.
