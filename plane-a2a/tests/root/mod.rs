@@ -836,7 +836,7 @@ fn served_core(
         .expect("mint");
     gov.hydrate_budgets(&cost, 0).expect("hydrate");
     let node = Arc::new(Node::new());
-    let book = rig::node_book(|| CARD.pin());
+    let book = rig::node_book();
     node.bind_book(Arc::clone(&book.durability));
     let post = Arc::new(NodeEndPost::new(Arc::clone(&node)));
     let end = Arc::clone(&post);
@@ -894,7 +894,7 @@ fn served_core(
         let live = Arc::clone(&live);
         compose = compose.hooks(
             Arc::new(move || {
-                busbar_kernel::plane_host::engine_host(
+                busbar_kernel::plane_driver::engine_host(
                     live.get().expect("the App is built before a unit runs"),
                 )
             }),
@@ -1702,9 +1702,18 @@ async fn a_failing_agent_trips_its_breaker_and_the_next_unit_is_refused_before_i
     assert!(!agent.relayed(), "the fast-failed unit never dialled");
 }
 
-/// The node's book lines whose counts name agent `agent`'s lane, in book order.
-fn agent_counts(s: &Served, agent: &str) -> Vec<rig::UnitCounts> {
-    let resource = format!("{}:{agent}", surface("resource_kind"));
+/// What one unit's audit record carries: what its plane reported, by class, and its fee count.
+#[derive(Debug, Clone)]
+struct Counted {
+    classes: BTreeMap<String, u64>,
+    fee_count: u32,
+}
+
+/// Every unit the caller ran, oldest first, as its one audit record carries it: the node keeps no
+/// money line (busbar MONEY-DESIGN §3); a unit's counts are the governance ledger's, and its record
+/// names them. Each cell runs one agent, `_agent`.
+fn agent_counts(s: &Served, _agent: &str) -> Vec<Counted> {
+    let caller = busbar_kernel_audit::Subject::PrincipalId(s.key.id.clone());
     s.book
         .lock()
         .expect("unpoisoned")
@@ -1723,8 +1732,8 @@ fn agent_counts(s: &Served, agent: &str) -> Vec<rig::UnitCounts> {
         .collect()
 }
 
-/// The count a line carries under `class`, `0` when it carries none.
-fn counted(counts: &rig::UnitCounts, class: &str) -> u64 {
+/// The count a record carries under `class`, `0` when it carries none.
+fn counted(counts: &Counted, class: &str) -> u64 {
     counts.classes.get(class).copied().unwrap_or(0)
 }
 
@@ -2256,7 +2265,7 @@ async fn a_hop_refused_before_the_socket_keeps_no_fee() {
 fn a_present_agents_card_silent_about_an_agent_refuses_the_config() {
     let folded =
         rig::folded_door(door(), "serve-agent-card-row").expect("the door binds and folds");
-    let _registry = busbar_kernel::plane::registry::TestRegistryIsolation::seeded(&[
+    let _registry = busbar_kernel::plane_driver::registry::TestRegistryIsolation::seeded(&[
         busbar_kernel::test_support::neutral_fallback_plane(),
         folded,
     ]);
