@@ -641,17 +641,16 @@ sys.stdout.write(t)') \
     || die "the admin API did not mint a key. Without a real binding there is no subject to bind a \
 token to, and a made-up one would be refused."
 
-  # THE MINTER IS THE MCP LEG'S, REUSED RATHER THAN COPIED. busbar's token format is one format
-  # across both planes — `governance/signing.rs` verifies MCP's and A2A's identically, and only the
-  # `a` (audience) claim differs — so a second copy of it here would be a second thing to keep in
-  # step with a wire format, which is precisely the duplication this release has already paid for
-  # three times.
-  # This plane repo carries no `scripts/mcp-subject/`: the minter is busbar's, taken from the busbar
-  # checkout the subject was built from (`BUSBAR_CHECKOUT`, busbar at the `.busbar-ref` pin), so the
-  # token format it signs is the one that busbar verifies. In busbar's own tree it is local.
-  local minter="${BUSBAR_CHECKOUT:+$BUSBAR_CHECKOUT/}scripts/mcp-subject/mint-audience-token.mjs"
-  [ -f "$minter" ] || die "$minter is missing; the A2A subject leg mints its credential with the \
-same helper the MCP leg does, because busbar's token format is one format across both planes."
+  # THE MINTER IS THE MCP LEG'S. busbar's token format is one format across both planes —
+  # `governance/signing.rs` verifies MCP's and A2A's identically, and only the `a` (audience) claim
+  # differs.
+  # busbar's tree no longer carries `scripts/mcp-subject/` (busbar 7f43d8a777 moved the MCP harness
+  # to busbar-plane-mcp), so the minter rides here, byte-for-byte the MCP leg's
+  # (busbar-plane-mcp scripts/mcp-subject/mint-audience-token.mjs). A copy can drift from the wire
+  # format; it cannot drift silently: `prove_the_boundary_is_intact` presents the token it mints to
+  # the booted busbar and requires it ADMITTED, so a stale format is a red in this leg, never a pass.
+  local minter; minter="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/mint-audience-token.mjs"
+  [ -f "$minter" ] || die "$minter is missing; the A2A subject leg mints its credential with it."
   local bound wrong
   bound=$(node "$minter" "$dir/signing.key" "$plain" "$canonical") \
     || die "could not mint the audience-bound token."
