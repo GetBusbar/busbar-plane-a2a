@@ -861,3 +861,12 @@ fn an_addressed_extended_card_read_is_relayed_as_a_task_less_hop() {
         "the caller's envelope, verbatim: the piece itself, lent"
     );
 }
+
+/// THE VERSION THE STATEMENT NAMES IS THE CRATE'S: [`VERSION`] is written out (the purity rules
+/// keep `env!` out of the plane's source), so this pins it to the manifest's `version`, exactly.
+/// RED: a release that bumps the manifest and not [`VERSION`] (or the reverse) states a version
+/// the signed manifest does not carry.
+#[test]
+fn the_statement_names_the_crates_version() {
+    assert_eq!(VERSION, env!("CARGO_PKG_VERSION"));
+}
