@@ -110,12 +110,12 @@ pub const SECTIONS: &[Section] = &[
     Section {
         name: abi_str(crate::CONFIG_SECTION),
         flags: SECTION_DECLARING,
-        _reserved: 0,
+        ..Section::ZERO
     },
     Section {
         name: abi_str(PUSH_SECTION),
         flags: 0,
-        _reserved: 0,
+        ..Section::ZERO
     },
 ];
 
@@ -340,7 +340,7 @@ pub const NEED_AGENT: u32 = 1;
 /// same member route as [`NEED_AGENT`], at the agent's own `url`, carried over the grpc transport,
 /// held to the same pin and client identity. The kernel binds a registration member on every
 /// member-target need its plane states, and an ATTEMPT names this one
-/// ([`crate::agent_door::attempt_need`]).
+/// ([`crate::plane_door::attempt_need`]).
 pub const NEED_GRPC: u32 = 2;
 
 /// THE MEMBER-TARGET PATH of [`NEED_AGENT`] (`busbar_contract::section::MEMBER_TARGET_PREFIX`): each
@@ -887,5 +887,5 @@ pub fn audit_write(
 }
 
 #[cfg(test)]
-#[path = "tests/door_statement.rs"]
+#[path = "tests/statement.rs"]
 mod tests;

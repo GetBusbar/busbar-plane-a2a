@@ -9,7 +9,7 @@
 //! * The lifecycle `tick` ([`tick_deliveries`]) attempts ONE due notification per op: the kernel's random
 //!   byte for the retry's jitter, then the destination judge over the callback, its name resolved,
 //!   then one exchange over the plane's outbound `open-web` need
-//!   ([`crate::door_statement::NEED_OPEN_WEB`]) landing only on the addresses it judged. Judging a
+//!   ([`crate::statement::NEED_OPEN_WEB`]) landing only on the addresses it judged. Judging a
 //!   destination is the host's (the connector judges every
 //!   open); the plane keeps no address rule of its own. An attempt whose exchange pends ends its `tick` PENDING (a driver ticket's op is never resumed) and goes on
 //!   through `drive` ([`drive`]), held in plane memory across the entries, each making the same host
@@ -32,11 +32,11 @@ use busbar_contract::abi::sdk::publish::Keyed;
 use busbar_contract::abi::sdk::{Instance, StaticServices};
 
 use crate::a2a::task::Task;
-use crate::agent_door::A2aDoor;
-use crate::door_statement::NEED_OPEN_WEB;
 use crate::local::{self, PushConfig};
+use crate::plane_door::A2aDoor;
 use crate::push::{Attempted, Deliveries, Delivery, DeliverySettled, Owed, Tokens};
 use crate::records::KIND_PUSH_CONFIG;
+use crate::statement::NEED_OPEN_WEB;
 use crate::tasks::{self, Halt, Records, Stamp, Write};
 use crate::TaskRow;
 

@@ -2,10 +2,10 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! The `agents:` section's grammar, and the value rules that make the object pin worth having,
-//! read as the door reads them: through [`crate::door_statement::read_agents_section`] over the section's JSON.
+//! read as the door reads them: through [`crate::statement::read_agents_section`] over the section's JSON.
 
 use super::*;
-use crate::door_statement::read_agents_section;
+use crate::statement::read_agents_section;
 use busbar_contract::config::UpstreamCreds;
 use busbar_contract::plane::{PinMechanismDecl, TrustKeyDecl, TrustRole};
 use busbar_contract::secret_ref::SecretRef;

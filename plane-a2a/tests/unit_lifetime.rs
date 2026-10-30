@@ -1232,7 +1232,7 @@ fn a_cancel_after_the_agent_answered_is_partial() {
 
 /// A HOP REFUSED FOR THE AGENT'S CREDENTIAL BEFORE IT WAS DIALLED LEDGERS NOTHING
 /// (`BUSBAR-1.6.0.md` l.1126: "a hop refused before the socket ledgers nothing"; the fee class's
-/// own statement in `door_statement::BILLABLE_CLASSES`: "a unit refused before that has its
+/// own statement in `statement::BILLABLE_CLASSES`: "a unit refused before that has its
 /// `per_request` refunded"). The ATTEMPT left the plane (its fee unit `1`) and the caller's body went
 /// toward the agent, then the kernel's send found the agent's credential unavailable and dialled nothing: the
 /// refused piece reports every class at `0`, which the kernel's checkpoint takes as the unit's last

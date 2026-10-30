@@ -81,7 +81,7 @@ a hand-rolled encoder, and so the pin is verified in exactly one place.
 
 ## What runs
 
-    scripts/a2a-subject/boot.sh --supplement     busbar, booted from this commit, two principals
+    testing/a2a-subject/boot.sh --supplement     busbar, booted from this commit, two principals
     testing/a2a-supplement/run-supplement.sh control-jsonrpc      a2a-go v2.4.0, JSON-RPC
     testing/a2a-supplement/run-supplement.sh control-http-json    a2a-go v2.4.0, HTTP+JSON
     testing/a2a-supplement/run-supplement.sh control-scenario     a2a-python, direct

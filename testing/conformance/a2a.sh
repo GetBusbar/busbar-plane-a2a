@@ -14,7 +14,7 @@
 #       broken relay of the scenario agent MUST report clearly more failed MUSTs than against the
 #       honest agent itself.
 #   THE SUBJECT: busbar built from $BUSBAR_CHECKOUT (the .busbar-ref pin) with THIS checkout's
-#       plane-a2a patched in, booted by scripts/a2a-subject/boot.sh, judged by the TCK (--tck) and by
+#       plane-a2a patched in, booted by testing/a2a-subject/boot.sh, judged by the TCK (--tck) and by
 #       the battery (--battery). A subject that cannot be built or booted is `fail`, never a skip.
 #
 # testing/a2a-supplement is busbar-authored and weaker evidence, and testing/a2a-governance is policy:
@@ -324,8 +324,8 @@ build_subject() {
   [ -x "$SUBJECT_BIN" ] || return 1
 }
 
-subject_tck()     { A2A_SUBJECT_BUSBAR_BIN="$SUBJECT_BIN" A2A_SUBJECT_WORKDIR="$W/subject-tck" scripts/a2a-subject/boot.sh --tck; }
-subject_battery() { A2A_SUBJECT_BUSBAR_BIN="$SUBJECT_BIN" A2A_SUBJECT_WORKDIR="$W/subject-battery" scripts/a2a-subject/boot.sh --battery; }
+subject_tck()     { A2A_SUBJECT_BUSBAR_BIN="$SUBJECT_BIN" A2A_SUBJECT_WORKDIR="$W/subject-tck" testing/a2a-subject/boot.sh --tck; }
+subject_battery() { A2A_SUBJECT_BUSBAR_BIN="$SUBJECT_BIN" A2A_SUBJECT_WORKDIR="$W/subject-battery" testing/a2a-subject/boot.sh --battery; }
 
 # ------------------------------------------------------------------------------------------------
 say "tck pin $TCK_REF; busbar pin ${BUSBAR_PIN:-?}; checkout $BUSBAR_CHECKOUT"

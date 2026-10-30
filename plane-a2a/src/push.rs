@@ -15,7 +15,7 @@
 //!   task's notifications reach the receiver in the order its state changed), the tasks served in
 //!   turn.
 //! * Each attempt re-runs the destination judge, then dials the plane's outbound `open-web` need
-//!   ([`crate::door_statement::NEED_OPEN_WEB`]) with [`request`]; its end is [`Attempted`].
+//!   ([`crate::statement::NEED_OPEN_WEB`]) with [`request`]; its end is [`Attempted`].
 //! * [`Deliveries::settle`] pops the head, or puts it back with its next time when the end is
 //!   retryable and attempts remain. [`Deliveries::next_tick_ns`] is the lifecycle tick's
 //!   `next_tick_ns` while no attempt is held: nothing waits on a slot or a thread between attempts.
@@ -445,7 +445,7 @@ impl Deliveries {
 
     /// The notifications dropped and the outcomes dropped unfiled SINCE THE LAST CALL: the
     /// increments the door reports on its counters
-    /// ([`crate::door_statement::FAMILY_PUSH_DROPPED`], [`crate::door_statement::FAMILY_PUSH_UNFILED`]).
+    /// ([`crate::statement::FAMILY_PUSH_DROPPED`], [`crate::statement::FAMILY_PUSH_UNFILED`]).
     pub fn take_counted(&self) -> (u64, u64) {
         self.with(|b| {
             let counted = (

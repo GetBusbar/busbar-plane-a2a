@@ -479,17 +479,14 @@ fn a_dealt_validate_blob_is_unwrapped_to_its_section() {
     let dealt =
         br#"{"agents":{"probe":{"url":"https://a.example/","pin":{"mechanism":"unpinned"}}}}"#;
     let section: serde_json::Value =
-        serde_json::from_slice(&crate::door_statement::dealt_section(dealt)).expect("JSON");
+        serde_json::from_slice(&crate::statement::dealt_section(dealt)).expect("JSON");
     assert_eq!(
         section,
         serde_json::json!({"probe": {"url": "https://a.example/", "pin": {"mechanism": "unpinned"}}})
     );
     let bare = br#"{"probe":{"url":"https://a.example/"},"hooks":[]}"#;
-    assert_eq!(&*crate::door_statement::dealt_section(bare), &bare[..]);
-    assert!(
-        crate::door_statement::read_agents_section(&crate::door_statement::dealt_section(dealt))
-            .is_ok()
-    );
+    assert_eq!(&*crate::statement::dealt_section(bare), &bare[..]);
+    assert!(crate::statement::read_agents_section(&crate::statement::dealt_section(dealt)).is_ok());
 }
 
 /// Two constants, and both are wire-visible: the credential kind appears on a stored credential row
@@ -583,15 +580,13 @@ fn a_named_header_placement_reads_through_the_section() {
                 "secret": { "env": "PLANNER_KEY" }, "placement": placement, "lease_ttl_ms": 1000
             },
         } });
-        crate::door_statement::read_agents_section(&serde_json::to_vec(&section).unwrap()).map(
-            |cfg| {
-                cfg.agents["planner"]
-                    .upstream_credential
-                    .clone()
-                    .unwrap()
-                    .placement
-            },
-        )
+        crate::statement::read_agents_section(&serde_json::to_vec(&section).unwrap()).map(|cfg| {
+            cfg.agents["planner"]
+                .upstream_credential
+                .clone()
+                .unwrap()
+                .placement
+        })
     };
     assert_eq!(
         placed(serde_json::json!({ "header": "X-API-Key" })),
@@ -707,7 +702,7 @@ fn the_plane_declares_its_published_identity_and_its_claims_speak_its_wire_forma
 /// Statement declares the two unlabelled counters the door's tick reports their increments on.
 #[test]
 fn the_statement_declares_the_push_queue_counters() {
-    let st = crate::agent_door::STATEMENT;
+    let st = crate::plane_door::STATEMENT;
     assert_eq!(st.families_len, FAMILIES.len());
     assert_eq!(FAMILIES.len(), 2);
     for (index, name) in [

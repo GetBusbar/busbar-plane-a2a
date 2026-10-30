@@ -566,7 +566,7 @@ pub fn not_live() -> AgentRefusal {
 }
 
 /// The status an arrival is refused with while the instance holds as many live units as it keeps
-/// ([`crate::agent_door::MAX_UNITS`]): the caller may try again once one ends.
+/// ([`crate::plane_door::MAX_UNITS`]): the caller may try again once one ends.
 pub const STATUS_TOO_MANY_REQUESTS: u32 = 429;
 
 /// The full instance's refusal: every unit the instance keeps is live work, and none is ever pushed
