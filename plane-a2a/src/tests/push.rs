@@ -46,10 +46,22 @@ impl Deliveries {
 }
 use crate::a2a::task::{Direction, TaskState};
 use busbar_contract::abi::host::service::DEST_METADATA;
+use busbar_contract::abi::sdk::cred::Seal;
 use busbar_contract::abi::sdk::exchange::Exchange;
-use busbar_contract::abi::sdk::test_support::chip::{cred, framed_head, sealed_bytes};
+use busbar_contract::abi::sdk::exchange::Request;
+use busbar_contract::abi::sdk::test_support::chip::{cred, framed_head};
 
 const MS: u64 = 1_000_000;
+
+/// The bytes `seal` puts on the wire: the value of the one sealed field an exchange frames for it
+/// (`x: <value>\r\n`, nothing else in the head).
+pub(crate) fn sealed_bytes(seal: Seal) -> Vec<u8> {
+    let head = framed_head(
+        &Exchange::request_sealed(Request::default(), vec![(0, b"x".to_vec(), seal)])
+            .expect("one sealed field frames"),
+    );
+    head[b"x: ".len()..head.len() - b"\r\n".len()].to_vec()
+}
 
 /// A task named `id` with a callback, in `state`.
 fn task(id: &str, state: TaskState) -> Task {
@@ -280,11 +292,11 @@ fn the_request_is_a_post_to_the_callbacks_path_with_the_credential_only_once_hel
     assert_eq!(bare.body, x.body);
     assert!(sealed.is_empty());
     d.remember_auth("t1", Some(auth("Bearer", "s3cret")));
-    let (with, sealed) = d.request(&x);
+    let (with, mut sealed) = d.request(&x);
     assert_eq!(with.fields.len(), 1, "the credential is no plain field");
     assert_eq!(sealed.len(), 1);
     assert_eq!((sealed[0].0, &sealed[0].1[..]), (1, &b"authorization"[..]));
-    assert_eq!(sealed_bytes(&sealed[0].2), b"Bearer s3cret");
+    assert_eq!(sealed_bytes(sealed.remove(0).2), b"Bearer s3cret");
     d.remember_auth("t1", None);
     assert!(
         d.request(&x).1.is_empty(),
@@ -347,7 +359,7 @@ fn a_terminal_tasks_last_delivery_forgets_its_credential() {
     let last = Delivery::of(&task("t1", TaskState::Completed)).expect("a callback");
     assert!(last.terminal);
     d.enqueue(last.clone(), 0);
-    assert_eq!(sealed_bytes(&d.request(&last).1[0].2), b"Basic");
+    assert_eq!(sealed_bytes(d.request(&last).1.remove(0).2), b"Basic");
     let _ = d.due(0);
     d.settle("t1", Attempted::Delivered, 0, 0);
     assert!(d.request(&last).1.is_empty());
@@ -358,7 +370,7 @@ fn the_credential_never_prints() {
     let a = auth("Bearer", "s3cret");
     assert!(!format!("{a:?}").contains("s3cret"));
     assert_eq!(
-        sealed_bytes(&a.authorization("https://hook.example/")),
+        sealed_bytes(a.authorization("https://hook.example/")),
         b"Bearer s3cret"
     );
 }
@@ -773,7 +785,7 @@ fn the_push_credential_reaches_the_authorization_field_and_no_debug_or_error_tex
     assert!(!format!("{auth:?}").contains(secret), "{auth:?}");
     assert!(!format!("{:?}", Some(&auth)).contains(secret));
     assert_eq!(
-        sealed_bytes(&auth.authorization("https://hook.example/")),
+        sealed_bytes(auth.authorization("https://hook.example/")),
         format!("Bearer {secret}").as_bytes()
     );
 
