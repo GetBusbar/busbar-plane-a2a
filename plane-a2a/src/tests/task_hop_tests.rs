@@ -640,7 +640,7 @@ fn opened_writing(desk: &mut Desk, envelope: &Value) -> (Opened, Vec<Write>) {
 // ── a refused hop's task end, racing another writer of the task ───────────────────────────────
 
 /// End the refused hop's `task` failed, as the door ends it on the refused piece, on the unit's
-/// own ticket: [`settle_on_answer`] on `TaskSettled::Failed` over the host's records (`agent_door::settle_task`).
+/// own ticket: [`settle_on_answer`] on `TaskSettled::Failed` over the host's records (`plane_door::settle_task`).
 fn ended_on_refusal(d: &mut Desk, task: &TaskHop) -> Vec<Write> {
     let mut out = Vec::new();
     settle_on_answer(

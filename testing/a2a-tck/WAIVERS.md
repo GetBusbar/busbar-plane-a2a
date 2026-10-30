@@ -5,7 +5,7 @@ by which that was established, the reason it is not being made to pass, and the 
 that is failing for a reason nobody wrote down is indistinguishable from one nobody noticed, which
 is the whole point of this file.
 
-Read alongside `scripts/a2a-subject/boot.sh` (which produces the number) and `run-tck.sh` (which
+Read alongside `testing/a2a-subject/boot.sh` (which produces the number) and `run-tck.sh` (which
 runs the suite). **Nothing here silences a test.** Every waived requirement still runs, still fails,
 and is still counted in the suite's own MUST row.
 
@@ -13,7 +13,7 @@ and is still counted in the suite's own MUST row.
 Laws 8 and 10). Its `waived` list holds the LOCKED `PUSH-DELIVER-001/002/003` trio, its `skipped`
 list is EMPTY, and the five SKIPPED MUSTs below sit in its `not_applicable` list (2026-10-14, see
 that section). NO entry is trusted by its id: each carries a premise that
-`scripts/a2a-subject/boot.sh`'s `assert_tck_number` EVALUATES on every run — the trio only while every
+`testing/a2a-subject/boot.sh`'s `assert_tck_number` EVALUATES on every run — the trio only while every
 error the suite reports for it is busbar's plaintext-callback refusal, each of the five only while the
 agent card the suite read holds the capability fact the test skips on (and, for `CARD-EXT-002`,
 while `CARD-EXT-001` passes on the same run). A premise that is false, an entry whose requirement no
@@ -117,7 +117,7 @@ pin.
 CORE-CAP-001   CORE-CAP-002   CORE-CAP-003   CORE-CAP-004   CARD-EXT-002
 ```
 
-**METHOD.** `scripts/a2a-subject/boot.sh --tck` against a busbar built from commit
+**METHOD.** `testing/a2a-subject/boot.sh --tck` against a busbar built from commit
 `6f48a84738c0a0af925a236d81e7f6a7752e6f8c` (this pin), TCK pinned at
 `5996b79f9cefa6fc390980e383e358a66fb9e49e`. Suite's own MUST row:
 
@@ -131,7 +131,7 @@ one's skip message verbatim, quoted below rather than paraphrased.
 
 **WHY: BUSBAR'S SERVED CARD IS FIXED, AND THAT IS THE MECHANISM.** The agent card the TCK reads is
 busbar's OWN card — answered for the root well-known path `/.well-known/agent-card.json`
-(`plane-a2a/src/agent_door.rs:1126`, `CardAsk::Own`) — not the fronted backend's.
+(`plane-a2a/src/plane_door.rs:1126`, `CardAsk::Own`) — not the fronted backend's.
 `self_card_document` (`plane-a2a/src/served_card.rs:192`) hard-codes:
 
 ```rust
@@ -203,7 +203,7 @@ extensions support, at which point this becomes a real, gated pass/fail like any
 
 ## `PUSH-DELIVER-001` / `PUSH-DELIVER-002` / `PUSH-DELIVER-003` — waived 2026-08-12
 
-**METHOD.** `scripts/a2a-subject/boot.sh --tck` against a busbar built from this commit, TCK pinned
+**METHOD.** `testing/a2a-subject/boot.sh --tck` against a busbar built from this commit, TCK pinned
 at `5996b79f9cefa6fc390980e383e358a66fb9e49e`. MUST row from the suite's own stdout:
 
 ```
@@ -234,7 +234,7 @@ Three independent blockers stand in front of these requirements, in this order:
    open-web egress class a push callback declares, before the host is judged for ranges
    (BUSBAR-1.6.0.md, the destination guard: "Every outbound connection of any kind (...
    webhooks, ...) is checked in ONE place, the connector"). No config key reaches that arm: the egress class
-   of a push callback is the plane's declared need (`door_statement::NEEDS`), not an operator
+   of a push callback is the plane's declared need (`statement::NEEDS`), not an operator
    setting. **A topology change cannot reach this refusal, and neither can a configuration
    change.**
 2. ~~**The caller's credential is never stored, so it can never be echoed.**~~ **BUILT — blocker
@@ -338,7 +338,7 @@ MUST row          73 passed, 25 failed, 16     72 passed, 26 failed, 16
 moment the capability IS supported, so it is passable only by not having the verb. It was passing
 because busbar did not have it.
 
-**METHOD FOR `CARD-EXT-001`.** `scripts/a2a-subject/boot.sh --tck` against a busbar built from this
+**METHOD FOR `CARD-EXT-001`.** `testing/a2a-subject/boot.sh --tck` against a busbar built from this
 commit, TCK pinned at `5996b79f9cefa6fc390980e383e358a66fb9e49e`. The first run named two members:
 
 ```
@@ -416,7 +416,7 @@ and `google.rpc.ErrorInfo` it rides in are `prost` messages the plane declares i
 
 ### The original record (historical)
 
-**METHOD.** `scripts/a2a-subject/boot.sh --tck` against a busbar built from this commit, TCK pinned
+**METHOD.** `testing/a2a-subject/boot.sh --tck` against a busbar built from this commit, TCK pinned
 at `5996b79f9cefa6fc390980e383e358a66fb9e49e`, on the run that first armed the gRPC binding. MUST
 row from the suite's own stdout:
 

@@ -7,10 +7,10 @@
 //!
 //! The lifecycle is this plane's own, on the SDK's `PlaneLife` (`lifecycle: plane_life(A2aDoor)`):
 //!
-//! * `validate` reads the settings blob as the `agents:` section ([`door_statement::read_agents_section`]) and
+//! * `validate` reads the settings blob as the `agents:` section ([`statement::read_agents_section`]) and
 //!   refuses in the grammar's words;
 //! * `open` judges the same section, reads the deployment's public base URL and publishes the
-//!   first generation's snapshot ([`door_statement::agents_snapshot_spec`]); `refresh` judges the new section and
+//!   first generation's snapshot ([`statement::agents_snapshot_spec`]); `refresh` judges the new section and
 //!   publishes the next generation over the base URL `open` was given; `retire` drops a
 //!   generation's snapshot. Each generation holds the section it serves beside its snapshot
 //!   (`Generations<PlaneSnapshot, AgentsCfg>`), and an arrival keeps the newest one;
@@ -61,9 +61,9 @@ use busbar_contract::abi::mechanism::ticket::{CompletionHandle, Ticket};
 
 use crate::a2a::config::AgentsCfg;
 use crate::agent_arrival::{self, AgentDisposition, Dialect};
-use crate::door_statement::{self, Line};
 use crate::relay::{self, HopRelay, PieceAnswer, TaskSettled};
 use crate::rest::STATUS_NOT_FOUND;
+use crate::statement::{self, Line};
 use crate::task_door::{kind_index, Via};
 use crate::task_hop::{self, Opened};
 use crate::tasks::{task_key, Halt, Write};
@@ -75,15 +75,15 @@ const MAX_INFLIGHT: u32 = 64;
 pub const VERSION: &str = "1.6.0";
 
 /// The Statement: the plane's name and version, the settings section it declares
-/// ([`door_statement::SECTIONS`]), its three outbound needs ([`door_statement::NEEDS`]), the secret references its
-/// section holds ([`door_statement::SECRET_REFS`]) and its tail ([`door_statement::TAIL`]).
+/// ([`statement::SECTIONS`]), its three outbound needs ([`statement::NEEDS`]), the secret references its
+/// section holds ([`statement::SECRET_REFS`]) and its tail ([`statement::TAIL`]).
 pub const STATEMENT: Statement = {
     let mut s = statement(crate::PLANE_KEY, VERSION, MAX_INFLIGHT)
-        .with_kind_tail(door_statement::TAIL)
-        .with_sections(door_statement::SECTIONS)
-        .with_needs(door_statement::NEEDS)
-        .with_secret_refs(door_statement::SECRET_REFS)
-        .with_families(door_statement::FAMILIES);
+        .with_kind_tail(statement::TAIL)
+        .with_sections(statement::SECTIONS)
+        .with_needs(statement::NEEDS)
+        .with_secret_refs(statement::SECRET_REFS)
+        .with_families(statement::FAMILIES);
     s.extensions = EXTENSIONS;
     s
 };
@@ -497,9 +497,9 @@ pub(crate) fn drive_originated(
     };
     let mut conn = host.connector_from(ticket, *start);
     let need = match hop.binding {
-        crate::binding::Binding::Grpc => door_statement::NEED_GRPC,
+        crate::binding::Binding::Grpc => statement::NEED_GRPC,
         crate::binding::Binding::JsonRpc | crate::binding::Binding::HttpJson => {
-            door_statement::NEED_AGENT
+            statement::NEED_AGENT
         }
     };
     match exchange(&mut conn, ex, need, Some(&hop.url)) {
@@ -621,9 +621,9 @@ impl A2aDoor {
     ) -> Result<Published<AgentsCfg>, Refusal> {
         let plane = self;
         let cfg = agents_section(settings)?;
-        door_statement::read_push_section(owned).map_err(Refusal::refused)?;
+        statement::read_push_section(owned).map_err(Refusal::refused)?;
         let names: Vec<&str> = cfg.agents.keys().map(String::as_str).collect();
-        let spec = door_statement::agents_snapshot_spec(plane.public_url.as_deref(), &names);
+        let spec = statement::agents_snapshot_spec(plane.public_url.as_deref(), &names);
         // THE CARDS A KEPT REGISTRATION HOLDS are held under the new generation too: the apply
         // keeps the operator's approval (it is the kernel's trust book's), and an approved agent
         // whose registration the apply did not touch is served on the next unit, not refused for
@@ -745,7 +745,8 @@ fn joined(
         }
     });
     for (agent, why) in &joined.refused {
-        tracing::warn!(
+        busbar_contract::diag_warn!(
+            crate::diagnostics::A2A_SPLIT_RECORD_UNREAD,
             kind,
             agent = %agent,
             why,
@@ -754,7 +755,8 @@ fn joined(
         );
     }
     if !joined.stray.is_empty() {
-        tracing::warn!(
+        busbar_contract::diag_warn!(
+            crate::diagnostics::A2A_SPLIT_RECORD_STRAY_PARTS,
             kind,
             parts = joined.stray.len(),
             "A2A {kind} part records that no whole record names were found; each is tombstoned on \
@@ -941,7 +943,7 @@ impl BackendIds {
 
 /// The settings blob read as the `agents:` section, or the refusal in the grammar's words.
 fn agents_section(bytes: &[u8]) -> Result<AgentsCfg, Refusal> {
-    door_statement::read_agents_section(bytes).map_err(Refusal::refused)
+    statement::read_agents_section(bytes).map_err(Refusal::refused)
 }
 
 /// Whether the instance has room for a unit under `key`, judged before `arrive` states anything:
@@ -966,7 +968,7 @@ fn room_for(units: &Keyed<u64, AgentUnit>, key: u64) -> bool {
 /// How many trailing-separator agent claims the current generation's snapshot states (R-16).
 fn agent_claims(plane: &A2aDoor) -> usize {
     plane.generations.current().map_or(0, |s| {
-        door_statement::agent_claim_count(s.agents.keys().map(String::as_str))
+        statement::agent_claim_count(s.agents.keys().map(String::as_str))
     })
 }
 
@@ -1093,7 +1095,7 @@ impl PlaneLife for A2aDoor {
 
     /// `validate`: the settings read as the section, or refused in the grammar's words.
     fn validate(settings: &[u8]) -> Result<(), Refusal> {
-        agents_section(&door_statement::dealt_section(settings)).map(|_| ())
+        agents_section(&statement::dealt_section(settings)).map(|_| ())
     }
 
     /// `open`: the instance over the section and the public base URL, and the first generation's
@@ -1101,7 +1103,7 @@ impl PlaneLife for A2aDoor {
     fn open(input: &Lent<'_, PlaneOpenIn>) -> Result<plane_life::Opened<Self>, Refusal> {
         let cfg = agents_section(input.open().settings().bytes())?;
         // ITS OWN `agent_push:` SECTION, judged for its shape (the host reads the CA itself).
-        door_statement::read_push_section(input.owned().bytes()).map_err(Refusal::refused)?;
+        statement::read_push_section(input.owned().bytes()).map_err(Refusal::refused)?;
         let plane = A2aDoor {
             public_url: input.public_url().stated(),
             host: input.open().host().map(|h| Host::of(&h)),
@@ -1109,7 +1111,7 @@ impl PlaneLife for A2aDoor {
             ..A2aDoor::default()
         };
         let names: Vec<&str> = cfg.agents.keys().map(String::as_str).collect();
-        let spec = door_statement::agents_snapshot_spec(plane.public_url.as_deref(), &names);
+        let spec = statement::agents_snapshot_spec(plane.public_url.as_deref(), &names);
         Ok(plane_life::Opened {
             plane,
             first: Published { spec, held: cfg },
@@ -1212,8 +1214,8 @@ impl PlaneLife for A2aDoor {
         // unfiled since the last tick, as the Statement's families' increments.
         let (dropped, unfiled) = plane.deliveries.take_counted();
         for (family, count) in [
-            (door_statement::FAMILY_PUSH_DROPPED, dropped),
-            (door_statement::FAMILY_PUSH_UNFILED, unfiled),
+            (statement::FAMILY_PUSH_DROPPED, dropped),
+            (statement::FAMILY_PUSH_UNFILED, unfiled),
         ] {
             if count > 0 {
                 out.metric(
@@ -1324,15 +1326,15 @@ slot!(
         if !room_for(&plane.units, given.unit()) {
             return refused(&mut out, &agent_arrival::units_full());
         }
-        let Some(route) = door_statement::route_of_claim(given.claim(), || agent_claims(plane)) else {
+        let Some(route) = statement::route_of_claim(given.claim(), || agent_claims(plane)) else {
             return unserved(&mut out);
         };
         let target = input.target().as_str().unwrap_or_default();
         let body = input.body().bytes();
-        let (dialect, envelope, framed) = match door_statement::line_of(route) {
-            Line::Document => (door_statement::DIALECT_DOCUMENT, None, None),
+        let (dialect, envelope, framed) = match statement::line_of(route) {
+            Line::Document => (statement::DIALECT_DOCUMENT, None, None),
             Line::Target => match crate::rest::compose(route, target, body) {
-                Ok(Some(envelope)) => (door_statement::DIALECT_TARGET, Some(envelope), None),
+                Ok(Some(envelope)) => (statement::DIALECT_TARGET, Some(envelope), None),
                 Ok(None) => return unserved(&mut out),
                 Err(refusal) => return refused(&mut out, &refusal),
             },
@@ -1346,7 +1348,7 @@ slot!(
                     return refused(&mut out, &framed_refusal(&crate::framed::unimplemented()));
                 };
                 match crate::framed::compose(rpc, body) {
-                    Ok(envelope) => (door_statement::DIALECT_FRAMED, Some(envelope), Some(rpc)),
+                    Ok(envelope) => (statement::DIALECT_FRAMED, Some(envelope), Some(rpc)),
                     Err(status) => return refused(&mut out, &framed_refusal(&status)),
                 }
             }
@@ -1546,7 +1548,7 @@ pub(crate) fn answered_here(disposition: &AgentDisposition, addressed: bool) -> 
 /// kernel's) is unserved here.
 fn arrive_card(
     plane: &A2aDoor,
-    route: &door_statement::Route,
+    route: &statement::Route,
     target: &str,
     unit: u64,
     out: &mut Out<'_, ArriveOut>,
@@ -1569,7 +1571,7 @@ fn arrive_card(
         return unserved(out);
     };
     out.set(|o| &o.op_class, op);
-    out.set(|o| &o.dialect, door_statement::DIALECT_DOCUMENT);
+    out.set(|o| &o.dialect, statement::DIALECT_DOCUMENT);
     match &agent {
         None => {
             out.set(|o| &o.principal_need, PRINCIPAL_NONE);
@@ -2076,7 +2078,7 @@ fn caller_stands(
         return None;
     }
     match (
-        entitled(reach, pass, &door_statement::agent_resource(member)),
+        entitled(reach, pass, &statement::agent_resource(member)),
         addressed,
     ) {
         (true, _) => None,
@@ -2146,7 +2148,7 @@ fn pool_gate(
     match holder {
         Some(holder) if holder != gate.member => Gate::Decline,
         Some(_) if elsewhere => {
-            match entitled(reach, pass, &door_statement::agent_resource(gate.member)) {
+            match entitled(reach, pass, &statement::agent_resource(gate.member)) {
                 true => Gate::Go,
                 false => {
                     let standing = busbar_contract::abi::host::service::ENTITLEMENT_STANDING;
@@ -2154,7 +2156,7 @@ fn pool_gate(
                     Gate::Refuse(relay::RelayReply::refused(
                         &agent_arrival::pinned_ungranted(
                             hop.relay.id().clone(),
-                            &door_statement::agent_resource(gate.member),
+                            &statement::agent_resource(gate.member),
                             live,
                         ),
                         None,
@@ -2165,7 +2167,7 @@ fn pool_gate(
         Some(_) => Gate::Go,
         None => {
             if elsewhere
-                && (!entitled(reach, pass, &door_statement::agent_resource(gate.member))
+                && (!entitled(reach, pass, &statement::agent_resource(gate.member))
                     || verdict(reach.plane, gate.member)
                         != busbar_contract::abi::host::service::DISTRUST_NONE)
             {
@@ -2392,7 +2394,7 @@ fn hop_piece(
         let ungated = attempt && hop.gated != given.attempt_no();
         if let (true, Some((name, members))) = (ungated, pooled.as_ref()) {
             // The pool as the walk names it: its breaker key, `agent:<pool>`.
-            let pool = door_statement::agent_resource(name);
+            let pool = statement::agent_resource(name);
             let gate = PoolGate {
                 pool: &pool,
                 members,
@@ -2665,23 +2667,20 @@ fn hop_piece(
     let moved = if refused { 0 } else { hop.relay.moved() };
     if moved != 0 {
         units.push(UnitCount {
-            class: door_statement::CLASS_BYTES_INDEX,
+            class: statement::CLASS_BYTES_INDEX,
             source: UNITS_REPORTED,
             amount: moved,
         });
     }
     if left && !refused {
         units.push(UnitCount {
-            class: door_statement::CLASS_FEE_INDEX,
+            class: statement::CLASS_FEE_INDEX,
             source: UNITS_REPORTED,
             amount: 1,
         });
     }
     if undialled {
-        for class in [
-            door_statement::CLASS_BYTES_INDEX,
-            door_statement::CLASS_FEE_INDEX,
-        ] {
+        for class in [statement::CLASS_BYTES_INDEX, statement::CLASS_FEE_INDEX] {
             units.push(UnitCount {
                 class,
                 source: UNITS_REPORTED,
@@ -2746,16 +2745,16 @@ fn hop_piece(
         Some(AnswerHead::Reply(..) | AnswerHead::Events | AnswerHead::Framed)
     );
     if caller_head && admitted && !member.is_empty() {
-        records.push(door_statement::audit_write(
+        records.push(statement::audit_write(
             &mut arena,
-            &door_statement::agent_resource(member),
+            &statement::agent_resource(member),
             left,
         ));
     }
     // THE UNIT'S LEDGER LANE (SEAM-L(j)): the agent it reached, as the engine's meter named it
     // (`agent:<id>`), so the agent's rate card prices it and the metering rows read the same.
     let lane =
-        (!member.is_empty()).then(|| arena.span(door_statement::agent_resource(member).as_bytes()));
+        (!member.is_empty()).then(|| arena.span(statement::agent_resource(member).as_bytes()));
     let wait_member = wait_member.map(|h| arena.span(h.as_bytes()));
     // The attempt's counter labels: the agent the attempt went to as its `pool`, the binding the hop goes
     // out on as its `lane` (one of the words the tail declares, `metric_lanes`).
@@ -2872,12 +2871,12 @@ fn hop_piece(
 }
 
 /// THE NEED AN ATTEMPT ON `binding` RIDES, as `OnPieceOut::need` names it (its index plus one;
-/// `0` = the member's own, [`door_statement::NEED_AGENT`]): the gRPC binding rides [`door_statement::NEED_GRPC`], every
+/// `0` = the member's own, [`statement::NEED_AGENT`]): the gRPC binding rides [`statement::NEED_GRPC`], every
 /// other binding the agent's own need.
 #[must_use]
 pub fn attempt_need(binding: crate::binding::Binding) -> u32 {
     match binding {
-        crate::binding::Binding::Grpc => door_statement::NEED_GRPC + 1,
+        crate::binding::Binding::Grpc => statement::NEED_GRPC + 1,
         crate::binding::Binding::JsonRpc | crate::binding::Binding::HttpJson => 0,
     }
 }
@@ -3055,10 +3054,10 @@ slot!(
         // `RefusalIn::target`), and a call on the gRPC service is refused on the gRPC line.
         let asked = input.target().as_str().unwrap_or_default();
         let dialect = match given.dialect() {
-            door_statement::DIALECT_DOCUMENT if crate::framed::on_service(asked) => Dialect::Framed,
-            door_statement::DIALECT_DOCUMENT => Dialect::JsonRpc,
-            door_statement::DIALECT_TARGET => Dialect::RestJson,
-            door_statement::DIALECT_FRAMED => Dialect::Framed,
+            statement::DIALECT_DOCUMENT if crate::framed::on_service(asked) => Dialect::Framed,
+            statement::DIALECT_DOCUMENT => Dialect::JsonRpc,
+            statement::DIALECT_TARGET => Dialect::RestJson,
+            statement::DIALECT_FRAMED => Dialect::Framed,
             _ => return Outcome::Refused,
         };
         let text = input.text().bytes();
@@ -3208,7 +3207,7 @@ slot!(
             let ungranted = (given.reason() == Code::ScopeDenied.code())
                 .then(|| of_unit(&instance, given.unit(), |u| u.agent.clone()))
                 .flatten()
-                .map(|agent| agent_arrival::not_granted_sentence(&door_statement::agent_resource(&agent)));
+                .map(|agent| agent_arrival::not_granted_sentence(&statement::agent_resource(&agent)));
             let text = ungranted.as_deref().unwrap_or(text);
             // The code is the reason's CLASS's (`class_code`): a node fault reads as the internal
             // error, every other class as the engine's admission refusal.
@@ -3260,9 +3259,9 @@ slot!(
                     (AgentDisposition::Request { row, .. }, None)
                         if row.op == crate::ops::OP_AGENT_CARD =>
                     {
-                        Some(door_statement::PLANE_POOL_RESOURCE.to_string())
+                        Some(statement::PLANE_POOL_RESOURCE.to_string())
                     }
-                    (_, Some(agent)) => Some(door_statement::agent_resource(agent)),
+                    (_, Some(agent)) => Some(statement::agent_resource(agent)),
                     _ => None,
                 })
             })
@@ -3281,7 +3280,7 @@ slot!(
             });
         }
         if let Some(resource) = &audited {
-            records.push(door_statement::audit_write(&mut arena, resource, false));
+            records.push(statement::audit_write(&mut arena, resource, false));
         }
         let short = !(reply.fits() && fields.fits() && arena.fits() && records.fits());
         let (rw, rnd) = reply.settle(short);
@@ -3588,12 +3587,7 @@ fn fetch_card(
                 }
                 (Ok(mut state), Some(host)) => {
                     let mut conn = host.connector_from(at.ticket, start);
-                    match exchange(
-                        &mut conn,
-                        &mut state,
-                        door_statement::NEED_AGENT,
-                        Some(&url),
-                    ) {
+                    match exchange(&mut conn, &mut state, statement::NEED_AGENT, Some(&url)) {
                         Poll::Pending => {
                             return Err(LookParked::Fetching {
                                 hop,
@@ -4037,10 +4031,10 @@ slot!(
         let Some(plane) = instance.get() else {
             return Outcome::Failed;
         };
-        if input.route() as usize == door_statement::PUSH_ROUTE {
+        if input.route() as usize == statement::PUSH_ROUTE {
             return crate::push_serve::serve(plane, &instance, input, out);
         }
-        let Some((_, route)) = door_statement::ADMIN_VERBS.get(input.route() as usize) else {
+        let Some((_, route)) = statement::ADMIN_VERBS.get(input.route() as usize) else {
             return verb_refused(&input, &mut out, STATUS_NOT_FOUND, "", None, AUDIT_NONE);
         };
         let approving = route.ends_with("/approve");
@@ -4327,7 +4321,7 @@ pub fn with_params(
 /// THE HTTP+JSON BODY THAT SPELLS `params` on `route`, where the line's body is the request's
 /// params ([`crate::rest::compose`]: a message sent or streamed, a push config posted, whose task
 /// the path names again); `None` on a route whose params the path and query spell.
-fn target_body(route: &door_statement::Route, params: &serde_json::Value) -> Option<Vec<u8>> {
+fn target_body(route: &statement::Route, params: &serde_json::Value) -> Option<Vec<u8>> {
     let rel = route
         .target
         .strip_prefix(crate::MOUNT_PATH)
@@ -4358,12 +4352,12 @@ slot!(
     Project, ProjectIn, ProjectOut, |instance, input, mut out| {
         let plane = instance.get();
         let agents = || plane.map_or(0, agent_claims);
-        let Some(route) = door_statement::route_of_claim(input.claim(), agents) else {
+        let Some(route) = statement::route_of_claim(input.claim(), agents) else {
             return Outcome::Refused;
         };
         let target = input.target().as_str().unwrap_or_default();
         let body = input.body().bytes();
-        let line = door_statement::line_of(route);
+        let line = statement::line_of(route);
         let envelope = match line {
             Line::Document => body.to_vec(),
             Line::Target => match crate::rest::compose(route, target, body) {
@@ -4529,7 +4523,7 @@ pub fn invocation_of(envelope: &[u8]) -> busbar_contract::ir::invoke::InvokeReq 
 }
 
 #[cfg(test)]
-#[path = "tests/agent_door_tests.rs"]
+#[path = "tests/plane_door_tests.rs"]
 mod tests;
 
 #[cfg(test)]

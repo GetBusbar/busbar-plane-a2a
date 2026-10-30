@@ -465,7 +465,7 @@ fn an_ungranted_caller_is_told_the_scope_it_does_not_hold() {
 /// keys are not live (disabled, tombstoned, past its row's `expires_at`, reaching the expiry being
 /// expired) is the kernel's identity step, pinned there
 /// (`host_services_tests::a_dead_or_expired_key_sees_nothing`), which the door asks at the attempt
-/// (`agent_door::caller_stands`); this pins what the door answers: `401`, `-32004`, no id, its sentence
+/// (`plane_door::caller_stands`); this pins what the door answers: `401`, `-32004`, no id, its sentence
 /// naming `this key` (a plane never sees the raw principal, BUSBAR-1.6.0.md l.2639-2641; ruling
 /// (B), coordinator 2026-10-07).
 /// Ported from busbar-a2a a2a/tests/inbound_tests.rs::a_key_that_is_not_live_is_refused_401_however_it_is_not_live.

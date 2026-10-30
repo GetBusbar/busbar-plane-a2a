@@ -148,7 +148,7 @@
 #   BUSBAR_A2A_ENDPOINT      an EXTERNAL, already-deployed busbar. OPTIONAL EXTRA only.
 
 set -euo pipefail
-# The repository root, two levels up: this file lives in `scripts/a2a-subject/`. Every path below is
+# The repository root, two levels up: this file lives in `testing/a2a-subject/`. Every path below is
 # written from the root so the script reads the same whether it is invoked from CI, from the root,
 # or from its own directory.
 cd "$(dirname "$0")/../.."
@@ -563,7 +563,7 @@ busbar built FROM THIS COMMIT; if the build step did not produce one, that is th
     : > "$SUBJECT_UPSTREAM_RECORD"
   fi
   A2A_VENDOR_RECORD="$SUBJECT_UPSTREAM_RECORD" \
-  node scripts/a2a-subject/signing-vendor.mjs "$vendor_port" "$agent_port" "$dir/issuer.spki" \
+  node testing/a2a-subject/signing-vendor.mjs "$vendor_port" "$agent_port" "$dir/issuer.spki" \
     >"$dir/signing-vendor.log" 2>&1 &
   subject_track_pid "$!"
   subject_await "http://127.0.0.1:$vendor_port/.well-known/agent-card.json" \
@@ -717,7 +717,7 @@ vacuously."
   # trailers (where `grpc-status` lives) as well as its headers. See that file's own header.
   local through="http://127.0.0.1:$public_port/a2a/agents/$SUBJECT_AGENT_ID"
   if [ "$credential_held_by" = "shim" ]; then
-    node scripts/a2a-subject/binding-shim.mjs "$suite_port" "$data_port" "$bound" \
+    node testing/a2a-subject/binding-shim.mjs "$suite_port" "$data_port" "$bound" \
       >"$dir/credential-shim.log" 2>&1 &
     subject_track_pid "$!"
 

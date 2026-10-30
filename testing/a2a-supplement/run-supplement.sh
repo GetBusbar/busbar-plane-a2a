@@ -29,7 +29,7 @@
 #
 # The BUSBAR leg does NOT live here. It needs a booted subject, two minted principals and an
 # out-of-band issuer key, so it lives with the rest of the subject rig:
-#   scripts/a2a-subject/boot.sh --supplement
+#   testing/a2a-subject/boot.sh --supplement
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -43,7 +43,7 @@ mkdir -p "$OUT" "$BIN_DIR"
 say () { printf '\n=== %s ===\n' "$*"; }
 
 # The pinned TCK's checkout and virtualenv, borrowed rather than duplicated. See the note in
-# `scripts/a2a-subject/boot.sh::leg_supplement`: the gRPC binding is driven through the
+# `testing/a2a-subject/boot.sh::leg_supplement`: the gRPC binding is driven through the
 # specification's OWN generated stubs, and there must be exactly one place the pin is verified.
 prepare () {
   local line

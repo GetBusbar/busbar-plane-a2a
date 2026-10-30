@@ -500,12 +500,12 @@ fn the_push_volume_bound_is_one_point_five_point_fives() {
 
 #[test]
 fn the_statement_declares_its_open_web_need_and_its_agent_member_need() {
-    use crate::door_statement::{MEMBER_TARGET, NEEDS, NEED_AGENT, NEED_OPEN_WEB};
+    use crate::statement::{MEMBER_TARGET, NEEDS, NEED_AGENT, NEED_OPEN_WEB};
     use busbar_contract::abi::host::conn::connector::{
         DIRECTION_OUTBOUND, EGRESS_OPEN_WEB, EGRESS_PROVIDER,
     };
     use busbar_contract::abi::mechanism::check::check_needs;
-    let st = &crate::agent_door::STATEMENT;
+    let st = &crate::plane_door::STATEMENT;
     assert!(!st.needs_ptr().is_null());
     // The open web, the agents over http, the agents over grpc.
     assert_eq!((st.needs_len(), NEEDS.len()), (3, 3));
@@ -538,7 +538,7 @@ fn the_statement_declares_its_open_web_need_and_its_agent_member_need() {
     );
     assert_eq!(
         need.trust_from.len(),
-        crate::door_statement::PUSH_TRUST_FROM.len(),
+        crate::statement::PUSH_TRUST_FROM.len(),
         "its trust anchor is the operator's optional `agent_push.ca` (the text is pinned by the \
          conformance read of the rendered Statement)"
     );
@@ -549,7 +549,7 @@ fn the_statement_declares_its_open_web_need_and_its_agent_member_need() {
 /// the section is stated as the plane's own (not declaring, not consumed).
 #[test]
 fn the_push_trust_path_names_the_owned_agent_push_section() {
-    use crate::door_statement::{PUSH_CA_KEY, PUSH_SECTION, PUSH_TRUST_FROM, SECTIONS};
+    use crate::statement::{PUSH_CA_KEY, PUSH_SECTION, PUSH_TRUST_FROM, SECTIONS};
     use busbar_contract::section::{owned_path, OWNED_PATH_PREFIX};
     assert_eq!(
         PUSH_TRUST_FROM,
@@ -572,7 +572,7 @@ fn the_push_trust_path_names_the_owned_agent_push_section() {
 /// usable trust anchor is the host's to judge.
 #[test]
 fn the_agent_push_section_holds_its_ca_alone() {
-    use crate::door_statement::read_push_section;
+    use crate::statement::read_push_section;
     for fine in [
         &b""[..],
         br#"{}"#,

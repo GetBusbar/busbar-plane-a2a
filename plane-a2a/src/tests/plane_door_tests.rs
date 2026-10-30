@@ -167,8 +167,8 @@ fn a_blank_a2a_version_on_the_grpc_line_reads_as_the_lines_own_version() {
 /// no ceiling and no arrival stated a stream, so a stalled caller held its unit forever.
 #[test]
 fn a_streamed_hop_states_a_stream_and_the_tail_predevs_600_second_ceiling() {
-    assert_eq!(crate::door_statement::TAIL.stream_ceiling_secs, 600);
-    assert_eq!(crate::door_statement::STREAM_CEILING_SECS, 600);
+    assert_eq!(crate::statement::TAIL.stream_ceiling_secs, 600);
+    assert_eq!(crate::statement::STREAM_CEILING_SECS, 600);
     for method in [
         "message/stream",
         "tasks/resubscribe",
@@ -269,7 +269,7 @@ fn a_rewrite_replaces_the_params_by_the_invoke_contract() {
 fn the_target_line_keeps_the_rewritten_params_as_its_body() {
     let route = |verb: &str, suffix: &str| {
         let target = format!("{}{suffix}", crate::MOUNT_PATH);
-        door_statement::ROUTES
+        statement::ROUTES
             .iter()
             .find(|r| r.verb == verb && r.target == target)
             .unwrap_or_else(|| panic!("{verb} {target}"))
@@ -754,7 +754,7 @@ fn the_rewrite_apply_site_never_falls_back_to_the_caller_s_original_params() {
         })
     }
 
-    let src = include_str!("../agent_door.rs");
+    let src = include_str!("../plane_door.rs");
     let site = src
         .split_once("let rewrite = input.rewrite().bytes();")
         .map(|(_, rest)| rest)

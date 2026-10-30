@@ -10,7 +10,7 @@
 // approved" (`CardPin::Unpinned` has no `is_a_root()`). A registration this rig needs Busbar to
 // actually SERVE therefore needs a real authenticity root, and the one that works over plaintext
 // loopback with no PKI relationship is a JWS-signed card under an Ed25519 issuer key the operator
-// holds out of band -- exactly what scripts/a2a-subject/signing-vendor.mjs already does for the
+// holds out of band -- exactly what testing/a2a-subject/signing-vendor.mjs already does for the
 // official a2a-subject boot. This file borrows that EXACT canonicalization (`jcs`) and signing shape
 // (`signCard`) rather than re-deriving it, so there is one implementation of "how busbar's JWS pin
 // verifies a card" in this tree, not two that can drift.

@@ -15,7 +15,7 @@
 //!   sequence is won with `records.claim` on `<caller>/<task>/<seq>` before anything is written. A
 //!   writer that loses re-reads and tries the next one.
 //! * The hash chain is the host's: the task-event kind is declared chained, length-prefixed with
-//!   its scope digested (`crate::door_statement`'s `RECORD_CHAINS`). An event is an append
+//!   its scope digested (`crate::statement`'s `RECORD_CHAINS`). An event is an append
 //!   to the chain keyed `<caller>/<task>` (`<caller>` the kernel's opaque caller reference, never
 //!   the principal) carrying only its own fields ([`suffix`]); the host frames `prev, scope, seq`
 //!   ahead of them,
