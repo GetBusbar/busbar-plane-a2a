@@ -281,13 +281,11 @@ pub fn compose(rpc: Rpc, message: &[u8]) -> Result<Vec<u8>, CallStatus> {
             to_params::<pb::DeleteTaskPushNotificationConfigRequest>(message)?
         }
     };
-    let envelope = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": COMPOSED_ID,
-        "method": rpc.name(),
-        "params": params,
-    });
-    Ok(envelope.to_string().into_bytes())
+    Ok(busbar_contract::jsonrpc::request_bytes(
+        COMPOSED_ID.to_string().as_bytes(),
+        rpc.name(),
+        Some(&serde_json::to_vec(&params).unwrap_or_default()),
+    ))
 }
 
 /// Whether `message` is a send whose request carries no message at all: the SDK's model gave it a
