@@ -267,7 +267,7 @@ stop_control () {
 # serve_scenario_agent <port>  -> exports CONTROL_PID
 #
 # The agent the SUBJECT leg fronts, served here with NO busbar in the path. That is the whole point
-# of this leg: `scripts/a2a-subject/boot.sh` measures busbar-fronting-this-agent, and a number has
+# of this leg: `testing/a2a-subject/boot.sh` measures busbar-fronting-this-agent, and a number has
 # no meaning without the number the same suite gives the same agent alone. The difference between
 # the two is busbar's contribution, in both directions, and nothing else.
 serve_scenario_agent () {
@@ -387,7 +387,7 @@ case "${1:-}" in
   # exceptions, both because their green side needs the network: `fetch_tck`'s pin refusal (a
   # checkout AT the pin can only be fetched), exercised by every control leg the conformance
   # recorder runs; and the subject verb's endpoint refusal (a subject run fetches the suite and
-  # needs a live endpoint), exercised by `scripts/a2a-subject/boot.sh --tck`.
+  # needs a live endpoint), exercised by `testing/a2a-subject/boot.sh --tck`.
   #
   # The report legs plant the previous run's GOOD report where the runner writes its own -- the
   # state the persistent cache leaves -- and have the stand-in suite crash without writing one; the

@@ -25,7 +25,7 @@ from a2asup.target import Target
 # The eleven operations of the SPEC 5.3 method mapping table, minus the two streaming ones. The
 # streaming pair is excluded DELIBERATELY and out loud: SSE and gRPC server-streaming answer with a
 # sequence rather than a document, so "the same result" needs a different comparison, and the
-# subject rig's SSE relay is a known-stalling component (see scripts/a2a-subject/binding-shim.mjs).
+# subject rig's SSE relay is a known-stalling component (see testing/a2a-subject/binding-shim.mjs).
 # Including them would measure the rig. What is lost is stated here rather than left implicit.
 EQUIV_OPS: list[tuple[str, dict]] = [
     ("get_task", {"id": "PLACEHOLDER"}),

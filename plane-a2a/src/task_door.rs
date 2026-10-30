@@ -30,8 +30,8 @@ use busbar_contract::abi::sdk::{
 use serde_json::Value;
 
 use crate::agent_arrival::{AgentDisposition, JSON_MEDIA_TYPE};
-use crate::agent_door::A2aDoor;
 use crate::local::{self, LocalVerb, Reach};
+use crate::plane_door::A2aDoor;
 use crate::records::HELD_KINDS;
 use crate::tasks::{self, Halt, Records, Write};
 
@@ -64,7 +64,7 @@ pub struct Pass {
     /// The reply the windows write is one message (the gRPC line's).
     message: bool,
     /// The audit row the unit's answer writes with its first window: its resource, and whether
-    /// the unit was served ([`crate::door_statement::AUDIT_ACTION`]); its resource is also the unit's ledger
+    /// the unit was served ([`crate::statement::AUDIT_ACTION`]); its resource is also the unit's ledger
     /// lane.
     pub(crate) audit: Option<(String, bool)>,
     /// The agent the unit's ATTEMPT reached.
@@ -548,7 +548,7 @@ pub fn on_piece(
     }
     // An answer held while busbar's own callback is mirrored: the mirror goes on, then the answer.
     if let Some(mut held) = held {
-        if crate::agent_door::drive_mirror(plane, instance.ticket(), &mut held.flight).is_pending()
+        if crate::plane_door::drive_mirror(plane, instance.ticket(), &mut held.flight).is_pending()
         {
             plane.on_unit(unit, |u| {
                 u.pass.held = Some(held);
@@ -624,7 +624,7 @@ pub fn on_piece(
         .as_ref()
         .and_then(|s| s.agents.get(member))
         .and_then(|def| {
-            crate::agent_door::admit_unit(
+            crate::plane_door::admit_unit(
                 plane,
                 (member, def),
                 addressed.as_deref(),
@@ -670,7 +670,7 @@ pub fn on_piece(
             writes.clear();
             local::unreadable(envelope.get("id").unwrap_or(&Value::Null))
         }
-        // A subscribe to a live task is the relay's (`crate::agent_door`'s events hop); one that
+        // A subscribe to a live task is the relay's (`crate::plane_door`'s events hop); one that
         // reached here carried no request the relay could send.
         Ok(None) => return Some(Outcome::Refused),
         Ok(Some(answer)) => answer,
@@ -686,7 +686,7 @@ pub fn on_piece(
         u.pass.served = served;
         // An admitted verb the plane answered is the caller's call, audited as served (after its
         // admission).
-        u.pass.audit = served.then(|| (crate::door_statement::agent_resource(member), true));
+        u.pass.audit = served.then(|| (crate::statement::agent_resource(member), true));
     });
     // Busbar's own callback, mirrored onto the agent before the answer goes: only on a successful local answer about a live task the agent has named.
     let mirrored = crate::mirror::mirrored_verb(verb).filter(|_| served && answer.status == 200);
@@ -707,7 +707,7 @@ pub fn on_piece(
         None => None,
     };
     if let Some(mut flight) = flight {
-        if crate::agent_door::drive_mirror(plane, instance.ticket(), &mut flight).is_pending() {
+        if crate::plane_door::drive_mirror(plane, instance.ticket(), &mut flight).is_pending() {
             plane.on_unit(unit, |u| {
                 u.pass.held = Some(HeldAnswer {
                     status: answer.status,
@@ -812,7 +812,7 @@ fn refresh_listed<'h>(
                 })
             });
             let params = serde_json::json!({});
-            match crate::agent_door::drive_originated(
+            match crate::plane_door::drive_originated(
                 plane,
                 ticket,
                 &mut hop,
@@ -1115,7 +1115,7 @@ fn window_core(
         .with(&unit, |u| u.is_some_and(|u| u.pass.served))
     {
         units.push(UnitCount {
-            class: crate::door_statement::CLASS_FEE_INDEX,
+            class: crate::statement::CLASS_FEE_INDEX,
             source: UNITS_REPORTED,
             amount: 1,
         });
@@ -1130,7 +1130,7 @@ fn window_core(
         // A whole answer states its length, so it is sent under it (never chunked).
         if head.length {
             fields.push(OutField {
-                name: arena.span(crate::agent_door::H_CONTENT_LENGTH.as_bytes()),
+                name: arena.span(crate::plane_door::H_CONTENT_LENGTH.as_bytes()),
                 value: arena.span(body.len().to_string().as_bytes()),
             });
         }
@@ -1150,7 +1150,7 @@ fn window_core(
             .with(&unit, |u| u.and_then(|u| u.pass.audit.clone())),
     );
     if let Some((resource, applied)) = &audit {
-        records.push(crate::door_statement::audit_write(
+        records.push(crate::statement::audit_write(
             &mut arena, resource, *applied,
         ));
     }
@@ -1205,7 +1205,7 @@ fn window_core(
     };
     if rest.is_empty() {
         // The answer is written whole: the door is done with the unit, the first to make room
-        // ([`crate::agent_door::AgentUnit::over`]).
+        // ([`crate::plane_door::AgentUnit::over`]).
         plane.on_unit(unit, |u| {
             u.over = true;
         });
@@ -1309,10 +1309,10 @@ fn extended_card(
     };
     let mut held = Vec::new();
     for (name, def) in agents {
-        if !signer.entitled(&format!("{}:{name}", crate::door_statement::SCOPE)) {
+        if !signer.entitled(&format!("{}:{name}", crate::statement::SCOPE)) {
             continue;
         }
-        if crate::agent_door::admit_unit(plane, (name, def), None, generation, None).is_err() {
+        if crate::plane_door::admit_unit(plane, (name, def), None, generation, None).is_err() {
             continue;
         }
         held.push((
@@ -1417,7 +1417,7 @@ pub fn card_piece(
         }
         crate::agent_arrival::CardAsk::Extended => {
             plane.on_unit(unit, |u| {
-                u.pass.audit = Some((crate::door_statement::PLANE_POOL_RESOURCE.to_string(), true));
+                u.pass.audit = Some((crate::statement::PLANE_POOL_RESOURCE.to_string(), true));
             });
             let (status, body) = extended_card(
                 plane,

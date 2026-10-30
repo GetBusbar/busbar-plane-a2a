@@ -39,20 +39,19 @@ mod a2a {
 }
 
 mod agent_arrival;
-/// THE DOOR's module: the plane door the root re-exports as [`door`].
-mod agent_door;
 mod answer_bytes;
 mod binding;
 mod card_trust;
 mod cards;
 mod claims;
 mod diagnostics;
-mod door_statement;
 mod events;
 mod framed;
 mod local;
 mod mirror;
 mod ops;
+/// THE DOOR's module: the plane door the root re-exports as [`door`].
+mod plane_door;
 mod proto;
 mod push;
 mod push_door;
@@ -65,6 +64,7 @@ mod served_card;
 mod skill;
 mod split_record;
 mod sse;
+mod statement;
 mod task_door;
 mod task_hop;
 mod task_identity;
@@ -72,7 +72,7 @@ mod tasks;
 mod wkt;
 
 /// The door: this plugin's one public item.
-pub use agent_door::door;
+pub use plane_door::door;
 
 /// The task and task-event row structs at the crate root, where the task type names them.
 use record::{TaskEventRow, TaskRow};
@@ -147,7 +147,7 @@ const METADATA_PATH: &str = "/.well-known/oauth-protected-resource/a2a";
 
 /// THE SUFFIX OF BUSBAR'S OWN PUSH CALLBACK under [`MOUNT_PATH`]: `/a2a/push`, the URL a mirrored
 /// push config names at the agent. It is served as busbar's own PUBLIC route
-/// ([`door_statement::PUSH_ROUTE`]), never as one of the plane's claims.
+/// ([`statement::PUSH_ROUTE`]), never as one of the plane's claims.
 const PUSH_PATH_SUFFIX: &str = "/push";
 
 /// [`MOUNT_PATH`] joined to one of the route suffixes above. One join, called from both sides,

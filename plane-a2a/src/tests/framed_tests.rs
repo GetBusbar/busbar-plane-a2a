@@ -35,7 +35,7 @@ fn the_service_path_is_the_generated_services() {
         Some(crate::proto::SERVICE_NAME)
     );
     assert_eq!(
-        crate::door_statement::ROUTES
+        crate::statement::ROUTES
             .iter()
             .filter(|r| r.carrier == crate::claims::FRAMED_TRANSPORT)
             .map(|r| r.target)

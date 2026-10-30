@@ -37,7 +37,7 @@ pub enum Binding {
     /// HTTP+JSON (A2A section 11.3): the operation's request line, its params as the body.
     HttpJson,
     /// gRPC: the rpc's path under the service, its params as the rpc's request message, carried
-    /// over the grpc transport ([`crate::door_statement::NEED_GRPC`]).
+    /// over the grpc transport ([`crate::statement::NEED_GRPC`]).
     Grpc,
 }
 

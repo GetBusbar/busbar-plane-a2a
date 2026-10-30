@@ -404,11 +404,8 @@ fn trailers_after_a_json_rpc_answer_are_not_read_as_its_body() {
 /// (the member's own).
 #[test]
 fn a_grpc_attempt_rides_the_doors_grpc_need() {
-    use crate::agent_door::attempt_need;
-    assert_eq!(
-        attempt_need(Binding::Grpc),
-        crate::door_statement::NEED_GRPC + 1
-    );
+    use crate::plane_door::attempt_need;
+    assert_eq!(attempt_need(Binding::Grpc), crate::statement::NEED_GRPC + 1);
     assert_eq!(attempt_need(Binding::JsonRpc), 0);
     assert_eq!(attempt_need(Binding::HttpJson), 0);
 }

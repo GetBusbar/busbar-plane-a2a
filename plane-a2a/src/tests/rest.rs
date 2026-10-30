@@ -6,7 +6,7 @@
 //! `Query` decoded them, and the answer re-framed by what it is.
 
 use super::*;
-use crate::door_statement::ROUTES;
+use crate::statement::ROUTES;
 use serde_json::json;
 
 /// The route `verb target` of the door's routes.
