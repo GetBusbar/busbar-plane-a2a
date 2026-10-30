@@ -1335,8 +1335,10 @@ fn extended_card(
     {
         Ok(doc) => (
             200,
-            serde_json::to_vec(&serde_json::json!({ "jsonrpc": "2.0", "id": rpc, "result": doc }))
-                .unwrap_or_default(),
+            busbar_contract::jsonrpc::result_bytes(
+                &serde_json::to_vec(&rpc).unwrap_or_default(),
+                &serde_json::to_vec(&doc).unwrap_or_default(),
+            ),
         ),
         Err(_) => refusal(500, -32603, "the extended agent card could not be built"),
     }

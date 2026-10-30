@@ -30,7 +30,7 @@
 //! forgets what the previous attempt's far end said.
 
 use busbar_contract::jsonrpc::{read_response, NotAnAnswerKind, Reply as RpcReply};
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use crate::a2a::task::TaskState;
 use crate::agent_arrival::{AgentRefusal, JSON_MEDIA_TYPE};
@@ -1161,7 +1161,9 @@ impl HopRelay {
                         // `grpc-status` from the trailers): an error status is the
                         // far end's error, relayed as one more event, and the answer ends failed.
                         if let Some(error) = self.grpc_error() {
-                            body.extend_from_slice(format!("data: {error}\n\n").as_bytes());
+                            body.extend_from_slice(b"data: ");
+                            body.extend_from_slice(&error);
+                            body.extend_from_slice(b"\n\n");
                             return self.events_refused(HopRefusal::BackendError, body);
                         }
                         self.answered = true;
@@ -1205,8 +1207,12 @@ impl HopRelay {
                 break true;
             };
             cursor += took;
-            let envelope = json!({ "jsonrpc": "2.0", "id": self.id, "result": result });
-            out.extend_from_slice(format!("data: {envelope}\n\n").as_bytes());
+            out.extend_from_slice(b"data: ");
+            out.extend_from_slice(&busbar_contract::jsonrpc::result_bytes(
+                &serde_json::to_vec(&self.id).unwrap_or_default(),
+                &serde_json::to_vec(&result).unwrap_or_default(),
+            ));
+            out.extend_from_slice(b"\n\n");
         };
         self.grpc.pending.drain(..cursor);
         (out, unread)
@@ -1215,14 +1221,15 @@ impl HopRelay {
     /// The JSON-RPC error a gRPC call that ended with an error status answers: its A2A code, where
     /// its reason or its status names one, else JSON-RPC's own internal error, as a JSON-RPC
     /// agent's internal error reads. `None` while the trailers have not said, or said `OK`.
-    fn grpc_error(&self) -> Option<Value> {
+    fn grpc_error(&self) -> Option<Vec<u8>> {
         let ended = self.grpc.ended.as_ref().filter(|e| !e.ok())?;
         let code = ended.a2a_code().unwrap_or(CODE_INTERNAL_ERROR);
-        Some(json!({
-            "jsonrpc": "2.0",
-            "id": self.id,
-            "error": { "code": code, "message": format!("grpc-status {}", ended.code) },
-        }))
+        Some(busbar_contract::jsonrpc::error_bytes(
+            &serde_json::to_vec(&self.id).unwrap_or_default(),
+            code,
+            &format!("grpc-status {}", ended.code),
+            None,
+        ))
     }
 
     /// A gRPC far end's whole answer, as the JSON-RPC envelope the one reader reads: a call that
@@ -1235,13 +1242,16 @@ impl HopRelay {
             return Some(self.far.clone());
         }
         if let Some(envelope) = self.grpc_error() {
-            return serde_json::to_vec(&envelope).ok();
+            return Some(envelope);
         }
         let rpc = crate::framed::Rpc::of_method(&self.method)?;
         let (len, _) = crate::framed::take_message(&self.far).ok()??;
         let message = &self.far[crate::framed::MESSAGE_PREFIX..crate::framed::MESSAGE_PREFIX + len];
         let result = crate::framed::response_result(rpc, message).ok()?;
-        serde_json::to_vec(&json!({ "jsonrpc": "2.0", "id": self.id, "result": result })).ok()
+        Some(busbar_contract::jsonrpc::result_bytes(
+            &serde_json::to_vec(&self.id).unwrap_or_default(),
+            &serde_json::to_vec(&result).unwrap_or_default(),
+        ))
     }
 
     /// The caller's answer to a far end's whole answer at `status`, read as one document.

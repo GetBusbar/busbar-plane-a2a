@@ -37,16 +37,16 @@ use busbar_contract::abi::mechanism::lifecycle::{GenIn, ReadyIn, RefreshIn, Tick
 use busbar_contract::abi::plane::{
     ArriveIn, ArriveOut, OnPieceIn, OnPieceOut, OutField, PlaneCancelIn, PlaneCancelOut,
     PlaneDriveIn, PlaneDriveOut, PlaneOpenIn, PlaneSnapshot, ProjectIn, ProjectOut, RecordWrite,
-    RefusalIn, RefusalOut, ServeIn, ServeOut, UnitCount, CANCEL_ABORTED, CANCEL_OK_PARTIAL,
-    EMIT_DONE, EMIT_TO_FAR_END, FROM_CALLER, FROM_FAR_END, FROM_KERNEL, PIECE_HAS_STATUS,
-    PIECE_LAST, PIECE_REFUSED, PRINCIPAL_NONE, PRINCIPAL_REQUIRED, RECORD_PUT, REFUSAL_ARRIVE,
-    REFUSAL_KERNEL, ROUTE_DIRECT, ROUTE_POOL, ROUTE_SCOPE, ROUTE_SCOPE_LOCAL, UNITS_REPORTED,
-    VERDICT_RETRY,
+    RefusalIn, RefusalOut, ServeIn, ServeOut, UnitCount, EMIT_DONE, EMIT_TO_FAR_END, FROM_CALLER,
+    FROM_FAR_END, FROM_KERNEL, PIECE_HAS_STATUS, PIECE_LAST, PIECE_REFUSED, PRINCIPAL_NONE,
+    PRINCIPAL_REQUIRED, RECORD_PUT, REFUSAL_ARRIVE, REFUSAL_KERNEL, ROUTE_DIRECT, ROUTE_POOL,
+    ROUTE_SCOPE, ROUTE_SCOPE_LOCAL, UNITS_REPORTED, VERDICT_RETRY,
 };
 use busbar_contract::abi::sdk::conn::{Host, StaticHost};
 // The one shared fault reading: the breaker's vocabulary, stated on `OnPieceOut`.
 use busbar_contract::abi::sdk::door::statement;
 use busbar_contract::abi::sdk::life::Refusal;
+use busbar_contract::abi::sdk::plane::{cancel_disposition, Ending, UnitCancel};
 use busbar_contract::abi::sdk::plane_life::{self, PlaneLife, Published};
 use busbar_contract::abi::sdk::publish::{class_index, Generations, Keyed};
 use busbar_contract::abi::sdk::{Instance, Lent, Out, Safe, SafeSlot, Services, StaticServices};
@@ -1275,23 +1275,17 @@ impl PlaneLife for A2aDoor {
         let mut answered = false;
         if let Some(plane) = instance.get() {
             // The cancelled unit is over: a refusal may still render it, so it is kept until then,
-            // the first to make room. The host's cancel of a unit names it by the key `arrive`
-            // kept it under, which finds one cancelled before its first piece recorded its
-            // ticket; a cancel naming no unit finds it by its ticket.
-            let (ticket, cancelled) = (input.cancel().ticket(), input.unit());
-            let far_answered =
-                |u: &AgentUnit| u.hop.as_ref().is_some_and(|h| h.relay.far_answered());
-            plane.units.with_all(|m| {
-                if let Some(u) = m.get_mut(&cancelled).filter(|_| cancelled != 0) {
+            // the first to make room (the SDK's one cancel rule: by the unit the host names, else
+            // by the cancelled ticket).
+            answered = UnitCancel::of(&input).end(
+                &plane.units,
+                Ending::Keep,
+                |u| Some(u.ticket),
+                |u| {
                     u.over = true;
-                    answered = far_answered(u);
-                } else if ticket != Ticket::NONE {
-                    for u in m.values_mut().filter(|u| u.ticket == ticket) {
-                        u.over = true;
-                        answered |= far_answered(u);
-                    }
-                }
-            });
+                    u.hop.as_ref().is_some_and(|h| h.relay.far_answered())
+                },
+            );
             let woken = plane.flights.abandon(input.cancel().ticket());
             if let Some(host) = plane.host.as_ref() {
                 for waiter in woken {
@@ -1300,16 +1294,8 @@ impl PlaneLife for A2aDoor {
             }
         }
         // A unit whose far end had begun its answer is PARTIAL, so the units it reported bill when
-        // its answer was streamed (the ledger records what the dialect
-        // did); one cut before is ABORTED.
-        out.set(
-            |o| &o.cancel.disposition,
-            if answered {
-                CANCEL_OK_PARTIAL
-            } else {
-                CANCEL_ABORTED
-            },
-        );
+        // its answer was streamed; one cut before is ABORTED.
+        out.set(|o| &o.cancel.disposition, cancel_disposition(answered));
         Outcome::Ready
     }
 }
