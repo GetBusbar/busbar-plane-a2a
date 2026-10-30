@@ -65,8 +65,10 @@ fn a_moved_task_with_a_registered_config_queues_its_notification_to_that_config(
     let body: serde_json::Value = serde_json::from_slice(&due.body).unwrap();
     assert_eq!(body["task"]["status"]["state"], "TASK_STATE_WORKING");
     let (_, sealed) = d.request(&due);
-    assert!(sealed.iter().any(|(_, n, v)| n == b"authorization"
-        && busbar_contract::abi::sdk::test_support::chip::sealed_bytes(v) == b"Bearer tok"));
+    assert!(sealed
+        .into_iter()
+        .any(|(_, n, v)| n == b"authorization"
+            && crate::push::tests::sealed_bytes(v) == b"Bearer tok"));
 }
 
 /// With no config held, the callback on the row (an inline config's) is the destination; with
