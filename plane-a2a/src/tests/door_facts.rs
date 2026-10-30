@@ -14,28 +14,16 @@ mod stated;
 
 #[test]
 fn the_door_driven_tests_restate_the_doors_own_constants() {
-    assert_eq!(stated::MAX_UNITS, crate::agent_door::MAX_UNITS);
-    assert_eq!(
-        stated::DIALECT_DOCUMENT,
-        crate::door_statement::DIALECT_DOCUMENT
-    );
+    assert_eq!(stated::MAX_UNITS, crate::plane_door::MAX_UNITS);
+    assert_eq!(stated::DIALECT_DOCUMENT, crate::statement::DIALECT_DOCUMENT);
     assert_eq!(
         stated::CLASS_BYTES_INDEX,
-        crate::door_statement::CLASS_BYTES_INDEX
+        crate::statement::CLASS_BYTES_INDEX
     );
-    assert_eq!(
-        stated::CLASS_FEE_INDEX,
-        crate::door_statement::CLASS_FEE_INDEX
-    );
+    assert_eq!(stated::CLASS_FEE_INDEX, crate::statement::CLASS_FEE_INDEX);
     assert_eq!(stated::WELL_KNOWN_CARD_PATH, crate::WELL_KNOWN_CARD_PATH);
-    assert_eq!(
-        stated::DIALECT_TARGET,
-        crate::door_statement::DIALECT_TARGET
-    );
-    assert_eq!(
-        stated::DIALECT_FRAMED,
-        crate::door_statement::DIALECT_FRAMED
-    );
+    assert_eq!(stated::DIALECT_TARGET, crate::statement::DIALECT_TARGET);
+    assert_eq!(stated::DIALECT_FRAMED, crate::statement::DIALECT_FRAMED);
     assert_eq!(stated::MOUNT_PATH, crate::MOUNT_PATH);
     assert_eq!(stated::ROUTE_MESSAGE_SEND, crate::ROUTE_MESSAGE_SEND);
     assert_eq!(stated::ROUTE_TASKS, crate::ROUTE_TASKS);
@@ -43,21 +31,18 @@ fn the_door_driven_tests_restate_the_doors_own_constants() {
     assert_eq!(stated::ROUTE_AGENT, crate::ROUTE_AGENT);
     assert_eq!(stated::ROUTE_AGENT_CARD, crate::ROUTE_AGENT_CARD);
     assert_eq!(stated::SERVICE_PATH, crate::framed::SERVICE_PATH);
-    assert_eq!(stated::NEED_OPEN_WEB, crate::door_statement::NEED_OPEN_WEB);
-    assert_eq!(stated::NEED_AGENT, crate::door_statement::NEED_AGENT);
-    assert_eq!(stated::NEED_GRPC, crate::door_statement::NEED_GRPC);
+    assert_eq!(stated::NEED_OPEN_WEB, crate::statement::NEED_OPEN_WEB);
+    assert_eq!(stated::NEED_AGENT, crate::statement::NEED_AGENT);
+    assert_eq!(stated::NEED_GRPC, crate::statement::NEED_GRPC);
     assert_eq!(stated::FRAMED_TRANSPORT, crate::claims::FRAMED_TRANSPORT);
-    assert_eq!(stated::MEMBER_TARGET, crate::door_statement::MEMBER_TARGET);
+    assert_eq!(stated::MEMBER_TARGET, crate::statement::MEMBER_TARGET);
     assert_eq!(
         stated::CLIENT_IDENTITY_FROM,
-        crate::door_statement::CLIENT_IDENTITY_FROM
+        crate::statement::CLIENT_IDENTITY_FROM
     );
-    assert_eq!(
-        stated::PUSH_TRUST_FROM,
-        crate::door_statement::PUSH_TRUST_FROM
-    );
+    assert_eq!(stated::PUSH_TRUST_FROM, crate::statement::PUSH_TRUST_FROM);
     assert_eq!(stated::HELD_KINDS, crate::records::HELD_KINDS);
-    let routes: Vec<(&str, &str)> = crate::door_statement::ROUTES
+    let routes: Vec<(&str, &str)> = crate::statement::ROUTES
         .iter()
         .map(|r| (r.verb, r.target))
         .collect();
@@ -72,7 +57,7 @@ mod root_stated;
 /// equal to the private item it restates.
 #[test]
 fn the_root_leg_restates_the_doors_own_constants() {
-    use crate::door_statement as ds;
+    use crate::statement as ds;
     assert_eq!(root_stated::PUSH_SECTION, ds::PUSH_SECTION);
     assert_eq!(root_stated::PUSH_CA_KEY, ds::PUSH_CA_KEY);
     assert_eq!(root_stated::PUSH_TRUST_FROM, ds::PUSH_TRUST_FROM);

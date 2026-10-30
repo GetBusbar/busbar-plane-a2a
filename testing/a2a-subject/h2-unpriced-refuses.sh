@@ -36,7 +36,7 @@
 #            here instead of silent.
 #
 #   ARM 2 -- BILLING ON with a card that does not price the class the call hits. This plane declares
-#            exactly one class, `bytes` (`plane-a2a/src/door_statement.rs` `BILLABLE_CLASSES`), and arm 2's
+#            exactly one class, `bytes` (`plane-a2a/src/statement.rs` `BILLABLE_CLASSES`), and arm 2's
 #            card names the agent's lane and NO `bytes` entry. #42 says such a node must not bill the
 #            class zero for what it moved; #77(5) says it refuses at BOOT, and that is what 1.6.0
 #            does ("agents.rate_card does not configure billable unit(s) bytes declared by this

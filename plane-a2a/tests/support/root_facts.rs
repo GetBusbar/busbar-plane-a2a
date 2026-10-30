@@ -9,19 +9,19 @@
 //! holds every value to the private item it restates and every helper to the generated message
 //! it stands for, so a drift is red in the crate before the root leg reads a stale copy.
 
-/// `door_statement::PUSH_SECTION`: the plane's own `agent_push:` section.
+/// `statement::PUSH_SECTION`: the plane's own `agent_push:` section.
 pub const PUSH_SECTION: &str = "agent_push";
 
-/// `door_statement::PUSH_CA_KEY`: the [`PUSH_SECTION`] key holding the operator CA.
+/// `statement::PUSH_CA_KEY`: the [`PUSH_SECTION`] key holding the operator CA.
 pub const PUSH_CA_KEY: &str = "ca";
 
-/// `door_statement::PUSH_TRUST_FROM`: where the push need's trust anchor comes from.
+/// `statement::PUSH_TRUST_FROM`: where the push need's trust anchor comes from.
 pub const PUSH_TRUST_FROM: &str = "owned.agent_push.ca";
 
-/// `door_statement::NEED_AGENT`: the `NEEDS` index of the relayed calls to the registered agents.
+/// `statement::NEED_AGENT`: the `NEEDS` index of the relayed calls to the registered agents.
 pub const NEED_AGENT: u32 = 1;
 
-/// `door_statement::NEED_GRPC`: the `NEEDS` index of the relayed calls to a gRPC-bound agent.
+/// `statement::NEED_GRPC`: the `NEEDS` index of the relayed calls to a gRPC-bound agent.
 pub const NEED_GRPC: u32 = 2;
 
 /// `proto::SERVICE_NAME`: the gRPC service's full name.

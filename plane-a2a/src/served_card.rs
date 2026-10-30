@@ -199,7 +199,7 @@ pub fn self_card_document(public_url: &str, skills: Vec<Value>) -> Option<Value>
             "An AI gateway. Agents reach the agents busbar fronts through this endpoint; busbar \
              authorises, meters and records every task. The agents themselves are not listed on \
              the public card — an authenticated caller is shown the ones it may reach.",
-        "version": crate::agent_door::VERSION,
+        "version": crate::plane_door::VERSION,
         "provider": { "organization": "busbar", "url": "https://getbusbar.com" },
         "supportedInterfaces": published_interfaces(public_url)?,
         "defaultInputModes": ["text/plain", "application/json"],

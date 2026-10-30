@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2026 Busbar Inc and contributors
 #
-# Shared boot/mint/call helpers for the H2 A2A gating scenarios (scripts/a2a-subject/h2-*.sh),
+# Shared boot/mint/call helpers for the H2 A2A gating scenarios (testing/a2a-subject/h2-*.sh),
 # the Teller-steps rule H2 (BUSBAR-1.6.0.md THE DESIGN, §1). Each h2-*.sh script sources this, boots its OWN
 # throwaway busbar + its own instance of h2-mock-agent.py on its own ports (the same isolation
 # testing/shadow-oracle/scripts/teller-*.sh use for the llm plane, and scripts/mcp-subject/h2-lib.sh
@@ -63,7 +63,7 @@ PY
 }
 
 # h2_boot <workdir> <group-yaml-block>
-# Boots busbar with one registered A2A agent "probe" (scripts/a2a-subject/h2-mock-agent.py,
+# Boots busbar with one registered A2A agent "probe" (testing/a2a-subject/h2-mock-agent.py,
 # `pin: unpinned`), and the group(s) named in <group-yaml-block>.
 # Sets: H2_DATA_PORT H2_ADMIN_PORT H2_AGENT_PORT H2_PLANE_URL H2_ADMIN_TOKEN H2_SIGNING_KEY
 #       H2_AGENT_PID H2_BUSBAR_PID H2_EGRESS_DIR H2_WORKDIR H2_CONTROL_FILE
@@ -524,7 +524,7 @@ h2_verdict() {
 }
 
 # ── --selftest ────────────────────────────────────────────────────────────────────────────────────
-# `./scripts/a2a-subject/h2-lib.sh --selftest [case]` -- no busbar, no node, no network. Each rig case
+# `./testing/a2a-subject/h2-lib.sh --selftest [case]` -- no busbar, no node, no network. Each rig case
 # copies the REAL rig script into a scratch dir beside a STUB h2-lib.sh (this file's own h2_verdict
 # and h2_int_is, plus canned answers for every reader the rig calls) and runs it, so what is judged is
 # the rig's own decision logic against a read it was never written for. Every case carries a control
@@ -637,6 +637,6 @@ h2_selftest() {
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
   case "${1:-}" in
     --selftest) h2_selftest "${2:-}"; exit $? ;;
-    *) echo "usage: $0 --selftest [case]  (this file is otherwise sourced by scripts/a2a-subject/h2-*.sh)" >&2; exit 2 ;;
+    *) echo "usage: $0 --selftest [case]  (this file is otherwise sourced by testing/a2a-subject/h2-*.sh)" >&2; exit 2 ;;
   esac
 fi

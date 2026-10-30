@@ -1,25 +1,6 @@
-# busbar-plane-a2a — THE A2A PLANE, as an ADAPTER and nothing else.
-#
-# WHAT THIS CRATE IS. One implementation of the plugin contract's plane kind for the agent-to-agent
-# protocol. Every method is a thin adapter over a codec that already exists in `busbar-a2a`: the
-# JSON-RPC envelope reader and writer, the task-operation vocabulary, the error envelopes and the
-# push-notification shapes. No wire format is written twice. If a byte differs between what this
-# crate produces and what the existing codec produces, the existing codec is the answer and this
-# crate has the bug.
-#
-# WHAT THIS CRATE IS NOT. There is no governance here, no breaker, no hook seat, no signing key and
-# no metering arithmetic. Those are units, and a unit is on the other side of the kernel from a
-# plane. The metering method returns LOCATORS — where the numbers are — and never a number the
-# ledger would post. The routing method returns a plan, never a connection. The plane's durable
-# state — the tasks, the push configurations, the pins — is reached only through record legs on that
-# plan, never through a store this crate holds.
-#
-# THE DEPENDENCY EDGE, STATED HONESTLY. The contract crate is the surface a plugin is written
-# against and it stands alone. `busbar-a2a` is named here for the codec vocabulary only, and it is
-# a heavier crate than a pure plane's dependency rule would like: it carries an HTTP stack, a gRPC
-# stack, an async runtime and the engine that still lives beside its codec. That is a finding about
-# where the codec sits today, not a decision taken here — the adapter itself names no runtime, opens
-# nothing, holds no connection and reads no clock but the one the context hands it.
+# busbar-plane-a2a: the A2A plane. Its door (`plane_door::door`) over the A2A codec it carries (the
+# `a2a` module: the JSON-RPC, HTTP+JSON and gRPC lines); the cdylib twin `busbar-plane-a2a-plugin`
+# exports the same door.
 [package]
 name = "busbar-plane-a2a"
 version = "1.6.0"
@@ -27,7 +8,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "The A2A plane for busbar: the plugin contract's plane kind implemented as a thin adapter over the busbar-a2a task-operation codec."
+description = "The A2A plane for busbar: the plugin contract's plane kind over the A2A protocol's JSON-RPC, HTTP+JSON and gRPC lines."
 # THE ROOT CELLS' ADDRESS: `build.rs` states `cells=<this crate>/tests/root/mod.rs` under this
 # `links` name, and the composition root's `build.rs` reads it as `DEP_BUSBAR_DOOR_CELLS_<CRATE>_CELLS`
 # (the same for a path dependency and a pinned one), so the root compiles this plane's own root cells

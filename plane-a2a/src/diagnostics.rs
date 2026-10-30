@@ -179,6 +179,48 @@ pub const A2A_TASK_STATE_UNREAD: Diagnostic = Diagnostic {
     retired: false,
 };
 
+/// A split card or approval record was not read back whole at the card warm: the agent is looked
+/// at afresh.
+pub const A2A_SPLIT_RECORD_UNREAD: Diagnostic = Diagnostic {
+    code: 7031,
+    class: Class::Plane,
+    slug: "a2a-split-record-unread",
+    title: "A2A card or approval record split across host records was not read back whole",
+    severity: Severity::Actionable,
+    summary: "When the plane warmed its agent cards after its instance opened, a card or card \
+              approval that was written split across several host records (it was larger than the \
+              host's record ceiling) could not be reassembled: a part is missing, or the parts do \
+              not verify against the digest the record's head states. The record is not read, so \
+              that agent is looked at afresh, as if no such record were held; the record is written \
+              again on the agent's next connect or approve. Emitted once per affected record on \
+              each warm.",
+    action: "Check the durable record store for lost or altered records (an interrupted write, a \
+             store restored from an older backup, or a write from outside busbar), and the named \
+             agent's card and approval state.",
+    since: "1.6.0",
+    retired: false,
+};
+
+/// Part records of a split card or approval that no whole record names were found at the card
+/// warm: each is tombstoned on its agent's next write.
+pub const A2A_SPLIT_RECORD_STRAY_PARTS: Diagnostic = Diagnostic {
+    code: 7032,
+    class: Class::Plane,
+    slug: "a2a-split-record-stray-parts",
+    title: "A2A card or approval part records that no whole record names were found",
+    severity: Severity::BenignRecurring,
+    summary: "When the plane warmed its agent cards after its instance opened, it found part \
+              records of a split card or card approval that no whole record names: left by a write \
+              that was interrupted or superseded. They are never read; each is tombstoned on its \
+              agent's next connect or approve. Emitted once per kind on each warm that finds any; \
+              the `parts` field carries how many.",
+    action: "None; self-heals. The stray parts are tombstoned when their agent's record is next \
+             written. If the count grows across restarts, check the durable record store for \
+             failing writes.",
+    since: "1.6.0",
+    retired: false,
+};
+
 /// A relayed SSE frame was not valid UTF-8 and was dropped. Frozen: `BUSBAR-7104`, the published
 /// catalog entry of the same number, byte for byte.
 pub const PLANE_SSE_FRAME_NOT_UTF8: Diagnostic = Diagnostic {
@@ -215,6 +257,8 @@ pub const DIAGNOSTICS: &[&Diagnostic] = &[
     &A2A_FAILURE_UNRECORDED,
     &A2A_TASK_ROWS_UNREADABLE,
     &A2A_TASK_STATE_UNREAD,
+    &A2A_SPLIT_RECORD_UNREAD,
+    &A2A_SPLIT_RECORD_STRAY_PARTS,
     &PLANE_SSE_FRAME_NOT_UTF8,
 ];
 
