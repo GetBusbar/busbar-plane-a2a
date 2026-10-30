@@ -383,13 +383,11 @@ pub fn compose_from(
     } else {
         return Ok(None);
     };
-    let envelope = json!({
-        "jsonrpc": "2.0",
-        "id": REST_RPC_ID,
-        "method": name,
-        "params": params,
-    });
-    Ok(Some(serde_json::to_vec(&envelope).unwrap_or_default()))
+    Ok(Some(busbar_contract::jsonrpc::request_bytes(
+        &serde_json::to_vec(&REST_RPC_ID).unwrap_or_default(),
+        name,
+        Some(&serde_json::to_vec(&params).unwrap_or_default()),
+    )))
 }
 
 /// Re-frame a JSON-RPC answer for the HTTP+JSON line, by what it is:

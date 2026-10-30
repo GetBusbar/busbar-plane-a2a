@@ -123,10 +123,12 @@ pub const NO_SUCH_TASK: &str = "no task with that id is open for this caller";
 
 /// A JSON-RPC success under the caller's id.
 fn ok(rpc_id: &Value, result: Value) -> LocalAnswer {
-    let doc = json!({ "jsonrpc": "2.0", "id": rpc_id, "result": result });
     LocalAnswer {
         status: 200,
-        body: serde_json::to_vec(&doc).unwrap_or_default(),
+        body: busbar_contract::jsonrpc::result_bytes(
+            &serde_json::to_vec(&rpc_id).unwrap_or_default(),
+            &serde_json::to_vec(&result).unwrap_or_default(),
+        ),
     }
 }
 

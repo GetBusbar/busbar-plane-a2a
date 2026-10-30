@@ -153,8 +153,13 @@ pub fn answered(
     let (len, _) = crate::framed::take_message(&body).ok()??;
     let message = &body[crate::framed::MESSAGE_PREFIX..crate::framed::MESSAGE_PREFIX + len];
     let result = crate::framed::response_result(rpc, message).ok()?;
-    let envelope = json!({ "jsonrpc": "2.0", "id": ORIGINATED_RPC_ID, "result": result });
-    Some((200, serde_json::to_vec(&envelope).ok()?))
+    Some((
+        200,
+        busbar_contract::jsonrpc::result_bytes(
+            &serde_json::to_vec(&ORIGINATED_RPC_ID).unwrap_or_default(),
+            &serde_json::to_vec(&result).unwrap_or_default(),
+        ),
+    ))
 }
 
 /// A request busbar originates that made no hop: the agent's `upstream_credential`, re-resolved for
