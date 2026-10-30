@@ -724,4 +724,4 @@ impl PushLimiter {
 
 #[cfg(test)]
 #[path = "tests/push.rs"]
-mod tests;
+pub(crate) mod tests;
