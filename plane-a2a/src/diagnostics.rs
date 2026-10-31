@@ -261,6 +261,26 @@ pub const A2A_RELAY_ENDPOINT_REFUSED: Diagnostic = Diagnostic {
     retired: false,
 };
 
+/// An agent card sighting was not recorded on the kernel's trust book: the look failed closed.
+pub const A2A_TRUST_SIGHTING_UNRECORDED: Diagnostic = Diagnostic {
+    code: 7042,
+    class: Class::Plane,
+    slug: "a2a-trust-sighting-unrecorded",
+    title: "A2A agent card sighting not recorded on the kernel's trust book",
+    severity: Severity::Actionable,
+    summary: "The plane looked at an agent's card (on connect, approve, or the re-verification before \
+             a relayed call) and reported what it saw to the kernel's trust book, and the host failed \
+             that report. The kernel was never told the card's fingerprint, so its verdict still \
+             answers for the card it last saw: the look fails closed, no card is held from it, and \
+             the agent is not served on it (connect and approve report the failure). Emitted once per \
+             failed report; the `agent` field names the agent.",
+    action: "Check the host's trust service and its durable store: a trust book that cannot record \
+            sightings leaves every re-verified agent refused until it can. The agent is looked at \
+            again on its next call or verb.",
+    since: "1.6.0",
+    retired: false,
+};
+
 /// A relayed SSE frame was not valid UTF-8 and was dropped. Frozen: `BUSBAR-7104`, the published
 /// catalog entry of the same number, byte for byte.
 pub const PLANE_SSE_FRAME_NOT_UTF8: Diagnostic = Diagnostic {
@@ -301,6 +321,7 @@ pub const DIAGNOSTICS: &[&Diagnostic] = &[
     &A2A_SPLIT_RECORD_STRAY_PARTS,
     &A2A_BACKEND_TASK_ID_UNHELD,
     &A2A_RELAY_ENDPOINT_REFUSED,
+    &A2A_TRUST_SIGHTING_UNRECORDED,
     &PLANE_SSE_FRAME_NOT_UTF8,
 ];
 

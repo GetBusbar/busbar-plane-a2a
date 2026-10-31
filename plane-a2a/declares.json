@@ -121,6 +121,15 @@
       "since": "1.6.0"
     },
     {
+      "code": 7042,
+      "slug": "a2a-trust-sighting-unrecorded",
+      "title": "A2A agent card sighting not recorded on the kernel's trust book",
+      "severity": "actionable",
+      "summary": "The plane looked at an agent's card (on connect, approve, or the re-verification before a relayed call) and reported what it saw to the kernel's trust book, and the host failed that report. The kernel was never told the card's fingerprint, so its verdict still answers for the card it last saw: the look fails closed, no card is held from it, and the agent is not served on it (connect and approve report the failure). Emitted once per failed report; the `agent` field names the agent.",
+      "action": "Check the host's trust service and its durable store: a trust book that cannot record sightings leaves every re-verified agent refused until it can. The agent is looked at again on its next call or verb.",
+      "since": "1.6.0"
+    },
+    {
       "code": 7104,
       "slug": "plane-sse-frame-not-utf8",
       "title": "A relayed SSE frame was not valid UTF-8 and was dropped",

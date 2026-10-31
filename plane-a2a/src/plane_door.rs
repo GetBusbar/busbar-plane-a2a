@@ -3372,8 +3372,9 @@ enum LookParked {
         hop: CardHop,
         exchange: Option<ParkedExchange>,
     },
-    /// `trust.sight` is in flight.
-    Sighted(CardLook, u32),
+    /// `trust.sight` is in flight: what the look landed, the handles it issued, and whether the
+    /// agent was unreachable (which sighting was asked).
+    Sighted(CardLook, u32, bool),
 }
 
 /// Where a look runs: the instance, the op's ticket, and the completion handle its host services
@@ -3751,7 +3752,13 @@ fn look(
 ) -> Result<(CardLook, u32), LookParked> {
     use crate::card_trust::Sighting;
     let resumed = match parked {
-        Some(LookParked::Sighted(looked, issued)) => return Ok((looked, issued)),
+        // THE SIGHTING ANSWERED: its answer is read again on its own handle (the host hands a
+        // handle's answer back to every later call on it), so a sighting that failed once it was in
+        // flight fails the look as one that failed at once does.
+        Some(LookParked::Sighted(looked, issued, unreachable)) => {
+            let sighted = sight(at, name, &looked, unreachable, issued - 1);
+            return settle_look(name, looked, sighted, issued, unreachable);
+        }
         Some(LookParked::Fetching { hop, exchange }) => Some((hop, exchange)),
         None => None,
     };
@@ -3781,16 +3788,27 @@ fn look(
         },
     };
     let issued = sight_seq + 1;
-    // The sighting on the kernel's trust book (the plane reports, the kernel
-    // pins and demotes): the verified fingerprint as the agent's catalogue hash; a card that did
-    // not verify against its pin as [`UNVERIFIED_CARD`], which is never an approved catalogue, so
-    // an approved agent whose card stopped verifying is quarantined; an agent that could not be
-    // reached at all as `trust.unreachable`, its last verdict kept. An `unpinned` card has no
-    // fingerprint and is sighted never (it can never be approved).
-    let Some(services) = at.plane.services else {
-        return Ok((looked, issued));
-    };
-    let sighted = match &looked.sighting {
+    let sighted = sight(at, name, &looked, unreachable, sight_seq);
+    settle_look(name, looked, sighted, issued, unreachable)
+}
+
+/// The sighting on the kernel's trust book (the plane reports, the kernel
+/// pins and demotes), on handle `sight_seq`: the verified fingerprint as the agent's catalogue hash; a
+/// card that did not verify against its pin as [`UNVERIFIED_CARD`], which is never an approved
+/// catalogue, so an approved agent whose card stopped verifying is quarantined; an agent that could
+/// not be reached at all (`unreachable`) as `trust.unreachable`, its last verdict kept. An `unpinned`
+/// card has no fingerprint and is sighted never (it can never be approved). `None` when nothing is
+/// sighted, or the instance holds no host services.
+fn sight(
+    at: &LookAt<'_>,
+    name: &str,
+    looked: &CardLook,
+    unreachable: bool,
+    sight_seq: u32,
+) -> Option<busbar_contract::abi::sdk::Pend<u64>> {
+    use crate::card_trust::Sighting;
+    let services = at.plane.services?;
+    match &looked.sighting {
         Sighting::Seen(seen) => seen
             .pin
             .fingerprint()
@@ -3802,23 +3820,52 @@ fn look(
             Some(services.trust_sight(at.handle(sight_seq), name, UNVERIFIED_CARD))
         }
         Sighting::Never => None,
-    };
+    }
+}
+
+/// The look `looked` once its sighting answered (`sighted`), with the handles it issued; parked
+/// while the sighting is in flight. A sighting the trust book failed is named in a diagnostic.
+fn settle_look(
+    name: &str,
+    looked: CardLook,
+    sighted: Option<busbar_contract::abi::sdk::Pend<u64>>,
+    issued: u32,
+    unreachable: bool,
+) -> Result<(CardLook, u32), LookParked> {
+    if let Some(Poll::Ready(Err(e))) = &sighted {
+        busbar_contract::diag_warn!(
+            crate::diagnostics::A2A_TRUST_SIGHTING_UNRECORDED,
+            agent = %name,
+            "a2a: the kernel's trust book did not record agent `{name}`'s card sighting ({e:?}); \
+             the look fails and the agent is not served on it"
+        );
+    }
     match landed(looked, sighted) {
         Ok(looked) => Ok((looked, issued)),
-        Err(looked) => Err(LookParked::Sighted(looked, issued)),
+        Err(looked) => Err(LookParked::Sighted(looked, issued, unreachable)),
     }
 }
 
 /// What a look landed once its sighting was put to the kernel's trust book (`sighted`; `None` when
 /// nothing was sighted): `Err` with the look while the sighting is in flight.
+///
+/// A sighting the trust book FAILED is a failed look: the kernel was never told this card's
+/// fingerprint, so its verdict still answers for the card it last saw, and a changed card passed as
+/// seen would be held and relayed to unjudged. The look fails closed: no card, a failed sighting.
 fn landed(
     looked: CardLook,
     sighted: Option<busbar_contract::abi::sdk::Pend<u64>>,
 ) -> Result<CardLook, CardLook> {
-    if sighted.is_some_and(|s| s.is_pending()) {
-        return Err(looked);
+    match sighted {
+        Some(Poll::Pending) => Err(looked),
+        Some(Poll::Ready(Err(e))) => Ok(CardLook {
+            sighting: crate::card_trust::Sighting::Failed(format!(
+                "the kernel's trust book did not record this card's sighting ({e:?})"
+            )),
+            card: None,
+        }),
+        _ => Ok(looked),
     }
-    Ok(looked)
 }
 
 /// WHETHER `member` SERVES, on its `standing` (read here, never decided): SERVING is the kernel's
