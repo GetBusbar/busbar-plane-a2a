@@ -1506,3 +1506,36 @@ fn a_read_or_an_addressed_turn_never_sweeps() {
         "an addressed turn retires nothing"
     );
 }
+
+/// The host records, down: every call fails.
+struct Down;
+
+impl Records for Down {
+    fn get(&mut self, _: &str, _: &str) -> Result<Option<Vec<u8>>, Halt> {
+        Err(Halt::Failed("the store is down".to_string()))
+    }
+    fn list(&mut self, _: &str, _: &str) -> Result<Vec<(String, Vec<u8>)>, Halt> {
+        Err(Halt::Failed("the store is down".to_string()))
+    }
+    fn claim(&mut self, _: &str, _: &str, _: u64) -> Result<bool, Halt> {
+        Err(Halt::Failed("the store is down".to_string()))
+    }
+}
+
+/// G1-33: A HOLDER READ THE STORE FAILED IS NOT "NO HOLDER": a pooled request about a task whose
+/// records could not be read is never read as a fresh submission (which the walk would send to its
+/// first member, migrating the task); the failure reaches the caller.
+#[test]
+fn a_failed_holder_read_is_a_failure_not_a_fresh_submission() {
+    let members = ["planner-a".to_string(), "planner-b".to_string()];
+    let named = send(json!({ "message": { "messageId": "m-2", "taskId": "t1" } }));
+    assert!(matches!(
+        holder(&mut Down, &named, ALICE, 300, &members),
+        Err(Halt::Failed(_))
+    ));
+    let resumed = send(json!({ "message": { "messageId": "m-3", "contextId": "ctx-1" } }));
+    assert!(matches!(
+        holder(&mut Down, &resumed, ALICE, 300, &members),
+        Err(Halt::Failed(_))
+    ));
+}
