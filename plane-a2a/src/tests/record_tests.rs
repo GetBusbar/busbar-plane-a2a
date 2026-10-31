@@ -27,24 +27,11 @@ fn task_rows_round_trip_through_the_store_seam_encoding() {
     };
     let body = serde_json::to_vec(&task).unwrap();
     assert_eq!(serde_json::from_slice::<TaskRow>(&body).unwrap(), task);
-    let json = String::from_utf8(body).unwrap();
-    for field in [
-        "task_id",
-        "context_id",
-        "principal",
-        "direction",
-        "state",
-        "agent_id",
-        "artifact_cursor",
-        "push_callback",
-        "created_at",
-        "updated_at",
-    ] {
-        assert!(
-            json.contains(field),
-            "`{field}` must be on the wire: {json}"
-        );
-    }
+    // THE EXACT WIRE, every field by name and in order (`push_version` included): a rename of any
+    // field changes these bytes, and a persisted row in this shape must still load.
+    let wire = r#"{"task_id":"t-1","context_id":"ctx-1","principal":"key-1","direction":"outbound","state":"auth-required","agent_id":"planner","artifact_cursor":7,"push_callback":"https://caller.example/cb","push_version":"0.3","created_at":10,"updated_at":20}"#;
+    assert_eq!(String::from_utf8(body).unwrap(), wire);
+    assert_eq!(serde_json::from_str::<TaskRow>(wire).unwrap(), task);
 }
 
 #[test]
@@ -68,4 +55,9 @@ fn task_event_rows_round_trip_through_the_task_event_envelope() {
         serde_json::from_slice::<TaskEventRow>(&body).unwrap(),
         event
     );
+    // THE EXACT WIRE, as for the task row: a rename of `seq`, `prev_hash`, `digest_version` or any
+    // other field changes these bytes, and a persisted event in this shape must still load.
+    let wire = r#"{"task_id":"t-1","seq":1,"ts":10,"kind":"task.submitted","context_id":"ctx-1","principal":"key-1","agent_id":"","state":"submitted","request_id":"req-1","prev_hash":"","hash":"deadbeef","digest_version":2}"#;
+    assert_eq!(String::from_utf8(body).unwrap(), wire);
+    assert_eq!(serde_json::from_str::<TaskEventRow>(wire).unwrap(), event);
 }
