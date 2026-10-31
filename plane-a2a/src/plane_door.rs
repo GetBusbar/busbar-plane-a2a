@@ -2178,12 +2178,14 @@ enum Gate {
 }
 
 /// Whether the registration a verb's look was made for (`looked_at`) is no longer the one that
-/// stands (`now`; `None` when a refresh dropped it).
+/// stands (`now`; `None` when a refresh dropped it): any change is a different registration, as a
+/// refresh judges one ([`A2aDoor::refreshed`]), so a card fetched for the old one is never held or
+/// approved for the new one.
 fn registration_moved(
     now: Option<&crate::a2a::config::AgentDefCfg>,
     looked_at: &crate::a2a::config::AgentDefCfg,
 ) -> bool {
-    now.is_none_or(|now| now.pin != looked_at.pin)
+    now != Some(looked_at)
 }
 
 /// THE ADMISSION GATE of an ATTEMPT's first entry (`first`) for `member` and its registration in
@@ -4308,6 +4310,13 @@ slot!(
             .as_ref()
             .map(|card| card_records(plane, &name, card))
             .unwrap_or_default();
+        // RE-FOUND, NOT ASSUMED: a refresh may have dropped or changed the registration while the
+        // card was fetched; the look was made for the registration as it stood, and nothing it
+        // found is held, recorded or approved for another (an approval is the operator's decision
+        // about the registration as it stands).
+        if registration_moved(registered(&name).as_ref(), &def) {
+            return verb_refused(&input, &mut out, STATUS_NOT_FOUND, "", None, AUDIT_REJECTED);
+        }
         let Some(claimed) = claimed else {
             // A PREVIEW DECIDES NOTHING: the key stands where the book has it.
             if let Some(card) = looked.card {
@@ -4327,12 +4336,6 @@ slot!(
         if let Err(refusal) = crate::card_trust::agrees(&looked.sighting, claimed.trim()) {
             let condition = Some(INVALID_CONFIG);
             return verb_refused(&input, &mut out, 400, &refusal, condition, AUDIT_REJECTED);
-        }
-        // RE-FOUND, NOT ASSUMED: a refresh may have dropped the registration or moved its pin
-        // while the card was fetched, and an approval is the operator's decision about the
-        // registration as it stands.
-        if registration_moved(registered(&name).as_ref(), &def) {
-            return verb_refused(&input, &mut out, STATUS_NOT_FOUND, "", None, AUDIT_REJECTED);
         }
         // THE KERNEL'S DECISION: the agent's trust key approved at what this look just sighted.
         if let Err(refusal) = approve_key(plane, &at, &name, claimed.trim()) {
