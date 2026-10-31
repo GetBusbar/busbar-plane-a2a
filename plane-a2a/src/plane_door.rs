@@ -2177,6 +2177,15 @@ enum Gate {
     Pending,
 }
 
+/// Whether the registration a verb's look was made for (`looked_at`) is no longer the one that
+/// stands (`now`; `None` when a refresh dropped it).
+fn registration_moved(
+    now: Option<&crate::a2a::config::AgentDefCfg>,
+    looked_at: &crate::a2a::config::AgentDefCfg,
+) -> bool {
+    now.is_none_or(|now| now.pin != looked_at.pin)
+}
+
 /// THE ADMISSION GATE of an ATTEMPT's first entry (`first`) for `member` and its registration in
 /// the unit's generation (`def`): the caller's standing, then the agent's admission (a member the
 /// generation does not register is refused as no fronted agent); the refusal that is the caller's
@@ -4322,7 +4331,7 @@ slot!(
         // RE-FOUND, NOT ASSUMED: a refresh may have dropped the registration or moved its pin
         // while the card was fetched, and an approval is the operator's decision about the
         // registration as it stands.
-        if registered(&name).is_none_or(|now| now.pin != def.pin) {
+        if registration_moved(registered(&name).as_ref(), &def) {
             return verb_refused(&input, &mut out, STATUS_NOT_FOUND, "", None, AUDIT_REJECTED);
         }
         // THE KERNEL'S DECISION: the agent's trust key approved at what this look just sighted.
