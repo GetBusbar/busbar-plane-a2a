@@ -3803,10 +3803,22 @@ fn look(
         }
         Sighting::Never => None,
     };
-    if sighted.is_some_and(|s| s.is_pending()) {
-        return Err(LookParked::Sighted(looked, issued));
+    match landed(looked, sighted) {
+        Ok(looked) => Ok((looked, issued)),
+        Err(looked) => Err(LookParked::Sighted(looked, issued)),
     }
-    Ok((looked, issued))
+}
+
+/// What a look landed once its sighting was put to the kernel's trust book (`sighted`; `None` when
+/// nothing was sighted): `Err` with the look while the sighting is in flight.
+fn landed(
+    looked: CardLook,
+    sighted: Option<busbar_contract::abi::sdk::Pend<u64>>,
+) -> Result<CardLook, CardLook> {
+    if sighted.is_some_and(|s| s.is_pending()) {
+        return Err(looked);
+    }
+    Ok(looked)
 }
 
 /// WHETHER `member` SERVES, on its `standing` (read here, never decided): SERVING is the kernel's
