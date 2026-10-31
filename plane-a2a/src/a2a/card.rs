@@ -75,11 +75,166 @@ pub fn fingerprint(card: &Value) -> Result<String, CardError> {
 /// itself. Removing the member is not the same as emptying it, and the distinction is load-bearing:
 /// a signer that hashed `"signatures":[]` and a verifier that hashed an absent member would disagree
 /// on every signed card in existence.
+///
+/// A v1.0 card (one stating `supportedInterfaces`) also has every default-valued member omitted
+/// first, as A2A v1.0 §8.4.1 rule 1 and §8.4.3 steps 3-5 require: a member that holds its proto
+/// default is left out unless its field is `REQUIRED` or `optional` (§5.7), at every depth the
+/// card's messages reach ([`CARD`]). A member the vendored `a2a.proto` does not declare is kept as
+/// received, and a `null` is kept as received. A v0.3 card states no canonicalization beyond RFC
+/// 7515, so it has only its `signatures` removed.
 pub fn signing_payload(card: &Value) -> Result<String, CardError> {
     let mut stripped = card.clone();
     let obj = stripped.as_object_mut().ok_or(CardError::NotAnObject)?;
     obj.remove("signatures");
+    if obj.get("supportedInterfaces").is_some_and(Value::is_array) {
+        omit_defaults(&mut stripped, CARD);
+    }
     Ok(canonicalize(&stripped)?)
+}
+
+/// How one member of an agent card's messages reads under proto3 field presence (A2A v1.0 §5.7),
+/// by its ProtoJSON name. A member a message's table does not name is `REQUIRED`, `optional`, or
+/// not declared, and is kept as it is.
+#[derive(Clone, Copy)]
+enum Member {
+    /// Implicit presence (neither `REQUIRED` nor `optional`): omitted at its default (`""`,
+    /// `false`, `0`, `[]`, `{}`).
+    Implicit,
+    /// A repeated message field, each entry that message; omitted when empty unless `REQUIRED`
+    /// (`true`).
+    List(Message, bool),
+    /// A map whose values are that message: omitted when empty.
+    Map(Message),
+    /// A singular message field (explicit presence): kept when present, read inside.
+    Of(Message),
+}
+
+/// One proto message of the card: its members that are not simply kept.
+type Message = &'static [(&'static str, Member)];
+
+/// `AgentCard` (`signatures` is removed before this is read).
+const CARD: Message = &[
+    ("supportedInterfaces", Member::List(INTERFACE, true)),
+    ("capabilities", Member::Of(CAPABILITIES)),
+    ("securitySchemes", Member::Map(SCHEME)),
+    ("securityRequirements", Member::List(REQUIREMENT, false)),
+    ("skills", Member::List(SKILL, true)),
+];
+/// `AgentInterface`.
+const INTERFACE: Message = &[("tenant", Member::Implicit)];
+/// `AgentCapabilities` (`streaming`, `pushNotifications`, `extendedAgentCard` are `optional`).
+const CAPABILITIES: Message = &[("extensions", Member::List(EXTENSION, false))];
+/// `AgentExtension` (`params` is a `Struct`, a message: kept when present).
+const EXTENSION: Message = &[
+    ("uri", Member::Implicit),
+    ("description", Member::Implicit),
+    ("required", Member::Implicit),
+];
+/// `AgentSkill`.
+const SKILL: Message = &[
+    ("examples", Member::Implicit),
+    ("inputModes", Member::Implicit),
+    ("outputModes", Member::Implicit),
+    ("securityRequirements", Member::List(REQUIREMENT, false)),
+];
+/// `SecurityRequirement`.
+const REQUIREMENT: Message = &[("schemes", Member::Map(STRING_LIST))];
+/// `StringList`.
+const STRING_LIST: Message = &[("list", Member::Implicit)];
+/// `SecurityScheme` (a oneof of messages).
+const SCHEME: Message = &[
+    ("apiKeySecurityScheme", Member::Of(DESCRIBED)),
+    ("httpAuthSecurityScheme", Member::Of(HTTP_AUTH)),
+    ("oauth2SecurityScheme", Member::Of(OAUTH2)),
+    ("openIdConnectSecurityScheme", Member::Of(DESCRIBED)),
+    ("mtlsSecurityScheme", Member::Of(DESCRIBED)),
+];
+/// `APIKeySecurityScheme`, `OpenIdConnectSecurityScheme`, `MutualTlsSecurityScheme`: only
+/// `description` is implicit.
+const DESCRIBED: Message = &[("description", Member::Implicit)];
+/// `HTTPAuthSecurityScheme`.
+const HTTP_AUTH: Message = &[
+    ("description", Member::Implicit),
+    ("bearerFormat", Member::Implicit),
+];
+/// `OAuth2SecurityScheme`.
+const OAUTH2: Message = &[
+    ("description", Member::Implicit),
+    ("flows", Member::Of(FLOWS)),
+    ("oauth2MetadataUrl", Member::Implicit),
+];
+/// `OAuthFlows` (a oneof of messages).
+const FLOWS: Message = &[
+    ("authorizationCode", Member::Of(AUTHORIZATION_CODE)),
+    ("clientCredentials", Member::Of(REFRESHED)),
+    ("implicit", Member::Of(IMPLICIT_FLOW)),
+    ("password", Member::Of(PASSWORD_FLOW)),
+    ("deviceCode", Member::Of(REFRESHED)),
+];
+/// `AuthorizationCodeOAuthFlow`.
+const AUTHORIZATION_CODE: Message = &[
+    ("refreshUrl", Member::Implicit),
+    ("pkceRequired", Member::Implicit),
+];
+/// `ClientCredentialsOAuthFlow`, `DeviceCodeOAuthFlow`: only `refreshUrl` is implicit.
+const REFRESHED: Message = &[("refreshUrl", Member::Implicit)];
+/// `ImplicitOAuthFlow` (no member is `REQUIRED`).
+const IMPLICIT_FLOW: Message = &[
+    ("authorizationUrl", Member::Implicit),
+    ("refreshUrl", Member::Implicit),
+    ("scopes", Member::Implicit),
+];
+/// `PasswordOAuthFlow` (no member is `REQUIRED`).
+const PASSWORD_FLOW: Message = &[
+    ("tokenUrl", Member::Implicit),
+    ("refreshUrl", Member::Implicit),
+    ("scopes", Member::Implicit),
+];
+
+/// Whether `v` is a proto default as ProtoJSON writes one.
+fn is_default(v: &Value) -> bool {
+    match v {
+        Value::String(s) => s.is_empty(),
+        Value::Bool(b) => !b,
+        Value::Number(n) => n.as_f64() == Some(0.0),
+        Value::Array(a) => a.is_empty(),
+        Value::Object(o) => o.is_empty(),
+        Value::Null => false,
+    }
+}
+
+/// Omit `v`'s default-valued implicit members, as `message` declares them, at every depth.
+fn omit_defaults(v: &mut Value, message: Message) {
+    let Some(obj) = v.as_object_mut() else {
+        return;
+    };
+    for (name, member) in message {
+        let Some(value) = obj.get_mut(*name) else {
+            continue;
+        };
+        let omit = match member {
+            Member::Implicit => is_default(value),
+            Member::List(inner, required) => {
+                if let Value::Array(entries) = value {
+                    entries.iter_mut().for_each(|e| omit_defaults(e, inner));
+                }
+                !required && is_default(value)
+            }
+            Member::Map(inner) => {
+                if let Value::Object(entries) = value {
+                    entries.values_mut().for_each(|e| omit_defaults(e, inner));
+                }
+                is_default(value)
+            }
+            Member::Of(inner) => {
+                omit_defaults(value, inner);
+                false
+            }
+        };
+        if omit {
+            obj.remove(*name);
+        }
+    }
 }
 
 /// The capability set the plane-neutral machine compares: skill id to a digest of that skill's
