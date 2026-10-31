@@ -175,3 +175,31 @@ fn a_task_hop_does_not_copy_its_envelope() {
         "a task hop allocated {count} times: it copied its 1000-part envelope"
     );
 }
+
+/// G1-52: THE HOOK VIEW READS THE REQUEST ONCE: its projection, its invocation and its session are
+/// taken from one parse of the envelope, never three parses each copying the params.
+#[test]
+fn the_hook_view_parses_the_envelope_once() {
+    let parts: Vec<serde_json::Value> = (0..1000)
+        .map(|i| serde_json::json!({ "kind": "text", "text": format!("part {i}") }))
+        .collect();
+    let envelope = serde_json::to_vec(&serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "message/send",
+        "params": { "message": { "role": "user", "contextId": "ctx", "parts": parts } },
+    }))
+    .unwrap();
+    // Warm outside the window.
+    assert!(crate::plane_door::hook_view(&envelope).is_some());
+    let parse = allocations_of(|| {
+        std::hint::black_box(serde_json::from_slice::<serde_json::Value>(&envelope).unwrap());
+    });
+    let mut view = None;
+    let count = allocations_of(|| view = crate::plane_door::hook_view(&envelope));
+    println!("one parse: {parse} allocations; the hook view: {count}");
+    assert!(view.is_some());
+    assert!(
+        count < 2 * parse,
+        "the hook view allocated {count} times, one parse of the envelope {parse}: it parsed or \
+         copied the request more than once"
+    );
+}
