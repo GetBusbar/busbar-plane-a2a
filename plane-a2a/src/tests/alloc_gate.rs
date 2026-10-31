@@ -142,3 +142,36 @@ fn reading_a_card_does_not_copy_it() {
         "reading the card allocated {count} times: it copied the card (1000 unmodelled members)"
     );
 }
+
+/// G1-16: A TASK HOP HOLDS ITS REQUEST ONCE: the envelope it opens the task from is the request it
+/// keeps, never a deep copy of it (a copy allocates once per node of the caller's message).
+#[test]
+fn a_task_hop_does_not_copy_its_envelope() {
+    let parts: Vec<serde_json::Value> = (0..1000)
+        .map(|i| serde_json::json!({ "kind": "text", "text": format!("part {i}") }))
+        .collect();
+    let envelope = serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "message/send",
+        "params": { "message": { "role": "user", "parts": parts } },
+    });
+    // Warm outside the window.
+    drop(crate::plane_door::Hop::task(
+        serde_json::json!(1),
+        "1.0",
+        envelope.clone(),
+    ));
+    let mut hop = None;
+    let count = allocations_of(|| {
+        hop = Some(crate::plane_door::Hop::task(
+            serde_json::json!(1),
+            "1.0",
+            envelope,
+        ));
+    });
+    println!("task hop allocations: {count}");
+    assert!(hop.is_some());
+    assert!(
+        count < 100,
+        "a task hop allocated {count} times: it copied its 1000-part envelope"
+    );
+}
