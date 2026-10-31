@@ -313,3 +313,39 @@ fn the_operators_url_query_is_kept_ahead_of_the_operations_members() {
     .unwrap();
     assert_eq!(f.target, "/x/tasks/t?code=K&historyLength=2");
 }
+
+/// G2-16: A v0.3 CARD states its bindings as `preferredTransport` (the binding of its `url`,
+/// `JSONRPC` when unstated) and `additionalInterfaces[].transport`. JSON-RPC, the binding v0.3
+/// makes mandatory, is kept wherever the card names it; a card that names no JSON-RPC but names
+/// HTTP+JSON is reached on HTTP+JSON. v0.3's gRPC service is not the one the plane frames, so a
+/// card naming only gRPC stays on JSON-RPC.
+#[test]
+fn a_v03_card_is_read_by_its_preferred_transport_and_additional_interfaces() {
+    let v03 = |preferred: Value, more: &[&str]| {
+        json!({ "url": "https://ignored.example", "preferredTransport": preferred,
+            "additionalInterfaces": more.iter()
+                .map(|t| json!({ "url": "https://ignored.example", "transport": t }))
+                .collect::<Vec<_>>() })
+    };
+    assert_eq!(binding_of(Some(&v03(json!("HTTP+JSON"), &[]))), "HTTP+JSON");
+    assert_eq!(
+        binding_of(Some(&v03(json!("GRPC"), &["HTTP+JSON"]))),
+        "HTTP+JSON"
+    );
+    assert_eq!(
+        binding_of(Some(&v03(json!("HTTP+JSON"), &["JSONRPC"]))),
+        BINDING_JSONRPC
+    );
+    assert_eq!(binding_of(Some(&v03(json!("GRPC"), &[]))), BINDING_JSONRPC);
+    assert_eq!(binding_of(Some(&v03(json!(7), &[]))), BINDING_JSONRPC);
+    // Unstated: the card's url is JSON-RPC.
+    assert_eq!(
+        binding_of(Some(&json!({ "url": "https://a.example",
+            "additionalInterfaces": [{ "url": "https://a.example", "transport": "HTTP+JSON" }] }))),
+        BINDING_JSONRPC
+    );
+    // A card that states `supportedInterfaces` is judged on that list alone.
+    let mut both = card(&["JSONRPC"]);
+    both["preferredTransport"] = json!("HTTP+JSON");
+    assert_eq!(binding_of(Some(&both)), BINDING_JSONRPC);
+}
