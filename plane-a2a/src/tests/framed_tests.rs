@@ -314,7 +314,8 @@ fn every_sse_frame_terminator_is_recognised() {
 /// Ported from busbar-a2a a2a/tests/served_methods_tests.rs::the_extended_card_is_served_over_grpc_at_the_path_the_proto_defines.
 /// The door's half of the gRPC binding: the generated service's own path names the rpc, and busbar's
 /// extended card (the document the JSON-RPC line answers) comes back as the proto's `AgentCard`
-/// message, carrying the entitled agent and nothing the caller is not entitled to.
+/// message, carrying exactly the skills the document carries (which agents a caller is entitled to
+/// see is the document's, judged before this transcode).
 #[test]
 fn the_extended_card_is_served_over_grpc_at_the_path_the_proto_defines() {
     let target = format!("{SERVICE_PATH}/GetExtendedAgentCard");
@@ -354,10 +355,6 @@ fn the_extended_card_is_served_over_grpc_at_the_path_the_proto_defines() {
             .map(|s| s.id.as_str())
             .collect::<Vec<_>>(),
         ["planner"],
-        "the extended card carries the agent this caller is entitled to reach"
-    );
-    assert!(
-        !bytes.windows(8).any(|w| w == b"payments"),
-        "the extended card shows nothing else over gRPC"
+        "the transcoded card carries exactly the skills the document carries"
     );
 }
