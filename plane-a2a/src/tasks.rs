@@ -56,6 +56,35 @@ const TRIES: usize = 3;
 /// sweep that may retire this many keeps the settled tasks bounded under any mix of submits, the
 /// rest waiting for the next submit's.
 pub const SWEEP_BUDGET: usize = 32;
+/// How long a sweep that left nothing behind holds off the next one, in seconds: the sweep reads
+/// every caller's task rows, so it is not paid on every submit.
+pub const SWEEP_INTERVAL_SECS: u64 = 30;
+
+/// WHEN THE NEXT [`retention_sweep`] IS DUE, per instance: at once while the last one spent its
+/// whole budget (more may wait), else [`SWEEP_INTERVAL_SECS`] after it. Plane memory; a restart
+/// sweeps on its first submit.
+#[derive(Debug, Default)]
+pub struct SweepGate {
+    last: busbar_contract::abi::sdk::publish::Keyed<(), (u64, bool)>,
+}
+
+impl SweepGate {
+    /// Whether a submit at `now` sweeps.
+    #[must_use]
+    pub fn due(&self, now: u64) -> bool {
+        self.last.with_all(|m| {
+            m.get(&()).is_none_or(|(at, backlog)| {
+                *backlog || now >= at.saturating_add(SWEEP_INTERVAL_SECS)
+            })
+        })
+    }
+
+    /// A sweep at `now` retired `touched` tasks of its `budget`.
+    pub fn swept(&self, now: u64, touched: usize, budget: usize) {
+        self.last
+            .with_all(|m| m.insert((), (now, touched >= budget)));
+    }
+}
 
 /// Why a step on the records did not finish.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -577,7 +606,8 @@ pub fn record_push_delivery(
 /// [`MAX_RETAINED`] or more terminal ones are held, the oldest go too. An active task is never
 /// touched, however long it has been idle. At
 /// most `budget` tasks are touched; the rest wait for the next sweep. Its one caller is a submit
-/// ([`crate::task_hop::open`]), never a read or a timer.
+/// ([`crate::task_hop::open`]) the [`SweepGate`] finds due, never a read or a timer. Answers how
+/// many tasks it retired.
 ///
 /// # Errors
 /// [`Halt`].
@@ -586,7 +616,7 @@ pub fn retention_sweep(
     now: u64,
     budget: usize,
     out: &mut Vec<Write>,
-) -> Result<(), Halt> {
+) -> Result<usize, Halt> {
     let rule = retention_of(KIND_TASK);
     let mut held: Vec<(String, TaskRow)> = rec
         .list(KIND_TASK, "")?
@@ -604,7 +634,7 @@ pub fn retention_sweep(
             touched += 1;
         }
     }
-    Ok(())
+    Ok(touched)
 }
 
 /// Tombstone `caller`'s task `task`, its push config, and its events (the chain dropped whole).

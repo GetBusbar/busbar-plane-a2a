@@ -185,6 +185,9 @@ pub struct Hop {
     settle: Vec<TaskSettled>,
     /// The second the piece in flight entered, kept across its re-entries.
     now: Option<u64>,
+    /// Whether the piece in flight's submit sweeps ([`crate::tasks::SweepGate::due`]), decided
+    /// once across its re-entries so they make the same host calls.
+    sweep: Option<bool>,
     /// A subscribe: busbar's own refusal of a task it does not hold live comes before the hop.
     subscribe: bool,
     /// How many of the piece in flight's task moves have queued their push notifications: a
@@ -549,6 +552,8 @@ pub struct A2aDoor {
     generations: Generations<PlaneSnapshot, AgentsCfg>,
     pub(crate) units: Keyed<u64, AgentUnit>,
     pub(crate) restored: Keyed<(), u64>,
+    /// When the next retention sweep is due ([`crate::tasks::SweepGate`]).
+    pub(crate) sweeps: crate::tasks::SweepGate,
     /// `<caller>/<busbar task id>` to the far end's own id for the task: plane memory, so a
     /// restart forgets it (its bound included).
     backends: BackendIds,
@@ -1749,6 +1754,7 @@ fn open_task(
         }
     }
     let backends = |id: &str| reach.plane.backends.get(&task_key(caller, id));
+    let sweep = *hop.sweep.get_or_insert_with(|| reach.plane.sweeps.due(now));
     let req = task_hop::Request {
         envelope,
         relayed: hop.rewritten.as_ref(),
@@ -1757,6 +1763,7 @@ fn open_task(
         member,
         addressed,
         now,
+        sweep,
     };
     let opened = match task_hop::open(&mut via, &req, hop.relay.id(), &backends, writes) {
         Err(Halt::Pending) => return Err(Outcome::Pending),
@@ -1766,6 +1773,7 @@ fn open_task(
     pass.issued = via.issued();
     hop.opening = None;
     hop.now = None;
+    hop.sweep = None;
     match opened {
         Opened::Refused(reply) => {
             pass.unrecorded = None;
@@ -1776,7 +1784,14 @@ fn open_task(
             instead,
             callback,
             unrecorded,
+            swept,
         } => {
+            if let Some(touched) = swept {
+                reach
+                    .plane
+                    .sweeps
+                    .swept(now, touched, crate::tasks::SWEEP_BUDGET);
+            }
             // The engine's answer should the store refuse the opening's writes, for `refusal`.
             pass.unrecorded = unrecorded;
             // The credential an inline callback names is held in plane memory, as the engine's

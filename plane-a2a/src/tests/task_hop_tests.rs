@@ -27,6 +27,8 @@ struct Desk {
     failed_claim: Option<usize>,
     /// The lists of every task row of every caller (the retention sweep's read).
     full_lists: usize,
+    /// When the next sweep is due, as the door holds it.
+    sweeps: tasks::SweepGate,
 }
 
 impl Records for Desk {
@@ -85,6 +87,7 @@ fn desk() -> Desk {
         claims: 0,
         failed_claim: None,
         full_lists: 0,
+        sweeps: tasks::SweepGate::default(),
     }
 }
 
@@ -112,9 +115,18 @@ fn opened_with(
         member: MEMBER,
         addressed: None,
         now: 300,
+        // As the door decides it: once per unit, off the instance's gate.
+        sweep: desk.sweeps.due(300),
     };
     let opened = open(desk, &req, &json!(7), backends, &mut out).unwrap();
     desk.book.apply(&out);
+    if let Opened::Hop {
+        swept: Some(touched),
+        ..
+    } = &opened
+    {
+        desk.sweeps.swept(300, *touched, tasks::SWEEP_BUDGET);
+    }
     opened
 }
 
@@ -389,6 +401,7 @@ fn an_inline_callback_the_floor_refuses_refuses_the_request_before_anything_open
             member: MEMBER,
             addressed: None,
             now: 300,
+            sweep: true,
         };
         let opened = open(&mut desk, &req, &json!(7), &|_| None, &mut out).unwrap();
         let (status, code, message) = refusal_of(opened);
@@ -660,6 +673,7 @@ fn opened_writing(desk: &mut Desk, envelope: &Value) -> (Opened, Vec<Write>) {
         member: MEMBER,
         addressed: None,
         now: 300,
+        sweep: true,
     };
     let opened = open(desk, &req, &json!(7), &|_| None, &mut out).unwrap();
     desk.book.apply(&out);
@@ -1208,6 +1222,7 @@ fn a_task_verb_naming_a_task_the_caller_does_not_hold_is_refused_task_not_found(
                 member: MEMBER,
                 addressed: None,
                 now: 300,
+                sweep: true,
             };
             let opened = open(&mut d, &req, &json!(7), &far, &mut out).unwrap();
             let Opened::Refused(reply) = opened else {
@@ -1284,6 +1299,7 @@ fn writes_of(desk: &mut Desk, envelope: &Value) -> Vec<Write> {
         member: MEMBER,
         addressed: None,
         now: 300,
+        sweep: true,
     };
     let opened = open(desk, &req, &json!(7), &|_| None, &mut out).unwrap();
     assert!(matches!(opened, Opened::Hop { .. }), "{opened:?}");
@@ -1419,6 +1435,7 @@ fn opened_at(d: &mut Desk, envelope: &Value, now: u64) -> Opened {
         member: MEMBER,
         addressed: None,
         now,
+        sweep: true,
     };
     let opened = open(d, &req, &json!(7), &|_| None, &mut out).unwrap();
     d.book.apply(&out);

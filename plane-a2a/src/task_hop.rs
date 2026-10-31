@@ -23,10 +23,10 @@
 //!   that move cannot be recorded).
 //! * FRESH: busbar mints the id from eight random bytes ([`task_identity::mint`]), the `contextId` is the
 //!   caller's or the id, and the task is submitted and dispatched to the agent before the hop
-//!   (refused `503` when it cannot be recorded). The submit carries the task store's RETENTION
-//!   SWEEP ([`tasks::retention_sweep`], at most [`tasks::SWEEP_BUDGET`] settled tasks retired in
-//!   its own writes): the sweep runs from a submit, never from a read or a timer, and one that
-//!   fails retires nothing and fails no submit.
+//!   (refused `503` when it cannot be recorded). A submit the instance's [`tasks::SweepGate`]
+//!   finds due carries the task store's RETENTION SWEEP ([`tasks::retention_sweep`], at most
+//!   [`tasks::SWEEP_BUDGET`] settled tasks retired in its own writes): the sweep runs from a
+//!   submit, never from a read or a timer, and one that fails retires nothing and fails no submit.
 //!
 //! Task ids the caller holds and whose far-end id busbar learnt are sent on as the far end's
 //! ([`task_identity::translate_request`]). On the answer, the reported state is recorded (nothing for
@@ -116,6 +116,9 @@ pub struct Request<'a> {
     pub addressed: Option<&'a str>,
     /// Now, in seconds.
     pub now: u64,
+    /// A fresh submit carries the retention sweep ([`tasks::SweepGate::due`], decided once per
+    /// unit so a re-entry makes the same host calls).
+    pub sweep: bool,
 }
 
 /// THE PUSH CALLBACK a request carried inline, as it passed the floor: the URL now on the task's
@@ -145,6 +148,8 @@ pub enum Opened {
         /// ([`TASK_UNRECORDED`]); a resumed one: `503`, `-32603` ([`TASK_UNRESUMED`]). `None` for an
         /// addressed task, whose hop is sent whether or not its callback was recorded.
         unrecorded: Option<AgentRefusal>,
+        /// How many settled tasks the submit's retention sweep retired; `None` when none ran.
+        swept: Option<usize>,
     },
     /// The hop does not go ahead: the caller's whole answer.
     Refused(RelayReply),
@@ -313,6 +318,7 @@ pub fn open(
         },
         _ => None,
     };
+    let mut swept = None;
     let (task, unrecorded) = match (addressed, resumed) {
         (Some(row), _)
             if is_cancel(req.envelope)
@@ -425,12 +431,15 @@ pub fn open(
             if let Some(callback) = callback.as_ref() {
                 out.extend(config_write(req, callback, version, &task_id));
             }
-            // THE SUBMIT'S RETENTION SWEEP, in the submit's own writes: a sweep that fails leaves
-            // nothing behind (it writes only once its read is whole) and fails no submit.
-            if let Err(Halt::Pending) =
-                tasks::retention_sweep(reach, req.now, tasks::SWEEP_BUDGET, out)
-            {
-                return Err(Halt::Pending);
+            // THE SUBMIT'S RETENTION SWEEP, when due, in the submit's own writes: a sweep that
+            // fails leaves nothing behind (it writes only once its read is whole) and fails no
+            // submit.
+            if req.sweep {
+                match tasks::retention_sweep(reach, req.now, tasks::SWEEP_BUDGET, out) {
+                    Err(Halt::Pending) => return Err(Halt::Pending),
+                    Err(Halt::Failed(_)) => {}
+                    Ok(touched) => swept = Some(touched),
+                }
             }
             let task = TaskHop {
                 task_id,
@@ -449,6 +458,7 @@ pub fn open(
         instead,
         callback,
         unrecorded,
+        swept,
     })
 }
 
