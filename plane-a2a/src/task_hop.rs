@@ -486,6 +486,10 @@ fn inline_callback(
     let Some(cfg) = inline_config(envelope) else {
         return Ok(Ok(None));
     };
+    // A `token` is refused here as the push-config verbs refuse it: busbar never presents one.
+    if cfg.get("token").is_some() {
+        return Ok(Err(local::TOKEN_UNCARRIED.to_string()));
+    }
     let auth = match local::delivery_auth(cfg) {
         Ok(auth) => auth,
         Err(message) => return Ok(Err(message)),

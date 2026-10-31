@@ -587,6 +587,14 @@ pub(crate) fn held_config(
         .and_then(|b| serde_json::from_slice(&Zeroizing::new(b)).ok()))
 }
 
+/// The words for a push notification config naming a `token`, which busbar never presents (the
+/// push-config verbs and an inline callback alike).
+pub const TOKEN_UNCARRIED: &str =
+    "busbar does not carry a push notification config `token`: there is no header or body \
+     member the delivery puts it in, so storing it would promise the receiver a value it \
+     never sees. Use `authentication`, which busbar presents on the `Authorization` header, \
+     or register the secret in the callback URL your receiver checks.";
+
 /// `CreateTaskPushNotificationConfig` / `tasks/pushNotificationConfig/set`.
 fn create_push_config(
     reach: &mut dyn Reach,
@@ -602,14 +610,7 @@ fn create_push_config(
     };
     let cfg = config_params(params);
     if cfg.get("token").is_some() {
-        return Ok(err(
-            rpc_id,
-            UNSUPPORTED_OPERATION,
-            "busbar does not carry a push notification config `token`: there is no header or body \
-             member the delivery puts it in, so storing it would promise the receiver a value it \
-             never sees. Use `authentication`, which busbar presents on the `Authorization` header, \
-             or register the secret in the callback URL your receiver checks.",
-        ));
+        return Ok(err(rpc_id, UNSUPPORTED_OPERATION, TOKEN_UNCARRIED));
     }
     let authentication = match delivery_auth(cfg) {
         Ok(auth) => auth,
