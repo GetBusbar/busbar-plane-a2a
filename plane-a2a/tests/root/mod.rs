@@ -5273,18 +5273,9 @@ async fn no_principal_sees_another_principals_agents() {
 /// A key deleted, disabled or expired sees no agent at all, and nothing is dialled. The
 /// control: a live key of the same grant sees both agents.
 ///
-/// * deleted and disabled: the kernel's auth chain refuses the token, so its catalogue read and
-///   an addressed unit are each `401`;
-/// * expired (its row's `expires_at` passed, its token still in date): the kernel's auth chain
-///   admits it (the 1.5.5 rule `key_expires_at_tests` and `key_expires_at_cross_plane` pin), and
-///   the plane's admission refuses it. Its catalogue read is predev's: `200`, busbar's card with
-///   no skill. MEASURED on predev 70776f1d36 (Latchkey job
-///   cli-cbd10b3b-45f6-4274-82bd-4a6a9e56c2c1, `served_methods_tests` over `relay_harness`):
-///   `GetExtendedAgentCard` on `POST /a2a` answered `200` with the signed busbar card and
-///   `"skills":[]`; ruling: match predev; coordinator 2026-10-07. Its addressed unit is
-///   predev's `KeyNotLive`, `401`, `-32004`, no id; predev measured `key `vk_…` is not live`,
-///   and the plane says `this key is not live` (BUSBAR-1.6.0.md l.2639-2641: a plane never sees
-///   the raw principal; ruling (B), coordinator 2026-10-07).
+/// The kernel refuses deleted, disabled and stored-row-expired credentials at authentication,
+/// including an otherwise in-date token (owner-approved expiry rule, 2026-10-30). Catalogue and
+/// addressed requests each return 401; their opaque authentication refusal reveals no key state.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_key_that_is_no_longer_live_sees_no_agent_at_all() {
     let _one = PUBLISHING.lock().await;
@@ -5302,6 +5293,7 @@ async fn a_key_that_is_no_longer_live_sees_no_agent_at_all() {
         "the control must pass, or the rows below prove nothing"
     );
 
+    let mut authentication_refusal = None;
     for what in ["deleted", "disabled", "expired"] {
         let (key, token) = another_caller(&s, what, None);
         match what {
@@ -5319,15 +5311,10 @@ async fn a_key_that_is_no_longer_live_sees_no_agent_at_all() {
                 s.gov.refresh().expect("the book reloads");
             }
         }
-        let catalogue_read = if what == "expired" {
-            StatusCode::OK
-        } else {
-            StatusCode::UNAUTHORIZED
-        };
         let (status, seen) = agents_seen(&s, &token).await;
         assert_eq!(
             (status, seen),
-            (catalogue_read, Vec::new()),
+            (StatusCode::UNAUTHORIZED, Vec::new()),
             "a {what} key must see no agent"
         );
         let (status, body) = answered(
@@ -5336,11 +5323,15 @@ async fn a_key_that_is_no_longer_live_sees_no_agent_at_all() {
         )
         .await;
         assert_eq!(status, StatusCode::UNAUTHORIZED, "{what}: {body}");
-        if what == "expired" {
-            let doc: serde_json::Value = serde_json::from_str(&body).expect("an envelope");
-            assert_eq!(doc["error"]["code"], -32004, "{body}");
-            assert_eq!(doc["error"]["message"], "this key is not live", "{body}");
-            assert_eq!(doc["id"], serde_json::Value::Null, "{body}");
+        let mut doc: serde_json::Value = serde_json::from_str(&body).expect("an envelope");
+        assert!(doc["error"].is_object(), "{body}");
+        if let Some(request_id) = doc.as_object_mut().expect("an object").remove("request_id") {
+            assert!(request_id.as_str().is_some_and(|id| !id.is_empty()));
+        }
+        if let Some(ref expected) = authentication_refusal {
+            assert_eq!(&doc, expected, "{what}: the same opaque authentication refusal");
+        } else {
+            authentication_refusal = Some(doc);
         }
         assert!(!agent.relayed(), "{what}: nothing was dialled");
     }
