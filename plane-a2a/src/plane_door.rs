@@ -3402,6 +3402,9 @@ struct CardHop {
     redirects: u8,
     url: String,
     issued: u32,
+    /// Why the canonical path produced no document, once the legacy path is being tried: reported
+    /// with the legacy path's own refusal, never lost to it.
+    canonical: Option<String>,
 }
 
 /// The most addresses one card host's judgement is read for.
@@ -3488,10 +3491,10 @@ fn guard_relay(
     if hop.endpoint_judged {
         return Poll::Ready(None);
     }
-    // The refusal's sentence is the operator's (the engine journalled it); the caller reads the
-    // hop's fixed words.
+    // The refusal's sentence is the operator's (a diagnostic names it); the caller reads the hop's
+    // fixed words.
     let refused = match crate::card_trust::scheme_refusal(url, def.allow_private) {
-        Some(_) => true,
+        Some(why) => Some(why),
         None => {
             let at = LookAt {
                 plane: reach.plane,
@@ -3502,17 +3505,24 @@ fn guard_relay(
                 Poll::Pending => return Poll::Pending,
                 Poll::Ready(Ok((issued, _))) => {
                     pass.issued = issued;
-                    false
+                    None
                 }
-                Poll::Ready(Err(_)) => {
+                Poll::Ready(Err(why)) => {
                     pass.issued += 1;
-                    true
+                    Some(why)
                 }
             }
         }
     };
     hop.endpoint_judged = true;
-    Poll::Ready(refused.then(|| hop.relay.refuse_endpoint()))
+    if let Some(why) = refused.as_deref() {
+        busbar_contract::diag_warn!(
+            crate::diagnostics::A2A_RELAY_ENDPOINT_REFUSED,
+            url = %url,
+            "a2a: the agent endpoint `{url}` was refused before the hop: {why}"
+        );
+    }
+    Poll::Ready(refused.map(|_| hop.relay.refuse_endpoint()))
 }
 
 /// THE CARD at the agent origin's well-known paths, canonical first, over the agent's connection
@@ -3552,6 +3562,7 @@ fn fetch_card(
             redirects: 0,
             url: urls[0].clone(),
             issued: at.base,
+            canonical: None,
         };
         (first, None)
     });
@@ -3668,15 +3679,22 @@ fn fetch_card(
         match got {
             Ok(None) => {}
             Ok(Some(card)) => return Ok((Ok(card), seen, hop.issued)),
-            Err(_) if !hop.legacy => {
+            Err(refusal) if !hop.legacy => {
                 hop = CardHop {
                     legacy: true,
                     redirects: 0,
                     url: urls[1].clone(),
                     issued: hop.issued,
+                    canonical: Some(refusal),
                 };
             }
-            Err(refusal) => return Ok((Err(refusal), seen, hop.issued)),
+            Err(refusal) => {
+                let refusal = match hop.canonical.take() {
+                    Some(canonical) => format!("{canonical}; the legacy path: {refusal}"),
+                    None => refusal,
+                };
+                return Ok((Err(refusal), seen, hop.issued));
+            }
         }
     }
 }

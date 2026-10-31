@@ -241,6 +241,26 @@ pub const A2A_BACKEND_TASK_ID_UNHELD: Diagnostic = Diagnostic {
     retired: false,
 };
 
+/// A relayed hop's agent endpoint was refused by the relay's guard: the operator's reason.
+pub const A2A_RELAY_ENDPOINT_REFUSED: Diagnostic = Diagnostic {
+    code: 7041,
+    class: Class::Plane,
+    slug: "a2a-relay-endpoint-refused",
+    title: "A2A agent endpoint refused before the hop",
+    severity: Severity::Actionable,
+    summary: "Before a relayed request was sent, the agent's registered url was refused by the relay's \
+             guard: its scheme is plaintext on a registration without `allow_private`, or the host's \
+             destination judgement refused the host or an address it resolves to. The caller is \
+             answered the hop's fixed refusal words; this diagnostic carries the guard's own \
+             sentence, naming the url and why, which the caller is never shown. Emitted on each \
+             refused hop.",
+    action: "Correct the named agent's registration: use an https:// url, or set `allow_private: \
+            true` if the endpoint is a loopback or private one the operator means to reach; for a \
+            refused address, check the agent's DNS and the deployment's destination policy.",
+    since: "1.6.0",
+    retired: false,
+};
+
 /// A relayed SSE frame was not valid UTF-8 and was dropped. Frozen: `BUSBAR-7104`, the published
 /// catalog entry of the same number, byte for byte.
 pub const PLANE_SSE_FRAME_NOT_UTF8: Diagnostic = Diagnostic {
@@ -280,6 +300,7 @@ pub const DIAGNOSTICS: &[&Diagnostic] = &[
     &A2A_SPLIT_RECORD_UNREAD,
     &A2A_SPLIT_RECORD_STRAY_PARTS,
     &A2A_BACKEND_TASK_ID_UNHELD,
+    &A2A_RELAY_ENDPOINT_REFUSED,
     &PLANE_SSE_FRAME_NOT_UTF8,
 ];
 

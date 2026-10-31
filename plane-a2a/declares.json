@@ -112,6 +112,15 @@
       "since": "1.6.0"
     },
     {
+      "code": 7041,
+      "slug": "a2a-relay-endpoint-refused",
+      "title": "A2A agent endpoint refused before the hop",
+      "severity": "actionable",
+      "summary": "Before a relayed request was sent, the agent's registered url was refused by the relay's guard: its scheme is plaintext on a registration without `allow_private`, or the host's destination judgement refused the host or an address it resolves to. The caller is answered the hop's fixed refusal words; this diagnostic carries the guard's own sentence, naming the url and why, which the caller is never shown. Emitted on each refused hop.",
+      "action": "Correct the named agent's registration: use an https:// url, or set `allow_private: true` if the endpoint is a loopback or private one the operator means to reach; for a refused address, check the agent's DNS and the deployment's destination policy.",
+      "since": "1.6.0"
+    },
+    {
       "code": 7104,
       "slug": "plane-sse-frame-not-utf8",
       "title": "A relayed SSE frame was not valid UTF-8 and was dropped",
