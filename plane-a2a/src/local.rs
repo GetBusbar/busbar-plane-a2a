@@ -460,11 +460,17 @@ pub fn delivery_auth(cfg: &Value) -> Result<Option<DeliveryAuth>, String> {
              authentication scheme name: it must be a single token of printable ASCII"
         ));
     }
-    let credentials = auth
-        .get("credentials")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .trim();
+    let credentials = match auth.get("credentials") {
+        None | Some(Value::Null) => "",
+        Some(Value::String(c)) => c.trim(),
+        Some(_) => {
+            return Err(
+                "a push notification config's authentication `credentials` must be a string \
+                 (the value busbar puts after the scheme on the `Authorization` header)"
+                    .to_string(),
+            )
+        }
+    };
     if credentials
         .bytes()
         .any(|b| !b.is_ascii_graphic() && b != b' ')
