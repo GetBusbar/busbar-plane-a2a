@@ -285,6 +285,14 @@ fn a_send_with_no_message_mints_a_v7_id() {
     assert!(minted["params"]["message"].get("parts").is_none());
 }
 
+/// The next complete frame of `buf`, consumed from it ([`frame_end`]).
+fn take_frame(buf: &mut Vec<u8>) -> Option<String> {
+    let (at, len) = frame_end(buf)?;
+    let frame = String::from_utf8_lossy(&buf[..at]).into_owned();
+    buf.drain(..at + len);
+    Some(frame)
+}
+
 /// SSE FRAMES ARE TAKEN WHOLE OR NOT AT ALL (the engine's `grpc_tests.rs`, ported): a frame split
 /// across two chunks is not delivered as two, and a buffer holding half a frame yields nothing
 /// rather than a truncated one.

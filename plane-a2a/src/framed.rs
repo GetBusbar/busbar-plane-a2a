@@ -532,12 +532,20 @@ pub fn event_messages(rpc: Rpc, buf: &[u8]) -> (Vec<Vec<u8>>, Option<CallStatus>
         return (Vec::new(), Some(status_for_http(200)));
     }
     let mut messages = Vec::new();
-    let mut rest = buf.to_vec();
-    while !rest.is_empty() {
-        let frame = take_frame(&mut rest).unwrap_or_else(|| {
-            let whole = std::mem::take(&mut rest);
-            String::from_utf8_lossy(&whole).into_owned()
-        });
+    // A CURSOR over the borrowed piece: each frame is found from where the last one ended.
+    let mut from = 0;
+    while from < buf.len() {
+        let rest = &buf[from..];
+        let frame = match frame_end(rest) {
+            Some((at, len)) => {
+                from += at + len;
+                String::from_utf8_lossy(&rest[..at])
+            }
+            None => {
+                from = buf.len();
+                String::from_utf8_lossy(rest)
+            }
+        };
         match event(&frame) {
             Some(Ok(message)) => messages.push(message),
             Some(Err(status)) => return (messages, Some(status)),
@@ -547,22 +555,17 @@ pub fn event_messages(rpc: Rpc, buf: &[u8]) -> (Vec<Vec<u8>>, Option<CallStatus>
     (messages, None)
 }
 
-/// The next complete event-stream frame in `buffered`, consumed from it: a frame ends at a blank
-/// line, in any of the three line-ending spellings the grammar allows.
-fn take_frame(buffered: &mut Vec<u8>) -> Option<String> {
+/// Where the first complete event-stream frame of `buf` ends: the offset of the blank line that
+/// ends it and that line ending's length, in any of the three spellings the grammar allows (the
+/// longest where two start at one offset). One forward scan.
+fn frame_end(buf: &[u8]) -> Option<(usize, usize)> {
     const TERMINATORS: [&[u8]; 3] = [b"\r\n\r\n", b"\n\n", b"\r\r"];
-    let (at, len) = TERMINATORS
-        .iter()
-        .filter_map(|t| {
-            buffered
-                .windows(t.len())
-                .position(|w| w == *t)
-                .map(|pos| (pos, t.len()))
-        })
-        .min_by_key(|(pos, len)| (*pos, std::cmp::Reverse(*len)))?;
-    let rest = buffered.split_off(at + len);
-    let frame = std::mem::replace(buffered, rest);
-    Some(String::from_utf8_lossy(&frame[..at]).into_owned())
+    (0..buf.len()).find_map(|at| {
+        TERMINATORS
+            .iter()
+            .find(|t| buf[at..].starts_with(t))
+            .map(|t| (at, t.len()))
+    })
 }
 
 /// The neutral status an event's error is read under (a stream's error reads at `500`).
