@@ -316,3 +316,72 @@ fn adding_an_unmodelled_member_to_a_signed_card_invalidates_its_signature() {
         signing_payload(&extended).expect("payload")
     );
 }
+
+/// G1-3: A2A v1.0 §8.4.1 (rule 1, field presence per §5.7) and §8.4.3 (verifier steps 3-5): the
+/// JWS payload omits every member that holds its proto default unless the field is `REQUIRED` or
+/// `optional`. This is the specification's own worked example (main, §8.4.1), byte for byte.
+#[test]
+fn the_signing_payload_omits_default_valued_members_as_the_v1_specification_shows() {
+    let card = serde_json::json!({
+      "name": "Example Agent",
+      "description": "An example agent that echoes messages.",
+      "supportedInterfaces": [
+        { "url": "https://example.com/a2a/v1", "protocolBinding": "JSONRPC", "protocolVersion": "1.0" }
+      ],
+      "version": "1.0.0",
+      "capabilities": { "streaming": false, "pushNotifications": false, "extensions": [] },
+      "defaultInputModes": ["text/plain"],
+      "defaultOutputModes": ["text/plain"],
+      "skills": [
+        { "id": "echo", "name": "Echo", "description": "Echoes the input.", "tags": ["echo"] }
+      ]
+    });
+    assert_eq!(
+        signing_payload(&card).unwrap(),
+        r#"{"capabilities":{"pushNotifications":false,"streaming":false},"defaultInputModes":["text/plain"],"defaultOutputModes":["text/plain"],"description":"An example agent that echoes messages.","name":"Example Agent","skills":[{"description":"Echoes the input.","id":"echo","name":"Echo","tags":["echo"]}],"supportedInterfaces":[{"protocolBinding":"JSONRPC","protocolVersion":"1.0","url":"https://example.com/a2a/v1"}],"version":"1.0.0"}"#
+    );
+}
+
+/// G1-3: a `REQUIRED` member is kept even at its default (the v1.0.0 tag's example: `""` and
+/// `[]` stay), an `optional` one is kept when present, and the defaults omitted at every depth the
+/// card's messages reach (skills, interfaces, extensions, security requirements and schemes).
+#[test]
+fn the_signing_payload_keeps_required_and_optional_members_at_their_defaults() {
+    let card = serde_json::json!({
+      "name": "Example Agent",
+      "description": "",
+      "supportedInterfaces": [
+        { "url": "https://e.example/a2a", "protocolBinding": "JSONRPC", "protocolVersion": "1.0", "tenant": "" }
+      ],
+      "capabilities": {
+        "streaming": false,
+        "extensions": [{ "uri": "urn:x", "description": "", "required": false, "params": {} }]
+      },
+      "securitySchemes": {
+        "bearer": { "httpAuthSecurityScheme": { "scheme": "Bearer", "description": "", "bearerFormat": "" } },
+        "imp": { "oauth2SecurityScheme": { "flows": { "implicit": { "authorizationUrl": "https://a.example", "scopes": {} } } } },
+        "cc": { "oauth2SecurityScheme": { "flows": { "clientCredentials": { "tokenUrl": "https://t.example", "scopes": {}, "refreshUrl": "" } } } }
+      },
+      "securityRequirements": [{ "schemes": { "bearer": { "list": [] } } }],
+      "skills": [],
+      "unmodelled": ""
+    });
+    assert_eq!(
+        signing_payload(&card).unwrap(),
+        r#"{"capabilities":{"extensions":[{"params":{},"uri":"urn:x"}],"streaming":false},"description":"","name":"Example Agent","securityRequirements":[{"schemes":{"bearer":{}}}],"securitySchemes":{"bearer":{"httpAuthSecurityScheme":{"scheme":"Bearer"}},"cc":{"oauth2SecurityScheme":{"flows":{"clientCredentials":{"scopes":{},"tokenUrl":"https://t.example"}}}},"imp":{"oauth2SecurityScheme":{"flows":{"implicit":{"authorizationUrl":"https://a.example"}}}}},"skills":[],"supportedInterfaces":[{"protocolBinding":"JSONRPC","protocolVersion":"1.0","url":"https://e.example/a2a"}],"unmodelled":""}"#
+    );
+}
+
+/// G1-3: a v0.3 card (no `supportedInterfaces`) keeps today's payload: v0.3 states no
+/// canonicalization beyond RFC 7515, so only `signatures` is removed.
+#[test]
+fn a_v03_cards_signing_payload_removes_only_its_signatures() {
+    let card = serde_json::json!({
+      "name": "A", "url": "https://e.example/a2a",
+      "capabilities": { "extensions": [] }, "skills": [], "signatures": []
+    });
+    assert_eq!(
+        signing_payload(&card).unwrap(),
+        r#"{"capabilities":{"extensions":[]},"name":"A","skills":[],"url":"https://e.example/a2a"}"#
+    );
+}
