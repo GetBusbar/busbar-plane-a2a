@@ -63,7 +63,7 @@ impl TaskShape {
                 .is_some_and(reads_as_stream),
             requires_push_notifications: CALLBACK_CONFIG_POINTERS
                 .into_iter()
-                .any(|p| envelope.pointer(p).is_some()),
+                .any(|p| envelope.pointer(p).is_some_and(Value::is_object)),
             output_modes: cfg
                 .and_then(|c| c.get("acceptedOutputModes"))
                 .and_then(Value::as_array)
