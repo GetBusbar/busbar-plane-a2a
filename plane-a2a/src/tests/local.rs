@@ -870,3 +870,113 @@ fn a_push_config_write_the_store_refuses_answers_the_engines_internal_error() {
         assert_eq!(unrecorded(verb, &id), None, "{verb:?}");
     }
 }
+
+/// G2-11: in v0.3 `tasks/pushNotificationConfig/get` names the config optionally
+/// (`GetTaskPushNotificationConfigParams.pushNotificationConfigId?`, or bare `TaskIdParams`):
+/// without it, it reads the task's config, and busbar holds exactly one per task.
+#[test]
+fn a_v03_get_without_a_config_id_reads_the_tasks_one_config() {
+    let mut desk = desk();
+    let set = json!({ "taskId": "t1",
+                      "pushNotificationConfig": { "id": "hook-1", "url": "https://hooks.example/cb" } });
+    let (status, _) = call(&mut desk, "tasks/pushNotificationConfig/set", set, ALICE);
+    assert_eq!(status, 200);
+    let (status, body) = call(
+        &mut desk,
+        "tasks/pushNotificationConfig/get",
+        json!({ "id": "t1" }),
+        ALICE,
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["result"]["pushNotificationConfig"]["id"], "hook-1");
+    // A v0.3 get naming another config id is still not found; v1.0 still needs the id.
+    let (_, body) = call(
+        &mut desk,
+        "tasks/pushNotificationConfig/get",
+        json!({ "id": "t1", "pushNotificationConfigId": "other" }),
+        ALICE,
+    );
+    assert_eq!(error_of(&body).0, -32001);
+}
+
+/// G2-12: the page cursor is split at its FIRST colon (the timestamp half is digits only), so a
+/// task id holding a colon (an agent name such as `team:billing`) pages, and the loop ends.
+#[test]
+fn a_task_id_with_a_colon_pages_and_the_loop_ends() {
+    let mut desk = desk();
+    for (n, at) in [(1, 400), (2, 500), (3, 600)] {
+        submitted(&mut desk.book, "carol", &format!("a2a-team:billing-{n}"), at);
+    }
+    let mut token = String::new();
+    let mut seen = Vec::new();
+    for _ in 0..5 {
+        let (_, body) = call(
+            &mut desk,
+            "ListTasks",
+            json!({ "pageSize": 1, "pageToken": token }),
+            "carol",
+        );
+        seen.push(body["result"]["tasks"][0]["id"].as_str().unwrap().to_string());
+        token = body["result"]["nextPageToken"].as_str().unwrap().to_string();
+        if token.is_empty() {
+            break;
+        }
+    }
+    assert_eq!(
+        seen,
+        ["a2a-team:billing-3", "a2a-team:billing-2", "a2a-team:billing-1"]
+    );
+}
+
+/// G2-13: `statusTimestampAfter` (v1.0 `ListTasksRequest.status_timestamp_after`, "greater than
+/// or equal to") filters the rows before paging; a value that is not an RFC 3339 timestamp is
+/// refused, never ignored.
+#[test]
+fn list_tasks_filters_on_status_timestamp_after() {
+    let mut desk = desk();
+    // Alice's t1 moved at 100 and t2 at 200 (seconds since the epoch).
+    let (status, body) = call(
+        &mut desk,
+        "ListTasks",
+        json!({ "statusTimestampAfter": "1970-01-01T00:02:30Z" }),
+        ALICE,
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["result"]["totalSize"], 1);
+    assert_eq!(body["result"]["tasks"][0]["id"], "t2");
+    let (_, body) = call(
+        &mut desk,
+        "ListTasks",
+        json!({ "status_timestamp_after": "1970-01-01T00:03:20Z" }),
+        ALICE,
+    );
+    assert_eq!(body["result"]["totalSize"], 1, "equal is kept: {body}");
+    let (status, body) = call(
+        &mut desk,
+        "ListTasks",
+        json!({ "statusTimestampAfter": "yesterday" }),
+        ALICE,
+    );
+    assert_eq!((status, error_of(&body).0), (400, -32602), "{body}");
+}
+
+/// G2-28: a credential that is not a string (a number, an object) is refused, never stored as an
+/// empty one that sends a bare `Authorization: Bearer` the receiver rejects.
+#[test]
+fn a_credential_that_is_not_a_string_is_refused() {
+    let mut desk = desk();
+    for credentials in [json!(12345), json!({ "token": "x" })] {
+        let (status, body) = call(
+            &mut desk,
+            "CreateTaskPushNotificationConfig",
+            json!({ "taskId": "t1", "id": "c", "url": "https://hooks.example/cb",
+                    "authentication": { "scheme": "Bearer", "credentials": credentials } }),
+            ALICE,
+        );
+        assert_eq!((status, error_of(&body).0), (400, -32602), "{body}");
+    }
+    assert!(desk
+        .book
+        .value(KIND_PUSH_CONFIG, &task_key(ALICE, "t1"))
+        .is_none());
+}
