@@ -1073,3 +1073,20 @@ fn an_attempt_for_an_unregistered_member_is_refused() {
     let body: Value = serde_json::from_slice(&reply.body).unwrap();
     assert!(body.to_string().contains("ghost"), "{body}");
 }
+
+/// G1-51: A REGISTRATION A REFRESH CHANGED WHILE A VERB LOOKED IS NOT THE ONE IT LOOKED AT: a moved
+/// url (pin unchanged) is a different registration, as the refresh itself judges one, so the card
+/// the look fetched from the old endpoint is never approved or held for the new one.
+#[test]
+fn a_registration_whose_url_moved_during_a_look_is_not_the_one_looked_at() {
+    let def = |url: &str| -> crate::a2a::config::AgentDefCfg {
+        serde_json::from_value(json!({ "url": url, "pin": { "mechanism": "unpinned" } })).unwrap()
+    };
+    let looked_at = def("https://old.example/a2a");
+    assert!(!registration_moved(Some(&looked_at), &looked_at));
+    assert!(registration_moved(None, &looked_at));
+    assert!(registration_moved(
+        Some(&def("https://new.example/a2a")),
+        &looked_at
+    ));
+}
