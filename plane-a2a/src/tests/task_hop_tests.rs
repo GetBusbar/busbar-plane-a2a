@@ -1558,7 +1558,10 @@ fn a_resumed_tasks_inline_callback_replaces_its_push_config() {
     let cfg = crate::local::held_config(&mut desk.book, ALICE, "t1")
         .unwrap()
         .expect("the push config");
-    assert_eq!(cfg.url, "https://two.example/cb", "the resumed callback wins");
+    assert_eq!(
+        cfg.url, "https://two.example/cb",
+        "the resumed callback wins"
+    );
     assert_eq!(
         cfg.authentication
             .map(|a| crate::push::tests::sealed_bytes(a.authorization(&cfg.url))),

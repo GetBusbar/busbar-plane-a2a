@@ -587,6 +587,9 @@ fn a_password_holding_a_delimiter_is_still_redacted() {
         assert!(shown.ends_with("@host/a2a"), "`{url}` shown as `{shown}`");
         let err = validate_agent("planner", &def(url, PinMechanism::Unpinned))
             .expect_err("a malformed URL is refused");
-        assert!(!err.contains(secret), "the refusal repeats the password: {err}");
+        assert!(
+            !err.contains(secret),
+            "the refusal repeats the password: {err}"
+        );
     }
 }

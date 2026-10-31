@@ -64,7 +64,7 @@ fn a_moved_task_with_a_registered_config_queues_its_notification_to_that_config(
     assert_eq!(due.task_id, "t1");
     let body: serde_json::Value = serde_json::from_slice(&due.body).unwrap();
     assert_eq!(body["task"]["status"]["state"], "TASK_STATE_WORKING");
-    let (_, sealed) = d.request(&due);
+    let (_, sealed) = crate::push::request(&due);
     assert!(sealed
         .into_iter()
         .any(|(_, n, v)| n == b"authorization"
@@ -275,7 +275,7 @@ fn tick_once(d: &Deliveries, host: &mut TestHost, now_ns: u64) -> (Attempted, De
         delivery,
         exchange: None,
     };
-    let Poll::Ready(end) = attempt(host, d, &mut flight) else {
+    let Poll::Ready(end) = attempt(host, &mut flight) else {
         panic!("the test's host never pends");
     };
     d.owe(&flight.delivery, end);
@@ -396,7 +396,7 @@ fn a_private_address_is_refused_with_no_socket() {
         delivery,
         exchange: None,
     };
-    let _ = attempt(&mut host, &d, &mut flight);
+    let _ = attempt(&mut host, &mut flight);
     assert!(flight.exchange.is_none(), "no request was framed");
     assert!(host.sent.is_empty(), "no socket");
 }
@@ -446,13 +446,8 @@ fn the_guard_is_re_run_on_the_retry() {
 fn a_deleted_config_takes_its_credential_out_of_memory() {
     let callback = "https://hook.caller.test/notify";
     let d = queued(callback);
-    let due = d.next_due(0).expect("due");
-    let presented = |d: &Deliveries| {
-        d.request(&due)
-            .1
-            .iter()
-            .any(|(_, n, _)| n == b"authorization")
-    };
+    // The queued delivery carries the config's credential: it is held while the delivery waits.
+    let presented = |d: &Deliveries| d.next_tick_ns() != 0;
     let tombstone = |caller: &str| Write {
         kind: KIND_PUSH_CONFIG,
         key: task_key(caller, "t1"),
@@ -466,7 +461,10 @@ fn a_deleted_config_takes_its_credential_out_of_memory() {
     forget_deleted(&d, ALICE, &[tombstone(BOB), written]);
     assert!(presented(&d), "nothing of Alice's was deleted");
     forget_deleted(&d, ALICE, &[tombstone(ALICE)]);
-    assert!(!presented(&d), "the deleted config's credential is gone");
+    assert!(
+        !presented(&d),
+        "the deleted config's delivery, and its credential, are gone"
+    );
 }
 
 /// A queued notification wakes the instance's driver ticket (R-PUSH), so the kernel ticks and
@@ -687,6 +685,7 @@ fn a_receiver_whose_addresses_changed_is_still_delivered() {
             url: callback.into(),
             body: Vec::new(),
             terminal: false,
+            auth: None,
         },
         0,
     );
@@ -713,26 +712,18 @@ fn a_task_that_ends_with_nothing_to_deliver_drops_its_credential() {
     let mut row = moved(&mut book, "");
     row.state = "completed".into();
     let d = Deliveries::default();
-    d.remember_auth(
+    let url = "https://hook.caller.test/notify";
+    d.hold_inline(
         "t1",
+        url,
         Some(DeliveryAuth {
             scheme: "Bearer".into(),
             credentials: busbar_contract::abi::sdk::test_support::chip::cred("tok"),
         }),
     );
     assert!(!queue(&d, &row, None), "nothing to deliver");
-    let probe = Delivery {
-        task_id: "t1".into(),
-        caller: ALICE.into(),
-        url: "https://hook.caller.test/notify".into(),
-        body: Vec::new(),
-        terminal: true,
-    };
     assert!(
-        !d.request(&probe)
-            .1
-            .iter()
-            .any(|(_, n, _)| n == b"authorization"),
+        d.inline_auth("t1", url).is_none(),
         "the ended task's credential is still held"
     );
 }
@@ -817,6 +808,7 @@ fn a_silent_receiver_delays_another_tasks_delivery_by_one_deadline_at_most() {
                 url: url.into(),
                 body: Vec::new(),
                 terminal: false,
+                auth: None,
             },
             0,
         );
@@ -897,6 +889,7 @@ fn a_held_attempt_asks_for_no_tick_before_its_deadline() {
             url: "https://other.caller.test/notify".into(),
             body: Vec::new(),
             terminal: false,
+            auth: None,
         },
         start,
     );
@@ -946,7 +939,10 @@ fn a_retrying_delivery_presents_the_credential_registered_with_its_own_url() {
     assert!(queue(&d, &row, Some(&config(u2, Some(auth("a2"))))));
     host.status = 200;
     let _ = tick_once(&d, &mut host, at);
-    assert_eq!(host.sent[1], u1, "the retry goes to the URL it was queued for");
+    assert_eq!(
+        host.sent[1], u1,
+        "the retry goes to the URL it was queued for"
+    );
     assert!(
         !carries(sent_head(&host, 1), b"Bearer a2"),
         "the re-registered credential crossed to the old callback"

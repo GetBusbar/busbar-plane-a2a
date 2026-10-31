@@ -45,27 +45,35 @@ use crate::TaskRow;
 const NO_JITTER: u8 = 128;
 
 /// QUEUE the notification `row`'s move owes: to `config` (the push_config record of the task) when
-/// the caller registered one, its credential held for the attempt; else to the row's own callback.
-/// Due at once: the next `tick` attempts it. (The book's times are the `tick`'s clock, which a
-/// piece does not read, so a first attempt is filed as due at its origin.) Answers whether one was
-/// queued.
+/// the caller registered one, carrying that config's credential; else to the row's own callback,
+/// carrying the inline credential held for that URL. The delivery takes its credential NOW, with
+/// its URL, so it never presents one registered later for another. Due at once: the next `tick`
+/// attempts it. (The book's times are the `tick`'s clock, which a piece does not read, so a first
+/// attempt is filed as due at its origin.) Answers whether one was queued.
 pub fn queue(deliveries: &Deliveries, row: &TaskRow, config: Option<&PushConfig>) -> bool {
     let Ok(mut task) = Task::from_row(row) else {
         return false;
     };
-    if let Some(cfg) = config {
-        task.push_callback = Some(cfg.url.clone());
-        task.push_version.clone_from(&cfg.version);
-        deliveries.remember_auth(&task.task_id, cfg.authentication.clone());
-    }
-    let Some(delivery) = Delivery::of(&task) else {
-        // An ended task with nothing to deliver leaves no credential behind: no delivery is left
-        // to present it.
-        if task.state.is_terminal() {
-            deliveries.remember_auth(&task.task_id, None);
+    let auth = match config {
+        Some(cfg) => {
+            task.push_callback = Some(cfg.url.clone());
+            task.push_version.clone_from(&cfg.version);
+            cfg.authentication.clone()
         }
+        None => task
+            .push_callback
+            .as_deref()
+            .and_then(|url| deliveries.inline_auth(&task.task_id, url)),
+    };
+    // An ended task's inline credential is not held past this, its last delivery (which carries
+    // its own copy), or past an end with nothing to deliver.
+    if task.state.is_terminal() {
+        deliveries.drop_inline(&task.task_id);
+    }
+    let Some(mut delivery) = Delivery::of(&task) else {
         return false;
     };
+    delivery.auth = auth;
     deliveries.enqueue(delivery, 0);
     // The delivery is attempted on this wake of the driver ticket, not at the next scheduled tick;
     // while an attempt is held, on that attempt's own completion wake ([`Deliveries::wake`]).
@@ -83,9 +91,9 @@ pub fn ended(tokens: &Tokens, row: &TaskRow) {
     }
 }
 
-/// Forget the webhook credential of every push config `writes` deletes for `caller` (the tombstone
-/// of its task's config record): a secret with no config left to present it for does not stay in
-/// plane memory.
+/// Forget what every push config `writes` deletes for `caller` (the tombstone of its task's config
+/// record) was queued for ([`Deliveries::forget_task`]): a notification and a secret with no config
+/// left to deliver them for do not stay in plane memory.
 pub fn forget_deleted(deliveries: &Deliveries, caller: &str, writes: &[Write]) {
     let prefix = tasks::task_key(caller, "");
     for w in writes
@@ -93,7 +101,7 @@ pub fn forget_deleted(deliveries: &Deliveries, caller: &str, writes: &[Write]) {
         .filter(|w| w.kind == KIND_PUSH_CONFIG && w.value.is_empty())
     {
         if let Some(task_id) = w.key.strip_prefix(prefix.as_str()) {
-            deliveries.remember_auth(task_id, None);
+            deliveries.forget_task(task_id);
         }
     }
 }
@@ -218,7 +226,7 @@ impl Line for Calls<'_> {
 /// EVERY attempt (spec l.392-393, "re-runs the destination judge on every attempt"), and the dial
 /// lands only within what that judgement admitted: a refusal ends the attempt before anything is
 /// framed or sent.
-fn attempt(line: &mut dyn Line, deliveries: &Deliveries, flight: &mut Flight) -> Poll<Attempted> {
+fn attempt(line: &mut dyn Line, flight: &mut Flight) -> Poll<Attempted> {
     let url = flight.delivery.url.clone();
     let (verdict, within) = match line.judge(&url) {
         Poll::Pending => return Poll::Pending,
@@ -231,7 +239,7 @@ fn attempt(line: &mut dyn Line, deliveries: &Deliveries, flight: &mut Flight) ->
     }
     // The credential joins the request only now, after the judge has passed.
     if flight.exchange.is_none() {
-        let (request, sealed) = deliveries.request(&flight.delivery);
+        let (request, sealed) = crate::push::request(&flight.delivery);
         match Exchange::request_sealed(request, sealed) {
             Ok(ex) => flight.exchange = Some(ex.landing_within(within)),
             // A request busbar cannot frame sends nothing.
@@ -418,7 +426,7 @@ fn advance_attempt(
     now_ns: Option<u64>,
 ) -> Outcome {
     let jitter = line.jitter();
-    match attempt(line, deliveries, &mut flight) {
+    match attempt(line, &mut flight) {
         Poll::Pending => {
             attempting.hold(flight, started_ns);
             deliveries.holding(true);

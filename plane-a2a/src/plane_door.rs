@@ -1779,13 +1779,13 @@ fn open_task(
         } => {
             // The engine's answer should the store refuse the opening's writes, for `refusal`.
             pass.unrecorded = unrecorded;
-            // The credential an inline callback names is held in plane memory, as the engine's
-            // delivery holds it: none clears one held.
+            // The credential an inline callback names is held in plane memory beside its URL, as
+            // the engine's delivery holds it: none clears one held.
             if let Some(callback) = callback {
                 reach
                     .plane
                     .deliveries
-                    .remember_auth(&task.task_id, callback.auth);
+                    .hold_inline(&task.task_id, &callback.url, callback.auth);
             }
             task.skill = skill;
             hop.relay.for_task(*task);

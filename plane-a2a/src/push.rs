@@ -24,11 +24,13 @@
 //!   files it ([`Deliveries::take_owed`]).
 //!
 //! The caller's webhook credential ([`DeliveryAuth`], a [`Cred`]) has its home in the push_config
-//! host record (`PushConfig::authentication`, written only through [`record_value`]). It is held
-//! here, in plane memory, from when the task's config (or its inline callback) names it until the
-//! task ends (its terminal delivery settles, or it ends with nothing to deliver) or the config is
-//! deleted; it is never logged or printed, and joins the request, sealed, only after the judge has
-//! passed. busbar's own callback token ([`Tokens`]) is a capability for one task,
+//! host record (`PushConfig::authentication`, written only through [`record_value`]). Each queued
+//! [`Delivery`] carries the credential registered WITH ITS URL, taken when it is queued, so a
+//! delivery waiting or retrying when the caller re-registers presents its own URL's credential and
+//! never the new one. An inline callback's credential, which no record holds, is kept here in plane
+//! memory beside the URL it was given for ([`Deliveries::hold_inline`]) until its task ends; a
+//! deleted config takes the deliveries queued for it ([`Deliveries::forget_task`]). It is never
+//! logged or printed, and joins the request, sealed, only after the judge has passed. busbar's own callback token ([`Tokens`]) is a capability for one task,
 //! `<task-id>.<signature>`, minted through the host's signing service (the plane never holds the
 //! key) and verified by signing again and comparing in constant time; it is never logged or
 //! audited. [`PushLimiter`] bounds how often one task's token may be spent.
@@ -240,6 +242,8 @@ pub struct Delivery {
     pub body: Vec<u8>,
     /// The task had reached a terminal state: the last delivery it gets.
     pub terminal: bool,
+    /// The credential registered with [`Delivery::url`], taken when the delivery was queued.
+    pub auth: Option<DeliveryAuth>,
 }
 
 impl Delivery {
@@ -252,6 +256,7 @@ impl Delivery {
             url: task.push_callback.clone()?,
             body: notification_body(task),
             terminal: task.state.is_terminal(),
+            auth: None,
         })
     }
 }
@@ -279,12 +284,13 @@ pub struct Owed {
     pub kind: &'static str,
 }
 
-/// The instance's push book: the queues, the drops, the credentials, the outcomes owed.
+/// The instance's push book: the queues, the drops, the inline credentials, the outcomes owed.
 #[derive(Debug, Default)]
 struct Book {
     queues: BTreeMap<String, VecDeque<Waiting>>,
     dropped: u64,
-    auths: BTreeMap<String, DeliveryAuth>,
+    /// Each task's INLINE callback credential and the URL it was given for.
+    inline: BTreeMap<String, (String, DeliveryAuth)>,
     owed: VecDeque<Owed>,
     unfiled: u64,
     /// The [`Book::dropped`] and [`Book::unfiled`] counts already reported as metrics.
@@ -459,7 +465,7 @@ impl Deliveries {
 
     /// Settle the open attempt on `task_id`'s head, the attempt having ENDED at `now_ns`: done, or
     /// back in the queue for its next attempt, its wait counted from `now_ns` (`jitter` is a
-    /// random byte, [`jittered_ms`]). A terminal task's last delivery forgets its credential.
+    /// random byte, [`jittered_ms`]).
     pub fn settle(
         &self,
         task_id: &str,
@@ -516,12 +522,9 @@ impl Deliveries {
                 }
                 return DeliverySettled::Retry(head.not_before_ns);
             }
-            let terminal = queue.pop_front().is_some_and(|w| w.delivery.terminal);
+            queue.pop_front();
             if queue.is_empty() {
                 b.queues.remove(task_id);
-            }
-            if terminal {
-                b.auths.remove(task_id);
             }
             DeliverySettled::Done(end.record_kind())
         })
@@ -548,29 +551,67 @@ impl Deliveries {
         })
     }
 
-    /// Hold the credential `task_id`'s receiver wants presented; `None` drops the one held (a
-    /// replaced config that names none has withdrawn it).
-    pub fn remember_auth(&self, task_id: &str, auth: Option<DeliveryAuth>) {
+    /// Hold the credential `task_id`'s INLINE callback at `url` names; `None` drops the one held
+    /// (an inline callback that names none has withdrawn it).
+    pub fn hold_inline(&self, task_id: &str, url: &str, auth: Option<DeliveryAuth>) {
         self.with(|b| match auth {
-            Some(a) => b.auths.insert(task_id.to_string(), a),
-            None => b.auths.remove(task_id),
+            Some(a) => b.inline.insert(task_id.to_string(), (url.to_string(), a)),
+            None => b.inline.remove(task_id),
         });
     }
 
-    /// The request for `delivery`, its credential attached as a sealed field. Call it only once
-    /// the destination judge has passed: no refused destination ever sees the credential.
+    /// The inline credential held for `task_id`, when it was given for `url`: a credential is
+    /// presented only at the URL it came with.
     #[must_use]
-    pub fn request(&self, delivery: &Delivery) -> (Request, Vec<SealedField>) {
-        let auth = self.with(|b| b.auths.get(&delivery.task_id).cloned());
-        request(delivery, auth.as_ref())
+    pub fn inline_auth(&self, task_id: &str, url: &str) -> Option<DeliveryAuth> {
+        self.with(|b| {
+            b.inline
+                .get(task_id)
+                .filter(|(at, _)| at == url)
+                .map(|(_, auth)| auth.clone())
+        })
+    }
+
+    /// Drop the inline credential held for `task_id` (its task has ended).
+    pub fn drop_inline(&self, task_id: &str) {
+        self.with(|b| b.inline.remove(task_id));
+    }
+
+    /// FORGET what `task_id`'s deleted push config was queued for: every waiting delivery not to
+    /// the task's inline callback is dropped, credential and all, and one in flight is not retried.
+    /// The inline callback's own deliveries and credential stay: the caller deleted the config, not
+    /// the callback on the task.
+    pub fn forget_task(&self, task_id: &str) {
+        self.with(|b| {
+            let inline = b.inline.get(task_id).map(|(url, _)| url.clone());
+            let Some(queue) = b.queues.get_mut(task_id) else {
+                return;
+            };
+            let kept = |w: &Waiting| inline.as_deref() == Some(w.delivery.url.as_str());
+            queue.retain_mut(|w| {
+                if kept(w) {
+                    return true;
+                }
+                if w.open {
+                    w.attempts = MAX_ATTEMPTS;
+                }
+                w.open
+            });
+            if queue.is_empty() {
+                b.queues.remove(task_id);
+            }
+        });
     }
 }
 
 /// The POST one delivery sends: the callback's path and query as the target, the content type,
-/// the caller's credential when it gave one, and the body. The credential is the SEALED field
-/// after the content type (`Exchange::request_sealed`): the plane never holds its value.
+/// the credential registered with its URL when the caller gave one ([`Delivery::auth`]), and the
+/// body. The credential is the SEALED field after the content type (`Exchange::request_sealed`):
+/// the plane never holds its value. Call it only once the destination judge has passed: no refused
+/// destination ever sees the credential.
 #[must_use]
-pub fn request(delivery: &Delivery, auth: Option<&DeliveryAuth>) -> (Request, Vec<SealedField>) {
+pub fn request(delivery: &Delivery) -> (Request, Vec<SealedField>) {
+    let auth = delivery.auth.as_ref();
     let target = url::Url::parse(&delivery.url).map_or_else(
         |_| "/".to_string(),
         |u| match u.query() {
