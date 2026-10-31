@@ -893,3 +893,15 @@ fn a_refresh_that_keeps_a_registration_keeps_its_card_under_the_live_generation_
         "a unit still on generation 1 reads its card there"
     );
 }
+
+/// G1-2: THE FAR END'S TASK ID IS UNTRUSTED INPUT, BOUNDED IN BYTES as the map is in entries: an id
+/// longer than [`MAX_BACKEND_ID_BYTES`] is not held (the task keeps busbar's own id), so a far end
+/// answering half-megabyte ids cannot make the bounded map hold gigabytes.
+#[test]
+fn a_far_end_task_id_past_the_byte_bound_is_not_held() {
+    let map = BackendIds::default();
+    map.record(3, "amy/t1".to_string(), "x".repeat(400_000));
+    assert_eq!(map.get("amy/t1"), None);
+    map.record(3, "amy/t2".to_string(), "y".repeat(MAX_BACKEND_ID_BYTES));
+    assert_eq!(map.get("amy/t2").map(|id| id.len()), Some(MAX_BACKEND_ID_BYTES));
+}
