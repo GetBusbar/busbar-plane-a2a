@@ -909,3 +909,14 @@ fn the_mechanism_is_part_of_the_identity_not_a_label_beside_it() {
     assert_ne!(CardPin::Unpinned, key_pin);
     assert_eq!(rooted(PinMechanism::CertKeyPin), key_pin);
 }
+
+/// G1-7: `pin_changed` says the kernel quarantined a MOVED card, whatever the latest fetch did: a
+/// moved, quarantined card whose next look failed still reports it.
+#[test]
+fn a_moved_cards_pin_changed_survives_a_failed_look() {
+    let failed = Sighting::Failed("down".to_string());
+    let view: Value =
+        serde_json::from_str(&connect_view("planner", State::Quarantined, &failed, None)).unwrap();
+    assert_eq!(view["state"], "error");
+    assert_eq!(view["pin_changed"], true, "{view}");
+}
