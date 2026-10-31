@@ -2178,8 +2178,9 @@ enum Gate {
 }
 
 /// THE ADMISSION GATE of an ATTEMPT's first entry (`first`) for `member` and its registration in
-/// the unit's generation (`def`): the caller's standing, then the agent's admission; the refusal
-/// that is the caller's answer, or `None` when the hop goes on.
+/// the unit's generation (`def`): the caller's standing, then the agent's admission (a member the
+/// generation does not register is refused as no fronted agent); the refusal that is the caller's
+/// answer, or `None` when the hop goes on.
 fn admission(
     reach: &Reach<'_>,
     (pass, hop): (&mut crate::task_door::Pass, &mut Hop),
@@ -2209,6 +2210,12 @@ fn admission(
                 Err(refusal) => Some(relay::RelayReply::refused(&refusal, None)),
             }
         }
+        // NO REGISTRATION IN THE UNIT'S GENERATION: nothing to admit, re-verify or guard the hop
+        // by, so it does not go (fail closed, never ungated).
+        (None, true) if !member.is_empty() => Some(relay::RelayReply::refused(
+            &agent_arrival::no_such_agent(member),
+            None,
+        )),
         _ => None,
     }
 }
