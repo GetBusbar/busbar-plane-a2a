@@ -1244,12 +1244,26 @@ fn a_refused_hops_journal_line_names_the_backend_and_the_callers_answer_does_not
                 let (mut r, _) = events_sent();
                 let first =
                     event(json!({ "kind": "status-update", "status": { "state": "working" } }));
-                let _ = r.on_piece(far(Some(200), &first, false));
-                let _ = r.on_piece(far(None, other, false));
+                // Every byte the relay sends the caller on the stream, the refusal part included:
+                // what the caller is answered, never a stand-in.
+                let mut body = Vec::new();
+                for piece in [far(Some(200), &first, false), far(None, other, false)] {
+                    match r.on_piece(piece) {
+                        PieceAnswer::Part(part) => body.extend(part.body),
+                        PieceAnswer::ToCaller(reply) => body.extend(reply.body),
+                        PieceAnswer::Nothing => {}
+                        unexpected => panic!("not a caller-bound answer: {unexpected:?}"),
+                    }
+                }
+                assert!(
+                    String::from_utf8_lossy(&body).contains("error"),
+                    "the stream's refusal reached the caller: {}",
+                    String::from_utf8_lossy(&body)
+                );
                 RelayReply {
                     status: 0,
                     content_type: "",
-                    body: Vec::new(),
+                    body,
                 }
             }),
         ),
