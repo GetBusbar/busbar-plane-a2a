@@ -123,18 +123,14 @@ fn the_two_vocabularies_agree_slot_for_slot() {
     }
 }
 
-/// Every method the codec's own local-verb table names is one this plane carries.
-///
-/// The table itself, iterated. This SCRAPED it out of the server half's source once — an
-/// `include_str!` over `../../busbar-a2a/src/a2a/local.rs`, then a hand-rolled scan for quoted
-/// pieces that look like a method name — which coupled this crate to a sibling its manifest does not
-/// name, so the plane could be neither built nor deleted on its own. The table is the codec's now,
-/// and the server half's `verb_of` is pinned against it in the crate that owns the match. A method
-/// the codec answers and this plane does not carry would arrive here as an unsupported operation.
+/// Every method the plane answers itself ([`crate::local::verb_of`], the table the door reads) is
+/// one its codec carries, held both ways against the methods listed here: each listed method is one
+/// `verb_of` answers and decodes, and every method of the rig's two vocabularies that `verb_of`
+/// answers is listed. A local verb added to the table for a method a caller sends is caught here
+/// until it is listed (and so checked to decode); one dropped from the table is caught too.
 #[test]
 fn every_local_verb_of_the_codec_is_carried() {
-    let mut seen = 0usize;
-    for method in [
+    const LOCAL: [&str; 12] = [
         "ListTasks",
         "tasks/list",
         "CreateTaskPushNotificationConfig",
@@ -147,15 +143,31 @@ fn every_local_verb_of_the_codec_is_carried() {
         "tasks/pushNotificationConfig/delete",
         "SubscribeToTask",
         "tasks/resubscribe",
-    ] {
+    ];
+    for method in LOCAL {
+        assert!(
+            crate::local::verb_of(method).is_some(),
+            "{method} is listed as local and the plane's table does not answer it"
+        );
         assert!(
             decode(&request("1", method)).is_ok(),
-            "the codec answers {method} and this plane does not carry it"
+            "the plane answers {method} itself and its codec does not carry it"
         );
-        seen += 1;
+    }
+    let mut answered = 0usize;
+    for table in ["METHODS_1_0", "METHODS_0_3"] {
+        for (_, method) in rig_vocabulary(table) {
+            if crate::local::verb_of(&method).is_some() {
+                assert!(
+                    LOCAL.contains(&method.as_str()),
+                    "the plane answers {method} itself and this test does not check it"
+                );
+                answered += 1;
+            }
+        }
     }
     assert!(
-        seen >= 11,
-        "only {seen} verbs were read out of the codec's table"
+        answered > 0,
+        "no method of the rig's vocabularies is one the plane answers itself"
     );
 }
