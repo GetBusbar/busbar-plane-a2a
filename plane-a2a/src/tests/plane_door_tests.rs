@@ -909,3 +909,35 @@ fn a_far_end_task_id_past_the_byte_bound_is_not_held() {
         Some(MAX_BACKEND_ID_BYTES)
     );
 }
+
+/// G1-48: A SIGHTING THE KERNEL'S TRUST BOOK DID NOT RECORD IS A FAILED LOOK: the kernel was never
+/// told the card's fingerprint, so its verdict still answers for the card it last saw; the look
+/// fails closed (no card is held, the agent does not serve on it), never passes as seen.
+#[test]
+fn a_sighting_the_trust_book_failed_is_a_failed_look() {
+    use crate::a2a::config::{AgentPinCfg, PinMechanism};
+    use crate::card_trust::{Handshake, Sighting};
+    let card = json!({ "name": "planner", "skills": [{ "id": "plan", "name": "Plan" }] });
+    let pin = AgentPinCfg {
+        mechanism: PinMechanism::JwsIssuerKey,
+        key: Some("MCowBQYDK2VwAyEA".to_string()),
+        fingerprint: None,
+    };
+    let seen = crate::card_trust::verify_card(&pin, &card, &Handshake::default(), || Ok(()))
+        .expect("verifies");
+    let looked = CardLook {
+        sighting: Sighting::Seen(seen),
+        card: Some(card),
+    };
+    let failed = Poll::Ready(Err(busbar_contract::abi::sdk::ServiceError::Broken));
+    let landed = landed(looked, Some(failed)).expect("the sighting answered");
+    assert!(
+        matches!(landed.sighting, Sighting::Failed(_)),
+        "{:?}",
+        landed.sighting
+    );
+    assert!(
+        landed.card.is_none(),
+        "no card is held off an unrecorded sighting"
+    );
+}
