@@ -1734,3 +1734,52 @@ fn two_submits_within_the_sweep_interval_read_the_rows_once() {
     hop(opened(&mut desk, &send(json!({})), ALICE));
     assert_eq!(desk.full_lists, 1);
 }
+
+/// G2-33: a far end streaming without end cannot grow a task's provenance chain without bound:
+/// past the per-task cap its artifact chunks are still relayed, the cursor stops, no event is
+/// chained, and the stop is said once (never a silent drop).
+#[test]
+fn a_tasks_artifact_events_are_capped_and_the_cap_is_said() {
+    /// The per-task cap (`tasks::MAX_ARTIFACT_EVENTS`).
+    const CAP: u64 = 1024;
+    let mut desk = desk();
+    let (task, _) = hop(opened(&mut desk, &send(json!({})), ALICE));
+    let artifact = TaskSettled::Event {
+        state: None,
+        artifact: true,
+        backend_id: None,
+    };
+    let latches = Latches::default();
+    let (sent, heard) = std::sync::mpsc::channel();
+    tracing::subscriber::with_default(Capture(sent), || {
+        for _ in 0..CAP + 50 {
+            let mut out = Vec::new();
+            settle_on_answer(
+                &mut desk.book,
+                &task,
+                &artifact,
+                ALICE,
+                400,
+                &mut out,
+                &latches,
+            )
+            .unwrap();
+            desk.book.apply(&out);
+        }
+    });
+    let held = get(&mut desk.book, ALICE, MINTED, 400).unwrap().unwrap();
+    assert_eq!(held.row.artifact_cursor, CAP);
+    let events = desk
+        .book
+        .list(KIND_TASK_EVENT, &tasks::task_key(ALICE, MINTED))
+        .unwrap()
+        .len() as u64;
+    assert_eq!(events, 2 + CAP, "genesis, dispatch, the capped chunks");
+    let lines: Vec<String> = heard.try_iter().map(|(_, line)| line).collect();
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains(MINTED) && l.contains("cap")),
+        "the cap is said, naming the task: {lines:?}"
+    );
+}
