@@ -8,17 +8,22 @@
 //! Every step is a refusal that costs nothing further:
 //!
 //! 1. the presented token names a task this instance minted it for, and the host's signature of
-//!    that task is the one presented, or `401`;
+//!    that task is the one presented, or `401` (`503` when the host could not sign it);
 //! 2. that task's push-volume budget has room ([`crate::push::PushLimiter`]), or `429` with
 //!    `retry-after`;
 //! 3. the body is at most [`MAX_PUSH_BODY`], or `413`;
 //! 4. the task is held for its caller and still live, or `401` (the same sentence as every other
-//!    refusal: whether a task exists or has ended is not told here);
+//!    refusal: whether a task exists or has ended is not told here); a store that could not read
+//!    it answers `503`;
 //! 5. the body is JSON, or `400`;
 //! 6. the state it reports is recorded on the task's own chain through the one transition table
-//!    (a push reporting no state this build can read, or the state already held, is `202` and moves
-//!    nothing, queuing no notification; a move that cannot be recorded is still `202`);
+//!    (a push reporting no state this build can read, the state already held, or a move the table
+//!    forbids, is `202` and moves nothing, queuing no notification);
 //! 7. the caller's own delivery is queued from busbar's own row, never from the pushed body.
+//!
+//! A host or store fault at any step (a signature, a read, a move the store failed to record) is
+//! `503`, retryable, with one warning line: a `401` would stop the agent pushing for good, and a
+//! `202` would drop the move and the caller's notification.
 
 use std::task::Poll;
 
@@ -37,6 +42,9 @@ pub const MAX_PUSH_BODY: usize = 64 * 1024;
 /// The one sentence every authorisation refusal answers with.
 pub const UNAUTHORISED: &str =
     "this endpoint is addressed by the push token busbar registered with the agent";
+
+/// The sentence a host or store fault answers with: retry.
+pub const UNAVAILABLE: &str = "busbar could not check or record this push right now; retry it";
 
 /// The sentence a spent push-volume budget answers with.
 pub const RATE_LIMITED: &str = "this task's push volume has exceeded its window budget";
@@ -109,7 +117,9 @@ pub(crate) enum Stop {
 pub(crate) fn verified_or_stop(signature: Option<&[u8]>, presented: &str) -> Result<(), Stop> {
     match signature {
         Some(sig) if crate::push::verified(sig, presented) => Ok(()),
-        Some(_) | None => Err(Stop::Refused(401, UNAUTHORISED)),
+        Some(_) => Err(Stop::Refused(401, UNAUTHORISED)),
+        // The host could not sign: no verdict on the token, so retry, not "never".
+        None => Err(Stop::Refused(503, UNAVAILABLE)),
     }
 }
 
@@ -117,7 +127,8 @@ pub(crate) fn verified_or_stop(signature: Option<&[u8]>, presented: &str) -> Res
 pub(crate) fn held_or_stop<T>(read: Result<Option<T>, Halt>) -> Result<T, Stop> {
     match read {
         Err(Halt::Pending) => Err(Stop::Pending),
-        Err(Halt::Failed(_)) | Ok(None) => Err(Stop::Refused(401, UNAUTHORISED)),
+        Err(Halt::Failed(_)) => Err(Stop::Refused(503, UNAVAILABLE)),
+        Ok(None) => Err(Stop::Refused(401, UNAUTHORISED)),
         Ok(Some(held)) => Ok(held),
     }
 }
@@ -127,7 +138,9 @@ pub(crate) fn held_or_stop<T>(read: Result<Option<T>, Halt>) -> Result<T, Stop> 
 pub(crate) fn moved_or_stop<T>(moved: Result<Option<T>, Halt>) -> Result<T, Stop> {
     match moved {
         Err(Halt::Pending) => Err(Stop::Pending),
-        Err(Halt::Failed(_)) | Ok(None) => Err(Stop::Accepted),
+        // The store failed the read or the write, or the task kept changing under it.
+        Err(Halt::Failed(_)) => Err(Stop::Refused(503, UNAVAILABLE)),
+        Ok(None) => Err(Stop::Accepted),
         Ok(Some(row)) => Ok(row),
     }
 }
@@ -136,7 +149,10 @@ pub(crate) fn moved_or_stop<T>(moved: Result<Option<T>, Halt>) -> Result<T, Stop
 pub(crate) fn queued_or_stop(queued: Result<bool, Halt>) -> Result<(), Stop> {
     match queued {
         Err(Halt::Pending) => Err(Stop::Pending),
-        Err(Halt::Failed(_)) | Ok(_) => Ok(()),
+        // The config read failed: answered retryable, so the move and its notification are made
+        // again rather than the move recorded with no notification.
+        Err(Halt::Failed(_)) => Err(Stop::Refused(503, UNAVAILABLE)),
+        Ok(_) => Ok(()),
     }
 }
 
@@ -169,7 +185,16 @@ pub(crate) fn serve(
             instance.park(Admitted);
             Outcome::Pending
         }
-        Stop::Refused(status, sentence) => refused(input, out, status, sentence, &[]),
+        Stop::Refused(status, sentence) => {
+            if status == 503 {
+                busbar_contract::diag_warn!(
+                    crate::diagnostics::A2A_RELAYED_OUTCOME_UNRECORDED,
+                    task = %task_id,
+                    "a2a: an agent's push could not be checked or recorded; answered 503 for a retry"
+                );
+            }
+            refused(input, out, status, sentence, &[])
+        }
         Stop::Accepted => accepted(input, out, &[]),
     };
     let signed = signature(plane, ticket, 0, &task_id);
