@@ -964,7 +964,6 @@ fn room_for(units: &Keyed<u64, AgentUnit>, key: u64) -> bool {
     })
 }
 
-/// The agent a JSON-RPC target names below the catalogue, if it names one.
 /// How many trailing-separator agent claims the current generation's snapshot states (R-16).
 fn agent_claims(plane: &A2aDoor) -> usize {
     plane.generations.current().map_or(0, |s| {
@@ -972,6 +971,7 @@ fn agent_claims(plane: &A2aDoor) -> usize {
     })
 }
 
+/// The agent a JSON-RPC target names below the catalogue, if it names one.
 fn agent_of(target: &str) -> Option<String> {
     let path = target.split(['?', '#']).next().unwrap_or(target);
     let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
