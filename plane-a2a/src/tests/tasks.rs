@@ -1347,14 +1347,7 @@ fn a_sweep_does_not_retire_a_task_another_unit_is_changing() {
     let late = 101 + TERMINAL_TTL_SECS;
     // The other unit: its claim is made, its writes ride its answer, not yet applied.
     let mut theirs = Vec::new();
-    record_push_delivery(
-        &mut book,
-        &step(ALICE, late),
-        "t1",
-        EV_ARTIFACT,
-        &mut theirs,
-    )
-    .unwrap();
+    record_push_delivery(&mut book, &step(ALICE, 200), "t1", EV_ARTIFACT, &mut theirs).unwrap();
     let mut swept = Vec::new();
     retention_sweep(&mut book, late, SWEEP_BUDGET, &mut swept).unwrap();
     book.apply(&swept);
