@@ -182,17 +182,20 @@ impl AgentRefusal {
 }
 
 /// A JSON-RPC `error` object at `http_status` as the AIP-193 error document the HTTP+JSON line
-/// answers: the status name is the error code's when it has one,
-/// else the HTTP status's; `details` is the error's `data` array, only when there is one.
+/// answers: the status name is the error code's when it has one (the catch-all `-32004` only at
+/// 400 or 501), else the HTTP status's; `details` is the error's `data` array, only when there is one.
 #[must_use]
 pub fn aip193(http_status: u32, error: &Value) -> Value {
     let message = error
         .get("message")
         .and_then(Value::as_str)
         .unwrap_or_default();
+    // `-32004` is the catch-all of many kernel and plane refusals (a rate limit, a not-serving
+    // agent, a refused grant): answered at any status but 400 or 501, it takes that status's name.
     let status = error
         .get("code")
         .and_then(Value::as_i64)
+        .filter(|code| *code != CODE_UNSUPPORTED_OPERATION || matches!(http_status, 400 | 501))
         .and_then(status_name_of)
         .unwrap_or_else(|| status_name_of_http(http_status));
     let mut out = json!({
