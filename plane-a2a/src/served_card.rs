@@ -31,7 +31,8 @@
 //! A rewritten card is no longer the document the vendor signed, so its signature is dropped and
 //! busbar signs the document it publishes, over the same canonicalisation it demands of every card it
 //! verifies. The backend's security schemes describe how to reach the BACKEND; the served card
-//! advertises exactly busbar's own inbound credential, in the normative proto spelling.
+//! advertises exactly busbar's own inbound credential, in the normative proto spelling (a v0.3
+//! card in v0.3's own: `{type: "http", ...}` required under `security`).
 
 use serde_json::{json, Map, Value};
 
@@ -143,6 +144,15 @@ pub fn agent_endpoint(public_url: &str, agent_id: &str) -> Option<String> {
     )
 }
 
+/// The sentence that describes busbar's inbound credential, in either card version's spelling.
+fn inbound_description() -> String {
+    format!(
+        "A busbar credential of kind `{CREDENTIAL_KIND_A2A_INBOUND}`, presented on the \
+         `{INBOUND_HEADER}` header. busbar authorises it against this fronted agent and \
+         meters the task against the presenting key's budget."
+    )
+}
+
 /// THE ONE DESCRIPTION of how a caller authenticates to this plane (proto `SecurityScheme`, a
 /// oneof whose variant key names the mechanism).
 fn inbound_security_schemes() -> Map<String, Value> {
@@ -152,12 +162,23 @@ fn inbound_security_schemes() -> Map<String, Value> {
         json!({
             "httpAuthSecurityScheme": {
                 "scheme": INBOUND_AUTH_SCHEME,
-                "description": format!(
-                    "A busbar credential of kind `{CREDENTIAL_KIND_A2A_INBOUND}`, presented on the \
-                     `{INBOUND_HEADER}` header. busbar authorises it against this fronted agent and \
-                     meters the task against the presenting key's budget."
-                ),
+                "description": inbound_description(),
             }
+        }),
+    );
+    schemes
+}
+
+/// The same scheme in v0.3's spelling (v0.3.0 `types.ts` `HTTPAuthSecurityScheme`:
+/// `{type: "http", scheme, description}`), for a fronted v0.3 card.
+fn inbound_security_schemes_v03() -> Map<String, Value> {
+    let mut schemes = Map::new();
+    schemes.insert(
+        INBOUND_SCHEME_NAME.to_string(),
+        json!({
+            "type": "http",
+            "scheme": INBOUND_AUTH_SCHEME,
+            "description": inbound_description(),
         }),
     );
     schemes
@@ -340,14 +361,28 @@ pub fn rewrite_card(
     out.remove("signatures");
     out.remove("security");
     out.remove("securityRequirements");
-    out.insert(
-        "securitySchemes".to_string(),
-        Value::Object(inbound_security_schemes()),
-    );
-    out.insert(
-        "securityRequirements".to_string(),
-        inbound_security_requirement(),
-    );
+    // IN THE CARD'S OWN VERSION'S SPELLING: a v0.3 card (no `supportedInterfaces`, its `url` or
+    // `preferredTransport` stated) names the scheme as v0.3 does and requires it under `security`;
+    // every other card in the normative proto spelling.
+    if !v10 && (out.contains_key("url") || out.contains_key("preferredTransport")) {
+        out.insert(
+            "securitySchemes".to_string(),
+            Value::Object(inbound_security_schemes_v03()),
+        );
+        out.insert(
+            "security".to_string(),
+            json!([{ INBOUND_SCHEME_NAME: [] }]),
+        );
+    } else {
+        out.insert(
+            "securitySchemes".to_string(),
+            Value::Object(inbound_security_schemes()),
+        );
+        out.insert(
+            "securityRequirements".to_string(),
+            inbound_security_requirement(),
+        );
+    }
     // THE AGENT'S OWN CAPABILITIES, as it states them: busbar relays a fronted agent's extended
     // card read to the agent itself, so the served card may promise one only where the agent's
     // card does. A card stating none is served with an empty `capabilities` (the member the card

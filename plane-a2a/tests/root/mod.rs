@@ -4034,10 +4034,13 @@ async fn a_fronted_agents_card_is_served_rewritten_through_busbar_behind_its_gra
         !body.contains(&format!("127.0.0.1:{}", agent.port)),
         "the backend authority is never published: {body}"
     );
+    // The agent's card is v0.3 (its `url`, no `supportedInterfaces`): busbar's scheme in v0.3's
+    // spelling, required under `security` (G1-4).
     assert_eq!(
-        card["securityRequirements"],
-        serde_json::json!([{ "schemes": { "busbarA2aInbound": { "list": [] } } }])
+        card["security"],
+        serde_json::json!([{ "busbarA2aInbound": [] }])
     );
+    assert_eq!(card["securitySchemes"]["busbarA2aInbound"]["type"], "http");
     assert_eq!(
         card["capabilities"],
         serde_json::json!({}),
