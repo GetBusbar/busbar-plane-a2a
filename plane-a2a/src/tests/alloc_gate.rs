@@ -116,3 +116,29 @@ fn an_unrewritten_envelope_is_relayed_without_a_copy() {
     );
     assert_ne!(planted, RELAY_ALLOCS, "a planted allocation fails the pin");
 }
+
+/// G1-10: reading a card's members borrows the card. A card carrying a large member busbar does
+/// not model costs the read nothing for that member; a deep copy of the card would allocate once
+/// per node of it.
+#[test]
+fn reading_a_card_does_not_copy_it() {
+    let unmodelled: Vec<serde_json::Value> = (0..1000)
+        .map(|i| serde_json::json!({ "note": format!("n{i}") }))
+        .collect();
+    let card = serde_json::json!({
+        "name": "Planner",
+        "description": "Plans.",
+        "skills": [{ "id": "plan", "name": "Plan" }],
+        "unmodelled": unmodelled,
+    });
+    // Warm outside the window.
+    assert!(crate::a2a::agent_card::parse(&card).is_some());
+    let mut parsed = None;
+    let count = allocations_of(|| parsed = crate::a2a::agent_card::parse(&card));
+    println!("card read allocations: {count}");
+    assert!(parsed.is_some());
+    assert!(
+        count < 100,
+        "reading the card allocated {count} times: it copied the card (1000 unmodelled members)"
+    );
+}
