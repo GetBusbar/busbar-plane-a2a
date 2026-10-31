@@ -281,6 +281,25 @@ pub const A2A_TRUST_SIGHTING_UNRECORDED: Diagnostic = Diagnostic {
     retired: false,
 };
 
+/// A task's push config could not be read when its move was settled: the notification is not sent.
+pub const A2A_PUSH_CONFIG_UNREAD: Diagnostic = Diagnostic {
+    code: 7043,
+    class: Class::Plane,
+    slug: "a2a-push-config-unread",
+    title: "A2A task push config could not be read; a notification was not sent",
+    severity: Severity::Actionable,
+    summary:
+        "A relayed task moved, and the push config its caller registered for it could not be read \
+             from the durable record store. A failed read is not taken as 'no config': no \
+             notification is queued to a destination guessed without it, and the credential a \
+             registered receiver is owed is kept for the notifications still waiting. The \
+             notification this move owed is not sent. The `task` field names busbar's task id.",
+    action: "Check the durable record store's health. The caller can read the task's state with \
+            tasks/get; later moves of the task are notified once the store reads again.",
+    since: "1.6.0",
+    retired: false,
+};
+
 /// A relayed SSE frame was not valid UTF-8 and was dropped. Frozen: `BUSBAR-7104`, the published
 /// catalog entry of the same number, byte for byte.
 pub const PLANE_SSE_FRAME_NOT_UTF8: Diagnostic = Diagnostic {
@@ -322,6 +341,7 @@ pub const DIAGNOSTICS: &[&Diagnostic] = &[
     &A2A_BACKEND_TASK_ID_UNHELD,
     &A2A_RELAY_ENDPOINT_REFUSED,
     &A2A_TRUST_SIGHTING_UNRECORDED,
+    &A2A_PUSH_CONFIG_UNREAD,
     &PLANE_SSE_FRAME_NOT_UTF8,
 ];
 

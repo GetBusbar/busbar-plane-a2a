@@ -74,14 +74,29 @@ pub fn queue(deliveries: &Deliveries, row: &TaskRow, config: Option<&PushConfig>
 }
 
 /// QUEUE what `row`'s move owes over the read of its task's push config (`read`, the record read
-/// [`local::held_config`] made): [`queue`] on what the read found.
+/// [`local::held_config`] made): [`queue`] on what the read found. A read the store FAILED is not
+/// "no config": nothing is queued to a destination guessed without it, the credential a registered
+/// receiver is owed is left held for the notifications still waiting, and the lost notification is
+/// named in a diagnostic.
 pub fn queue_read(
     deliveries: &Deliveries,
     row: &TaskRow,
     read: Result<Option<PushConfig>, Halt>,
 ) -> bool {
-    let config = read.unwrap_or_default();
-    queue(deliveries, row, config.as_ref())
+    match read {
+        Ok(config) => queue(deliveries, row, config.as_ref()),
+        Err(Halt::Failed(why)) => {
+            let (task, state) = (&row.task_id, &row.state);
+            busbar_contract::diag_warn!(
+                crate::diagnostics::A2A_PUSH_CONFIG_UNREAD,
+                task = %task,
+                "a2a: task `{task}`'s push config could not be read ({why}); the notification its \
+                 move to `{state}` owes is not sent"
+            );
+            false
+        }
+        Err(Halt::Pending) => false,
+    }
 }
 
 /// RELEASE busbar's own callback token for `row`'s task once the move has ENDED it, whichever way

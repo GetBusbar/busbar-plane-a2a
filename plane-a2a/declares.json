@@ -130,6 +130,15 @@
       "since": "1.6.0"
     },
     {
+      "code": 7043,
+      "slug": "a2a-push-config-unread",
+      "title": "A2A task push config could not be read; a notification was not sent",
+      "severity": "actionable",
+      "summary": "A relayed task moved, and the push config its caller registered for it could not be read from the durable record store. A failed read is not taken as 'no config': no notification is queued to a destination guessed without it, and the credential a registered receiver is owed is kept for the notifications still waiting. The notification this move owed is not sent. The `task` field names busbar's task id.",
+      "action": "Check the durable record store's health. The caller can read the task's state with tasks/get; later moves of the task are notified once the store reads again.",
+      "since": "1.6.0"
+    },
+    {
       "code": 7104,
       "slug": "plane-sse-frame-not-utf8",
       "title": "A relayed SSE frame was not valid UTF-8 and was dropped",
