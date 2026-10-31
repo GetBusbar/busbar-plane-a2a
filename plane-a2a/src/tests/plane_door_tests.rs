@@ -941,3 +941,45 @@ fn a_sighting_the_trust_book_failed_is_a_failed_look() {
         "no card is held off an unrecorded sighting"
     );
 }
+
+/// G1-19: A STORED CARD OR APPROVAL THE WARM CANNOT READ IS NAMED, not skipped in silence: the
+/// agent is refused for want of its card until an operator connects it again, and the diagnostic
+/// tells them why.
+#[test]
+fn an_unreadable_warmed_record_is_named_in_a_diagnostic() {
+    let plane = A2aDoor::default();
+    let (sent, heard) = std::sync::mpsc::channel();
+    tracing::subscriber::with_default(crate::tests::capture::Capture(sent), || {
+        warm_into(
+            &plane,
+            1,
+            vec![("planner".to_string(), b"{not json".to_vec())],
+            vec![("scout".to_string(), b"[1, 2]".to_vec())],
+        );
+    });
+    let lines: Vec<String> = heard.try_iter().map(|(_, line)| line).collect();
+    assert!(lines.iter().any(|l| l.contains("planner")), "{lines:?}");
+    assert!(lines.iter().any(|l| l.contains("scout")), "{lines:?}");
+    assert_eq!(plane.cards.at("planner", 1), None);
+}
+
+/// G1-20: THE WARM ONLY FILLS GAPS: a card a connect or approve held while the listing was in
+/// flight is fresher than the stored record, and the warm leaves it as it is.
+#[test]
+fn the_warm_never_replaces_a_card_held_while_it_listed() {
+    let plane = A2aDoor::default();
+    plane.cards.hold("planner", 1, json!({ "v": "fresh" }));
+    let stale = serde_json::to_vec(&json!({ "v": "recorded" })).unwrap();
+    warm_into(&plane, 1, vec![("planner".to_string(), stale)], Vec::new());
+    assert_eq!(
+        plane.cards.at("planner", 1).as_deref(),
+        Some(&json!({ "v": "fresh" }))
+    );
+    let recorded = serde_json::to_vec(&json!({ "v": "recorded" })).unwrap();
+    warm_into(&plane, 1, vec![("scout".to_string(), recorded)], Vec::new());
+    assert_eq!(
+        plane.cards.at("scout", 1).as_deref(),
+        Some(&json!({ "v": "recorded" })),
+        "an agent holding no card is warmed"
+    );
+}
