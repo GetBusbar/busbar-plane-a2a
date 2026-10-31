@@ -106,39 +106,129 @@ fn the_source_contains_no_unsafe_block() {
     );
 }
 
-/// The manifest names the contract, the codec and the serializer, and nothing kernel-side.
-#[test]
-fn the_manifest_names_only_what_a_plane_may_name() {
-    let manifest = manifest();
-    let deps = manifest
-        .split("[dependencies]")
-        .nth(1)
-        .expect("the manifest has a dependency section");
-    for line in deps.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') || line.starts_with('[') {
+/// THE OTHER PLANES, by crate name: the fixed list every plane's sibling check names (lead ruling
+/// D33). A prefix scan over a `crates/` directory or a `busbar-plane-` family would be vacuous in a
+/// standalone repo, so the names are stated, each with its cdylib twin.
+const SIBLING_PLANES: &[&str] = &[
+    "busbar-plane-llm",
+    "busbar-plane-llm-plugin",
+    "busbar-plane-mcp",
+    "busbar-plane-mcp-plugin",
+    "busbar-plane-streaming",
+    "busbar-plane-streaming-plugin",
+    "busbar-plane-decisions",
+    "busbar-plane-decisions-plugin",
+];
+
+/// Every crate a manifest's dependency tables name, each as `(the key, the package it renames)`:
+/// the `[dependencies]`, `[dev-dependencies]` and `[build-dependencies]` tables, their
+/// `[target.<cfg>.*]` forms, and the `[dependencies.<name>]` table form, so neither a table header
+/// nor a `package = "..."` rename hides a crate.
+fn dependencies(manifest: &str) -> Vec<(String, Option<String>)> {
+    // The table being read: a dependency list, or one dependency's own table (its index in
+    // `found`).
+    enum Table {
+        Other,
+        List,
+        One(usize),
+    }
+    let kinds = ["dependencies", "dev-dependencies", "build-dependencies"];
+    let unquote = |v: &str| v.trim().trim_matches('"').to_string();
+    let package_of = |v: &str| {
+        v.split("package")
+            .nth(1)
+            .and_then(|rest| rest.trim_start().strip_prefix('='))
+            .and_then(|rest| rest.trim_start().strip_prefix('"'))
+            .and_then(|rest| rest.split('"').next())
+            .map(str::to_string)
+    };
+    let mut found: Vec<(String, Option<String>)> = Vec::new();
+    let mut table = Table::Other;
+    for line in manifest.lines() {
+        let line = line.split('#').next().unwrap_or_default().trim();
+        if line.is_empty() {
             continue;
         }
-        let name = line.split_whitespace().next().unwrap_or_default();
-        for forbidden in [
-            "busbar-core",
-            "busbar-substrate",
-            "busbar-caps",
-            "busbar-kernel",
-            "busbar-unit-",
-        ] {
+        if let Some(header) = line.strip_prefix('[').and_then(|h| h.strip_suffix(']')) {
+            let header = header.trim();
+            let path: Vec<&str> = header.split('.').map(str::trim).collect();
+            let at = path.iter().position(|seg| kinds.contains(seg));
+            table = match at {
+                // `[dependencies]` or `[target.<cfg>.dependencies]`.
+                Some(i) if i + 1 == path.len() && (i == 0 || path[0] == "target") => Table::List,
+                // `[dependencies.<name>]` or `[target.<cfg>.dependencies.<name>]`.
+                Some(i) if i + 2 == path.len() && (i == 0 || path[0] == "target") => {
+                    found.push((unquote(path[i + 1]), None));
+                    Table::One(found.len() - 1)
+                }
+                _ => Table::Other,
+            };
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        match table {
+            Table::List => found.push((unquote(key), package_of(value))),
+            Table::One(i) if key.trim() == "package" => found[i].1 = Some(unquote(value)),
+            Table::One(_) | Table::Other => {}
+        }
+    }
+    found
+}
+
+/// The manifest names the contract, the codec and the serializer, and nothing kernel-side, and no
+/// other plane: no dependency, by its key or by the package a rename points at, in any dependency
+/// table.
+#[test]
+fn the_manifest_names_only_what_a_plane_may_name() {
+    let deps = dependencies(&manifest());
+    assert!(
+        deps.iter().any(|(name, _)| name == "busbar-contract"),
+        "the manifest's dependencies were read: {deps:?}"
+    );
+    for (key, package) in &deps {
+        for name in std::iter::once(key).chain(package) {
+            for forbidden in [
+                "busbar-core",
+                "busbar-substrate",
+                "busbar-caps",
+                "busbar-kernel",
+                "busbar-unit-",
+            ] {
+                assert!(
+                    !name.starts_with(forbidden),
+                    "the plane depends on {name}, which is kernel-side"
+                );
+            }
+            // No plane depends on a sibling plane's crate — the broker law (DECISION #8): planes
+            // never talk to each other.
             assert!(
-                !name.starts_with(forbidden),
-                "the plane depends on {name}, which is kernel-side"
+                !SIBLING_PLANES.contains(&name.as_str()),
+                "the plane depends on sibling plane crate {name}"
             );
         }
-        // No plane depends on a sibling plane's crate — the broker law (DECISION #8): planes
-        // never talk to each other. A prefix check over the whole `busbar-plane-` family
-        // generalises what used to be two named siblings, so a THIRD sibling plane added to the
-        // roster is covered without this test being edited again.
+    }
+}
+
+/// The manifest reading sees a sibling however it is spelled: a table header, a rename, a target
+/// table, a dev or build dependency.
+#[test]
+fn a_sibling_is_seen_however_the_manifest_spells_it() {
+    for spelled in [
+        "[dependencies]\nbusbar-plane-llm = \"1\"\n",
+        "[dependencies]\nllm = { package = \"busbar-plane-mcp\", version = \"1\" }\n",
+        "[dependencies.busbar-plane-streaming]\nversion = \"1\"\n",
+        "[dependencies.x]\npackage = \"busbar-plane-decisions\"\n",
+        "[target.'cfg(unix)'.dependencies]\nbusbar-plane-llm-plugin = \"1\"\n",
+        "[dev-dependencies]\nbusbar-plane-mcp = { path = \"../mcp\" }\n",
+    ] {
+        let deps = dependencies(spelled);
         assert!(
-            !name.starts_with("busbar-plane-"),
-            "the plane depends on sibling plane crate {name}"
+            deps.iter().any(|(key, package)| std::iter::once(key)
+                .chain(package)
+                .any(|n| SIBLING_PLANES.contains(&n.as_str()))),
+            "not seen in {spelled:?}: {deps:?}"
         );
     }
 }

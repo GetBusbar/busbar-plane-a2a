@@ -187,7 +187,10 @@ fn a_push_config_lives_as_a_record_of_its_task() {
         json!([{ "taskId": "t1", "pushNotificationConfig": { "id": "c1", "url": "https://hooks.example/cb" } }]),
         "the v0.3 list holds the stored config in its shape"
     );
-    assert!(!body.to_string().contains("s3cret"), "the v0.3 list echoes no credential");
+    assert!(
+        !body.to_string().contains("s3cret"),
+        "the v0.3 list echoes no credential"
+    );
     let (_, body) = call(
         &mut desk,
         "ListTaskPushNotificationConfigs",

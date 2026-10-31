@@ -79,10 +79,11 @@ fn the_plane_spells_no_interior_mutability_of_its_own() {
         "UnsafeCell",
         "Mutex<",
         "RwLock",
-        "AtomicUsize",
-        "AtomicU64",
-        "AtomicU32",
-        "AtomicBool",
+        // Every atomic type, not four spellings of one: `AtomicI64`, `AtomicPtr`, ... alike.
+        "Atomic",
+        "Condvar",
+        "sync::Once",
+        "Once::new",
         "OnceLock",
         "OnceCell",
         "LazyLock",
@@ -144,12 +145,76 @@ fn the_plane_performs_no_input_or_output() {
                 }
             }
         }
+        // A GROUPED IMPORT (`use std::{env, fs};`, rustfmt's merged form) spells none of the paths
+        // above, so each `std::{ ... }` group is read for the modules it names.
+        for named in std_group_modules(text) {
+            if ["fs", "net", "process", "thread", "io", "env"].contains(&named.as_str()) {
+                offenders.push(format!("{}: std::{{{named}}}", path.display()));
+            }
+        }
     });
     assert!(
         offenders.is_empty(),
         "the plane reaches outside itself: {offenders:?}"
     );
 }
+
+/// The first path segment of every member of every `std::{ ... }` group in `text` (comment lines
+/// dropped), nested groups read too: `use std::{env, io::Read};` names `env` and `io`.
+fn std_group_modules(text: &str) -> Vec<String> {
+    let code: String = text
+        .lines()
+        .filter(|l| !is_comment(l))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut named = Vec::new();
+    for (at, _) in code.match_indices("std::{") {
+        let body = &code[at + "std::{".len()..];
+        let mut depth = 0usize;
+        let mut member = String::new();
+        let mut members = Vec::new();
+        for c in body.chars() {
+            match c {
+                '{' => depth += 1,
+                '}' if depth == 0 => break,
+                '}' => depth -= 1,
+                ',' if depth == 0 => members.push(std::mem::take(&mut member)),
+                _ => {}
+            }
+            if depth == 0 && c != ',' && c != '}' {
+                member.push(c);
+            }
+        }
+        members.push(member);
+        named.extend(
+            members
+                .iter()
+                .filter_map(|m| m.trim().split("::").next())
+                .map(|m| m.trim().to_string())
+                .filter(|m| !m.is_empty()),
+        );
+    }
+    named
+}
+
+/// The scan of a grouped `std` import reads the modules it names, nested and across lines.
+#[test]
+fn a_grouped_std_import_is_read_for_its_modules() {
+    assert_eq!(
+        std_group_modules("use std::{env, fs};\nuse std::{\n    collections::BTreeMap,\n    io::{Read, Write},\n};"),
+        ["env", "fs", "collections", "io"]
+    );
+}
+
+/// THE OTHER PLANES' CRATES as source names them (`tests/invariance.rs` `SIBLING_PLANES`, the
+/// fixed list of lead ruling D33): a cdylib twin's name starts with its plane's, so each covers
+/// both.
+const SIBLING_PLANE_CRATES: &[&str] = &[
+    "busbar_plane_llm",
+    "busbar_plane_mcp",
+    "busbar_plane_streaming",
+    "busbar_plane_decisions",
+];
 
 /// The plane names no kernel-side crate.
 ///
@@ -174,12 +239,14 @@ fn the_plane_names_no_kernel_side_crate() {
                     offenders.push(format!("{}:{}: {name}", path.display(), n + 1));
                 }
             }
-            // No plane names a sibling plane crate — same broker law (DECISION #8) as the
-            // manifest-level check in `tests/invariance.rs`, asserted here from the source side.
-            // A prefix over the whole `busbar_plane_` family covers every sibling plane, present
-            // or future, rather than naming siblings one at a time.
-            if line.contains("busbar_plane_") {
-                offenders.push(format!("{}:{}: busbar_plane_", path.display(), n + 1));
+            // No plane names a sibling plane crate — same broker law (DECISION #8), and the same
+            // fixed list of the other planes (lead ruling D33), as the manifest-level check in
+            // `tests/invariance.rs`, asserted here from the source side. (A renamed dependency
+            // is that check's to catch: the manifest is where a rename is spelled.)
+            for sibling in SIBLING_PLANE_CRATES {
+                if line.contains(sibling) {
+                    offenders.push(format!("{}:{}: {sibling}", path.display(), n + 1));
+                }
             }
         }
     });
@@ -271,23 +338,34 @@ fn the_plane_names_no_money_and_no_decision() {
     );
 }
 
+/// The macros that write a log line: the SDK's `diag_*!` and `tracing`'s own, which the SDK
+/// captures into the envelope's log records just the same.
+fn is_log_macro(name: &str) -> bool {
+    name.starts_with("diag_")
+        || ["trace", "debug", "info", "warn", "error", "event"].contains(&name)
+}
+
 /// THE PUSH TOKEN IS NEVER LOGGED (`BUSBAR-1.6.0.md` l.4882: the plane checks its own callback
 /// correlation token, "never logged/audited"; the push route is audited nowhere, the door's own
-/// cell): no diagnostic line the plane writes, in any of its sources, names the token, the field
-/// it rides in, or a value read from either.
+/// cell): no log line the plane writes, in any of its sources, through a `diag_*!` or a `tracing`
+/// macro, names the token, the field it rides in, or a value read from either.
 #[test]
 fn no_diagnostic_line_of_the_plane_carries_the_push_token() {
     let mut lines = 0;
     each_source(&mut |path, text| {
-        for (start, _) in text.match_indices("diag_") {
-            let rest = &text[start..];
-            let Some(open) = rest.find("!(").filter(|o| {
-                rest[..*o]
-                    .bytes()
-                    .all(|b| b.is_ascii_lowercase() || b == b'_')
-            }) else {
+        for (bang, _) in text.match_indices("!(") {
+            // The macro's name: the identifier right before `!(`, its path (`tracing::`) aside.
+            let name_start = text[..bang]
+                .rfind(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .map_or(0, |i| {
+                    i + text[i..].chars().next().map_or(1, char::len_utf8)
+                });
+            if !is_log_macro(&text[name_start..bang]) {
                 continue;
-            };
+            }
+            let start = name_start;
+            let rest = &text[start..];
+            let open = bang - start;
             // The call's arguments, to the parenthesis that closes them.
             let mut depth = 0usize;
             let close = rest[open + 1..]
