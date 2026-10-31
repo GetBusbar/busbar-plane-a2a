@@ -1043,3 +1043,33 @@ fn an_approval_made_while_a_refresh_publishes_is_kept() {
         Some(approved)
     );
 }
+
+/// G1-27: AN ATTEMPT FOR A MEMBER THE UNIT'S GENERATION DOES NOT REGISTER IS REFUSED, never let
+/// through ungated: with no registration there is nothing to admit, re-verify or guard the hop by.
+#[test]
+fn an_attempt_for_an_unregistered_member_is_refused() {
+    let plane = A2aDoor::default();
+    let reach = Reach {
+        plane: &plane,
+        ticket: busbar_contract::abi::mechanism::ticket::Ticket {
+            slot: 4,
+            generation: 1,
+        },
+    };
+    let mut hop = Hop::new(json!(1), "1.0");
+    let mut pass = crate::task_door::Pass::default();
+    let refused = admission(
+        &reach,
+        (&mut pass, &mut hop),
+        ("ghost", None),
+        Some("ghost"),
+        1,
+        true,
+    );
+    let Some(reply) = refused else {
+        panic!("the attempt went on ungated");
+    };
+    assert_eq!(reply.status, 404);
+    let body: Value = serde_json::from_slice(&reply.body).unwrap();
+    assert!(body.to_string().contains("ghost"), "{body}");
+}
