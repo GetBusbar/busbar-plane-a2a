@@ -878,10 +878,11 @@ mod both_ways {
             "{rest}"
         );
         assert_eq!(body_of(rest)["tool"], json!("SendMessage"));
+        let listing = line(&t, "project 5 ");
         assert_eq!(
-            line(&t, "project 5 "),
-            line(&t, "project 5 "),
-            "a listing projects its envelope too"
+            body_of(listing),
+            json!({ "tool": "ListTasks", "arguments": { "pageSize": 5, "status": "working" } }),
+            "a listing projects its envelope too: {listing}"
         );
     }
 
