@@ -466,13 +466,45 @@ fn rewrite_backend_urls(v: &mut Value, backend_host: &str, endpoint: &str) {
     }
 }
 
-/// Every remaining mention of the backend host, with its JSON path; busbar's own endpoint (`ours`,
-/// exact) is never a mention.
+/// Whether `text` names the backend `host` (lowercase): an occurrence bounded by characters no
+/// hostname continues with (so `notexample.com`, `example.community` and `10.0.0.15` do not name
+/// `example.com` or `10.0.0.1`). A one-label host (`travel`) is also an ordinary word, so it names
+/// the backend only as an authority: after `//` or `@`, or followed by `:` and a port.
+fn names_host(text: &str, host: &str) -> bool {
+    let text = text.to_lowercase();
+    let b = text.as_bytes();
+    let label = |c: u8| c.is_ascii_alphanumeric() || c == b'-';
+    let one_label = !host.contains(['.', ':']);
+    text.match_indices(host).any(|(at, _)| {
+        let end = at + host.len();
+        let before = at.checked_sub(1).map(|i| b[i]);
+        let after = b.get(end).copied();
+        // A longer name around it: a label character, or a dot joined to another label.
+        let longer_before = before.is_some_and(|c| {
+            label(c) || (c == b'.' && at >= 2 && label(b[at - 2]))
+        });
+        let longer_after = after.is_some_and(|c| {
+            label(c) || (c == b'.' && b.get(end + 1).is_some_and(|n| label(*n)))
+        });
+        if longer_before || longer_after {
+            return false;
+        }
+        if !one_label {
+            return true;
+        }
+        let authority = text[..at].ends_with("//") || before == Some(b'@');
+        let ported = after == Some(b':') && b.get(end + 1).is_some_and(u8::is_ascii_digit);
+        authority || ported
+    })
+}
+
+/// Every remaining mention of the backend host ([`names_host`]), with its JSON path; busbar's own
+/// endpoint (`ours`, exact) is never a mention.
 fn collect_mentions(v: &Value, backend_host: &str, ours: &str, out: &mut Vec<String>) {
     fn walk(v: &Value, host: &str, ours: &str, path: &str, out: &mut Vec<String>) {
         match v {
             Value::String(s) => {
-                if s != ours && s.to_lowercase().contains(host) {
+                if s != ours && names_host(s, host) {
                     out.push(path.to_string());
                 }
             }
@@ -483,7 +515,7 @@ fn collect_mentions(v: &Value, backend_host: &str, ours: &str, out: &mut Vec<Str
             }
             Value::Object(o) => {
                 for (k, x) in o {
-                    if k.to_lowercase().contains(host) {
+                    if names_host(k, host) {
                         out.push(format!("{path}.{k} (member NAME)"));
                     }
                     walk(x, host, ours, &format!("{path}.{k}"), out);
