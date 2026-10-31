@@ -512,3 +512,83 @@ fn an_empty_egress_scope_is_refused() {
     .unwrap_err();
     assert!(err.contains("egress_scopes"), "got: {err}");
 }
+
+/// NO ACCEPTED-BUT-INERT POLICY KEY (G3-19): `egress_scopes:` is enforced by nothing in this build,
+/// so a registration that states one is refused at parse with a sentence saying so, rather than
+/// stored as though it limited who may delegate.
+#[test]
+fn an_egress_scope_is_refused_because_nothing_enforces_it() {
+    let mut d = def("https://a2a.vendor/", PinMechanism::Unpinned);
+    d.egress_scopes = vec!["billing".to_string()];
+    let err = validate_agent("planner", &d).expect_err("an inert policy key is refused");
+    assert!(err.contains("egress_scopes"), "got: {err}");
+    assert!(err.contains("not enforced"), "got: {err}");
+    let read = parse(&json!({
+        "planner": {
+            "url": "https://x/",
+            "pin": {"mechanism": "unpinned"},
+            "egress_scopes": ["billing"]
+        }
+    }))
+    .expect_err("refused on the read path too");
+    assert!(read.contains("not enforced"), "got: {read}");
+}
+
+/// A REFUSED URL NAMES ITS OWN FAULT (G3-31): an `https://` URL that does not parse (a port out
+/// of range) is not told it must be an http(s) endpoint; the scheme sentence stays for a URL whose
+/// scheme is wrong.
+#[test]
+fn a_malformed_https_url_is_refused_for_what_is_wrong_with_it() {
+    let err = validate_agent(
+        "planner",
+        &def("https://agent.example:99999/", PinMechanism::Unpinned),
+    )
+    .expect_err("a port out of range is refused");
+    assert!(err.contains("`url:`"), "got: {err}");
+    assert!(
+        !err.contains("must be an http:// or https:// endpoint"),
+        "the refusal names the wrong fault: {err}"
+    );
+    assert!(err.contains("port"), "got: {err}");
+    let err = validate_agent("planner", &def("ftp://a2a.vendor/", PinMechanism::Unpinned))
+        .expect_err("a non-http scheme is refused");
+    assert!(
+        err.contains("must be an http:// or https:// endpoint"),
+        "got: {err}"
+    );
+}
+
+/// AN AGENT NAME IS ONE PLAIN PATH SEGMENT (G3-34): the name is the `/a2a/agents/<name>/`
+/// endpoint, and a name that is not one plain segment claims nothing, so a registration under it
+/// is refused at parse rather than approved and then answered 404.
+#[test]
+fn an_agent_name_that_is_not_one_plain_path_segment_is_refused() {
+    let d = def("https://a2a.vendor/", PinMechanism::Unpinned);
+    for name in ["legal+eu", "a/b", "..", "with space"] {
+        assert!(
+            crate::statement::agent_slash_claims(&[name]).is_empty(),
+            "`{name}` claims nothing"
+        );
+        let err = validate_agent(name, &d).expect_err(&format!("`{name}` must be refused"));
+        assert!(err.contains("path segment"), "got: {err}");
+    }
+    assert_eq!(validate_agent("legal-eu_2.v~1", &d), Ok(()));
+}
+
+/// A RAW `#`, `?` OR `/` IN A URL'S PASSWORD NEVER LEAKS (G3-35): the userinfo runs to the last `@`
+/// of the authority even when a delimiter inside the password would end a naive authority first.
+#[test]
+fn a_password_holding_a_delimiter_is_still_redacted() {
+    for (url, secret) in [
+        ("https://user:p#ss@host/a2a", "p#ss"),
+        ("https://user:p?ss@host/a2a", "p?ss"),
+        ("https://user:p/ss@host/a2a", "p/ss"),
+    ] {
+        let shown = without_userinfo(url);
+        assert!(!shown.contains(secret), "`{url}` shown as `{shown}`");
+        assert!(shown.ends_with("@host/a2a"), "`{url}` shown as `{shown}`");
+        let err = validate_agent("planner", &def(url, PinMechanism::Unpinned))
+            .expect_err("a malformed URL is refused");
+        assert!(!err.contains(secret), "the refusal repeats the password: {err}");
+    }
+}
