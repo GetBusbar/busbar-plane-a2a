@@ -4441,6 +4441,22 @@ pub fn projection(envelope: &[u8]) -> Option<Vec<u8>> {
     serde_json::to_vec(&serde_json::json!({ "tool": tool, "arguments": arguments })).ok()
 }
 
+/// THE HOOK VIEW of one request envelope: its [`projection`], its [`invocation_of`] and its
+/// [`context_session`]; `None` for a body that is not a JSON object.
+pub(crate) fn hook_view(
+    envelope: &[u8],
+) -> Option<(
+    Vec<u8>,
+    busbar_contract::ir::invoke::InvokeReq,
+    Option<String>,
+)> {
+    Some((
+        projection(envelope)?,
+        invocation_of(envelope),
+        context_session(envelope),
+    ))
+}
+
 /// THE SESSION a request's hook view carries: the `contextId` its message names, which groups an
 /// A2A conversation's tasks (the engine keyed its gate's incremental scan on it); `None` when the
 /// message names none, so the request is screened whole. `project` writes it into the view's opaque session.
@@ -4685,16 +4701,14 @@ slot!(
             }
             None => (envelope, None),
         };
-        let Some(projected) = projection(&envelope) else {
+        let Some((projected, invocation, session)) = hook_view(&envelope) else {
             return Outcome::Refused;
         };
-        let invocation = invocation_of(&envelope);
         let shape = busbar_contract::ir::facts::IrFacts::shape(&invocation);
         let turns: Vec<(&str, String)> = busbar_contract::ir::facts::IrFacts::content(&invocation)
             .iter()
             .map(|item| (item.author(), item.screenable_text().into_owned()))
             .collect();
-        let session = context_session(&envelope);
         let pool = agent_of(target).unwrap_or_default();
         let (signals, mut arena, mut messages) =
             (input.signals_buf(), input.arena_buf(), input.messages_buf());

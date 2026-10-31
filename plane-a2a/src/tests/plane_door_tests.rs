@@ -760,7 +760,7 @@ fn the_rewrite_apply_site_never_falls_back_to_the_caller_s_original_params() {
         .map(|(_, rest)| rest)
         .expect("`project` reads the stage's rewrite");
     let site = &site[..site
-        .find("let Some(projected) = projection(&envelope)")
+        .find("hook_view(&envelope)")
         .expect("and projects what it applied")];
     assert!(
         site.contains("rewritten_params(rewrite)"),
