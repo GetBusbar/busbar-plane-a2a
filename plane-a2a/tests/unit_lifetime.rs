@@ -147,7 +147,10 @@ extern "C" fn decided(_: HostCtx, _: *const c_void, out: *mut ServiceOut) -> Raw
     answer(out, Outcome::Ready, TRUST_DECIDED_SERVING, 0)
 }
 
-extern "C" fn judged(_: HostCtx, _: *const c_void, out: *mut ServiceOut) -> RawOutcome {
+extern "C" fn judged(_: HostCtx, input: *const c_void, out: *mut ServiceOut) -> RawOutcome {
+    if let Some(result) = relay_within_cases::scripted_judgement(input, out) {
+        return result;
+    }
     answer(out, Outcome::Ready, DEST_ALLOWED, 0)
 }
 
@@ -517,6 +520,9 @@ struct Answered {
     more: u32,
     flags: u32,
     verb: String,
+    target: String,
+    fields: Vec<(String, String)>,
+    fields_needed: u32,
     emitted: Vec<u8>,
     units: Vec<(u32, u64)>,
 }
@@ -694,8 +700,18 @@ impl Door {
 
     /// One `on_piece` of `unit`, its reply buffer `reply_cap` bytes.
     fn piece(&self, unit: u64, given: Given<'_>, reply_cap: usize) -> Answered {
+        self.piece_with_fields(unit, given, reply_cap, 16)
+    }
+
+    fn piece_with_fields(
+        &self,
+        unit: u64,
+        given: Given<'_>,
+        reply_cap: usize,
+        fields_cap: usize,
+    ) -> Answered {
         let mut reply = vec![0_u8; reply_cap];
-        let mut fields = [z::<OutField>(); 16];
+        let mut fields = vec![z::<OutField>(); fields_cap];
         let mut arena = vec![0_u8; 1 << 14];
         let mut records = [z::<RecordWrite>(); 16];
         let mut units = [z::<UnitCount>(); 8];
@@ -741,6 +757,16 @@ impl Door {
             } else {
                 at(o.verb)
             },
+            target: if o.target.len == 0 {
+                String::new()
+            } else {
+                at(o.target)
+            },
+            fields: fields[..(o.fields_written as usize).min(fields.len())]
+                .iter()
+                .map(|field| (at(field.name), at(field.value)))
+                .collect(),
+            fields_needed: o.fields_needed,
             emitted: reply[..usize::try_from(o.emitted).unwrap().min(reply_cap)].to_vec(),
             units: units[..(o.units_written as usize).min(units.len())]
                 .iter()
@@ -1023,6 +1049,9 @@ impl Door {
         self.piece(unit, Given::more(), 8).outcome == Some(Outcome::Ready)
     }
 }
+
+#[path = "support/relay_within_cases.rs"]
+mod relay_within_cases;
 
 // ── (A2) a finished unit holds no place ─────────────────────────────────────────────────────────
 
