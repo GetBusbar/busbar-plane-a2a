@@ -219,6 +219,24 @@ pub fn compose(base: &str, method: &str, params: &Value) -> Result<Framed, Strin
     let empty = Map::new();
     let mut left = params.as_object().unwrap_or(&empty).clone();
     let mut path = String::new();
+    // THE TENANT: every operation is also bound under a leading `/{tenant}` segment (the
+    // proto's `additional_bindings`); an empty one is the proto's default, no segment.
+    if let Some(tenant) = left.remove("tenant") {
+        let tenant = if tenant.is_null() {
+            String::new()
+        } else {
+            scalar(&tenant)
+        };
+        if tenant == "." || tenant == ".." {
+            return Err(format!(
+                "`{method}`'s `tenant` is a dot segment, which would re-point the request line"
+            ));
+        }
+        if !tenant.is_empty() {
+            path.push('/');
+            path.push_str(&percent(&tenant));
+        }
+    }
     let mut rest = op.path;
     while let Some(open) = rest.find('{') {
         path.push_str(&rest[..open]);
@@ -259,8 +277,9 @@ pub fn compose(base: &str, method: &str, params: &Value) -> Result<Framed, Strin
     let mut url = base.clone();
     url.set_path(&format!("{}{path}", base.path().trim_end_matches('/')));
     {
+        // The operator's own query (a function key, an api-version) stays, as the JSON-RPC
+        // binding keeps it ([`crate::relay::target_of`]); the operation's members follow it.
         let mut query = url.query_pairs_mut();
-        query.clear();
         for name in op.query {
             if let Some(value) = left.remove(*name) {
                 query.append_pair(name, &scalar(&value));

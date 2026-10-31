@@ -628,7 +628,7 @@ fn an_http_json_attempt_is_the_operations_request_line_and_sends_no_body_for_a_r
         r.on_piece(kernel(Some(URL))),
         PieceAnswer::Attempt(Attempt {
             verb: "GET",
-            target: "/a2a/v1/tasks/t1".into(),
+            target: "/a2a/v1/tasks/t1?tenant=t1".into(),
             fields: vec![
                 ("accept", "application/json".into()),
                 ("a2a-version", "1.0".into()),

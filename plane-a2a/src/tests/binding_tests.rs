@@ -75,7 +75,7 @@ fn a_send_posts_its_params_as_the_body_under_the_operators_path() {
     )
     .unwrap();
     assert_eq!(f.verb, "POST");
-    assert_eq!(f.target, "/a2a/v1/message:send");
+    assert_eq!(f.target, "/a2a/v1/message:send?tenant=t1");
     assert!(f.has_body);
     assert_eq!(f.body, br#"{"message":{"messageId":"m"}}"#);
 }
@@ -89,11 +89,11 @@ fn a_read_takes_its_id_into_the_path_and_its_options_onto_the_query() {
     )
     .unwrap();
     assert_eq!(f.verb, "GET");
-    assert_eq!(f.target, "/a2a/v1/tasks/t%2F1?historyLength=5");
+    assert_eq!(f.target, "/a2a/v1/tasks/t%2F1?tenant=t1&historyLength=5");
     assert!(!f.has_body);
     assert!(f.body.is_empty());
     let f = compose(BASE, "GetTask", &json!({ "task_id": "t1" })).unwrap();
-    assert_eq!(f.target, "/a2a/v1/tasks/t1");
+    assert_eq!(f.target, "/a2a/v1/tasks/t1?tenant=t1");
 }
 
 #[test]
@@ -105,7 +105,7 @@ fn a_push_config_route_keeps_the_config_id_apart_from_the_task() {
     )
     .unwrap();
     assert_eq!(f.verb, "DELETE");
-    assert_eq!(f.target, "/a2a/v1/tasks/t1/pushNotificationConfigs/c1");
+    assert_eq!(f.target, "/a2a/v1/tasks/t1/pushNotificationConfigs/c1?tenant=t1");
 }
 
 #[test]
