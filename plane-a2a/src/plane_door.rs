@@ -637,7 +637,7 @@ impl A2aDoor {
                 .and_then(|b| b.agents.get(name))
                 .is_some_and(|was| was == def);
             if let Some(card) = plane.cards.at(name, held_at).filter(|_| kept) {
-                plane.cards.hold(name, generation, (*card).clone());
+                plane.cards.hold_shared(name, generation, card);
             }
             // The skills it was approved at go with the kept approval, for the trust view's drift.
             if let Some(approved) = plane
@@ -3835,7 +3835,20 @@ fn verify_agent_on_call(
     let mut standing = plane.trust.get(&key).unwrap_or_default();
     standing.sighting = cadence.settle(looked.sighting, &mut standing.ledger, now_ms);
     if let Some(card) = looked.card {
-        plane.cards.hold(member, generation, card);
+        let card = std::sync::Arc::new(card);
+        plane.cards.hold_shared(member, generation, std::sync::Arc::clone(&card));
+        // A LOOK THAT PENDED ACROSS A REFRESH refreshes the newest generation's card too, when that
+        // generation registers the agent as the unit's did (a changed registration holds none
+        // until it is looked at again).
+        let newest = plane.newest();
+        if newest != generation
+            && plane
+                .generations
+                .at(newest)
+                .is_some_and(|s| s.agents.get(member) == Some(def))
+        {
+            plane.cards.hold_shared(member, newest, card);
+        }
     }
     let serving = serves(&standing);
     plane.trust.insert(key.clone(), standing);

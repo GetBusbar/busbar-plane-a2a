@@ -25,16 +25,27 @@ fn a_card_held_under_a_generation_is_read_under_it_only() {
 }
 
 #[test]
-fn a_newer_hold_replaces_the_card_and_retire_drops_its_generation() {
+fn a_hold_replaces_the_card_under_its_generation_and_retire_drops_its_generation() {
     let cards = Cards::default();
-    cards.hold("planner", 1, json!({ "v": 1 }));
+    cards.hold("planner", 2, json!({ "v": 1 }));
     cards.hold("planner", 2, json!({ "v": 2 }));
-    assert_eq!(cards.at("planner", 1), None);
     assert_eq!(cards.at("planner", 2).as_deref(), Some(&json!({ "v": 2 })));
     cards.retire(1);
     assert!(cards.at("planner", 2).is_some());
     cards.retire(2);
     assert_eq!(cards.at("planner", 2), None);
+}
+
+/// One agent's card is held under at most [`MAX_GENERATIONS_PER_CARD`] generations: holds under
+/// generations that are never retired drop the oldest first.
+#[test]
+fn an_agents_cards_are_bounded_by_generation() {
+    let cards = Cards::default();
+    for g in 1..=10 {
+        cards.hold("planner", g, json!({ "g": g }));
+    }
+    let held: Vec<u64> = (1..=10).filter(|g| cards.at("planner", *g).is_some()).collect();
+    assert_eq!(held, (7..=10).collect::<Vec<u64>>());
 }
 
 /// G1-1: SEVERAL GENERATIONS ARE LIVE AT ONCE, and each keeps the card held under it: a hold under

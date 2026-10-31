@@ -8,8 +8,12 @@
 //! mirror from those records (`records.list`), so an instance opened again holds the cards its
 //! operator approved before. A held card is valid to the
 //! refresh generation it was held under: `arrive` does no I/O and reads only this memory, and a
-//! card held under another generation is not read.
+//! card held under another generation is not read. SEVERAL GENERATIONS ARE LIVE AT ONCE (a unit
+//! keeps the generation it arrived under until it ends, and the kernel retires a generation
+//! later), so each agent's card is held per generation: a hold under one generation leaves every
+//! other generation's card as it was, and a retire drops only its own.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use busbar_contract::abi::sdk::publish::Keyed;
@@ -18,39 +22,55 @@ use serde_json::Value;
 /// The most cards held at once; past it, the smallest agent ids are dropped first.
 pub const MAX_CARDS: usize = 4096;
 
-/// The held cards, by agent id, each with the generation it was held under.
+/// The most generations one agent's card is held under at once; past it, the oldest generation's
+/// is dropped first (a hold that lands under a generation already retired never grows the map
+/// past it).
+pub const MAX_GENERATIONS_PER_CARD: usize = 4;
+
+/// The held cards, by agent id, each under the generations it was held under.
 #[derive(Debug, Default)]
 pub struct Cards {
-    by_agent: Keyed<String, (u64, Arc<Value>)>,
+    by_agent: Keyed<String, BTreeMap<u64, Arc<Value>>>,
 }
 
 impl Cards {
-    /// Hold `card` for `agent` under `generation`, in place of any earlier one.
+    /// Hold `card` for `agent` under `generation`, in place of any earlier one under it.
     pub fn hold(&self, agent: &str, generation: u64, card: Value) {
+        self.hold_shared(agent, generation, Arc::new(card));
+    }
+
+    /// [`Cards::hold`] of a card already shared (held under another generation too).
+    pub fn hold_shared(&self, agent: &str, generation: u64, card: Arc<Value>) {
         self.by_agent.with_all(|m| {
             while m.len() >= MAX_CARDS && !m.contains_key(agent) {
                 if m.pop_first().is_none() {
                     break;
                 }
             }
-            m.insert(agent.to_string(), (generation, Arc::new(card)));
+            let held = m.entry(agent.to_string()).or_default();
+            held.insert(generation, card);
+            while held.len() > MAX_GENERATIONS_PER_CARD {
+                held.pop_first();
+            }
         });
     }
 
-    /// The card held for `agent` under `generation`; `None` when none is, or it was held under
-    /// another generation.
+    /// The card held for `agent` under `generation`; `None` when none is held under it.
     #[must_use]
     pub fn at(&self, agent: &str, generation: u64) -> Option<Arc<Value>> {
-        self.by_agent
-            .get(&agent.to_string())
-            .filter(|(held, _)| *held == generation)
-            .map(|(_, card)| card)
+        self.by_agent.with(&agent.to_string(), |held| {
+            held.and_then(|h| h.get(&generation).cloned())
+        })
     }
 
     /// Drop every card held under `generation` (its retire).
     pub fn retire(&self, generation: u64) {
-        self.by_agent
-            .with_all(|m| m.retain(|_, (held, _)| *held != generation));
+        self.by_agent.with_all(|m| {
+            m.retain(|_, held| {
+                held.remove(&generation);
+                !held.is_empty()
+            });
+        });
     }
 }
 
