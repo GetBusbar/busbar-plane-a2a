@@ -392,8 +392,20 @@ pub(crate) fn judge_open_web(
     handle: CompletionHandle,
     dest: &str,
 ) -> Poll<Result<(u64, String), ServiceError>> {
-    let mut bytes = [0u8; JUDGED_BYTES];
-    let mut spans = [ABSENT_SPAN; JUDGED_ADDRESSES];
+    judge_open_web_sized(services, handle, dest, JUDGED_BYTES, JUDGED_ADDRESSES)
+}
+
+/// [`judge_open_web`] with room for `bytes` of judged addresses in `items` spans: the re-call a
+/// `Short` answer asks for, once, on the same handle.
+pub(crate) fn judge_open_web_sized(
+    services: &StaticServices,
+    handle: CompletionHandle,
+    dest: &str,
+    bytes: usize,
+    items: usize,
+) -> Poll<Result<(u64, String), ServiceError>> {
+    let mut bytes = vec![0u8; bytes];
+    let mut spans = vec![ABSENT_SPAN; items];
     services
         .dest_judge_as(
             handle,

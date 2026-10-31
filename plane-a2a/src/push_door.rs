@@ -29,7 +29,7 @@ use busbar_contract::abi::mechanism::ticket::{CompletionHandle, Ticket};
 use busbar_contract::abi::sdk::conn::StaticHost;
 use busbar_contract::abi::sdk::exchange::{exchange, Exchange};
 use busbar_contract::abi::sdk::publish::Keyed;
-use busbar_contract::abi::sdk::{Instance, StaticServices};
+use busbar_contract::abi::sdk::{Instance, ServiceError, StaticServices};
 
 use crate::a2a::task::Task;
 use crate::local::{self, PushConfig};
@@ -184,7 +184,7 @@ type Judgement = (u64, String);
 
 trait Line {
     /// The destination judge over `url`: its `DEST_*` verdict and the set a dial must land within;
-    /// `None` when nothing was checked.
+    /// `None` when the host could not answer it (nothing was checked).
     fn judge(&mut self, url: &str) -> Poll<Option<Judgement>>;
     /// One exchange of `ex` to `url`: the receiver's status; `None` when the connection or the
     /// exchange failed.
@@ -209,7 +209,22 @@ impl Line for Calls<'_> {
         }
     }
     fn judge(&mut self, url: &str) -> Poll<Option<Judgement>> {
-        crate::task_door::judge_open_web(&self.services, self.handle(1), url).map(Result::ok)
+        match crate::task_door::judge_open_web(&self.services, self.handle(1), url) {
+            // More addresses than the first call had room for: re-called ONCE, on the same
+            // handle, at the size the host named (the service's short-buffer rule).
+            Poll::Ready(Err(ServiceError::Short { bytes, items })) => {
+                let size = |n: u64| usize::try_from(n).unwrap_or(usize::MAX);
+                crate::task_door::judge_open_web_sized(
+                    &self.services,
+                    self.handle(1),
+                    url,
+                    size(bytes),
+                    size(items),
+                )
+                .map(Result::ok)
+            }
+            answered => answered.map(Result::ok),
+        }
     }
 
     fn send(&mut self, ex: &mut Exchange, url: &str) -> Poll<Option<u16>> {
@@ -230,8 +245,10 @@ fn attempt(line: &mut dyn Line, flight: &mut Flight) -> Poll<Attempted> {
     let url = flight.delivery.url.clone();
     let (verdict, within) = match line.judge(&url) {
         Poll::Pending => return Poll::Pending,
-        // Nothing was checked, so nothing is allowed.
-        Poll::Ready(None) => return Poll::Ready(Attempted::Judged(DEST_UNRESOLVABLE)),
+        // Nothing was checked, so nothing is sent; the host's judge failing is no refusal of the
+        // destination, so the attempt ends as a transport error, retried under the three-attempt
+        // rule.
+        Poll::Ready(None) => return Poll::Ready(Attempted::Transport),
         Poll::Ready(Some(judged)) => judged,
     };
     if verdict != DEST_ALLOWED {
