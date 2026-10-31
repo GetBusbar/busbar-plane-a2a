@@ -232,9 +232,10 @@ pub struct AgentDefCfg {
     /// plus its lease policy. Never the secret, never the caller's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upstream_credential: Option<super::creds::OutboundCredential>,
-    /// Which fronted agents may delegate here (the egress policy).
-    /// Judged for shape only ([`validate_agent`] refuses an empty name) and READ BY NOTHING: the
-    /// plane has no delegating-from path, so no request is ever judged against this list.
+    /// Which fronted agents may delegate here (the egress policy). ENFORCED BY NOTHING in this
+    /// build (the plane has no delegating-from path), so [`validate_agent`] refuses a non-empty
+    /// list rather than accept a control that is not attached. Kept in the grammar so the refusal
+    /// names the key instead of calling it unknown.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub egress_scopes: Vec<String>,
     /// Hooks attached to THIS agent, by bare name from the top-level `hooks:` map. ADDS to the
@@ -412,13 +413,13 @@ pub fn validate_agent(name: &str, def: &AgentDefCfg) -> Result<(), String> {
         }
     }
 
-    for scope in &def.egress_scopes {
-        if scope.trim().is_empty() {
-            return Err(format!(
-                "{at}: `egress_scopes:` contains an empty name; an empty scope grants nothing and \
-                 reads as though it grants something"
-            ));
-        }
+    // NO ACCEPTED-BUT-INERT POLICY KEY: nothing in this build judges a request against
+    // `egress_scopes:`, so a registration that states one is refused rather than stored as though
+    // it limited who may delegate.
+    if !def.egress_scopes.is_empty() {
+        return Err(format!(
+            "{at}: `egress_scopes:` is not enforced by this build; remove it"
+        ));
     }
 
     // A dotted hook reference is refused by the kernel, which sees every section; this validator

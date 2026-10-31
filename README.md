@@ -38,7 +38,7 @@ Off by default: a document with no `agents:` section states no route.
   - `agents.<name>.upstream_credentials`: the outbound credential mode (`passthrough` is refused).
   - `agents.<name>.upstream_credential`: the leased credential busbar presents on the hop (a
     secret-store handle and its lease policy).
-  - `agents.<name>.egress_scopes`: judged for shape, read by nothing.
+  - `agents.<name>.egress_scopes`: refused (nothing in this build enforces it).
   - `agents.<name>.hooks`: hooks attached to this agent, added to `agents.hooks`.
   - `agents.hooks`, `agents.upstream_credentials`: the all-agents hooks and credential default.
 - `pools:` (the top-level failover pools whose members are `agents:` registrations): handed to the

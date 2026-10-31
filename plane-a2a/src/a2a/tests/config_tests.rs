@@ -467,7 +467,7 @@ fn the_admin_write_path_refuses_mutual_tls_without_a_client_identity_too() {
 
 /// The LEASE is a field rather than an adjective, so a lease that could never be presented is
 /// refused where the operator wrote it: a zero `lease_ttl_ms` is refused at parse, naming the key,
-/// and a positive one parses field for field beside the `egress_scopes` it was written with.
+/// and a positive one parses field for field.
 /// Ported from busbar-a2a a2a/tests/config_tests.rs::a_zero_lease_ttl_is_refused_at_parse.
 #[test]
 fn a_zero_lease_ttl_is_refused_at_parse() {
@@ -485,8 +485,7 @@ fn a_zero_lease_ttl_is_refused_at_parse() {
         "planner": {
             "url": "https://x/",
             "pin": {"mechanism": "unpinned"},
-            "upstream_credential": {"secret": {"env": "VENDOR_TOKEN"}, "lease_ttl_ms": 60000},
-            "egress_scopes": ["orchestrator"]
+            "upstream_credential": {"secret": {"env": "VENDOR_TOKEN"}, "lease_ttl_ms": 60000}
         }
     }))
     .expect("a positive TTL is legal");
@@ -494,7 +493,6 @@ fn a_zero_lease_ttl_is_refused_at_parse() {
     let cred = def.upstream_credential.as_ref().expect("the handle");
     assert_eq!(cred.lease_ttl_ms, 60_000);
     assert_eq!(cred.secret, sugar("env", "VENDOR_TOKEN"));
-    assert_eq!(def.egress_scopes, vec!["orchestrator".to_string()]);
 }
 
 /// An empty egress scope grants nothing and READS as though it grants something, so a blank name
