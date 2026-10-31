@@ -640,3 +640,23 @@ fn p_item_refusal_reason_collapse_only_a_node_fault_is_internal_and_one_class_on
         kernel_refusal(500, words)
     );
 }
+
+/// G2-8: `-32004` is the catch-all code of many kernel and plane refusals (a rate limit, a
+/// not-serving agent, a refused grant); its AIP-193 status follows the HTTP status it is answered
+/// at, never contradicting it. At 400 or 501 it is still `UNIMPLEMENTED`.
+#[test]
+fn the_catch_all_code_takes_its_status_name_from_the_http_status() {
+    let at = |status: u32| {
+        aip193(
+            status,
+            &serde_json::json!({ "code": -32004, "message": "m" }),
+        )["error"]["status"]
+            .clone()
+    };
+    assert_eq!(at(429), "RESOURCE_EXHAUSTED");
+    assert_eq!(at(503), "UNAVAILABLE");
+    assert_eq!(at(401), "UNAUTHENTICATED");
+    assert_eq!(at(403), "PERMISSION_DENIED");
+    assert_eq!(at(400), "UNIMPLEMENTED");
+    assert_eq!(at(501), "UNIMPLEMENTED");
+}
