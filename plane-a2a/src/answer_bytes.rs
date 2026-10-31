@@ -102,9 +102,11 @@ fn last<'m>(members: &'m [ObjectMember], key: &str) -> Option<&'m ObjectMember> 
 /// then spelled `0` (the reading never decides on a number's value; the caller's bytes keep it).
 #[must_use]
 pub fn readable(b: &[u8]) -> Cow<'_, [u8]> {
+    // Built in ONE pass: the run since the last replacement, then `0` (a far end's answer is
+    // untrusted, so no per-number shift of the whole tail).
     let mut out: Option<Vec<u8>> = None;
+    let mut copied = 0;
     let mut i = 0;
-    let mut shift = 0isize;
     while i < b.len() {
         match b[i] {
             b'"' => i = value_at(b, i).map_or(b.len(), |v| v.end),
@@ -115,17 +117,20 @@ pub fn readable(b: &[u8]) -> Cow<'_, [u8]> {
                     .and_then(|t| t.parse::<f64>().ok())
                     .is_some_and(f64::is_infinite);
                 if past {
-                    let o = out.get_or_insert_with(|| b.to_vec());
-                    let at = (i as isize + shift) as usize;
-                    o.splice(at..at + (end - i), *b"0");
-                    shift += 1 - (end - i) as isize;
+                    let o = out.get_or_insert_with(|| Vec::with_capacity(b.len()));
+                    o.extend_from_slice(&b[copied..i]);
+                    o.push(b'0');
+                    copied = end;
                 }
                 i = end;
             }
             _ => i += 1,
         }
     }
-    out.map_or(Cow::Borrowed(b), Cow::Owned)
+    out.map_or(Cow::Borrowed(b), |mut o| {
+        o.extend_from_slice(&b[copied..]);
+        Cow::Owned(o)
+    })
 }
 
 /// The span of `result` in the JSON-RPC envelope `envelope` (its last `result` member).
