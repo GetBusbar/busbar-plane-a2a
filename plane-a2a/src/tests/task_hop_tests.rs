@@ -1599,11 +1599,17 @@ fn an_inline_callback_on_a_fresh_task_is_its_push_config_record() {
         .unwrap()
         .expect("the push config record");
     assert_eq!(cfg.url, "https://hook.example/cb");
-    assert!(cfg.authentication.is_some(), "the credential is in the record");
+    assert!(
+        cfg.authentication.is_some(),
+        "the credential is in the record"
+    );
     let held = get(&mut desk.book, ALICE, &task.task_id, 300)
         .unwrap()
         .unwrap();
-    assert_eq!(held.row.push_callback, "", "the record, not the row, holds it");
+    assert_eq!(
+        held.row.push_callback, "",
+        "the record, not the row, holds it"
+    );
 
     let mut desk = interrupted();
     let envelope = send(json!({
