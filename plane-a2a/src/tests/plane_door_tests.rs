@@ -1011,3 +1011,35 @@ fn the_tombstones_of_a_changing_split_record_stay_bounded() {
         "{last_tombstones} tombstones for a key whose previous value had {previous_parts} parts"
     );
 }
+
+/// G1-25: AN APPROVAL MADE BETWEEN A REFRESH AND ITS PUBLICATION IS KEPT: the trust reset the
+/// publication makes keeps every kept registration's approval as it stands then, not as it stood
+/// when the refresh was judged.
+#[test]
+fn an_approval_made_while_a_refresh_publishes_is_kept() {
+    let section =
+        br#"{"planner": {"url": "https://planner.example/a2a", "pin": {"mechanism": "unpinned"}}}"#;
+    let plane = A2aDoor::default();
+    let cfg = agents_section(section).expect("the section reads");
+    let spec = statement::agents_snapshot_spec(None, &["planner"]);
+    let _ = plane.generations.publish_with(1, &spec, cfg);
+    PlaneLife::published(&plane, 1);
+    PlaneLife::refresh(&plane, section, 2).expect("the apply is judged");
+    let approved: std::collections::BTreeMap<String, String> =
+        [("plan".to_string(), "sha256:x".to_string())].into();
+    plane.trust.insert(
+        "planner".to_string(),
+        crate::card_trust::TrustStanding {
+            approved: Some(approved.clone()),
+            ..Default::default()
+        },
+    );
+    PlaneLife::published(&plane, 2);
+    assert_eq!(
+        plane
+            .trust
+            .get(&"planner".to_string())
+            .and_then(|s| s.approved),
+        Some(approved)
+    );
+}
