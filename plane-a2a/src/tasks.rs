@@ -56,6 +56,11 @@ const TRIES: usize = 3;
 /// sweep that may retire this many keeps the settled tasks bounded under any mix of submits, the
 /// rest waiting for the next submit's.
 pub const SWEEP_BUDGET: usize = 32;
+/// The most artifact chunks one task's chain records ([`bump_cursor`]): past it the chunks are
+/// still relayed, but neither counted nor chained, so a far end that streams without end cannot
+/// grow a task's provenance chain (and the restore's read of it) without bound. The task_hop says
+/// so when it is reached.
+pub const MAX_ARTIFACT_EVENTS: u64 = 1024;
 /// How long a sweep that left nothing behind holds off the next one, in seconds: the sweep reads
 /// every caller's task rows, so it is not paid on every submit.
 pub const SWEEP_INTERVAL_SECS: u64 = 30;
@@ -565,7 +570,7 @@ pub fn transition(
 
 /// ADVANCE the artifact cursor by one chunk, with a `task.artifact` event, per
 /// relayed artifact event, counted on from where the task left off (a resumed stream does not count
-/// from zero).
+/// from zero). `None` (nothing written) once the cursor holds [`MAX_ARTIFACT_EVENTS`].
 ///
 /// # Errors
 /// As [`change`].
@@ -576,6 +581,9 @@ pub fn bump_cursor(
     out: &mut Vec<Write>,
 ) -> Result<Option<TaskRow>, Halt> {
     let mut plan = |row: &TaskRow| -> Planned {
+        if row.artifact_cursor >= MAX_ARTIFACT_EVENTS {
+            return Ok(None);
+        }
         let mut next = row.clone();
         next.artifact_cursor = row.artifact_cursor.saturating_add(1);
         next.updated_at = at.now;

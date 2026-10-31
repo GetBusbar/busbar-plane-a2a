@@ -676,6 +676,27 @@ impl WriteRefused {
     }
 }
 
+/// A task's artifact chunks reached [`tasks::MAX_ARTIFACT_EVENTS`]: said at WARN by the chunk that
+/// reaches it (once per task), and at debug for each chunk past it, naming the task.
+fn capped(task: &str, reached: bool) {
+    if reached {
+        busbar_contract::diag_warn!(
+            crate::diagnostics::A2A_RELAYED_OUTCOME_UNRECORDED,
+            task = %task,
+            cap = tasks::MAX_ARTIFACT_EVENTS,
+            "a2a: a streamed task reached the per-task artifact cap; its further artifact chunks \
+             are relayed but no longer counted on its resume cursor or chained as provenance"
+        );
+    } else {
+        busbar_contract::diag_debug!(
+            crate::diagnostics::A2A_RELAYED_OUTCOME_UNRECORDED,
+            task = %task,
+            cap = tasks::MAX_ARTIFACT_EVENTS,
+            "a2a: an artifact chunk past the per-task cap is relayed, not chained"
+        );
+    }
+}
+
 /// SETTLE `task` on what its answer said; the record writes go to `out`. A write the store refuses
 /// is not the caller's failure: the answer stands. A relayed event settles as it passes: the state
 /// it reported, then the artifact it carried (the resume cursor, one chunk on), each chained over
@@ -748,7 +769,15 @@ pub fn settle_on_answer(
         match bumped {
             Err(Halt::Pending) => return Err(Halt::Pending),
             Err(Halt::Failed(words)) => WriteRefused::Cursor.report(latches, &task.task_id, &words),
-            Ok(_) => out.extend(step),
+            // THE CAP: past it the chunk is relayed, but no longer counted or chained; the chunk
+            // that reaches it says so.
+            Ok(None) => capped(&task.task_id, false),
+            Ok(Some(row)) => {
+                out.extend(step);
+                if row.artifact_cursor == tasks::MAX_ARTIFACT_EVENTS {
+                    capped(&task.task_id, true);
+                }
+            }
         }
     }
     Ok(moved)
