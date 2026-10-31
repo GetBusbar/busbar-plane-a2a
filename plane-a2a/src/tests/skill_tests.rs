@@ -70,18 +70,18 @@ fn an_unfit_request_is_refused_403_in_the_engines_exclusion_words() {
     assert_eq!(
         refused.envelope(),
         json!({ "jsonrpc": "2.0", "id": null, "error": {
-            "code": -32004, "message": "SkillNotDeclared(\"fly\")",
+            "code": -32004, "message": "this agent's card declares no skill `fly`",
             "data": [{ "@type": "type.googleapis.com/google.rpc.ErrorInfo",
                 "domain": "a2a-protocol.org", "reason": "UNSUPPORTED_OPERATION" }] } })
     );
     assert_eq!(refused.status, 403);
     assert_eq!(
         refusal(&Unfit::CapabilityNotDeclared("streaming")).message,
-        "CapabilityNotDeclared(\"streaming\")"
+        "this agent's card does not declare the `streaming` capability this request needs"
     );
     assert_eq!(
         refusal(&Unfit::Unreadable(Unreadable::NotAnObject)).message,
-        "Unreadable(NotAnObject)"
+        "this agent's held card cannot be read: it is not a JSON object"
     );
 }
 
@@ -111,7 +111,11 @@ fn the_shape_reads_every_spelling_of_a_stream_and_a_push_callback() {
 
 #[test]
 fn an_agent_with_no_held_card_is_refused_by_the_catalogue_s_name() {
-    assert_eq!(refusal(&Unfit::NoCachedCard).message, "NoCachedCard");
+    assert_eq!(
+        refusal(&Unfit::NoCachedCard).message,
+        "busbar holds no card for this agent yet, so the request cannot be judged against what \
+         the agent declares"
+    );
     assert_eq!(refusal(&Unfit::NoCachedCard).status, 403);
 }
 

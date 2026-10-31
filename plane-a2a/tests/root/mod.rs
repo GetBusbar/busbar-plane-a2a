@@ -3194,7 +3194,7 @@ async fn every_hop_of_a_legal_chain_is_followed_to_the_card() {
 /// then its card's fit. A request naming a skill the card does not declare is refused as
 /// not-serving (`403`, the kernel's trust refusal) while the agent is unapproved, and by the
 /// catalogue (`403`,
-/// `SkillNotDeclared("fly")`) once it is approved — never dialled either way.
+/// "this agent's card declares no skill `fly`") once it is approved — never dialled either way.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_request_the_card_does_not_fit_is_judged_after_the_trust_gate() {
     let _one = PUBLISHING.lock().await;
@@ -3215,7 +3215,7 @@ async fn a_request_the_card_does_not_fit_is_judged_after_the_trust_gate() {
     let doc: serde_json::Value = serde_json::from_str(&body).expect("an envelope");
     assert_eq!(doc["error"]["code"], -32004, "{body}");
     assert_eq!(
-        doc["error"]["message"], "SkillNotDeclared(\"fly\")",
+        doc["error"]["message"], "this agent's card declares no skill `fly`",
         "{body}"
     );
     assert_eq!(doc["id"], serde_json::Value::Null, "{body}");

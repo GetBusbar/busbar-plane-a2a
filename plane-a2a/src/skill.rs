@@ -78,8 +78,7 @@ impl TaskShape {
     }
 }
 
-/// Why a card does not fit a shape. The arms' `Debug` rendering is the words its catalogue
-/// refusal carries.
+/// Why a card does not fit a shape; [`Unfit::words`] is the sentence its refusal carries.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Unfit {
     /// The card declares no skill with the requested id.
@@ -92,6 +91,31 @@ pub enum Unfit {
     Unreadable(Unreadable),
     /// No card is held for the agent: nothing to judge the request's shape against.
     NoCachedCard,
+}
+
+impl Unfit {
+    /// The caller's sentence for this exclusion (a skill id is the caller's own word, bounded).
+    #[must_use]
+    pub fn words(&self) -> String {
+        match self {
+            Unfit::SkillNotDeclared(skill) => format!(
+                "this agent's card declares no skill `{}`",
+                crate::binding::bounded_word(skill)
+            ),
+            Unfit::CapabilityNotDeclared(capability) => format!(
+                "this agent's card does not declare the `{capability}` capability this request needs"
+            ),
+            Unfit::ModesIncompatible => "this agent's card produces none of the output modes \
+                                         this request accepts in `acceptedOutputModes`"
+                .to_string(),
+            Unfit::Unreadable(Unreadable::NotAnObject) => {
+                "this agent's held card cannot be read: it is not a JSON object".to_string()
+            }
+            Unfit::NoCachedCard => "busbar holds no card for this agent yet, so the request \
+                                    cannot be judged against what the agent declares"
+                .to_string(),
+        }
+    }
 }
 
 /// Why a held card cannot be read.
@@ -115,14 +139,14 @@ pub fn fit(card: &Value, shape: &TaskShape) -> Result<Option<String>, Unfit> {
 pub const STATUS_UNFIT: u32 = 403;
 
 /// The refusal of a request an agent's held card does not fit:
-/// `403`, `-32004`, no id, the exclusion's own name as the message.
+/// `403`, `-32004`, no id, the exclusion's sentence ([`Unfit::words`]) as the message.
 #[must_use]
 pub fn refusal(unfit: &Unfit) -> crate::agent_arrival::AgentRefusal {
     crate::agent_arrival::AgentRefusal::new(
         STATUS_UNFIT,
         None,
         crate::agent_arrival::CODE_UNSUPPORTED_OPERATION,
-        format!("{unfit:?}"),
+        unfit.words(),
     )
 }
 
