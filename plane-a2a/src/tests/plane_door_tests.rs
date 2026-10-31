@@ -870,3 +870,26 @@ fn an_addressed_extended_card_read_is_relayed_as_a_task_less_hop() {
 fn the_statement_names_the_crates_version() {
     assert_eq!(VERSION, env!("CARGO_PKG_VERSION"));
 }
+
+/// G1-1: A CONFIG APPLY THAT KEEPS A REGISTRATION KEEPS ITS CARD AT EVERY LIVE GENERATION: the
+/// refresh holds it under the next generation too, and a unit that arrived under the generation
+/// before still reads it there (its ATTEMPT is admitted on `cards.at(member, unit.generation)`).
+#[test]
+fn a_refresh_that_keeps_a_registration_keeps_its_card_under_the_live_generation_too() {
+    let section = br#"{"planner": {"url": "https://planner.example/a2a", "pin": {"mechanism": "unpinned"}}}"#;
+    let plane = A2aDoor::default();
+    let cfg = agents_section(section).expect("the section reads");
+    let spec = statement::agents_snapshot_spec(None, &["planner"]);
+    let _ = plane.generations.publish_with(1, &spec, cfg);
+    PlaneLife::published(&plane, 1);
+    plane.cards.hold("planner", 1, json!({ "name": "planner" }));
+    PlaneLife::refresh(&plane, section, 2).expect("the apply is judged");
+    assert!(
+        plane.cards.at("planner", 2).is_some(),
+        "the kept registration's card is held under the new generation"
+    );
+    assert!(
+        plane.cards.at("planner", 1).is_some(),
+        "a unit still on generation 1 reads its card there"
+    );
+}
