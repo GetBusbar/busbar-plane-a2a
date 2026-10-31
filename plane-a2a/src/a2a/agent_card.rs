@@ -171,5 +171,5 @@ pub fn parse(card: &Value) -> Option<AgentCard> {
     if !card.is_object() {
         return None;
     }
-    serde_json::from_value(card.clone()).ok()
+    AgentCard::deserialize(card).ok()
 }
