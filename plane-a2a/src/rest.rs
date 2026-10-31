@@ -222,6 +222,17 @@ pub fn json_body(body: &[u8]) -> Value {
     serde_json::from_slice(body).unwrap_or_else(|_| json!({}))
 }
 
+/// `body` less its `members`: the path names the task, so the body's spellings of it go.
+fn without(body: &Value, members: &[&str]) -> Value {
+    let mut body = body.clone();
+    if let Some(obj) = body.as_object_mut() {
+        for m in members {
+            obj.remove(*m);
+        }
+    }
+    body
+}
+
 /// The refusal for a `POST /tasks/…` that names no verb this binding defines: `404` +
 /// `MethodNotFound`.
 #[must_use]
@@ -352,14 +363,18 @@ pub fn compose_from(
         } else {
             json!({})
         };
+        // The path names the task alone: the body's other spellings of it are dropped.
+        let posted = without(&posted, &crate::task_identity::TASK_ID_MEMBERS);
         (
             name,
             Params::new().merge(&posted).set("id", id).into_value(),
         )
     } else if at("POST", crate::ROUTE_PUSH_CONFIGS) {
         // THE PATH WINS: merged first, `taskId` set after, so a posted member cannot re-point it.
+        // The path names the task alone: the body's other spelling of it is dropped (`id` here
+        // is the config's).
         let params = Params::new()
-            .merge(&json_body(body))
+            .merge(&without(&json_body(body), &["task_id"]))
             .set("taskId", var("id"));
         (method::CREATE_PUSH_CONFIG, params.into_value())
     } else if at("GET", crate::ROUTE_PUSH_CONFIGS) {

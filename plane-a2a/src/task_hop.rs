@@ -65,6 +65,10 @@ use crate::agent_arrival::{
 const STATUS_BAD_REQUEST: u32 = 400;
 /// The plane's words for a task verb whose `params` name no task id as a string.
 pub const TASK_UNNAMED: &str = "a task verb must name its task: `params.id` is required, a string";
+/// The plane's words for a request naming its task under more than one id.
+pub const TASK_NAMED_TWICE: &str =
+    "a request names one task: its task id members (`id`, `taskId`, `task_id`, the message's \
+     `taskId`) must not name different tasks";
 /// The status a task that cannot be recorded answers with.
 const STATUS_UNAVAILABLE: u32 = 503;
 /// The status an interrupted task that cannot resume answers with.
@@ -250,6 +254,17 @@ pub fn open(
             ))
         }
     };
+    // ONE TASK PER REQUEST: aliases of the task member (`id`, `taskId`, `task_id`, the message's)
+    // naming different ids are refused, never opened on the first while the rest go on unchecked.
+    let named = task_identity::translatable(req.envelope);
+    if named.iter().any(|id| *id != named[0]) {
+        return Ok(refused(
+            STATUS_BAD_REQUEST,
+            rpc_id,
+            CODE_INVALID_PARAMS,
+            TASK_NAMED_TWICE,
+        ));
+    }
     let url = callback.as_ref().map(|c| c.url.as_str());
     // The version the callback is registered under: the one the request's method is spelled in.
     let version = local::Dialect::of_method(
