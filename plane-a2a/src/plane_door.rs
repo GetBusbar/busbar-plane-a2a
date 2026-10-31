@@ -177,8 +177,8 @@ impl AgentUnit {
 pub struct Hop {
     relay: HopRelay,
     outbox: Outbox,
-    /// A task hop's request, until its first ATTEMPT opens the task.
-    opening: Option<serde_json::Value>,
+    /// A task hop whose first ATTEMPT has not yet opened its task (from [`Hop::request`]).
+    opening: bool,
     /// The caller's request envelope: what a binding other than JSON-RPC composes from.
     request: Option<serde_json::Value>,
     /// What the far end's answer has said about the task, until its record writes are made.
@@ -271,7 +271,7 @@ impl Hop {
     #[must_use]
     pub fn task(id: serde_json::Value, version: &'static str, envelope: serde_json::Value) -> Self {
         Hop {
-            opening: Some(envelope.clone()),
+            opening: true,
             request: Some(envelope),
             ..Hop::new(id, version)
         }
@@ -1745,7 +1745,7 @@ fn open_task(
     writes: &mut Vec<Write>,
 ) -> Result<Option<relay::RelayReply>, Outcome> {
     let (caller, member, addressed) = request;
-    let Some(envelope) = hop.opening.as_ref() else {
+    let Some(envelope) = hop.request.as_ref().filter(|_| hop.opening) else {
         return Ok(None);
     };
     let now = match hop.now {
@@ -1767,11 +1767,10 @@ fn open_task(
             hop.relay.send_instead(bytes.clone());
             hop.relayed_bytes = Some(bytes);
         }
-        hop.request = Some(minted.clone());
-        hop.opening = Some(minted);
+        hop.request = Some(minted);
         hop.mint_message_id = false;
     }
-    let Some(envelope) = hop.opening.as_ref() else {
+    let Some(envelope) = hop.request.as_ref() else {
         return Ok(None);
     };
     // A subscribe answers busbar's own refusal first, for a task it does not hold for this caller
@@ -1792,7 +1791,7 @@ fn open_task(
         };
         if let Some(answer) = refused {
             pass.issued = via.issued();
-            hop.opening = None;
+            hop.opening = false;
             hop.now = None;
             return Ok(Some(relay::RelayReply {
                 status: answer.status,
@@ -1817,7 +1816,7 @@ fn open_task(
         Ok(opened) => opened,
     };
     pass.issued = via.issued();
-    hop.opening = None;
+    hop.opening = false;
     hop.now = None;
     match opened {
         Opened::Refused(reply) => {

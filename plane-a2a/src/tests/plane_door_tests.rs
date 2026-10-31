@@ -88,7 +88,7 @@ fn envelope(method: &str) -> Value {
 fn a_request_whose_answer_is_events_gets_an_events_hop() {
     for method in ["message/stream", "tasks/resubscribe"] {
         let hop = hop_of(&request(method), false, &mut Some(envelope(method))).expect(method);
-        assert!(hop.opening.is_some(), "{method}: about a task");
+        assert!(hop.opening, "{method}: about a task");
         assert_eq!(hop.subscribe, method == "tasks/resubscribe", "{method}");
     }
     let unlisted = AgentDisposition::Unlisted {
@@ -104,7 +104,7 @@ fn a_request_whose_answer_is_events_gets_an_events_hop() {
         false,
         &mut Some(envelope("message/send")),
     );
-    assert!(unary.is_some_and(|h| !h.subscribe && h.opening.is_some()));
+    assert!(unary.is_some_and(|h| !h.subscribe && h.opening));
     assert!(hop_of(
         &request("tasks/list"),
         false,
@@ -838,7 +838,7 @@ fn an_addressed_extended_card_read_is_relayed_as_a_task_less_hop() {
         "the plane's own endpoint answers it locally"
     );
     let mut hop = hop_of(&asked, true, &mut Some(envelope.clone())).expect("a hop to the agent");
-    assert!(hop.opening.is_none(), "a card read opens no task");
+    assert!(!hop.opening, "a card read opens no task");
     hop.relay.bind(crate::binding::Binding::JsonRpc, &envelope);
     let PieceAnswer::Attempt(attempt) = hop.relay.on_piece(relay::Piece {
         from: relay::From::Kernel(Some("https://backend.agent.test/a2a")),
