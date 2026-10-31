@@ -2177,6 +2177,42 @@ enum Gate {
     Pending,
 }
 
+/// THE ADMISSION GATE of an ATTEMPT's first entry (`first`) for `member` and its registration in
+/// the unit's generation (`def`): the caller's standing, then the agent's admission; the refusal
+/// that is the caller's answer, or `None` when the hop goes on.
+fn admission(
+    reach: &Reach<'_>,
+    (pass, hop): (&mut crate::task_door::Pass, &mut Hop),
+    (member, def): (&str, Option<&crate::a2a::config::AgentDefCfg>),
+    addressed: Option<&str>,
+    generation: u64,
+    first: bool,
+) -> Option<relay::RelayReply> {
+    match (def, first) {
+        (Some(def), true) => {
+            let admitted = match caller_stands(reach, pass, member, addressed) {
+                Some(refusal) => Err(refusal),
+                None => admit_unit(
+                    reach.plane,
+                    (member, def),
+                    addressed,
+                    generation,
+                    hop.request.as_ref(),
+                ),
+            };
+            match admitted {
+                Ok(skill) => {
+                    hop.admitted = true;
+                    hop.skill = skill;
+                    None
+                }
+                Err(refusal) => Some(relay::RelayReply::refused(&refusal, None)),
+            }
+        }
+        _ => None,
+    }
+}
+
 /// The pool's member for this attempt (over the kernel's one walk, which offers the members
 /// primary first):
 ///
@@ -2506,29 +2542,15 @@ fn hop_piece(
         // THE ADMISSION GATE (the engine's ordered gate, its artifact step), on the ATTEMPT's first
         // entry: an agent whose recorded state is not `approved` is refused before anything else
         // the hop does, in the admission's words.
-        let admission = match (&def, attempt && !hop.admitted) {
-            (Some(def), true) => {
-                let admitted = match caller_stands(reach, pass, member, addressed.as_deref()) {
-                    Some(refusal) => Err(refusal),
-                    None => admit_unit(
-                        reach.plane,
-                        (member, def),
-                        addressed.as_deref(),
-                        unit.generation,
-                        hop.request.as_ref(),
-                    ),
-                };
-                match admitted {
-                    Ok(skill) => {
-                        hop.admitted = true;
-                        hop.skill = skill;
-                        None
-                    }
-                    Err(refusal) => Some(relay::RelayReply::refused(&refusal, None)),
-                }
-            }
-            _ => None,
-        };
+        let first = attempt && !hop.admitted;
+        let admission = admission(
+            reach,
+            (pass, hop),
+            (member, def.as_ref()),
+            addressed.as_deref(),
+            generation,
+            first,
+        );
         let opened = if let Some(reply) = pool_refusal.or(admission) {
             Some(reply)
         } else if attempt {
