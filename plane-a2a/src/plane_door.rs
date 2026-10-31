@@ -2157,10 +2157,23 @@ fn pool_gate(
     if hop.left {
         return Gate::Decline;
     }
-    let holder = match read_holder(reach, hop, pass, gate.caller, gate.members) {
-        Poll::Pending => return Gate::Pending,
-        Poll::Ready(holder) => holder,
-    };
+    let holder =
+        match read_holder(reach, hop, pass, gate.caller, gate.members) {
+            Poll::Pending => return Gate::Pending,
+            Poll::Ready(Ok(holder)) => holder,
+            // FAIL CLOSED: a request about a task whose holder could not be read is not sent to a
+            // member that may not hold it.
+            Poll::Ready(Err(())) => return Gate::Refuse(relay::RelayReply::refused(
+                &agent_arrival::AgentRefusal::new(
+                    agent_arrival::STATUS_UNAVAILABLE,
+                    Some(hop.relay.id().clone()).filter(|id| !id.is_null()),
+                    agent_arrival::CODE_INTERNAL,
+                    "busbar could not read which pool member holds this task; nothing was sent. \
+                     Retry the request",
+                ),
+                None,
+            )),
+        };
     // A member other than the one addressed; for an unaddressed unit, every member: each is judged
     // on the caller's own grant.
     let elsewhere = gate.addressed != Some(gate.member);
@@ -2211,31 +2224,35 @@ fn pool_gate(
 }
 
 /// The member holding the task a pooled unit's request is about ([`task_hop::holder`]), read once
-/// per unit and kept on its hop; `None` for a fresh submission, and where there is nothing to read
-/// it with.
+/// per unit and kept on its hop; `None` for a fresh submission, and for a unit with no request to
+/// read. `Err` when the request names a task (or a context to resume) and the read failed, or
+/// there was no clock or store to read it with: never kept, never read as a fresh submission.
 fn read_holder(
     reach: &Reach<'_>,
     hop: &mut Hop,
     pass: &mut crate::task_door::Pass,
     caller: &str,
     members: &[String],
-) -> Poll<Option<String>> {
+) -> Poll<Result<Option<String>, ()>> {
     if let Some(holder) = hop.holder.clone() {
-        return Poll::Ready(holder);
+        return Poll::Ready(Ok(holder));
     }
-    let (Some(envelope), Some(now), Some(mut via)) =
-        (hop.request.as_ref(), reach.now(), reach.via(pass.issued))
-    else {
-        return Poll::Ready(None);
+    let Some(envelope) = hop.request.as_ref() else {
+        return Poll::Ready(Ok(None));
+    };
+    let (Some(now), Some(mut via)) = (reach.now(), reach.via(pass.issued)) else {
+        let fresh = crate::task_identity::translatable(envelope).is_empty()
+            && crate::task_identity::context_of(envelope).is_empty();
+        return Poll::Ready(if fresh { Ok(None) } else { Err(()) });
     };
     let holder = match task_hop::holder(&mut via, envelope, caller, now, members) {
         Err(Halt::Pending) => return Poll::Pending,
-        Err(Halt::Failed(_)) => None,
+        Err(Halt::Failed(_)) => return Poll::Ready(Err(())),
         Ok(holder) => holder,
     };
     pass.issued = via.issued();
     hop.holder = Some(holder.clone());
-    Poll::Ready(holder)
+    Poll::Ready(Ok(holder))
 }
 
 /// `entitlement.check` of the unit's caller for `target` (an agent's scope, or the principal's

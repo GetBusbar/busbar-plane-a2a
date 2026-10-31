@@ -196,8 +196,10 @@ pub fn holder(
     now: u64,
     members: &[String],
 ) -> Result<Option<String>, Halt> {
+    // A READ THE STORE FAILED IS NOT "NOT HELD": read as a fresh submission, the request would go
+    // to the walk's first member, migrating the task; the failure is the caller's answer.
     for named in task_identity::translatable(envelope) {
-        if let Some(held) = or_absent(tasks::get(reach, caller, named, now), None)? {
+        if let Some(held) = tasks::get(reach, caller, named, now)? {
             return Ok(Some(held.row.agent_id));
         }
     }
@@ -205,7 +207,7 @@ pub fn holder(
     if context.is_empty() {
         return Ok(None);
     }
-    let mut candidates: Vec<TaskRow> = or_absent(tasks::list(reach, caller, now), Vec::new())?
+    let mut candidates: Vec<TaskRow> = tasks::list(reach, caller, now)?
         .into_iter()
         .filter(|r| {
             r.context_id == context
