@@ -361,3 +361,39 @@ fn the_extended_card_is_served_over_grpc_at_the_path_the_proto_defines() {
         "the extended card shows nothing else over gRPC"
     );
 }
+
+/// G2-31: a piece of many small events (the far end decides how many land in one piece) is read
+/// in time linear in its size, its messages in order: each frame is found from where the last one
+/// ended, with no copy of the remainder per frame.
+#[test]
+fn a_piece_of_many_small_events_is_read_in_one_pass() {
+    let working = |id: &str| {
+        format!(
+            "data: {}\n\n",
+            serde_json::json!({ "jsonrpc": "2.0", "id": 1, "result": { "task": { "id": id,
+                "contextId": "c", "status": { "state": "TASK_STATE_WORKING" } } } })
+        )
+    };
+    let three = [working("t-1"), working("t-2"), working("t-3")].concat();
+    let (messages, end) = event_messages(Rpc::SendStreamingMessage, three.as_bytes());
+    assert!(end.is_none());
+    let ids: Vec<String> = messages
+        .iter()
+        .map(|m| {
+            let r = pb::StreamResponse::decode(m.as_slice()).unwrap();
+            match r.payload {
+                Some(pb::stream_response::Payload::Task(t)) => t.id,
+                other => panic!("{other:?}"),
+            }
+        })
+        .collect();
+    assert_eq!(ids, ["t-1", "t-2", "t-3"]);
+
+    // 256 KiB of keep-alive-sized frames: ~26k frames.
+    let piece = "data: {}\n\n".repeat(26_000);
+    let started = std::time::Instant::now();
+    let (messages, end) = event_messages(Rpc::SendStreamingMessage, piece.as_bytes());
+    let took = started.elapsed();
+    assert!(messages.is_empty() && end.is_none());
+    assert!(took < std::time::Duration::from_secs(2), "took {took:?}");
+}
