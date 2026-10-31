@@ -641,8 +641,10 @@ fn get_push_config(
         return Ok(err(rpc_id, TASK_NOT_FOUND, NO_SUCH_TASK));
     };
     let wanted = config_id_wanted(dialect, params);
+    // v0.3 names the config optionally (`pushNotificationConfigId?`): without it, the task's one.
+    let any = dialect == Dialect::V03 && params.get("pushNotificationConfigId").is_none();
     Ok(
-        match held_config(rec, caller, &task.task_id)?.filter(|c| c.id == wanted) {
+        match held_config(rec, caller, &task.task_id)?.filter(|c| any || c.id == wanted) {
             Some(cfg) => ok(rpc_id, config_json(dialect, &task.task_id, &cfg)),
             None => err(
                 rpc_id,
