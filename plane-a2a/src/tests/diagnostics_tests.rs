@@ -660,8 +660,13 @@ fn the_catalogue_is_the_codes_the_plane_names() {
             } else if path.extension().is_some_and(|e| e == "rs")
                 && path.file_name().is_some_and(|n| n != "diagnostics.rs")
             {
-                out.push_str(&std::fs::read_to_string(&path).expect("a source file reads"));
-                out.push('\n');
+                // CODE, NOT COMMENTS: a doc or line comment naming a code is not a raise of it, so
+                // everything from `//` on is dropped before the names are looked for.
+                let text = std::fs::read_to_string(&path).expect("a source file reads");
+                for line in text.lines() {
+                    out.push_str(line.split("//").next().unwrap_or_default());
+                    out.push('\n');
+                }
             }
         }
     }
