@@ -209,3 +209,28 @@ fn the_target_lines_event_is_the_results_own_bytes() {
         "data: {\"z\":1,\"a\":123456789012345678901234567890,\"big\":1e400}\n\nid: 4\ndata: {\"z\":1,\ndata: \"a\":2}\n\n"
     );
 }
+
+/// G2-21: a task SNAPSHOT is not an artifact chunk, whatever `artifacts` it carries (an empty
+/// list, or a final snapshot repeating what was streamed): only an artifact update counts.
+#[test]
+fn a_task_snapshot_with_artifacts_relays_no_artifact_chunk() {
+    for result in [
+        json!({ "task": { "id": "far-1", "status": { "state": "TASK_STATE_WORKING" }, "artifacts": [] } }),
+        json!({ "id": "far-1", "kind": "task", "status": { "state": "completed" },
+            "artifacts": [{ "artifactId": "a", "parts": [] }] }),
+    ] {
+        let ev = read_event(&frame_of(result.clone()), &json!(11), "t", "c", None, &[]).unwrap();
+        assert!(!ev.artifact, "{result}");
+    }
+    let bare = read_event(
+        &frame_of(json!({ "kind": "artifact-update", "taskId": "far-1",
+            "artifact": { "artifactId": "a", "parts": [] } })),
+        &json!(11),
+        "t",
+        "c",
+        None,
+        &[],
+    )
+    .unwrap();
+    assert!(bare.artifact);
+}
