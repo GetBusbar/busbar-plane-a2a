@@ -66,14 +66,15 @@ pub fn speakable(word: &str) -> Option<Binding> {
 
 /// THE BINDING A HELD CARD DECLARES, or [`BINDING_JSONRPC`] where none is held or it declares
 /// none: the first `supportedInterfaces` word the plane frames, else the card's first word (which
-/// the hop refuses by name, never sends as JSON-RPC).
+/// the hop refuses by name, never sends as JSON-RPC). A card without `supportedInterfaces` is
+/// read in v0.3's words ([`v03_binding`]).
 #[must_use]
 pub fn binding_of(card: Option<&Value>) -> String {
     let Some(interfaces) = card
         .and_then(|c| c.get("supportedInterfaces"))
         .and_then(Value::as_array)
     else {
-        return BINDING_JSONRPC.to_string();
+        return v03_binding(card);
     };
     let words: Vec<&str> = interfaces
         .iter()
@@ -89,6 +90,35 @@ pub fn binding_of(card: Option<&Value>) -> String {
         .find(|w| speakable(w).is_some())
         .unwrap_or(first)
         .to_string()
+}
+
+/// THE BINDING A v0.3 CARD DECLARES: its `preferredTransport` (the binding of its `url`,
+/// `JSONRPC` when unstated) and its `additionalInterfaces[].transport`. JSON-RPC, the binding
+/// v0.3 makes mandatory, wherever the card names it; else HTTP+JSON where it names that; else
+/// JSON-RPC (v0.3's gRPC service is not the one the plane frames, so it is never chosen here).
+fn v03_binding(card: Option<&Value>) -> String {
+    let Some(card) = card else {
+        return BINDING_JSONRPC.to_string();
+    };
+    let preferred = match card.get("preferredTransport") {
+        None | Some(Value::Null) => Some(BINDING_JSONRPC),
+        Some(word) => word.as_str(),
+    };
+    let words: Vec<Option<Binding>> = preferred
+        .into_iter()
+        .chain(
+            card.get("additionalInterfaces")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|i| i.get("transport").and_then(Value::as_str)),
+        )
+        .map(speakable)
+        .collect();
+    if !words.contains(&Some(Binding::JsonRpc)) && words.contains(&Some(Binding::HttpJson)) {
+        return BINDING_HTTP_JSON.to_string();
+    }
+    BINDING_JSONRPC.to_string()
 }
 
 /// One untrusted word made safe for a caller's error body: at most 48 characters of an
