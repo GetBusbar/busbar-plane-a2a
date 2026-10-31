@@ -345,13 +345,21 @@ pub fn validate_agent(name: &str, def: &AgentDefCfg) -> Result<(), String> {
     // URL with a host, and no userinfo, which is refused without being repeated (a password in a
     // URL is a credential, and a refusal is logged).
     let parsed = busbar_contract::net::parse_url(&def.url);
-    let scheme_ok = (def.url.starts_with("https://") || def.url.starts_with("http://"))
-        && parsed
+    let scheme_ok = def.url.starts_with("https://") || def.url.starts_with("http://");
+    if !scheme_ok
+        || parsed
             .as_ref()
-            .is_ok_and(|p| p.scheme == "https" || p.scheme == "http");
-    if !scheme_ok {
+            .is_ok_and(|p| p.scheme != "https" && p.scheme != "http")
+    {
         return Err(format!(
             "{at}: `url:` must be an http:// or https:// endpoint, got `{}`",
+            without_userinfo(&def.url)
+        ));
+    }
+    // An http(s) URL that does not parse is refused for what is wrong with it, not its scheme.
+    if let Err(why) = parsed.as_ref() {
+        return Err(format!(
+            "{at}: `url:` is malformed ({why}), got `{}`",
             without_userinfo(&def.url)
         ));
     }
