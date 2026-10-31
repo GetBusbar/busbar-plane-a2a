@@ -909,3 +909,59 @@ fn a_push_moves_its_task_only_to_a_new_state_it_reports() {
         Some(TaskState::Completed)
     );
 }
+
+/// A HOST FAULT IS NOT A CREDENTIAL REJECTION (G3-11): a far agent reads `401` as a permanent "no"
+/// and stops pushing for the task, so a store that fails the task read, or a signing service that
+/// cannot sign the claimed task, answers `503` (retryable); a token that does not verify, or a task
+/// not held, still answers `401`.
+#[test]
+fn a_host_fault_on_the_push_route_is_retryable_not_unauthorised() {
+    use crate::push_serve::{held_or_stop, verified_or_stop, Stop};
+    use crate::tasks::Halt;
+    assert!(
+        matches!(
+            held_or_stop::<()>(Err(Halt::Failed("store down".into()))),
+            Err(Stop::Refused(503, _))
+        ),
+        "a store fault on the task read is answered 401"
+    );
+    assert_eq!(
+        held_or_stop::<()>(Ok(None)),
+        Err(Stop::Refused(401, crate::push_serve::UNAUTHORISED)),
+        "a task not held stays 401"
+    );
+    assert!(
+        matches!(verified_or_stop(None, "abc"), Err(Stop::Refused(503, _))),
+        "a signer that could not sign is answered 401"
+    );
+    assert_eq!(
+        verified_or_stop(Some(&[7u8; 32]), "not-the-signature"),
+        Err(Stop::Refused(401, crate::push_serve::UNAUTHORISED)),
+        "a token that does not verify stays 401"
+    );
+}
+
+/// A MOVE THE STORE COULD NOT RECORD IS NOT TAKEN (G3-10): a pushed move whose transition or
+/// delivery read fails at the store answers `503` so the agent retries it; `202` with nothing
+/// written would lose the move and the caller's webhook. A move with nothing to record stays `202`.
+#[test]
+fn a_pushed_move_the_store_could_not_record_is_retryable() {
+    use crate::push_serve::{moved_or_stop, queued_or_stop, Stop};
+    use crate::tasks::Halt;
+    assert!(
+        matches!(
+            moved_or_stop::<()>(Err(Halt::Failed("kept changing".into()))),
+            Err(Stop::Refused(503, _))
+        ),
+        "a transition the store failed is answered 202"
+    );
+    assert_eq!(moved_or_stop::<()>(Ok(None)), Err(Stop::Accepted));
+    assert!(
+        matches!(
+            queued_or_stop(Err(Halt::Failed("store down".into()))),
+            Err(Stop::Refused(503, _))
+        ),
+        "a delivery the store could not read for is dropped behind a 202"
+    );
+    assert_eq!(queued_or_stop(Ok(false)), Ok(()));
+}

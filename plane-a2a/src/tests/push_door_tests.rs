@@ -372,11 +372,11 @@ fn the_callers_own_webhook_credential_is_presented_on_the_delivery() {
     );
 }
 
-/// A name that resolves to nothing at delivery, or a judgement that could not be made, is refused:
-/// nothing was checked, so nothing is allowed.
+/// A name that resolves to nothing at delivery is refused: nothing was checked, so nothing is
+/// allowed.
 #[test]
 fn a_name_that_resolves_to_nothing_at_delivery_time_is_refused() {
-    for script in [Some((DEST_UNRESOLVABLE, &[][..])), None] {
+    for script in [Some((DEST_UNRESOLVABLE, &[][..]))] {
         let d = queued("https://hook.caller.test/notify");
         let mut host = TestHost::answering(vec![script], 200);
         let (end, _) = tick_once(&d, &mut host, 0);
@@ -969,4 +969,30 @@ fn a_deleted_configs_waiting_notifications_are_dropped() {
         d.next_due(0).is_none(),
         "a notification to the deleted config is still attempted"
     );
+}
+
+/// A JUDGE THE HOST COULD NOT ANSWER IS RETRIED, NOT A REFUSAL (G3-5): a transient failure of the
+/// destination judge sends nothing (nothing was checked, so nothing is allowed) but ends the attempt
+/// as a transport error under the three-attempt rule, filed as a failure, never as a `push.refused`
+/// the host never made; the retry's fresh judgement delivers.
+#[test]
+fn a_judge_the_host_could_not_answer_is_retried() {
+    let d = queued("https://hook.caller.test/notify");
+    let mut host = TestHost::answering(
+        vec![None, Some((DEST_ALLOWED, &[AT_REGISTRATION][..]))],
+        200,
+    );
+    let (first, settled) = tick_once(&d, &mut host, 0);
+    assert_eq!(
+        first,
+        Attempted::Transport,
+        "an unanswered judge is no refusal"
+    );
+    assert!(host.sent.is_empty(), "nothing is sent unjudged");
+    let DeliverySettled::Retry(at) = settled else {
+        panic!("an unanswered judge is retried: {settled:?}");
+    };
+    let (second, settled) = tick_once(&d, &mut host, at);
+    assert_eq!(second, Attempted::Delivered);
+    assert_eq!(settled, DeliverySettled::Done(EV_PUSH_DELIVERED));
 }
