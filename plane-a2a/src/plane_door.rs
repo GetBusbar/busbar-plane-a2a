@@ -705,23 +705,44 @@ fn warm_into(
     cards: Vec<(String, Vec<u8>)>,
     approvals: Vec<(String, Vec<u8>)>,
 ) {
+    // THE WARM ONLY FILLS GAPS: a card held for the agent already (a connect or approve that
+    // verified it while the listing was in flight, or a refresh that left a changed registration
+    // card-less beside its older generation's) is fresher than the stored record.
     for (agent, value) in cards {
-        if let Ok(card) = serde_json::from_slice::<serde_json::Value>(&value) {
-            plane.cards.hold(&agent, generation, card);
+        match serde_json::from_slice::<serde_json::Value>(&value) {
+            Ok(card) => {
+                plane.cards.hold_if_none(&agent, generation, card);
+            }
+            Err(e) => record_unread(crate::records::KIND_CARD, &agent, &e),
         }
     }
     for (agent, value) in approvals {
-        let Ok(approved) =
-            serde_json::from_slice::<std::collections::BTreeMap<String, String>>(&value)
-        else {
-            continue;
-        };
+        let approved =
+            match serde_json::from_slice::<std::collections::BTreeMap<String, String>>(&value) {
+                Ok(approved) => approved,
+                Err(e) => {
+                    record_unread(crate::records::KIND_CARD_APPROVAL, &agent, &e);
+                    continue;
+                }
+            };
         let mut standing = plane.trust.get(&agent).unwrap_or_default();
         if standing.approved.is_none() {
             standing.approved = Some(approved);
             plane.trust.insert(agent, standing);
         }
     }
+}
+
+/// A stored `kind` record of `agent` the warm could not read (`e`), named: the agent is looked at
+/// afresh, as if none were stored.
+fn record_unread(kind: &str, agent: &str, e: &serde_json::Error) {
+    busbar_contract::diag_warn!(
+        crate::diagnostics::A2A_CARD_RECORD_UNREAD,
+        kind,
+        agent = %agent,
+        "a2a: agent `{agent}`'s stored {kind} record could not be read ({e}); the agent is looked \
+         at afresh and the record is written again on its next connect or approve"
+    );
 }
 
 /// How soon after a tick that left the held cards unwarmed (the host refused their listing) the

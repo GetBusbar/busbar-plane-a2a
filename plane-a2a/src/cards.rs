@@ -41,18 +41,20 @@ impl Cards {
 
     /// [`Cards::hold`] of a card already shared (held under another generation too).
     pub fn hold_shared(&self, agent: &str, generation: u64, card: Arc<Value>) {
+        self.by_agent
+            .with_all(|m| insert(m, agent, generation, card));
+    }
+
+    /// [`Cards::hold`] only when no card is held for `agent` under any generation (a card held
+    /// since is fresher than `card`), under the one lock; whether it was held.
+    pub fn hold_if_none(&self, agent: &str, generation: u64, card: Value) -> bool {
         self.by_agent.with_all(|m| {
-            while m.len() >= MAX_CARDS && !m.contains_key(agent) {
-                if m.pop_first().is_none() {
-                    break;
-                }
+            if m.contains_key(agent) {
+                return false;
             }
-            let held = m.entry(agent.to_string()).or_default();
-            held.insert(generation, card);
-            while held.len() > MAX_GENERATIONS_PER_CARD {
-                held.pop_first();
-            }
-        });
+            insert(m, agent, generation, Arc::new(card));
+            true
+        })
     }
 
     /// The card held for `agent` under `generation`; `None` when none is held under it.
@@ -71,6 +73,25 @@ impl Cards {
                 !held.is_empty()
             });
         });
+    }
+}
+
+/// Hold `card` for `agent` under `generation` in the held map `m`, within both bounds.
+fn insert(
+    m: &mut BTreeMap<String, BTreeMap<u64, Arc<Value>>>,
+    agent: &str,
+    generation: u64,
+    card: Arc<Value>,
+) {
+    while m.len() >= MAX_CARDS && !m.contains_key(agent) {
+        if m.pop_first().is_none() {
+            break;
+        }
+    }
+    let held = m.entry(agent.to_string()).or_default();
+    held.insert(generation, card);
+    while held.len() > MAX_GENERATIONS_PER_CARD {
+        held.pop_first();
     }
 }
 

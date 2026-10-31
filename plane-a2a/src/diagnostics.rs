@@ -300,6 +300,26 @@ pub const A2A_PUSH_CONFIG_UNREAD: Diagnostic = Diagnostic {
     retired: false,
 };
 
+/// A stored card or approval record could not be read at the card warm: the agent is looked at afresh.
+pub const A2A_CARD_RECORD_UNREAD: Diagnostic = Diagnostic {
+    code: 7044,
+    class: Class::Plane,
+    slug: "a2a-card-record-unread",
+    title: "A2A stored card or approval record could not be read",
+    severity: Severity::Actionable,
+    summary: "When the plane warmed its agent cards after its instance opened, a stored card or \
+             card-approval record read back whole but is not the JSON the plane wrote (a card that is \
+             not a JSON document, an approval that is not a map of skill digests). The record is not \
+             used: the agent holds no card from it, so its calls are refused until it is looked at \
+             again, and its approved skills are not restored for the trust view. Emitted once per \
+             affected record on each warm; the `kind` and `agent` fields name it.",
+    action: "Run connect (and approve, if the agent was approved) for the named agent: that writes \
+            the record again. Check the durable record store for writes from outside busbar or a \
+            restore from an incompatible backup.",
+    since: "1.6.0",
+    retired: false,
+};
+
 /// A relayed SSE frame was not valid UTF-8 and was dropped. Frozen: `BUSBAR-7104`, the published
 /// catalog entry of the same number, byte for byte.
 pub const PLANE_SSE_FRAME_NOT_UTF8: Diagnostic = Diagnostic {
@@ -342,6 +362,7 @@ pub const DIAGNOSTICS: &[&Diagnostic] = &[
     &A2A_RELAY_ENDPOINT_REFUSED,
     &A2A_TRUST_SIGHTING_UNRECORDED,
     &A2A_PUSH_CONFIG_UNREAD,
+    &A2A_CARD_RECORD_UNREAD,
     &PLANE_SSE_FRAME_NOT_UTF8,
 ];
 
