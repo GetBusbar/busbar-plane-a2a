@@ -1090,3 +1090,37 @@ fn a_registration_whose_url_moved_during_a_look_is_not_the_one_looked_at() {
         &looked_at
     ));
 }
+
+/// The diagnostic lines `f` emits.
+fn diags_of<R>(f: impl FnOnce() -> R) -> (R, Vec<String>) {
+    let (sent, heard) = std::sync::mpsc::channel();
+    let r = tracing::subscriber::with_default(crate::tests::capture::Capture(sent), f);
+    (r, heard.try_iter().map(|(_, line)| line).collect())
+}
+
+/// G1-53 (lead ruling, 1.5.5's RewriteReply semantics): A REWRITE THAT YIELDS NO OBJECT LEAVES THE
+/// REQUEST UNMODIFIED, AND SAYS SO: one diagnostic line names the hook stage and why the rewrite
+/// was not applied; never silent.
+#[test]
+fn a_rewrite_that_yields_no_object_is_not_applied_and_says_so() {
+    let reply = br#"{"messages": [{"role": "user", "content": "[REDACTED]"}]}"#;
+    let (read, lines) = diags_of(|| rewritten_params(reply));
+    assert_eq!(read, Ok(None), "the request is left as it came");
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(
+        lines[0].contains("request") && lines[0].contains("not applied"),
+        "{lines:?}"
+    );
+}
+
+/// G1-54: A COMMITTED REWRITE BUSBAR CANNOT READ BACK IS REFUSED WITH ITS REASON NAMED: the caller
+/// reads the fixed internal error, and the operator reads what the hook returned.
+#[test]
+fn an_unreadable_rewrite_names_its_reason() {
+    let (read, lines) = diags_of(|| rewritten_params(b"not json"));
+    assert!(read.is_err());
+    assert!(lines.iter().any(|l| l.contains("not JSON")), "{lines:?}");
+    let (read, lines) = diags_of(|| rewritten_params(br#"{"tools": []}"#));
+    assert!(read.is_err());
+    assert!(lines.iter().any(|l| l.contains("messages")), "{lines:?}");
+}
