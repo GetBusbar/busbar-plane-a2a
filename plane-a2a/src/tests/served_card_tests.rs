@@ -794,3 +794,36 @@ fn a_v10_cards_duplicate_interfaces_are_published_once() {
         "{served}"
     );
 }
+
+/// G1-4: A FRONTED v0.3 CARD ADVERTISES BUSBAR'S CREDENTIAL IN v0.3's OWN SPELLING (v0.3.0
+/// `types.ts`: an `HTTPAuthSecurityScheme` is `{type: "http", scheme, description?}`, and the
+/// requirement is `security: [{name: scopes}]`), never in v1.0's proto spelling, which a v0.3
+/// reader cannot read. Both v0.3 shapes: with and without `protocolVersion`.
+#[test]
+fn a_v03_cards_inbound_scheme_is_written_in_v03s_spelling() {
+    for card in [
+        json!({
+            "name": "Planner", "description": "plans", "protocolVersion": "0.3.0",
+            "url": "https://internal.corp.example/a2a", "preferredTransport": "JSONRPC",
+            "securitySchemes": { "vendor": { "type": "apiKey", "in": "header", "name": "k" } },
+            "security": [{ "vendor": [] }],
+            "capabilities": {}, "skills": [],
+        }),
+        json!({
+            "name": "Planner", "description": "plans",
+            "url": "https://internal.corp.example/a2a",
+            "capabilities": {}, "skills": [],
+        }),
+    ] {
+        let served = rewrite_card(&card, "https://internal.corp.example/a2a", PUBLIC, "planner")
+            .expect("served");
+        let scheme = &served["securitySchemes"][INBOUND_SCHEME_NAME];
+        assert_eq!(scheme["type"], "http", "{served}");
+        assert_eq!(scheme["scheme"], INBOUND_AUTH_SCHEME);
+        assert!(scheme["description"].is_string());
+        assert!(scheme.get("httpAuthSecurityScheme").is_none());
+        assert_eq!(served["securitySchemes"].as_object().map(Map::len), Some(1));
+        assert_eq!(served["security"], json!([{ INBOUND_SCHEME_NAME: [] }]));
+        assert!(served.get("securityRequirements").is_none(), "{served}");
+    }
+}
