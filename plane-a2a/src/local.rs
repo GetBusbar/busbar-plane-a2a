@@ -319,12 +319,31 @@ fn list_tasks(
     let token = member(params, "pageToken", "page_token")
         .and_then(Value::as_str)
         .unwrap_or_default();
+    // `statusTimestampAfter`: a row whose status moved at or after it (the proto's "greater than
+    // or equal to"); a value that is not an RFC 3339 timestamp is refused, never ignored.
+    let since = match member(params, "statusTimestampAfter", "status_timestamp_after")
+        .filter(|v| !v.is_null())
+    {
+        None => None,
+        Some(v) => match v.as_str().map(str::parse::<crate::wkt::Timestamp>) {
+            Some(Ok(t)) => Some(i128::from(t.seconds) * 1_000_000_000 + i128::from(t.nanos)),
+            _ => {
+                return Ok(err(
+                    rpc_id,
+                    INVALID_PARAMS,
+                    "`statusTimestampAfter` must be an RFC 3339 timestamp, such as \
+                     `2023-10-27T10:00:00Z`",
+                ))
+            }
+        },
+    };
     // SCOPED FIRST, filtered second: every filter narrows the caller's own set.
     let mut rows: Vec<Task> = tasks::list(rec, caller, now)?
         .iter()
         .filter_map(|r| Task::from_row(r).ok())
         .filter(|t| context_id.is_empty() || t.context_id == context_id)
         .filter(|t| wanted.is_none_or(|w| wire_state(t.state) == w || t.state.as_str() == w))
+        .filter(|t| since.is_none_or(|s| i128::from(t.updated_at) * 1_000_000_000 >= s))
         .collect();
     rows.sort_by(|a, b| {
         (b.updated_at, b.task_id.as_str()).cmp(&(a.updated_at, a.task_id.as_str()))
