@@ -813,7 +813,7 @@ pub fn agent_slash_target(agent: &str) -> Option<String> {
 }
 
 /// Whether `name` is one plain path segment (unreserved characters only, not `.` or `..`).
-fn plain_segment(name: &str) -> bool {
+pub(crate) fn plain_segment(name: &str) -> bool {
     !name.is_empty()
         && name != "."
         && name != ".."

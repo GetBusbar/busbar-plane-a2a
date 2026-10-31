@@ -341,6 +341,16 @@ pub fn without_userinfo(url: &str) -> std::borrow::Cow<'_, str> {
 pub fn validate_agent(name: &str, def: &AgentDefCfg) -> Result<(), String> {
     let at = format!("`agents.{name}`");
 
+    // The name is the agent's `/a2a/agents/<name>/` endpoint: one that is not one plain path segment
+    // claims nothing ([`crate::statement::agent_slash_claims`]), so it is refused here rather than
+    // registered and then answered 404.
+    if !crate::statement::plain_segment(name) {
+        return Err(format!(
+            "{at}: an agent name must be one plain path segment (letters, digits, `-`, `_`, `.`, \
+             `~`; not `.` or `..`): it names the agent's `/a2a/agents/<name>/` endpoint"
+        ));
+    }
+
     if def.url.trim().is_empty() {
         return Err(format!("{at}: `url:` must name the agent's A2A endpoint"));
     }
