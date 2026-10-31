@@ -983,3 +983,31 @@ fn the_warm_never_replaces_a_card_held_while_it_listed() {
         "an agent holding no card is warmed"
     );
 }
+
+/// G1-22: THE PARTS A KEY'S EARLIER VALUES RETIRED DO NOT ACCUMULATE: an agent whose over-ceiling
+/// card changes on every connect tombstones the parts of the value it replaces, not every part any
+/// value of the key ever had (a part an unwritten answer left behind is a stray the warm lists).
+#[test]
+fn the_tombstones_of_a_changing_split_record_stay_bounded() {
+    let plane = A2aDoor::default();
+    let size = 3 * busbar_contract::bounded::MAX_RECORD_BYTES;
+    let mut previous_parts = 0;
+    let mut last_tombstones = 0;
+    for i in 0..50_u32 {
+        let value: Vec<u8> = format!("{i:08}").bytes().cycle().take(size).collect();
+        let writes = kept_records(&plane, crate::records::KIND_CARD, "planner", &value);
+        let parts = writes
+            .iter()
+            .filter(|w| crate::split_record::is_part(&w.key) && !w.value.is_empty())
+            .count();
+        last_tombstones = writes.iter().filter(|w| w.value.is_empty()).count();
+        if i < 49 {
+            previous_parts = parts;
+        }
+    }
+    assert!(previous_parts > 1, "the value is split");
+    assert!(
+        last_tombstones <= previous_parts,
+        "{last_tombstones} tombstones for a key whose previous value had {previous_parts} parts"
+    );
+}
