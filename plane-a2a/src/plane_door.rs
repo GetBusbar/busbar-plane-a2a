@@ -769,11 +769,9 @@ fn joined(
     plane.record_parts.with_all(|known| {
         known.retain(|(k, _), _| *k != kind);
         for part in listed {
-            known
-                .entry((kind, owner(&part).to_string()))
-                .or_default()
-                .retired
-                .push(part);
+            let held = known.entry((kind, owner(&part).to_string())).or_default();
+            held.retired.push(part);
+            held.carried = false;
         }
     });
     for (agent, why) in &joined.refused {
@@ -824,10 +822,17 @@ fn approval_records(
 /// listed), which each write of the key tombstones. A write of the value `current` already names
 /// (an unchanged card, or the kernel's re-call of a short answer) tombstones `retired` again, so an
 /// answer that was never written still tombstones what it should.
+///
+/// BOUNDED: a change of value retires the parts of the value it replaces; the parts an earlier
+/// change retired were tombstoned by that change's answer and are not carried on (a part an answer
+/// that was never written left in the store is a stray the next warm lists and retires again).
+/// The parts the warm listed are carried until one write has tombstoned them (`carried`).
 #[derive(Debug, Clone, Default)]
 struct HeldParts {
     current: Vec<String>,
     retired: Vec<String>,
+    /// A write of the key has tombstoned `retired` since the warm listed them.
+    carried: bool,
 }
 
 /// The host records that keep `value` under `agent` of `kind`, whatever its length: a record is at
@@ -847,15 +852,19 @@ fn kept_records(plane: &A2aDoor, kind: &'static str, agent: &str, value: &[u8]) 
         let held = known.entry((kind, agent.to_string())).or_default();
         if held.current != named {
             let mut retired = std::mem::take(&mut held.current);
-            retired.append(&mut held.retired);
+            if !held.carried {
+                retired.append(&mut held.retired);
+            }
             retired.retain(|part| !named.contains(part));
             retired.sort();
             retired.dedup();
             *held = HeldParts {
                 current: named.clone(),
                 retired,
+                carried: false,
             };
         }
+        held.carried = true;
         held.retired.clone()
     });
     writes.extend(retired.into_iter().map(|key| Write {
