@@ -355,3 +355,33 @@ fn only_the_protos_non_string_query_members_are_typed() {
         )
     );
 }
+
+/// G2-35: THE PATH NAMES THE TASK ALONE. A posted body's other spellings of the task member
+/// (`taskId`, `task_id` on a cancel; `task_id` on a push-config create) are dropped, never carried
+/// beside the path's id for a far end that reads the other spelling to act on.
+#[test]
+fn a_posted_body_cannot_name_the_task_under_another_spelling() {
+    let cancel = composed(
+        "POST",
+        "/a2a/tasks/{id}",
+        "/a2a/tasks/t-1:cancel",
+        br#"{"taskId":"X","task_id":"Y","metadata":{"why":"done"}}"#,
+    );
+    assert_eq!(
+        cancel,
+        envelope(
+            method::CANCEL_TASK,
+            json!({"id": "t-1", "metadata": {"why": "done"}})
+        )
+    );
+    let create = composed(
+        "POST",
+        "/a2a/tasks/{id}/pushNotificationConfigs",
+        "/a2a/tasks/t-1/pushNotificationConfigs",
+        br#"{"task_id":"X","id":"cfg","url":"https://receiver.example/hook"}"#,
+    );
+    assert_eq!(
+        create["params"],
+        json!({"taskId": "t-1", "id": "cfg", "url": "https://receiver.example/hook"})
+    );
+}

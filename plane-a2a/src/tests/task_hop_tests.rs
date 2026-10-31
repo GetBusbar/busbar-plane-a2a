@@ -20,16 +20,31 @@ struct Desk {
     random: [u8; MINT_BYTES],
     draws: usize,
     verdict: u64,
+    /// The store fails every read (`get` and `list`).
+    unreadable: bool,
+    /// The claims made, and the one (counted from 1) the store fails.
+    claims: usize,
+    failed_claim: Option<usize>,
 }
 
 impl Records for Desk {
     fn get(&mut self, kind: &str, key: &str) -> Result<Option<Vec<u8>>, Halt> {
+        if self.unreadable {
+            return Err(Halt::Failed("the store is down".into()));
+        }
         self.book.get(kind, key)
     }
     fn list(&mut self, kind: &str, prefix: &str) -> Result<Vec<(String, Vec<u8>)>, Halt> {
+        if self.unreadable {
+            return Err(Halt::Failed("the store is down".into()));
+        }
         self.book.list(kind, prefix)
     }
     fn claim(&mut self, kind: &str, key: &str, ttl_ms: u64) -> Result<bool, Halt> {
+        self.claims += 1;
+        if self.failed_claim == Some(self.claims) {
+            return Err(Halt::Failed("the claim failed".into()));
+        }
         self.book.claim(kind, key, ttl_ms)
     }
 }
@@ -61,6 +76,9 @@ fn desk() -> Desk {
         random: [1, 2, 3, 4, 5, 6, 7, 8],
         draws: 0,
         verdict: DEST_ALLOWED,
+        unreadable: false,
+        claims: 0,
+        failed_claim: None,
     }
 }
 
@@ -1505,4 +1523,174 @@ fn a_read_or_an_addressed_turn_never_sweeps() {
             .is_some(),
         "an addressed turn retires nothing"
     );
+}
+
+// ── the audit round's G2 cells ─────────────────────────────────────────────────────────────────
+
+/// Alice's `t1`, dispatched to the agent and interrupted (input-required) under `ctx-1`.
+fn interrupted() -> Desk {
+    let mut desk = desk();
+    let mut out = Vec::new();
+    let at = Stamp {
+        caller: ALICE,
+        request_id: "r",
+        now: 150,
+    };
+    tasks::tests::dispatch(&mut desk.book, &at, "t1", MEMBER, &mut out).unwrap();
+    for state in [TaskState::Working, TaskState::InputRequired] {
+        desk.book.apply(&out);
+        out.clear();
+        tasks::transition(&mut desk.book, &at, "t1", state, &mut out).unwrap();
+    }
+    desk.book.apply(&out);
+    desk
+}
+
+/// G2-9: a resume the store cannot record is the store's fault, answered as the fresh task's is
+/// (`503`, `-32603`), never with the cancel-refused code `-32002`; so is the answer should the
+/// store refuse the resume's writes.
+#[test]
+fn a_resume_the_store_cannot_record_is_503_not_the_cancel_code() {
+    let mut desk = interrupted();
+    desk.failed_claim = Some(desk.claims + 1);
+    let (status, code, message) = refusal_of(opened(
+        &mut desk,
+        &send(json!({ "message": { "contextId": "ctx-1" } })),
+        ALICE,
+    ));
+    assert_eq!((status, code), (503, -32603), "{message}");
+    let mut desk = interrupted();
+    let Opened::Hop { unrecorded, .. } = opened(
+        &mut desk,
+        &send(json!({ "message": { "contextId": "ctx-1" } })),
+        ALICE,
+    ) else {
+        panic!("refused");
+    };
+    let unrecorded = unrecorded.expect("a resume states its answer");
+    assert_eq!((unrecorded.status, unrecorded.code), (503, -32603));
+}
+
+/// G2-10: an inline callback carrying `token` is refused as the push-config verbs refuse it:
+/// busbar never presents a `token`, so the caller is told rather than the token dropped.
+#[test]
+fn an_inline_callback_carrying_a_token_is_refused() {
+    let mut desk = desk();
+    let envelope = with_callback(json!({ "url": "https://hook.example/cb", "token": "abc" }));
+    let (status, code, message) = refusal_of(opened(&mut desk, &envelope, ALICE));
+    assert_eq!((status, code), (400, -32602), "{message}");
+    assert!(message.contains("`token`"), "{message}");
+    assert_eq!(desk.draws, 0, "nothing is opened");
+}
+
+/// G2-14: an inline callback on a FRESH (or resumed) task is the task's push config record, as on
+/// an addressed task: delivery, the push-config verbs and a restart all read that one record, so
+/// its credential survives a restart and a delete withdraws it (the row carries no callback of its
+/// own to keep delivering to).
+#[test]
+fn an_inline_callback_on_a_fresh_task_is_its_push_config_record() {
+    let mut desk = desk();
+    let envelope = with_callback(json!({
+        "url": "https://hook.example/cb",
+        "authentication": { "scheme": "Bearer", "credentials": "S" },
+    }));
+    let (task, _) = hop(opened(&mut desk, &envelope, ALICE));
+    let cfg = crate::local::held_config(&mut desk.book, ALICE, &task.task_id)
+        .unwrap()
+        .expect("the push config record");
+    assert_eq!(cfg.url, "https://hook.example/cb");
+    assert!(cfg.authentication.is_some(), "the credential is in the record");
+    let held = get(&mut desk.book, ALICE, &task.task_id, 300)
+        .unwrap()
+        .unwrap();
+    assert_eq!(held.row.push_callback, "", "the record, not the row, holds it");
+
+    let mut desk = interrupted();
+    let envelope = send(json!({
+        "message": { "contextId": "ctx-1" },
+        "configuration": { "pushNotificationConfig": { "url": "https://hook.example/r" } },
+    }));
+    let (task, _) = hop(opened(&mut desk, &envelope, ALICE));
+    assert_eq!(task.task_id, "t1");
+    let cfg = crate::local::held_config(&mut desk.book, ALICE, "t1")
+        .unwrap()
+        .expect("the resumed task's push config record");
+    assert_eq!(cfg.url, "https://hook.example/r");
+}
+
+/// G2-20: a reported state the task already holds (a routine GetTask of a working task, a second
+/// `working` event) is no move: nothing is written, nothing is logged, and no latch is spent.
+#[test]
+fn a_reported_state_the_task_already_holds_is_no_move_and_logs_nothing() {
+    let mut desk = desk();
+    let (task, _) = hop(opened(&mut desk, &send(json!({})), ALICE));
+    let working = TaskSettled::Reported {
+        state: TaskState::Working,
+        backend_id: None,
+    };
+    assert_eq!(settled(&mut desk, &task, &working), 2);
+    let latches = Latches::default();
+    let (sent, heard) = std::sync::mpsc::channel();
+    let mut out = Vec::new();
+    let again = tracing::subscriber::with_default(Capture(sent), || {
+        settle_on_answer(
+            &mut desk.book,
+            &task,
+            &working,
+            ALICE,
+            400,
+            &mut out,
+            &latches,
+        )
+    });
+    assert!(matches!(again, Ok(None)), "{again:?}");
+    assert!(out.is_empty());
+    let lines: Vec<String> = heard.try_iter().map(|(_, line)| line).collect();
+    assert!(lines.is_empty(), "{lines:?}");
+    assert!(latches.first(0), "the relayed-outcome latch is not spent");
+}
+
+/// G2-27: a store that cannot be read is not an absent task: a CancelTask of a task the caller
+/// holds is answered as the store's fault (`503`), never `404` TaskNotFound (which retires the
+/// task at the client); nor does a message under a held context open a fresh task.
+#[test]
+fn a_store_read_failure_is_the_stores_fault_not_an_absent_task() {
+    for envelope in [
+        json!({ "jsonrpc": "2.0", "id": 7, "method": "CancelTask", "params": { "id": "t1" } }),
+        send(json!({ "message": { "contextId": "ctx-1" } })),
+    ] {
+        let mut desk = desk();
+        desk.unreadable = true;
+        let (status, code, message) = refusal_of(opened(&mut desk, &envelope, ALICE));
+        assert_eq!((status, code), (503, -32603), "{envelope}: {message}");
+        assert_eq!(message, "the task store could not be reached");
+        assert_eq!(desk.draws, 0, "nothing is opened");
+    }
+}
+
+/// G2-30: a fresh task whose dispatch cannot be recorded is refused as unrecorded (`503`), never
+/// left held with no agent (a task no pool member and no resume could ever reach again).
+#[test]
+fn a_fresh_task_whose_dispatch_cannot_be_recorded_is_refused_and_not_held() {
+    let mut desk = desk();
+    desk.failed_claim = Some(2);
+    let (status, code, _) = refusal_of(opened(&mut desk, &send(json!({})), ALICE));
+    assert_eq!((status, code), (503, -32603));
+    assert!(get(&mut desk.book, ALICE, MINTED, 300).unwrap().is_none());
+}
+
+/// G2-35: a request naming its task under two spellings with different ids is refused, never
+/// opened on the first while the second (unauthorised) id is forwarded for a far end to act on.
+#[test]
+fn a_request_naming_two_different_task_ids_is_refused() {
+    let mut desk = desk();
+    let envelope = json!({ "jsonrpc": "2.0", "id": 7, "method": "GetTask",
+        "params": { "id": "t1", "taskId": "foreign" } });
+    let (status, code, _) = refusal_of(opened(&mut desk, &envelope, ALICE));
+    assert_eq!((status, code), (400, -32602));
+    // The same id under two spellings is one task.
+    let envelope = json!({ "jsonrpc": "2.0", "id": 7, "method": "GetTask",
+        "params": { "id": "t1", "taskId": "t1" } });
+    let (task, _) = hop(opened(&mut desk, &envelope, ALICE));
+    assert_eq!(task.task_id, "t1");
 }
