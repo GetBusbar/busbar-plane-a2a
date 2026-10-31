@@ -75,6 +75,8 @@ pub const TASK_UNRECORDED: &str = "the task could not be recorded";
 /// refusal, `local::subscribe_refusal`).
 pub const TASK_NOT_CANCELABLE: &str =
     "this task has reached a terminal state, so it cannot be canceled";
+/// The words for a task store that could not be read: its fault, never an absent task.
+pub const TASK_STORE_UNREACHABLE: &str = "the task store could not be reached";
 /// The words for an interrupted task that could not be moved back to `working`.
 pub const TASK_UNRESUMED: &str = "this task cannot be resumed";
 
@@ -185,7 +187,7 @@ fn resumable(rows: Vec<TaskRow>, context_id: &str, member: &str) -> Option<TaskR
 /// the request names (in its `params` or its message) and the caller holds, else of the newest of the caller's interrupted tasks
 /// under the `contextId` it names held by ANY of the pool's `members` (it resumes AT that member).
 /// `None` = the request is a fresh submission, which the pool's walk places. A read that failed
-/// reads as nothing, as [`open`]'s lookups read it.
+/// reads as nothing here (the walk places the unit; its [`open`] then answers the store's fault).
 ///
 /// # Errors
 /// [`Halt::Pending`] when a host call pends: the piece runs again from the top.
@@ -257,11 +259,26 @@ pub fn open(
             .unwrap_or_default(),
     )
     .version();
+    // A READ THAT FAILED is the store's fault (`503`), never an absent task: read as absent, a
+    // held task would be refused `404` (retired at the client) or a held context opened afresh.
+    let unreachable = || {
+        Ok(refused(
+            STATUS_UNAVAILABLE,
+            rpc_id,
+            CODE_INTERNAL,
+            TASK_STORE_UNREACHABLE,
+        ))
+    };
     let mut addressed = None;
     for named in task_identity::translatable(req.envelope) {
-        if let Some(held) = or_absent(tasks::get(reach, req.caller, named, req.now), None)? {
-            addressed = Some(held.row);
-            break;
+        match tasks::get(reach, req.caller, named, req.now) {
+            Err(Halt::Pending) => return Err(Halt::Pending),
+            Err(Halt::Failed(_)) => return unreachable(),
+            Ok(Some(held)) => {
+                addressed = Some(held.row);
+                break;
+            }
+            Ok(None) => {}
         }
     }
     if addressed.is_none() && addresses_a_task(req.envelope) {
@@ -274,11 +291,11 @@ pub fn open(
     }
     let context = task_identity::context_of(req.envelope);
     let resumed = match (&addressed, context.is_empty()) {
-        (None, false) => resumable(
-            or_absent(tasks::list(reach, req.caller, req.now), Vec::new())?,
-            context,
-            req.member,
-        ),
+        (None, false) => match tasks::list(reach, req.caller, req.now) {
+            Err(Halt::Pending) => return Err(Halt::Pending),
+            Err(Halt::Failed(_)) => return unreachable(),
+            Ok(rows) => resumable(rows, context, req.member),
+        },
         _ => None,
     };
     let (task, unrecorded) = match (addressed, resumed) {
