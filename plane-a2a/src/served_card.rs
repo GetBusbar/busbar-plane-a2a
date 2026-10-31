@@ -369,10 +369,7 @@ pub fn rewrite_card(
             "securitySchemes".to_string(),
             Value::Object(inbound_security_schemes_v03()),
         );
-        out.insert(
-            "security".to_string(),
-            json!([{ INBOUND_SCHEME_NAME: [] }]),
-        );
+        out.insert("security".to_string(), json!([{ INBOUND_SCHEME_NAME: [] }]));
     } else {
         out.insert(
             "securitySchemes".to_string(),
@@ -480,12 +477,10 @@ fn names_host(text: &str, host: &str) -> bool {
         let before = at.checked_sub(1).map(|i| b[i]);
         let after = b.get(end).copied();
         // A longer name around it: a label character, or a dot joined to another label.
-        let longer_before = before.is_some_and(|c| {
-            label(c) || (c == b'.' && at >= 2 && label(b[at - 2]))
-        });
-        let longer_after = after.is_some_and(|c| {
-            label(c) || (c == b'.' && b.get(end + 1).is_some_and(|n| label(*n)))
-        });
+        let longer_before =
+            before.is_some_and(|c| label(c) || (c == b'.' && at >= 2 && label(b[at - 2])));
+        let longer_after = after
+            .is_some_and(|c| label(c) || (c == b'.' && b.get(end + 1).is_some_and(|n| label(*n))));
         if longer_before || longer_after {
             return false;
         }

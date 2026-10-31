@@ -44,7 +44,9 @@ fn an_agents_cards_are_bounded_by_generation() {
     for g in 1..=10 {
         cards.hold("planner", g, json!({ "g": g }));
     }
-    let held: Vec<u64> = (1..=10).filter(|g| cards.at("planner", *g).is_some()).collect();
+    let held: Vec<u64> = (1..=10)
+        .filter(|g| cards.at("planner", *g).is_some())
+        .collect();
     assert_eq!(held, (7..=10).collect::<Vec<u64>>());
 }
 

@@ -876,7 +876,8 @@ fn the_statement_names_the_crates_version() {
 /// before still reads it there (its ATTEMPT is admitted on `cards.at(member, unit.generation)`).
 #[test]
 fn a_refresh_that_keeps_a_registration_keeps_its_card_under_the_live_generation_too() {
-    let section = br#"{"planner": {"url": "https://planner.example/a2a", "pin": {"mechanism": "unpinned"}}}"#;
+    let section =
+        br#"{"planner": {"url": "https://planner.example/a2a", "pin": {"mechanism": "unpinned"}}}"#;
     let plane = A2aDoor::default();
     let cfg = agents_section(section).expect("the section reads");
     let spec = statement::agents_snapshot_spec(None, &["planner"]);
@@ -903,5 +904,8 @@ fn a_far_end_task_id_past_the_byte_bound_is_not_held() {
     map.record(3, "amy/t1".to_string(), "x".repeat(400_000));
     assert_eq!(map.get("amy/t1"), None);
     map.record(3, "amy/t2".to_string(), "y".repeat(MAX_BACKEND_ID_BYTES));
-    assert_eq!(map.get("amy/t2").map(|id| id.len()), Some(MAX_BACKEND_ID_BYTES));
+    assert_eq!(
+        map.get("amy/t2").map(|id| id.len()),
+        Some(MAX_BACKEND_ID_BYTES)
+    );
 }

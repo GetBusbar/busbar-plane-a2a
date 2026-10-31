@@ -225,9 +225,13 @@ fn the_connect_view_is_a_preview_of_the_card_under_the_key_s_state() {
         quarantined["pin_changed"], true,
         "the kernel quarantined a moved card"
     );
-    let held: Value =
-        serde_json::from_str(&connect_view("planner", svc::DISTRUST_QUARANTINED, &s, None))
-            .unwrap();
+    let held: Value = serde_json::from_str(&connect_view(
+        "planner",
+        svc::DISTRUST_QUARANTINED,
+        &s,
+        None,
+    ))
+    .unwrap();
     assert_eq!(held["state"], "quarantined");
     assert_eq!(
         held["pin_changed"], false,
@@ -409,8 +413,13 @@ fn an_unpinned_registration_presents_no_fingerprint_to_sight() {
         )
         .unwrap(),
     );
-    let view: Value =
-        serde_json::from_str(&connect_view("a", svc::DISTRUST_NOT_APPROVED, &unpinned, None)).unwrap();
+    let view: Value = serde_json::from_str(&connect_view(
+        "a",
+        svc::DISTRUST_NOT_APPROVED,
+        &unpinned,
+        None,
+    ))
+    .unwrap();
     assert_eq!(view["state"], "pending");
     assert_eq!(view["fingerprint"], Value::Null);
     assert_eq!(view["pin_mechanism"], "unpinned");
@@ -923,8 +932,13 @@ fn the_mechanism_is_part_of_the_identity_not_a_label_beside_it() {
 #[test]
 fn a_moved_cards_pin_changed_survives_a_failed_look() {
     let failed = Sighting::Failed("down".to_string());
-    let view: Value =
-        serde_json::from_str(&connect_view("planner", svc::DISTRUST_CHANGED, &failed, None)).unwrap();
+    let view: Value = serde_json::from_str(&connect_view(
+        "planner",
+        svc::DISTRUST_CHANGED,
+        &failed,
+        None,
+    ))
+    .unwrap();
     assert_eq!(view["state"], "error");
     assert_eq!(view["pin_changed"], true, "{view}");
 }

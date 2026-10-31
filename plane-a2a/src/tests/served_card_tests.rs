@@ -815,8 +815,13 @@ fn a_v03_cards_inbound_scheme_is_written_in_v03s_spelling() {
             "capabilities": {}, "skills": [],
         }),
     ] {
-        let served = rewrite_card(&card, "https://internal.corp.example/a2a", PUBLIC, "planner")
-            .expect("served");
+        let served = rewrite_card(
+            &card,
+            "https://internal.corp.example/a2a",
+            PUBLIC,
+            "planner",
+        )
+        .expect("served");
         let scheme = &served["securitySchemes"][INBOUND_SCHEME_NAME];
         assert_eq!(scheme["type"], "http", "{served}");
         assert_eq!(scheme["scheme"], INBOUND_AUTH_SCHEME);
@@ -842,8 +847,14 @@ fn a_word_that_only_contains_the_backend_host_is_not_a_leak() {
     for (backend, description) in [
         ("http://travel:8080", "Plans travel itineraries"),
         ("http://travel:8080", "a travel-agent for trips"),
-        ("https://example.com", "see notexample.com or example.community"),
-        ("http://10.0.0.1:8080", "its sibling at 10.0.0.15 answers too"),
+        (
+            "https://example.com",
+            "see notexample.com or example.community",
+        ),
+        (
+            "http://10.0.0.1:8080",
+            "its sibling at 10.0.0.15 answers too",
+        ),
     ] {
         assert!(
             rewrite_card(&card(backend, description), backend, PUBLIC, "planner").is_ok(),
