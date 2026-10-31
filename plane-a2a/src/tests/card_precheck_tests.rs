@@ -63,3 +63,106 @@ fn a_card_fetch_without_host_services_is_refused() {
     assert_eq!(DIALS.with(Cell::get), 0, "an unjudged card hop was dialled");
     assert!(card.is_err(), "the fetch is refused: {card:?}");
 }
+
+thread_local! {
+    /// The destination judgements this thread's fake host was asked for.
+    static JUDGED: Cell<usize> = const { Cell::new(0) };
+}
+
+/// The destination judgement: the first host it is asked about is a loopback name, every later one
+/// does not resolve, so the canonical path and the legacy path are refused in different words.
+struct LoopbackThenUnresolvable;
+impl FakeService for LoopbackThenUnresolvable {
+    type In = busbar_contract::abi::host::service::DestJudgeIn;
+    fn serve(call: &mut ServiceCall<busbar_contract::abi::host::service::DestJudgeIn>) -> Outcome {
+        let n = JUDGED.with(|j| {
+            j.set(j.get() + 1);
+            j.get()
+        });
+        call.set_value(if n == 1 {
+            busbar_contract::abi::host::service::DEST_INTERNAL
+        } else {
+            busbar_contract::abi::host::service::DEST_UNRESOLVABLE
+        });
+        Outcome::Ready
+    }
+}
+
+fn planner_def(url: &str) -> crate::a2a::config::AgentDefCfg {
+    serde_json::from_value(serde_json::json!({
+        "url": url,
+        "pin": {"mechanism": "unpinned"},
+    }))
+    .unwrap()
+}
+
+/// G1-45: THE CANONICAL PATH'S REFUSAL IS NOT LOST TO THE LEGACY PATH'S: a card whose canonical
+/// well-known path is refused for one reason and whose legacy path is refused for another reports
+/// the canonical reason too.
+#[test]
+fn the_canonical_paths_refusal_survives_the_legacy_paths() {
+    let fake: &'static FakeHost = Box::leak(Box::new(
+        FakeHost::new()
+            .serve(
+                busbar_contract::abi::sdk::test_support::fake::host::DEST_JUDGE,
+                LoopbackThenUnresolvable,
+            )
+            .serve(conn::ESTABLISH, Dial),
+    ));
+    let tables = Box::leak(Box::new(fake.lent()));
+    let plane = A2aDoor {
+        host: Some(Host::of(tables)),
+        services: busbar_contract::abi::sdk::Services::of(tables),
+        ..A2aDoor::default()
+    };
+    let at = LookAt {
+        plane: &plane,
+        ticket: Ticket {
+            slot: 4,
+            generation: 1,
+        },
+        base: 0,
+    };
+    JUDGED.with(|j| j.set(0));
+    let Ok((card, _, _)) = fetch_card(
+        &at,
+        "planner",
+        &planner_def("https://agent.example/a2a"),
+        None,
+    ) else {
+        panic!("the fetch parked with nothing in flight");
+    };
+    assert_eq!(JUDGED.with(Cell::get), 2, "both paths were judged");
+    let reason = card.expect_err("both paths refused");
+    assert!(reason.contains("loopback name"), "{reason}");
+}
+
+/// G1-44: THE RELAY'S GUARD NAMES WHY IT REFUSED: the caller reads the hop's fixed words, and the
+/// operator reads the refusal's own sentence in a diagnostic (here, the plaintext scheme).
+#[test]
+fn a_refused_relay_endpoint_is_named_in_a_diagnostic() {
+    let plane = A2aDoor::default();
+    let reach = Reach {
+        plane: &plane,
+        ticket: Ticket {
+            slot: 4,
+            generation: 1,
+        },
+    };
+    let mut hop = Hop::new(serde_json::json!(1), "1.0");
+    let mut pass = crate::task_door::Pass::default();
+    let url = "http://agent.example/a2a";
+    let (sent, heard) = std::sync::mpsc::channel();
+    let refused = tracing::subscriber::with_default(crate::tests::capture::Capture(sent), || {
+        guard_relay(&reach, &mut hop, &mut pass, url, &planner_def(url))
+    });
+    assert!(
+        matches!(refused, Poll::Ready(Some(_))),
+        "the hop is refused"
+    );
+    let lines: Vec<String> = heard.try_iter().map(|(_, line)| line).collect();
+    assert!(
+        lines.iter().any(|l| l.contains("uses scheme `http`")),
+        "{lines:?}"
+    );
+}
