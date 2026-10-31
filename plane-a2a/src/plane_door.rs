@@ -693,6 +693,18 @@ fn warm_cards(plane: &A2aDoor, ticket: Ticket, issued: u32) -> (Poll<bool>, u32)
     let generation = plane.newest();
     let cards = joined(plane, crate::records::KIND_CARD, cards);
     let approvals = joined(plane, crate::records::KIND_CARD_APPROVAL, approvals);
+    warm_into(plane, generation, cards, approvals);
+    (Poll::Ready(landed), issued)
+}
+
+/// The listed card records (`cards`, agent and whole value) held under `generation`, and the listed
+/// approvals folded into each agent's standing.
+fn warm_into(
+    plane: &A2aDoor,
+    generation: u64,
+    cards: Vec<(String, Vec<u8>)>,
+    approvals: Vec<(String, Vec<u8>)>,
+) {
     for (agent, value) in cards {
         if let Ok(card) = serde_json::from_slice::<serde_json::Value>(&value) {
             plane.cards.hold(&agent, generation, card);
@@ -710,7 +722,6 @@ fn warm_cards(plane: &A2aDoor, ticket: Ticket, issued: u32) -> (Poll<bool>, u32)
             plane.trust.insert(agent, standing);
         }
     }
-    (Poll::Ready(landed), issued)
 }
 
 /// How soon after a tick that left the held cards unwarmed (the host refused their listing) the
