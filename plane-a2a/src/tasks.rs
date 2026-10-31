@@ -442,10 +442,11 @@ fn submit_held(
 
 /// OPEN a relayed task: SUBMIT `row` for the caller, then record its DISPATCH to `agent_id` on the
 /// chain the submit just started (both before the hop). Both events are written in this one answer, so the dispatch is sealed over the genesis
-/// held here rather than read back. A dispatch that cannot be recorded leaves the submitted task.
+/// held here rather than read back. A dispatch that cannot be recorded opens nothing: a task held
+/// with no agent could never be reached again (no pool member holds it, no resume matches it).
 ///
 /// # Errors
-/// As [`submit`].
+/// As [`submit`]; `Failed` for a dispatch that cannot be recorded, its writes withdrawn.
 pub fn open(
     rec: &mut dyn Records,
     at: &Stamp<'_>,
@@ -457,6 +458,7 @@ pub fn open(
         return Err(Halt::Failed("no caller to hold the task under".into()));
     }
     row.principal = at.caller.to_string();
+    let mark = out.len();
     let genesis = HeldTask {
         row: row.clone(),
         next_seq: 1,
@@ -471,7 +473,13 @@ pub fn open(
     next.updated_at = at.now;
     match commit(rec, at, &held, next, EV_DELEGATED, out) {
         Ok(Some(dispatched)) => Ok(dispatched.row),
-        Ok(None) | Err(Halt::Failed(_)) => Ok(held.row),
+        Ok(None) | Err(Halt::Failed(_)) => {
+            out.truncate(mark);
+            Err(Halt::Failed(format!(
+                "the dispatch of task `{}` could not be recorded",
+                held.row.task_id
+            )))
+        }
         Err(Halt::Pending) => Err(Halt::Pending),
     }
 }
