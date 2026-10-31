@@ -1325,3 +1325,51 @@ fn the_restore_reads_only_the_in_flight_tasks_chains() {
         .collect();
     assert_eq!(chains, [task_key(BOB, "t-paused").as_str()]);
 }
+
+/// G2-4: THE SWEEP DOES NOT RACE A CHANGE OF THE TASK IT RETIRES. Another unit's change of a
+/// settled task (a push delivery's outcome) holds the task's next sequence while its answer is in
+/// flight; a sweep in that window must not tombstone the task under it, or the change's answer
+/// lands after the tombstones and resurrects the row over a dropped chain.
+#[test]
+fn a_sweep_does_not_retire_a_task_another_unit_is_changing() {
+    let mut book = Book::default();
+    submitted(&mut book, ALICE, "t1", 100);
+    let mut out = Vec::new();
+    transition(
+        &mut book,
+        &step(ALICE, 100),
+        "t1",
+        TaskState::Completed,
+        &mut out,
+    )
+    .unwrap();
+    book.apply(&out);
+    let late = 101 + TERMINAL_TTL_SECS;
+    // The other unit: its claim is made, its writes ride its answer, not yet applied.
+    let mut theirs = Vec::new();
+    record_push_delivery(
+        &mut book,
+        &step(ALICE, late),
+        "t1",
+        EV_ARTIFACT,
+        &mut theirs,
+    )
+    .unwrap();
+    let mut swept = Vec::new();
+    retention_sweep(&mut book, late, SWEEP_BUDGET, &mut swept).unwrap();
+    book.apply(&swept);
+    book.apply(&theirs);
+    // Whatever stands is whole: a row, if one is held, has the chain its sequence says it has.
+    if let Some(bytes) = book.value(KIND_TASK, &task_key(ALICE, "t1")).cloned() {
+        let held: HeldTask = serde_json::from_slice(&bytes).unwrap();
+        let chained = book
+            .list(KIND_TASK_EVENT, &task_key(ALICE, "t1"))
+            .unwrap()
+            .len() as u64;
+        assert_eq!(
+            chained,
+            held.next_seq - 1,
+            "the row's sequence and its chain agree"
+        );
+    }
+}
