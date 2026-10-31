@@ -577,10 +577,10 @@ pub struct A2aDoor {
     pub(crate) pushes: crate::push::PushLimiter,
     /// The newest refresh generation published.
     newest: Keyed<(), u64>,
-    /// The approvals a `refresh` keeps (`agent -> the skills it was approved at`), for the trust
-    /// reset its `published` makes once the generation is published; `open` keeps none.
-    kept_approvals:
-        Keyed<(), std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>>,
+    /// The registrations a `refresh` keeps (unchanged by the apply), for the trust reset its
+    /// `published` makes once the generation is published: each keeps the approval it holds THEN;
+    /// `open` keeps none.
+    kept_registrations: Keyed<(), std::collections::BTreeSet<String>>,
     /// The sizes short host-records answers named, per handle ([`crate::task_door::Grown`]).
     pub(crate) grown: crate::task_door::Grown,
     /// Each agent's verify-on-call flight: one look at a time.
@@ -630,7 +630,7 @@ impl A2aDoor {
         // want of the card it was approved at. A registration the apply changed holds none until it is
         // looked at again.
         let (before, held_at) = (plane.generations.current(), plane.newest());
-        let mut approvals = std::collections::BTreeMap::new();
+        let mut kept_names = std::collections::BTreeSet::new();
         for (name, def) in &cfg.agents {
             let kept = before
                 .as_ref()
@@ -639,19 +639,14 @@ impl A2aDoor {
             if let Some(card) = plane.cards.at(name, held_at).filter(|_| kept) {
                 plane.cards.hold_shared(name, generation, card);
             }
-            // The skills it was approved at go with the kept approval, for the trust view's drift.
-            if let Some(approved) = plane
-                .trust
-                .get(name)
-                .and_then(|s| s.approved)
-                .filter(|_| kept)
-            {
-                approvals.insert(name.clone(), approved);
+            // The kept approval goes with it, for the trust view's drift: read at publication.
+            if kept {
+                kept_names.insert(name.clone());
             }
         }
         // The trust reset the apply makes once its generation is published
         // ([`PlaneLife::published`]).
-        plane.kept_approvals.insert((), approvals);
+        plane.kept_registrations.insert((), kept_names);
         Ok(Published { spec, held: cfg })
     }
 }
@@ -1188,18 +1183,27 @@ impl PlaneLife for A2aDoor {
 
     /// After `generation` was published, by `open` or `refresh`: the newest when it is newer. After
     /// a `refresh`, every registration starts again at the fail-closed floor on the config apply:
-    /// nothing sighted, and a kept registration keeps the skills its kept approval was made at (the
-    /// approvals `refresh` kept); `open` kept none, and resets nothing.
+    /// nothing sighted, and a registration `refresh` kept keeps the skills its approval stands at
+    /// now; `open` kept none, and resets nothing.
     fn published(&self, generation: u64) {
         self.newest.with_all(|m| {
             if m.get(&()).is_none_or(|n| *n < generation) {
                 m.insert((), generation);
             }
         });
-        let Some(approvals) = self.kept_approvals.remove(&()) else {
+        let Some(kept) = self.kept_registrations.remove(&()) else {
             return;
         };
+        // THE APPROVALS AS THEY STAND NOW: an approve made while the generation was published is
+        // the operator's latest decision about a kept registration, and is kept with it.
         self.trust.with_all(|m| {
+            let approvals: Vec<(String, std::collections::BTreeMap<String, String>)> = kept
+                .into_iter()
+                .filter_map(|name| {
+                    let approved = m.get(&name).and_then(|s| s.approved.clone())?;
+                    Some((name, approved))
+                })
+                .collect();
             m.clear();
             for (name, approved) in approvals {
                 let standing = crate::card_trust::TrustStanding {
