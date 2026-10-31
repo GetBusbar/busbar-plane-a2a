@@ -410,8 +410,9 @@ fn an_inline_credential_busbar_cannot_present_refuses_the_request() {
     );
 }
 
-/// A callback that passes is the push callback on the task the request opens, and its credential
-/// rides back for the door to hold; the chain gains no event for it.
+/// A callback that passes is the push config record of the task the request opens (G2-14: not a
+/// callback on its row), and its credential rides back for the door to hold; the chain gains no
+/// event for it.
 #[test]
 fn an_inline_callback_that_passes_is_the_opened_tasks_callback() {
     let mut desk = desk();
@@ -433,7 +434,11 @@ fn an_inline_callback_that_passes_is_the_opened_tasks_callback() {
     let held = get(&mut desk.book, ALICE, &task.task_id, 300)
         .unwrap()
         .unwrap();
-    assert_eq!(held.row.push_callback, "https://hook.example/cb?k=v");
+    assert_eq!(held.row.push_callback, "");
+    let cfg = crate::local::held_config(&mut desk.book, ALICE, &task.task_id)
+        .unwrap()
+        .expect("the push config record");
+    assert_eq!(cfg.url, "https://hook.example/cb?k=v");
     assert_eq!(held.next_seq, 3, "submitted and delegated, nothing more");
 }
 

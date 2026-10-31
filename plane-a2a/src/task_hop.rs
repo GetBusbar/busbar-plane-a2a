@@ -35,11 +35,10 @@
 //! A push callback the request carries INLINE (its `configuration`, in any of the three spellings
 //! [`CALLBACK_CONFIG_POINTERS`] names) is judged before anything is opened, by the same floor the
 //! push-config verbs use ([`local::judge_callback`]), and a callback or a credential busbar cannot
-//! honour refuses the request `400`. One that passes is the task's
-//! `push_callback`, on the row it opens or resumes (in that change's own claimed write); on a task
-//! it addresses it is the task's push config, put as the push-config verbs put one, the later set
-//! winning. Its credential rides back to the door ([`Callback`]), which holds it in plane memory as
-//! the delivery does.
+//! honour refuses the request `400`. One that passes is the task's push config record, put as the
+//! push-config verbs put one, the later set winning, on the task it opens, resumes or addresses
+//! alike: delivery, the push-config verbs and a restart read that one record. Its credential rides
+//! back to the door ([`Callback`]), which holds it in plane memory as the delivery does.
 
 use std::collections::BTreeMap;
 
@@ -329,26 +328,10 @@ pub fn open(
         (Some(row), _) => {
             // An addressed task's callback is a PUSH-CONFIG SET, replace semantics, last writer
             // wins: a put of the task's push_config record, never a write of its row, so no other
-            // writer's move of the task is undone.
+            // writer's move of the task is undone. A callback that cannot be registered leaves the
+            // task as it was: the hop goes on.
             if let Some(callback) = callback.as_ref() {
-                let stored = local::PushConfig {
-                    id: inline_config(req.envelope)
-                        .and_then(|c| c.get("id"))
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_string(),
-                    url: callback.url.clone(),
-                    authentication: callback.auth.clone(),
-                    version: version.to_string(),
-                };
-                // A callback that cannot be registered leaves the task as it was: the hop goes on.
-                if let Ok(value) = crate::push::record_value(&stored) {
-                    out.push(Write {
-                        kind: KIND_PUSH_CONFIG,
-                        key: tasks::task_key(req.caller, &row.task_id),
-                        value,
-                    });
-                }
+                out.extend(config_write(req, callback, version, &row.task_id));
             }
             let task = TaskHop {
                 task_id: row.task_id,
@@ -365,11 +348,13 @@ pub fn open(
                 request_id: &row.task_id,
                 now: req.now,
             };
+            // A callback the resume carries is the task's push config record (below), so a
+            // callback the row still holds from before is cleared: the record alone is read.
             let mut plan = |held: &TaskRow| -> Planned {
                 plan_transition(TaskState::Working, at.now)(held).map(|(mut next, kind)| {
-                    if let Some(url) = url {
-                        next.push_callback = url.to_string();
-                        next.push_version = version.to_string();
+                    if url.is_some() {
+                        next.push_callback = String::new();
+                        next.push_version = String::new();
                     }
                     Some((next, kind))
                 })
@@ -387,6 +372,9 @@ pub fn open(
                     ))
                 }
                 Ok(_) => {}
+            }
+            if let Some(callback) = callback.as_ref() {
+                out.extend(config_write(req, callback, version, &row.task_id));
             }
             let task = TaskHop {
                 task_id: row.task_id,
@@ -420,13 +408,7 @@ pub fn open(
                 req.now,
             )
             .map_err(|e| Halt::Failed(e.to_string()))
-            .and_then(|mut t| {
-                t.push_callback = url.map(str::to_string);
-                if url.is_some() {
-                    t.push_version = version.to_string();
-                }
-                tasks::open(reach, &at, t.to_row(), req.member, out)
-            });
+            .and_then(|t| tasks::open(reach, &at, t.to_row(), req.member, out));
             match opened {
                 Err(Halt::Pending) => return Err(Halt::Pending),
                 Err(Halt::Failed(_)) => {
@@ -438,6 +420,10 @@ pub fn open(
                     ))
                 }
                 Ok(_) => {}
+            }
+            // Its inline callback is its push config record, as an addressed task's is.
+            if let Some(callback) = callback.as_ref() {
+                out.extend(config_write(req, callback, version, &task_id));
             }
             // THE SUBMIT'S RETENTION SWEEP, in the submit's own writes: a sweep that fails leaves
             // nothing behind (it writes only once its read is whole) and fails no submit.
@@ -490,6 +476,32 @@ fn is_cancel(envelope: &Value) -> bool {
         .and_then(Value::as_str)
         .and_then(crate::ops::row_for)
         .is_some_and(|row| row.op == crate::ops::OP_TASK_CANCEL)
+}
+
+/// THE PUSH CONFIG RECORD an inline `callback` is on task `task_id`, as the push-config verbs put
+/// one (its `id` the inline config's own, its version the request's); `None` when it cannot be
+/// rendered.
+fn config_write(
+    req: &Request<'_>,
+    callback: &Callback,
+    version: &str,
+    task_id: &str,
+) -> Option<Write> {
+    let stored = local::PushConfig {
+        id: inline_config(req.envelope)
+            .and_then(|c| c.get("id"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        url: callback.url.clone(),
+        authentication: callback.auth.clone(),
+        version: version.to_string(),
+    };
+    crate::push::record_value(&stored).ok().map(|value| Write {
+        kind: KIND_PUSH_CONFIG,
+        key: tasks::task_key(req.caller, task_id),
+        value,
+    })
 }
 
 /// THE INLINE CONFIG OBJECT whose `url` is the callback: the first of the three spellings that
