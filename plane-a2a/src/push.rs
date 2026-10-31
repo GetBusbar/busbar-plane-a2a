@@ -244,6 +244,9 @@ pub struct Delivery {
     pub terminal: bool,
     /// The credential registered with [`Delivery::url`], taken when the delivery was queued.
     pub auth: Option<DeliveryAuth>,
+    /// Queued for the task's push config record (not its inline callback): a deleted config takes
+    /// it ([`Deliveries::forget_task`]).
+    pub from_config: bool,
 }
 
 impl Delivery {
@@ -257,6 +260,7 @@ impl Delivery {
             body: notification_body(task),
             terminal: task.state.is_terminal(),
             auth: None,
+            from_config: false,
         })
     }
 }
@@ -577,19 +581,17 @@ impl Deliveries {
         self.with(|b| b.inline.remove(task_id));
     }
 
-    /// FORGET what `task_id`'s deleted push config was queued for: every waiting delivery not to
-    /// the task's inline callback is dropped, credential and all, and one in flight is not retried.
-    /// The inline callback's own deliveries and credential stay: the caller deleted the config, not
-    /// the callback on the task.
+    /// FORGET what `task_id`'s deleted push config was queued for: every waiting delivery queued for
+    /// the config ([`Delivery::from_config`]) is dropped, credential and all, and one in flight is
+    /// not retried. The inline callback's own deliveries and credential stay: the caller deleted the
+    /// config, not the callback on the task.
     pub fn forget_task(&self, task_id: &str) {
         self.with(|b| {
-            let inline = b.inline.get(task_id).map(|(url, _)| url.clone());
             let Some(queue) = b.queues.get_mut(task_id) else {
                 return;
             };
-            let kept = |w: &Waiting| inline.as_deref() == Some(w.delivery.url.as_str());
             queue.retain_mut(|w| {
-                if kept(w) {
+                if !w.delivery.from_config {
                     return true;
                 }
                 if w.open {

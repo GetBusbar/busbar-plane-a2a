@@ -54,6 +54,7 @@ pub fn queue(deliveries: &Deliveries, row: &TaskRow, config: Option<&PushConfig>
     let Ok(mut task) = Task::from_row(row) else {
         return false;
     };
+    let from_config = config.is_some();
     let auth = match config {
         Some(cfg) => {
             task.push_callback = Some(cfg.url.clone());
@@ -74,6 +75,7 @@ pub fn queue(deliveries: &Deliveries, row: &TaskRow, config: Option<&PushConfig>
         return false;
     };
     delivery.auth = auth;
+    delivery.from_config = from_config;
     deliveries.enqueue(delivery, 0);
     // The delivery is attempted on this wake of the driver ticket, not at the next scheduled tick;
     // while an attempt is held, on that attempt's own completion wake ([`Deliveries::wake`]).

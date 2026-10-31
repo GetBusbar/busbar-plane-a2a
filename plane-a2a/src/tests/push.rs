@@ -376,24 +376,34 @@ fn forgetting_a_task_drops_the_deleted_configs_deliveries_and_keeps_the_inline_o
     let d = Deliveries::default();
     let inline = "https://inline.example/cb";
     d.hold_inline("t1", inline, Some(auth("Bearer", "mine")));
-    let to = |url: &str, body: &[u8]| Delivery {
+    let to = |url: &str, body: &[u8], from_config: bool| Delivery {
         url: url.to_string(),
         body: body.to_vec(),
+        from_config,
         ..delivery("t1")
     };
-    d.enqueue(to("https://config.example/cb", b"in flight"), 0);
-    d.enqueue(to("https://config.example/cb", b"waiting"), 0);
-    d.enqueue(to(inline, b"inline"), 0);
+    d.enqueue(to("https://config.example/cb", b"in flight", true), 0);
+    d.enqueue(to("https://config.example/cb", b"waiting", true), 0);
+    // The inline callback's own delivery stays even when it carries no credential.
+    d.enqueue(to("https://bare.example/cb", b"bare inline", false), 0);
+    d.enqueue(to(inline, b"inline", false), 0);
     let flying = d.next_due(0).expect("the head is attempted");
     assert_eq!(flying.body, b"in flight");
     d.forget_task("t1");
-    assert_eq!(d.depth("t1"), 2, "the flight and the inline delivery stay");
+    assert_eq!(
+        d.depth("t1"),
+        3,
+        "the flight and the inline deliveries stay"
+    );
     assert_eq!(
         d.settle("t1", Attempted::Status(503), 0, 128),
         DeliverySettled::Done(vocab::EV_PUSH_FAILED),
         "the deleted config's delivery in flight is not retried"
     );
-    assert_eq!(d.next_due(0).expect("the inline delivery").body, b"inline");
+    assert_eq!(
+        d.next_due(0).expect("an inline delivery").body,
+        b"bare inline"
+    );
     assert!(
         d.inline_auth("t1", inline).is_some(),
         "the inline credential stays"
@@ -923,7 +933,7 @@ fn a_host_fault_on_the_push_route_is_retryable_not_unauthorised() {
             held_or_stop::<()>(Err(Halt::Failed("store down".into()))),
             Err(Stop::Refused(503, _))
         ),
-        "a store fault on the task read is answered 401"
+        "a store fault on the task read is retryable"
     );
     assert_eq!(
         held_or_stop::<()>(Ok(None)),
@@ -932,7 +942,7 @@ fn a_host_fault_on_the_push_route_is_retryable_not_unauthorised() {
     );
     assert!(
         matches!(verified_or_stop(None, "abc"), Err(Stop::Refused(503, _))),
-        "a signer that could not sign is answered 401"
+        "a signer that could not sign is retryable"
     );
     assert_eq!(
         verified_or_stop(Some(&[7u8; 32]), "not-the-signature"),
@@ -941,9 +951,9 @@ fn a_host_fault_on_the_push_route_is_retryable_not_unauthorised() {
     );
 }
 
-/// A MOVE THE STORE COULD NOT RECORD IS NOT TAKEN (G3-10): a pushed move whose transition or
-/// delivery read fails at the store answers `503` so the agent retries it; `202` with nothing
-/// written would lose the move and the caller's webhook. A move with nothing to record stays `202`.
+/// A MOVE THE STORE COULD NOT RECORD IS NOT TAKEN (G3-10): a pushed move whose transition fails at
+/// the store answers `503` so the agent retries it; `202` with nothing written would lose the move
+/// and the caller's webhook. A move with nothing to record stays `202`.
 #[test]
 fn a_pushed_move_the_store_could_not_record_is_retryable() {
     use crate::push_serve::{moved_or_stop, queued_or_stop, Stop};
@@ -953,15 +963,14 @@ fn a_pushed_move_the_store_could_not_record_is_retryable() {
             moved_or_stop::<()>(Err(Halt::Failed("kept changing".into()))),
             Err(Stop::Refused(503, _))
         ),
-        "a transition the store failed is answered 202"
+        "a transition the store failed is retryable"
     );
     assert_eq!(moved_or_stop::<()>(Ok(None)), Err(Stop::Accepted));
-    assert!(
-        matches!(
-            queued_or_stop(Err(Halt::Failed("store down".into()))),
-            Err(Stop::Refused(503, _))
-        ),
-        "a delivery the store could not read for is dropped behind a 202"
+    // A delivery config that cannot be read after the move is recorded loses the notification
+    // with a warning; the move stands.
+    assert_eq!(
+        queued_or_stop(Err(Halt::Failed("store down".into()))),
+        Ok(())
     );
     assert_eq!(queued_or_stop(Ok(false)), Ok(()));
 }

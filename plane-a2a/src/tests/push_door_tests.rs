@@ -686,6 +686,7 @@ fn a_receiver_whose_addresses_changed_is_still_delivered() {
             body: Vec::new(),
             terminal: false,
             auth: None,
+            from_config: false,
         },
         0,
     );
@@ -809,6 +810,7 @@ fn a_silent_receiver_delays_another_tasks_delivery_by_one_deadline_at_most() {
                 body: Vec::new(),
                 terminal: false,
                 auth: None,
+                from_config: false,
             },
             0,
         );
@@ -890,6 +892,7 @@ fn a_held_attempt_asks_for_no_tick_before_its_deadline() {
             body: Vec::new(),
             terminal: false,
             auth: None,
+            from_config: false,
         },
         start,
     );

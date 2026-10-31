@@ -21,9 +21,10 @@
 //!    forbids, is `202` and moves nothing, queuing no notification);
 //! 7. the caller's own delivery is queued from busbar's own row, never from the pushed body.
 //!
-//! A host or store fault at any step (a signature, a read, a move the store failed to record) is
-//! `503`, retryable, with one warning line: a `401` would stop the agent pushing for good, and a
-//! `202` would drop the move and the caller's notification.
+//! A host or store fault at a step that decides the answer (a signature, the task read, a move the
+//! store failed to record) is `503`, retryable, with one warning line: a `401` would stop the agent
+//! pushing for good, and a `202` would drop the move. A delivery config that cannot be read after
+//! the move is recorded loses that one notification with a warning, and the move stands.
 
 use std::task::Poll;
 
@@ -149,9 +150,16 @@ pub(crate) fn moved_or_stop<T>(moved: Result<Option<T>, Halt>) -> Result<T, Stop
 pub(crate) fn queued_or_stop(queued: Result<bool, Halt>) -> Result<(), Stop> {
     match queued {
         Err(Halt::Pending) => Err(Stop::Pending),
-        // The config read failed: answered retryable, so the move and its notification are made
-        // again rather than the move recorded with no notification.
-        Err(Halt::Failed(_)) => Err(Stop::Refused(503, UNAVAILABLE)),
+        // The config read failed: the move stands (its writes ride the answer) and its
+        // notification is lost, LOUDLY: a warning, never a silent drop and never a refusal that
+        // would hold the task's moves back for as long as the read fails.
+        Err(Halt::Failed(_)) => {
+            busbar_contract::diag_warn!(
+                crate::diagnostics::A2A_RELAYED_OUTCOME_UNRECORDED,
+                "a2a: a pushed move was recorded, its delivery config unreadable; nothing queued"
+            );
+            Ok(())
+        }
         Ok(_) => Ok(()),
     }
 }
