@@ -320,6 +320,45 @@ pub const A2A_CARD_RECORD_UNREAD: Diagnostic = Diagnostic {
     retired: false,
 };
 
+/// A request-stage hook's rewrite yielded no params object: the request is relayed unmodified.
+pub const A2A_HOOK_REWRITE_NOT_APPLIED: Diagnostic = Diagnostic {
+    code: 7045,
+    class: Class::Plane,
+    slug: "a2a-hook-rewrite-not-applied",
+    title: "A2A request hook rewrite not applied (it yields no params object)",
+    severity: Severity::Actionable,
+    summary: "A request-stage hook attached to an A2A agent returned a rewrite whose messages yield no \
+             JSON object to replace the request's params with (for example a content of plain text \
+             such as '[REDACTED]'). As 1.5.5's rewrite contract has it, a rewrite that cannot be \
+             applied leaves the request unmodified: the request is relayed with its original params. \
+             The `stage` field names the hook stage.",
+    action: "Check the hook: an A2A rewrite replaces the request's `params` object, so the hook must \
+            return the rewritten params as a JSON object (an object content, or a JSON string that \
+            parses to one). A hook meant to redact must return the redacted params, not a \
+            placeholder string.",
+    since: "1.6.0",
+    retired: false,
+};
+
+/// A request-stage hook committed a rewrite busbar could not read back: the submission is refused.
+pub const A2A_HOOK_REWRITE_UNREADABLE: Diagnostic = Diagnostic {
+    code: 7046,
+    class: Class::Plane,
+    slug: "a2a-hook-rewrite-unreadable",
+    title: "A2A request hook rewrite could not be read back; submission refused",
+    severity: Severity::Actionable,
+    summary: "A request-stage hook attached to an A2A agent committed a rewrite whose bytes busbar \
+             could not read back (they are not JSON, or not the hook stage's messages list). The \
+             submission is refused with an internal error rather than relayed with the params the \
+             hook said it had replaced. The caller reads the fixed refusal; this diagnostic carries \
+             the reason. The `stage` field names the hook stage.",
+    action: "Check the hook's output against the hook stage's rewrite contract (a JSON object with a \
+            `messages` list). Submissions to the agent keep being refused while the hook commits \
+            unreadable rewrites.",
+    since: "1.6.0",
+    retired: false,
+};
+
 /// A relayed SSE frame was not valid UTF-8 and was dropped. Frozen: `BUSBAR-7104`, the published
 /// catalog entry of the same number, byte for byte.
 pub const PLANE_SSE_FRAME_NOT_UTF8: Diagnostic = Diagnostic {
@@ -363,6 +402,8 @@ pub const DIAGNOSTICS: &[&Diagnostic] = &[
     &A2A_TRUST_SIGHTING_UNRECORDED,
     &A2A_PUSH_CONFIG_UNREAD,
     &A2A_CARD_RECORD_UNREAD,
+    &A2A_HOOK_REWRITE_NOT_APPLIED,
+    &A2A_HOOK_REWRITE_UNREADABLE,
     &PLANE_SSE_FRAME_NOT_UTF8,
 ];
 

@@ -4457,23 +4457,34 @@ pub fn context_session(envelope: &[u8]) -> Option<String> {
 /// `messages` entry's `content` (an object verbatim, or a JSON string that parses to an object) or,
 /// for an entry with no `role`, the entry itself; the LAST entry that yields an object wins.
 ///
-/// `Ok(None)` = not applied: a reply whose entries yield no object leaves the request as it came,
-/// as the served engine's invoke contract left a submission's params untouched.
+/// `Ok(None)` = not applied: a reply whose entries yield no object leaves the request as it came
+/// (1.5.5's `RewriteReply` semantics, one rule for every plane: a rewrite that cannot be applied
+/// leaves the request unmodified), and one diagnostic line names the request hook stage and why,
+/// so it is never silent.
 ///
 /// # Errors
 ///
 /// A committed rewrite busbar cannot read back (bytes that are not JSON, or a reply that is not the
-/// stage's `{"messages": [...]}`): the reason. The unit is REFUSED on it, never relayed with the
-/// params the hook said it had replaced (a redaction hook that reported its rewrite applied is
-/// never silently undone).
+/// stage's `{"messages": [...]}`): the reason, also named in a diagnostic. The unit is REFUSED on
+/// it, never relayed with the params the hook said it had replaced (a redaction hook that reported
+/// its rewrite applied is never silently undone).
 pub fn rewritten_params(rewrite: &[u8]) -> Result<Option<serde_json::Value>, String> {
     use serde_json::Value;
-    let reply: Value =
-        serde_json::from_slice(rewrite).map_err(|e| format!("the output is not JSON: {e}"))?;
+    let refused = |why: String| {
+        busbar_contract::diag_warn!(
+            crate::diagnostics::A2A_HOOK_REWRITE_UNREADABLE,
+            stage = "request",
+            "a2a: the request hook stage's committed rewrite could not be read back ({why}); the \
+             submission is refused"
+        );
+        why
+    };
+    let reply: Value = serde_json::from_slice(rewrite)
+        .map_err(|e| refused(format!("the output is not JSON: {e}")))?;
     let messages = reply
         .get("messages")
         .and_then(Value::as_array)
-        .ok_or_else(|| "the output is JSON but names no `messages` list".to_string())?;
+        .ok_or_else(|| refused("the output is JSON but names no `messages` list".to_string()))?;
     let mut params: Option<Value> = None;
     for message in messages {
         let candidate = match message.get("content") {
@@ -4491,6 +4502,15 @@ pub fn rewritten_params(rewrite: &[u8]) -> Result<Option<serde_json::Value>, Str
         if resolved.is_some() {
             params = resolved;
         }
+    }
+    if params.is_none() {
+        busbar_contract::diag_warn!(
+            crate::diagnostics::A2A_HOOK_REWRITE_NOT_APPLIED,
+            stage = "request",
+            "a2a: the request hook stage's rewrite was not applied: none of its {} messages \
+             yields a params object; the request is relayed unmodified",
+            messages.len()
+        );
     }
     Ok(params)
 }
@@ -4618,7 +4638,16 @@ slot!(
                     };
                     with_params(&envelope, params)
                         .map(|(value, bytes)| (value, bytes, kept))
-                        .ok_or_else(|| "the request is no envelope to write it into".to_string())
+                        .ok_or_else(|| {
+                            busbar_contract::diag_warn!(
+                                crate::diagnostics::A2A_HOOK_REWRITE_UNREADABLE,
+                                stage = "request",
+                                "a2a: the request hook stage's committed rewrite could not be \
+                                 written back (the request is no envelope to write it into); \
+                                 the submission is refused"
+                            );
+                            "the request is no envelope to write it into".to_string()
+                        })
                 })
                 .transpose()
         }) {
