@@ -275,3 +275,41 @@ fn a_dot_segment_id_is_refused_rather_than_composed() {
     let f = compose(BASE, "GetTask", &json!({ "id": "...", "historyLength": 1 })).unwrap();
     assert!(f.target.contains("/tasks/..."), "{}", f.target);
 }
+
+/// G2-22: A2A's HTTP+JSON binding addresses every operation under an optional leading
+/// `/{tenant}` segment (the vendored proto's `additional_bindings`), so a request naming its
+/// `tenant` is carried there, not refused (a read) nor put in the body (a send).
+#[test]
+fn a_named_tenant_is_carried_as_the_leading_path_segment() {
+    let f = compose(AGENT, "GetTask", &json!({ "id": "t", "tenant": "acme" }))
+        .expect("a read naming its tenant is framable");
+    assert_eq!((f.verb, f.target.as_str()), ("GET", "/a2a/acme/tasks/t"));
+    let f = compose(
+        AGENT,
+        "SendMessage",
+        &json!({ "tenant": "acme/x", "message": { "messageId": "m" } }),
+    )
+    .unwrap();
+    assert_eq!(f.target, "/a2a/acme%2Fx/message:send");
+    assert_eq!(f.body, br#"{"message":{"messageId":"m"}}"#);
+    // An empty tenant is the proto's default: no segment.
+    let f = compose(AGENT, "GetTask", &json!({ "id": "t", "tenant": "" })).unwrap();
+    assert_eq!(f.target, "/a2a/tasks/t");
+    assert!(compose(AGENT, "GetTask", &json!({ "id": "t", "tenant": ".." })).is_err());
+}
+
+/// G2-23: the operator's own `url:` query (a function key, an api-version) is kept on the
+/// HTTP+JSON binding as the JSON-RPC binding keeps it ([`crate::relay::target_of`]); the
+/// operation's members follow it.
+#[test]
+fn the_operators_url_query_is_kept_ahead_of_the_operations_members() {
+    let f = compose("https://a.example/x?code=K", "GetTask", &json!({ "id": "t" })).unwrap();
+    assert_eq!(f.target, "/x/tasks/t?code=K");
+    let f = compose(
+        "https://a.example/x?code=K",
+        "GetTask",
+        &json!({ "id": "t", "historyLength": 2 }),
+    )
+    .unwrap();
+    assert_eq!(f.target, "/x/tasks/t?code=K&historyLength=2");
+}
