@@ -1862,13 +1862,12 @@ fn settle_task(
     // Each move owes its push notification. The config reads are made on every entry, so a
     // re-entry's host calls keep their order; each notification is queued once.
     for (i, row) in moved.iter().enumerate() {
-        let config = match crate::local::held_config(&mut via, caller, &row.task_id) {
+        let read = match crate::local::held_config(&mut via, caller, &row.task_id) {
             Err(Halt::Pending) => return pend(hop, settles),
-            Err(Halt::Failed(_)) => None,
-            Ok(config) => config,
+            read => read,
         };
         if i >= hop.queued {
-            crate::push_door::queue(&reach.plane.deliveries, row, config.as_ref());
+            crate::push_door::queue_read(&reach.plane.deliveries, row, read);
             crate::push_door::ended(&reach.plane.tokens, row);
             hop.queued = i + 1;
         }

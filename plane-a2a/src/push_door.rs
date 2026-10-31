@@ -73,6 +73,17 @@ pub fn queue(deliveries: &Deliveries, row: &TaskRow, config: Option<&PushConfig>
     true
 }
 
+/// QUEUE what `row`'s move owes over the read of its task's push config (`read`, the record read
+/// [`local::held_config`] made): [`queue`] on what the read found.
+pub fn queue_read(
+    deliveries: &Deliveries,
+    row: &TaskRow,
+    read: Result<Option<PushConfig>, Halt>,
+) -> bool {
+    let config = read.unwrap_or_default();
+    queue(deliveries, row, config.as_ref())
+}
+
 /// RELEASE busbar's own callback token for `row`'s task once the move has ENDED it, whichever way
 /// it ended (the relayed answer, a cancel, a mirror refresh, the agent's own push): an ended task
 /// has nothing left to report, and a token held past it would count against
