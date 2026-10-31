@@ -16,7 +16,8 @@
 use busbar_contract::diagnostic::{Class, Diagnostic, Severity};
 
 /// A restored A2A task's per-task provenance chain failed verification at boot — tamper evidence.
-/// Lives in `a2a/mod.rs`, but the subject is the provenance chain's integrity, so it is a 2000 code.
+/// Raised by the restore path in `task_door.rs`; the subject is the provenance chain's integrity, so it
+/// is a 2000 code.
 pub const A2A_TASK_CHAIN_VERIFY_FAILED: Diagnostic = Diagnostic {
     code: 2030,
     class: Class::Audit,
