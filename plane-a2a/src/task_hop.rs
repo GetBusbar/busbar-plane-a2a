@@ -37,8 +37,9 @@
 //! honour refuses the request `400`. One that passes is the task's
 //! `push_callback`, on the row it opens or resumes (in that change's own claimed write); on a task
 //! it addresses or resumes it is also the task's push config, put as the push-config verbs put one,
-//! the later set winning. Its credential rides back to the door ([`Callback`]), which holds it in plane memory as
-//! the delivery does.
+//! the later set winning. On a task it opens or resumes, its credential rides back to the door
+//! ([`Callback`]), which holds it in plane memory beside its URL as the delivery does; on an
+//! addressed task the config record is its only home.
 
 use std::collections::BTreeMap;
 
@@ -412,6 +413,9 @@ pub fn open(
         }
     };
     let (instead, references) = translated(reach, req, backends)?;
+    // An addressed task's callback is its push config record, the credential's home: nothing rides
+    // back for plane memory to hold (a terminal task, which no move follows, would hold it forever).
+    let callback = callback.filter(|_| !task.addressed);
     Ok(Opened::Hop {
         task: Box::new(TaskHop { references, ..task }),
         instead,
