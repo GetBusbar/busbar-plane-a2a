@@ -152,6 +152,7 @@ set -euo pipefail
 # written from the root so the script reads the same whether it is invoked from CI, from the root,
 # or from its own directory.
 cd "$(dirname "$0")/../.."
+SUBJECT_MINTER="$PWD/testing/a2a-subject/mint-audience-token.mjs"
 
 say() { printf '%s\n' "$*"; }
 die() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
@@ -641,15 +642,14 @@ sys.stdout.write(t)') \
     || die "the admin API did not mint a key. Without a real binding there is no subject to bind a \
 token to, and a made-up one would be refused."
 
-  # THE MINTER IS THE MCP LEG'S, REUSED RATHER THAN COPIED. busbar's token format is one format
-  # across both planes — `governance/signing.rs` verifies MCP's and A2A's identically, and only the
-  # `a` (audience) claim differs — so a second copy of it here would be a second thing to keep in
-  # step with a wire format, which is precisely the duplication this release has already paid for
-  # three times.
-  # This plane repo carries no `scripts/mcp-subject/`: the minter is busbar's, taken from the busbar
-  # checkout the subject was built from (`BUSBAR_CHECKOUT`, busbar at the `.busbar-ref` pin), so the
-  # token format it signs is the one that busbar verifies. In busbar's own tree it is local.
-  local minter="${BUSBAR_CHECKOUT:+$BUSBAR_CHECKOUT/}scripts/mcp-subject/mint-audience-token.mjs"
+  # THE MINTER IS THE MCP LEG'S. busbar's token format is one format across both planes —
+  # `governance/signing.rs` verifies MCP's and A2A's identically, and only the `a` (audience) claim
+  # differs. It left busbar's tree with the MCP harness (busbar 7f43d8a777; it is not at the
+  # `.busbar-ref` pin), so this leg carries plane-mcp's copy beside this script
+  # (plane-mcp d06c93ed2d scripts/mcp-subject/mint-audience-token.mjs, byte for byte). A drift from
+  # the format busbar verifies cannot pass: the boundary proof below must see the bound token
+  # admitted and the tampered and wrong-audience ones refused, by the same booted process.
+  local minter="$SUBJECT_MINTER"
   [ -f "$minter" ] || die "$minter is missing; the A2A subject leg mints its credential with the \
 same helper the MCP leg does, because busbar's token format is one format across both planes."
   local bound wrong
