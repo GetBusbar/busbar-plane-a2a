@@ -4102,7 +4102,7 @@ slot!(
             }
         };
         let mut standing = plane.trust.get(&name).unwrap_or_default();
-        let state_now = |plane: &A2aDoor| crate::card_trust::verdict_state(verdict(plane, &name));
+        let state_now = |plane: &A2aDoor| verdict(plane, &name);
         // The card record: a card this look verified rides the verb's
         // answer as the agent's `card` host records (split under the host's record ceiling),
         // which a later `open` warms the held cards from.

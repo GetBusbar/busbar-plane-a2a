@@ -708,16 +708,18 @@ fn skill_drift(
     (added, changed, removed)
 }
 
-/// The view, `state` being the state the verb answers and `kernel` the kernel's own verdict: a key
-/// the kernel holds no approval for (`pending`) has approved nothing, whatever skills the plane
-/// last held for it.
+/// The view, `state` being the state the verb answers and `distrust` the kernel's own verdict (a
+/// `trust.serves` answer): a key the kernel holds no approval for (`pending`) has approved nothing,
+/// whatever skills the plane last held for it, and `pin_changed` is the kernel's own word that the
+/// card moved (`DISTRUST_CHANGED`), whatever the latest look did.
 fn agent_view(
     name: &str,
     state: State,
-    kernel: State,
+    distrust: u64,
     sighting: &Sighting,
     approved: Option<&BTreeMap<String, String>>,
 ) -> String {
+    let kernel = verdict_state(distrust);
     let state = if sighting.failure().is_some() {
         State::Error
     } else {
@@ -730,7 +732,7 @@ fn agent_view(
         state: state.word(),
         pin_mechanism: sighted_mechanism(sighting),
         fingerprint: sighting.seen().and_then(|o| o.pin.fingerprint()),
-        pin_changed: state == State::Quarantined,
+        pin_changed: distrust == svc::DISTRUST_CHANGED,
         added,
         changed,
         removed,
@@ -748,15 +750,15 @@ fn agent_view(
 #[must_use]
 pub fn connect_view(
     name: &str,
-    state: State,
+    distrust: u64,
     sighting: &Sighting,
     approved: Option<&BTreeMap<String, String>>,
 ) -> String {
-    let shown = match state {
+    let shown = match verdict_state(distrust) {
         State::Approved => State::Pending,
         other => other,
     };
-    agent_view(name, shown, state, sighting, approved)
+    agent_view(name, shown, distrust, sighting, approved)
 }
 
 /// `approve`'s answer: the registration as it now stands on the kernel's trust book (`state`), its
@@ -764,11 +766,11 @@ pub fn connect_view(
 #[must_use]
 pub fn registration_view(
     name: &str,
-    state: State,
+    distrust: u64,
     sighting: &Sighting,
     approved: Option<&BTreeMap<String, String>>,
 ) -> String {
-    agent_view(name, state, state, sighting, approved)
+    agent_view(name, verdict_state(distrust), distrust, sighting, approved)
 }
 
 /// DOES WHAT THE ENDPOINT SERVES NOW AGREE WITH WHAT THE OPERATOR SAYS THEY APPROVED? Every arm
