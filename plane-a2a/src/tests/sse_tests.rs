@@ -13,7 +13,8 @@ fn fed(r: &mut SseReader, chunk: &[u8]) -> Vec<String> {
     r.frames().map(str::to_string).collect()
 }
 
-/// All three of the spec's line terminators end a line, so all nine of their pairings end a frame —
+/// All three of the spec's line terminators end a line, so every pairing of two of them ends a frame
+/// (eight distinct pairings: a CR followed by an LF is one CRLF, not a pair), each listed once —
 /// mirroring the http transport's `sse::proto` test `every_spec_line_terminator_pairing_ends_a_frame`
 /// over `SseReader::feed` rather than the bare scanner. A bare-CR stream (or one mixing terminators
 /// across the frame boundary) must frame exactly like an LF/CRLF one.
@@ -25,7 +26,7 @@ fn every_spec_line_terminator_pairing_ends_a_frame() {
         ("data: a\r\n\rrest", "data: a\r\n\r"),
         ("data: a\n\r\nrest", "data: a\n\r\n"),
         ("data: a\r\n\n", "data: a\r\n\n"),
-        ("data: a\n\r\n", "data: a\n\r\n"),
+        ("data: a\r\r\nrest", "data: a\r\r\n"),
         ("data: a\n\nrest", "data: a\n\n"),
         ("data: a\r\n\r\nrest", "data: a\r\n\r\n"),
     ];
