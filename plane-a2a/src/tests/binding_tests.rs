@@ -105,7 +105,10 @@ fn a_push_config_route_keeps_the_config_id_apart_from_the_task() {
     )
     .unwrap();
     assert_eq!(f.verb, "DELETE");
-    assert_eq!(f.target, "/a2a/v1/tasks/t1/pushNotificationConfigs/c1?tenant=t1");
+    assert_eq!(
+        f.target,
+        "/a2a/v1/tasks/t1/pushNotificationConfigs/c1?tenant=t1"
+    );
 }
 
 #[test]
@@ -303,7 +306,12 @@ fn a_named_tenant_is_carried_as_the_leading_path_segment() {
 /// operation's members follow it.
 #[test]
 fn the_operators_url_query_is_kept_ahead_of_the_operations_members() {
-    let f = compose("https://a.example/x?code=K", "GetTask", &json!({ "id": "t" })).unwrap();
+    let f = compose(
+        "https://a.example/x?code=K",
+        "GetTask",
+        &json!({ "id": "t" }),
+    )
+    .unwrap();
     assert_eq!(f.target, "/x/tasks/t?code=K");
     let f = compose(
         "https://a.example/x?code=K",

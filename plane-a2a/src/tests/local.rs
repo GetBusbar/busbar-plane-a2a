@@ -905,7 +905,12 @@ fn a_v03_get_without_a_config_id_reads_the_tasks_one_config() {
 fn a_task_id_with_a_colon_pages_and_the_loop_ends() {
     let mut desk = desk();
     for (n, at) in [(1, 400), (2, 500), (3, 600)] {
-        submitted(&mut desk.book, "carol", &format!("a2a-team:billing-{n}"), at);
+        submitted(
+            &mut desk.book,
+            "carol",
+            &format!("a2a-team:billing-{n}"),
+            at,
+        );
     }
     let mut token = String::new();
     let mut seen = Vec::new();
@@ -916,15 +921,27 @@ fn a_task_id_with_a_colon_pages_and_the_loop_ends() {
             json!({ "pageSize": 1, "pageToken": token }),
             "carol",
         );
-        seen.push(body["result"]["tasks"][0]["id"].as_str().unwrap().to_string());
-        token = body["result"]["nextPageToken"].as_str().unwrap().to_string();
+        seen.push(
+            body["result"]["tasks"][0]["id"]
+                .as_str()
+                .unwrap()
+                .to_string(),
+        );
+        token = body["result"]["nextPageToken"]
+            .as_str()
+            .unwrap()
+            .to_string();
         if token.is_empty() {
             break;
         }
     }
     assert_eq!(
         seen,
-        ["a2a-team:billing-3", "a2a-team:billing-2", "a2a-team:billing-1"]
+        [
+            "a2a-team:billing-3",
+            "a2a-team:billing-2",
+            "a2a-team:billing-1"
+        ]
     );
 }
 
