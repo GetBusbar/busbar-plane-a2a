@@ -909,3 +909,37 @@ fn a_held_attempt_asks_for_no_tick_before_its_deadline() {
     assert_eq!(drive_over(&mut host, &d, &attempting), Outcome::Ready);
     assert_eq!(next_tick_ns(&d, &attempting), start);
 }
+
+/// G1-31: A PUSH CONFIG THE STORE FAILED TO READ IS NOT "NO CONFIG": the task's move is not queued
+/// to a destination guessed without it, and the credential its registered receiver is owed is never
+/// dropped on a failed read (a notification still waiting presents it).
+#[test]
+fn a_failed_config_read_never_drops_the_receivers_credential() {
+    let mut book = Book::default();
+    let row = moved(&mut book, "");
+    let auth = DeliveryAuth {
+        scheme: "Bearer".into(),
+        credentials: busbar_contract::abi::sdk::test_support::chip::cred("tok"),
+    };
+    let d = Deliveries::default();
+    assert!(queue(
+        &d,
+        &row,
+        Some(&config("https://hook.example/cb", Some(auth)))
+    ));
+    let mut ended = row.clone();
+    ended.state = "completed".into();
+    assert!(!queue_read(
+        &d,
+        &ended,
+        Err(Halt::Failed("the store is down".into()))
+    ));
+    let waiting = d
+        .next_due(0)
+        .expect("the working move's notification still waits");
+    let (_, sealed) = d.request(&waiting);
+    assert!(
+        sealed.into_iter().any(|(_, n, _)| n == b"authorization"),
+        "the receiver's credential is still presented"
+    );
+}
