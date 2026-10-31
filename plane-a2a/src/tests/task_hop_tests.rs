@@ -25,6 +25,8 @@ struct Desk {
     /// The claims made, and the one (counted from 1) the store fails.
     claims: usize,
     failed_claim: Option<usize>,
+    /// The lists of every task row of every caller (the retention sweep's read).
+    full_lists: usize,
 }
 
 impl Records for Desk {
@@ -37,6 +39,9 @@ impl Records for Desk {
     fn list(&mut self, kind: &str, prefix: &str) -> Result<Vec<(String, Vec<u8>)>, Halt> {
         if self.unreadable {
             return Err(Halt::Failed("the store is down".into()));
+        }
+        if kind == KIND_TASK && prefix.is_empty() {
+            self.full_lists += 1;
         }
         self.book.list(kind, prefix)
     }
@@ -79,6 +84,7 @@ fn desk() -> Desk {
         unreadable: false,
         claims: 0,
         failed_claim: None,
+        full_lists: 0,
     }
 }
 
@@ -1699,4 +1705,15 @@ fn a_request_naming_two_different_task_ids_is_refused() {
         "params": { "id": "t1", "taskId": "t1" } });
     let (task, _) = hop(opened(&mut desk, &envelope, ALICE));
     assert_eq!(task.task_id, "t1");
+}
+
+/// G2-32: the retention sweep reads every caller's task rows, so it is not paid on every submit:
+/// two submits within the sweep interval, with nothing found to retire, read the rows once.
+#[test]
+fn two_submits_within_the_sweep_interval_read_the_rows_once() {
+    let mut desk = desk();
+    hop(opened(&mut desk, &send(json!({})), ALICE));
+    desk.random = [9, 9, 9, 9, 9, 9, 9, 9];
+    hop(opened(&mut desk, &send(json!({})), ALICE));
+    assert_eq!(desk.full_lists, 1);
 }
