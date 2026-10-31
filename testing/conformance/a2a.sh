@@ -314,13 +314,19 @@ negative_tck() {
 # SUBJECT: busbar at the pin, this plane patched in, built here, booted by the repo's own boot.sh.
 # ------------------------------------------------------------------------------------------------
 build_subject() {
-  # The plane busbar links is a git dependency at a rev; this checkout's plane-a2a replaces it by a
-  # run-time `--config` patch (nothing committed). busbar's own [patch] already routes the busbar
-  # crates the plane names to BUSBAR_CHECKOUT.
-  ( cd "$BUSBAR_CHECKOUT" && cargo build -p busbar \
-      --config "patch.\"https://github.com/GetBusbar/busbar-plane-a2a\".busbar-plane-a2a.path=\"$ROOT/plane-a2a\"" ) \
+  # The package is busbar's default distribution (dist/default), staged by compose.sh with its rows
+  # pointed at this plane's door and declares; the root crate (`-p busbar`) is core with no plane
+  # linked and refuses the `agents:` section at boot. compose-selftest.sh holds the composition
+  # first. The plane busbar links is a git dependency at a rev; this checkout's plane-a2a replaces
+  # it by a run-time `--config` patch (nothing committed). busbar's own [patch] already routes the
+  # busbar crates the plane names to BUSBAR_CHECKOUT.
+  local stage="$W/subject-src" manifest
+  bash testing/a2a-subject/compose-selftest.sh "$BUSBAR_CHECKOUT" "$stage" || return 1
+  manifest="$(bash testing/a2a-subject/compose.sh "$BUSBAR_CHECKOUT" "$ROOT/plane-a2a" "$stage")" || return 1
+  cargo build --manifest-path "$manifest" --bin busbar \
+      --config "patch.\"https://github.com/GetBusbar/busbar-plane-a2a\".busbar-plane-a2a.path=\"$ROOT/plane-a2a\"" \
     || return 1
-  SUBJECT_BIN="${CARGO_TARGET_DIR:-$BUSBAR_CHECKOUT/target}/debug/busbar"
+  SUBJECT_BIN="${CARGO_TARGET_DIR:-$(dirname "$manifest")/target}/debug/busbar"
   [ -x "$SUBJECT_BIN" ] || return 1
 }
 
