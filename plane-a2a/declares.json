@@ -103,6 +103,15 @@
       "since": "1.6.0"
     },
     {
+      "code": 7040,
+      "slug": "a2a-backend-task-id-unheld",
+      "title": "A2A far-end task id longer than the plane holds was not recorded",
+      "severity": "actionable",
+      "summary": "An agent answered a task with its own task id, and that id is longer than the plane holds (1024 bytes): the far end's ids are untrusted input, and the map that translates them is bounded in bytes as it is in entries. The id is not recorded, so the task keeps busbar's own id and a later request naming the task reaches the agent under busbar's id, which the agent may not know. The `task` field carries busbar's task id and `bytes` the length the agent named.",
+      "action": "Investigate the named agent: it issues task ids far longer than any A2A agent needs. Follow-up requests on the affected tasks may be answered 'task not found' by the agent until it issues ids of an ordinary length.",
+      "since": "1.6.0"
+    },
+    {
       "code": 7104,
       "slug": "plane-sse-frame-not-utf8",
       "title": "A relayed SSE frame was not valid UTF-8 and was dropped",

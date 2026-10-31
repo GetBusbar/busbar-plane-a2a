@@ -221,6 +221,26 @@ pub const A2A_SPLIT_RECORD_STRAY_PARTS: Diagnostic = Diagnostic {
     retired: false,
 };
 
+/// A far end named a task id longer than the plane holds: busbar's own id stands for the task.
+pub const A2A_BACKEND_TASK_ID_UNHELD: Diagnostic = Diagnostic {
+    code: 7040,
+    class: Class::Plane,
+    slug: "a2a-backend-task-id-unheld",
+    title: "A2A far-end task id longer than the plane holds was not recorded",
+    severity: Severity::Actionable,
+    summary: "An agent answered a task with its own task id, and that id is longer than the plane \
+             holds (1024 bytes): the far end's ids are untrusted input, and the map that translates \
+             them is bounded in bytes as it is in entries. The id is not recorded, so the task keeps \
+             busbar's own id and a later request naming the task reaches the agent under busbar's id, \
+             which the agent may not know. The `task` field carries busbar's task id and `bytes` the \
+             length the agent named.",
+    action: "Investigate the named agent: it issues task ids far longer than any A2A agent needs. \
+            Follow-up requests on the affected tasks may be answered 'task not found' by the agent \
+            until it issues ids of an ordinary length.",
+    since: "1.6.0",
+    retired: false,
+};
+
 /// A relayed SSE frame was not valid UTF-8 and was dropped. Frozen: `BUSBAR-7104`, the published
 /// catalog entry of the same number, byte for byte.
 pub const PLANE_SSE_FRAME_NOT_UTF8: Diagnostic = Diagnostic {
@@ -259,6 +279,7 @@ pub const DIAGNOSTICS: &[&Diagnostic] = &[
     &A2A_TASK_STATE_UNREAD,
     &A2A_SPLIT_RECORD_UNREAD,
     &A2A_SPLIT_RECORD_STRAY_PARTS,
+    &A2A_BACKEND_TASK_ID_UNHELD,
     &PLANE_SSE_FRAME_NOT_UTF8,
 ];
 

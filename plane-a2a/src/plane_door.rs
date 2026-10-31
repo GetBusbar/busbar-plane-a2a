@@ -889,6 +889,10 @@ pub(crate) fn verb_answer(
 /// The most far-end task ids the instance remembers.
 pub const MAX_BACKEND_IDS: usize = 100_000;
 
+/// The longest far-end task id the instance holds, in bytes: the far end's id is untrusted input,
+/// so the map is bounded in bytes as well as in entries ([`MAX_BACKEND_IDS`]).
+pub const MAX_BACKEND_ID_BYTES: usize = 1024;
+
 /// The far end's own task ids, by `<caller>/<busbar task id>`, bounded: past the bound the id
 /// recorded longest ago is forgotten first, whichever caller it is for, so one caller's volume
 /// never pushes out another caller's newer ids because of how their references sort.
@@ -919,8 +923,11 @@ impl BackendIds {
 
     /// Hold `id` under `key`; past `cap`, the id recorded longest ago is forgotten. A key held
     /// already keeps its place and forgets nothing (insertion order, its
-    /// bound included).
-    pub(crate) fn record(&self, cap: usize, key: String, id: String) {
+    /// bound included). An id longer than [`MAX_BACKEND_ID_BYTES`] is not held (`false`).
+    pub(crate) fn record(&self, cap: usize, key: String, id: String) -> bool {
+        if id.len() > MAX_BACKEND_ID_BYTES {
+            return false;
+        }
         self.0.with_all(|m| {
             let r = m.entry(()).or_default();
             if let Some((_, held)) = r.ids.get_mut(&key) {
@@ -938,6 +945,7 @@ impl BackendIds {
             r.order.insert(at, key.clone());
             r.ids.insert(key, (at, id));
         });
+        true
     }
 }
 
@@ -1892,10 +1900,21 @@ fn settle_task(
         };
         // A far end that issued the SAME id busbar did needs no translation and holds no slot.
         if let Some(backend) = backend.filter(|b| *b != task.task_id) {
-            reach
-                .plane
-                .backends
-                .record(MAX_BACKEND_IDS, task_key(caller, &task.task_id), backend);
+            let bytes = backend.len();
+            let held = reach.plane.backends.record(
+                MAX_BACKEND_IDS,
+                task_key(caller, &task.task_id),
+                backend,
+            );
+            if !held {
+                busbar_contract::diag_warn!(
+                    crate::diagnostics::A2A_BACKEND_TASK_ID_UNHELD,
+                    task = %task.task_id,
+                    bytes,
+                    "a2a: the agent's own task id ({bytes} bytes) is longer than the plane holds; \
+                     the task keeps busbar's id"
+                );
+            }
         }
     }
     hop.outbox.writes.extend(writes.split_off(seeded));
@@ -3836,7 +3855,9 @@ fn verify_agent_on_call(
     standing.sighting = cadence.settle(looked.sighting, &mut standing.ledger, now_ms);
     if let Some(card) = looked.card {
         let card = std::sync::Arc::new(card);
-        plane.cards.hold_shared(member, generation, std::sync::Arc::clone(&card));
+        plane
+            .cards
+            .hold_shared(member, generation, std::sync::Arc::clone(&card));
         // A LOOK THAT PENDED ACROSS A REFRESH refreshes the newest generation's card too, when that
         // generation registers the agent as the unit's did (a changed registration holds none
         // until it is looked at again).
