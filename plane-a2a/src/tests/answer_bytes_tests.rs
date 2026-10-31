@@ -181,3 +181,33 @@ fn a_request_is_translated_at_its_ids_spans_only() {
         None
     );
 }
+
+/// G2-34: the reading copy is built in one pass. A far-end answer of many out-of-range numbers
+/// (untrusted, and as large as a reply may be) is read in time linear in its size: 200k
+/// replacements in a 1.2 MB array complete well inside a budget the old splice-per-number
+/// (each shifting the whole tail, ~10^11 byte moves here) cannot meet.
+#[test]
+fn many_out_of_range_numbers_are_read_in_one_pass() {
+    const N: usize = 200_000;
+    let mut b = b"[".to_vec();
+    for k in 0..N {
+        if k > 0 {
+            b.push(b',');
+        }
+        b.extend_from_slice(b"1e999");
+    }
+    b.push(b']');
+    let started = std::time::Instant::now();
+    let r = readable(&b);
+    let took = started.elapsed();
+    let mut want = b"[".to_vec();
+    for k in 0..N {
+        if k > 0 {
+            want.push(b',');
+        }
+        want.push(b'0');
+    }
+    want.push(b']');
+    assert_eq!(&*r, &want[..]);
+    assert!(took < std::time::Duration::from_secs(3), "took {took:?}");
+}
