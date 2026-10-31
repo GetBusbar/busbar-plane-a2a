@@ -92,6 +92,54 @@ pub(crate) fn push_move(held: TaskState, document: &Value) -> Option<TaskState> 
     crate::task_identity::reported_task_state(document).filter(|reported| *reported != held)
 }
 
+/// Where the route stops short of recording a move: PENDING, a refusal, or `202` with nothing
+/// recorded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Stop {
+    /// A records call pends: the op runs again.
+    Pending,
+    /// Refused with this status and sentence.
+    Refused(u32, &'static str),
+    /// Taken, nothing recorded.
+    Accepted,
+}
+
+/// Step 1, the capability's signature: the host's `signature` of the claimed task is the one
+/// `presented`, or the route stops.
+pub(crate) fn verified_or_stop(signature: Option<&[u8]>, presented: &str) -> Result<(), Stop> {
+    match signature {
+        Some(sig) if crate::push::verified(sig, presented) => Ok(()),
+        Some(_) | None => Err(Stop::Refused(401, UNAUTHORISED)),
+    }
+}
+
+/// Step 4, the task read: the task held for its caller, or the route stops.
+pub(crate) fn held_or_stop<T>(read: Result<Option<T>, Halt>) -> Result<T, Stop> {
+    match read {
+        Err(Halt::Pending) => Err(Stop::Pending),
+        Err(Halt::Failed(_)) | Ok(None) => Err(Stop::Refused(401, UNAUTHORISED)),
+        Ok(Some(held)) => Ok(held),
+    }
+}
+
+/// Step 6, the move through the transition table (an illegal move already answered `202` before
+/// it): the moved row, or the route stops.
+pub(crate) fn moved_or_stop<T>(moved: Result<Option<T>, Halt>) -> Result<T, Stop> {
+    match moved {
+        Err(Halt::Pending) => Err(Stop::Pending),
+        Err(Halt::Failed(_)) | Ok(None) => Err(Stop::Accepted),
+        Ok(Some(row)) => Ok(row),
+    }
+}
+
+/// Step 7, the caller's own delivery queued: on, or the route stops.
+pub(crate) fn queued_or_stop(queued: Result<bool, Halt>) -> Result<(), Stop> {
+    match queued {
+        Err(Halt::Pending) => Err(Stop::Pending),
+        Err(Halt::Failed(_)) | Ok(_) => Ok(()),
+    }
+}
+
 /// `serve` of the push route.
 pub(crate) fn serve(
     plane: &A2aDoor,
@@ -116,10 +164,17 @@ pub(crate) fn serve(
     else {
         return refused(&input, &mut out, 401, UNAUTHORISED, &[]);
     };
-    let verified = signature(plane, ticket, 0, &task_id)
-        .is_some_and(|sig| crate::push::verified(&sig, presented));
-    if !verified {
-        return refused(&input, &mut out, 401, UNAUTHORISED, &[]);
+    let stop = |input: &Lent<'_, ServeIn>, out: &mut Out<'_, ServeOut>, stop: Stop| match stop {
+        Stop::Pending => {
+            instance.park(Admitted);
+            Outcome::Pending
+        }
+        Stop::Refused(status, sentence) => refused(input, out, status, sentence, &[]),
+        Stop::Accepted => accepted(input, out, &[]),
+    };
+    let signed = signature(plane, ticket, 0, &task_id);
+    if let Err(s) = verified_or_stop(signed.as_deref(), presented) {
+        return stop(&input, &mut out, s);
     }
     let Some(host) = plane.host.as_ref() else {
         return refused(&input, &mut out, 401, UNAUTHORISED, &[]);
@@ -153,16 +208,9 @@ pub(crate) fn serve(
     }
     let mut via = crate::task_door::Via::new(host, plane.services, ticket, 2, &plane.grown);
     // 4. THE TASK, held and live.
-    let pend = || {
-        instance.park(Admitted);
-        Outcome::Pending
-    };
-    let held = match tasks::get(&mut via, &caller, &task_id, now) {
-        Err(Halt::Pending) => return pend(),
-        Err(Halt::Failed(_)) | Ok(None) => {
-            return refused(&input, &mut out, 401, UNAUTHORISED, &[]);
-        }
-        Ok(Some(held)) => held,
+    let held = match held_or_stop(tasks::get(&mut via, &caller, &task_id, now)) {
+        Err(s) => return stop(&input, &mut out, s),
+        Ok(held) => held,
     };
     let Ok(task) = Task::from_row(&held.row) else {
         return refused(&input, &mut out, 401, UNAUTHORISED, &[]);
@@ -187,23 +235,35 @@ pub(crate) fn serve(
     let Some(reported) = push_move(task.state, &document) else {
         return accepted(&input, &mut out, &[]);
     };
+    // A move the table forbids (a push about a state the task cannot reach from where it is) is
+    // the agent being redundant: `202` stops its retry loop, nothing recorded.
+    if crate::a2a::task::plan_transition(reported, now)(&held.row).is_err() {
+        return accepted(&input, &mut out, &[]);
+    }
     let mut writes = Vec::new();
     let at = Stamp {
         caller: &caller,
         request_id: "",
         now,
     };
-    let moved = match tasks::transition(&mut via, &at, &task_id, reported, &mut writes) {
-        Err(Halt::Pending) => return pend(),
-        // A move that cannot be recorded (commonly a push about a task already terminal) is the
-        // agent being redundant: `202` stops its retry loop.
-        Err(Halt::Failed(_)) | Ok(None) => return accepted(&input, &mut out, &[]),
-        Ok(Some(row)) => row,
+    let moved = match moved_or_stop(tasks::transition(
+        &mut via,
+        &at,
+        &task_id,
+        reported,
+        &mut writes,
+    )) {
+        Err(s) => return stop(&input, &mut out, s),
+        Ok(row) => row,
     };
     // 7. THE CALLER'S OWN DELIVERY, from busbar's row.
-    match crate::push_door::queue_moved(&plane.deliveries, &mut via, &caller, &moved) {
-        Err(Halt::Pending) => return pend(),
-        Err(Halt::Failed(_)) | Ok(_) => {}
+    if let Err(s) = queued_or_stop(crate::push_door::queue_moved(
+        &plane.deliveries,
+        &mut via,
+        &caller,
+        &moved,
+    )) {
+        return stop(&input, &mut out, s);
     }
     // The ending spends the token, once the answer is final: forgotten before a PENDING entry,
     // the re-entry would find no token and refuse the very report that ended the task.
