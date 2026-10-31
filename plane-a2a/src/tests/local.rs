@@ -907,7 +907,7 @@ fn a_task_id_with_a_colon_pages_and_the_loop_ends() {
     for (n, at) in [(1, 400), (2, 500), (3, 600)] {
         submitted(
             &mut desk.book,
-            "carol",
+            "c0ffee",
             &format!("a2a-team:billing-{n}"),
             at,
         );
@@ -919,7 +919,7 @@ fn a_task_id_with_a_colon_pages_and_the_loop_ends() {
             &mut desk,
             "ListTasks",
             json!({ "pageSize": 1, "pageToken": token }),
-            "carol",
+            "c0ffee",
         );
         seen.push(
             body["result"]["tasks"][0]["id"]
