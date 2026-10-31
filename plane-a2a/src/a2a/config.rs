@@ -313,13 +313,17 @@ impl<'de> Deserialize<'de> for AgentsCfg {
 }
 
 /// `url` as a refusal may repeat it: any userinfo in its authority (everything before the last `@`
-/// ahead of the path) replaced by `***`, so no refusal repeats a credential a URL carried.
+/// ahead of the path) replaced by `***`, so no refusal repeats a credential a URL carried. A raw
+/// `/`, `?` or `#` inside a password would end a naive authority before its `@`, so the authority
+/// is taken to end at the first of those AFTER the first `@`: a URL with an `@` in its path and no
+/// userinfo is redacted further than it needs to be, never a password less.
 #[must_use]
 pub fn without_userinfo(url: &str) -> std::borrow::Cow<'_, str> {
     let start = url.find("://").map_or(0, |i| i + 3);
-    let authority_end = url[start..]
+    let after_first_at = url[start..].find('@').map_or(start, |i| start + i);
+    let authority_end = url[after_first_at..]
         .find(['/', '?', '#'])
-        .map_or(url.len(), |i| start + i);
+        .map_or(url.len(), |i| after_first_at + i);
     match url[start..authority_end].rfind('@') {
         Some(at) => std::borrow::Cow::Owned(format!("{}***{}", &url[..start], &url[start + at..])),
         None => std::borrow::Cow::Borrowed(url),
