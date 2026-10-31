@@ -289,7 +289,8 @@ pub fn cursor_of(task: &Task) -> String {
 /// Is `task` strictly after `cursor` in the descending order? An unreadable cursor selects all.
 #[must_use]
 pub fn after_cursor(task: &Task, cursor: &str) -> bool {
-    let Some((ts, id)) = cursor.rsplit_once(':') else {
+    // The FIRST colon: the timestamp half is digits only, a task id may hold a colon.
+    let Some((ts, id)) = cursor.split_once(':') else {
         return true;
     };
     let Ok(ts) = ts.parse::<u64>() else {
