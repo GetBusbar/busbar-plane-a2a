@@ -235,3 +235,36 @@ fn a_held_card_with_null_members_reads_as_absent() {
     let shape = TaskShape::of(&send(json!({ "metadata": { "skill": "plan" } })));
     assert_eq!(fit(&card, &shape), Ok(Some("plan".into())));
 }
+
+/// G2-17: an explicit `null` callback config (SDKs serialise unset members so) registers no
+/// callback, as everywhere else the plane reads null as absent: it does not require push support.
+#[test]
+fn a_null_callback_config_requires_no_push_support() {
+    for at in [
+        json!({ "pushNotificationConfig": null }),
+        json!({ "taskPushNotificationConfig": null }),
+    ] {
+        let shape = TaskShape::of(&json!({ "params": { "configuration": at } }));
+        assert!(!shape.requires_push_notifications, "{at}");
+    }
+}
+
+/// G2-24: the refusal of an unfit request is a written sentence, never a Rust `Debug` rendering.
+#[test]
+fn an_unfit_refusal_is_a_sentence_not_a_debug_rendering() {
+    for unfit in [
+        Unfit::SkillNotDeclared("plan".into()),
+        Unfit::CapabilityNotDeclared("streaming"),
+        Unfit::ModesIncompatible,
+        Unfit::Unreadable(Unreadable::NotAnObject),
+        Unfit::NoCachedCard,
+    ] {
+        let message = refusal(&unfit).message;
+        assert_ne!(message, format!("{unfit:?}"));
+        assert!(!message.contains('('), "{message}");
+        assert!(message.contains(' '), "{message}");
+    }
+    assert!(refusal(&Unfit::SkillNotDeclared("plan".into()))
+        .message
+        .contains("`plan`"));
+}
