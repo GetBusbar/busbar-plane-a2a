@@ -7348,12 +7348,12 @@ async fn a_submission_whose_task_the_store_refuses_answers_the_engines_503() {
     }
 }
 
-/// AN INTERRUPTED TASK WHOSE RESUMPTION THE STORE REFUSES is answered as predev answered a task
-/// it could not move back to `working`: `409` with `-32002` "this task cannot be resumed" and
-/// its `TASK_NOT_CANCELABLE` `ErrorInfo`, echoing the request id (busbar-a2a
-/// `receive.rs:1985-2001`, `rpcerror.rs:305-318`), and the agent is never dialled.
+/// AN INTERRUPTED TASK WHOSE RESUMPTION THE STORE REFUSES is answered as the store's fault, as a
+/// fresh task the store refuses is: `503` with `-32603` "this task cannot be resumed", echoing the
+/// request id (audit G2-9: predev's `409` `-32002` was A2A's cancel-refused code), and the agent is
+/// never dialled.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_resumption_the_store_refuses_answers_the_engines_409() {
+async fn a_resumption_the_store_refuses_answers_503() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-resume-refused";
     let mut agent = Agent::start_answering(
@@ -7382,15 +7382,10 @@ async fn a_resumption_the_store_refuses_answers_the_engines_409() {
     assert_eq!(
         (status, doc),
         (
-            StatusCode::CONFLICT,
+            StatusCode::SERVICE_UNAVAILABLE,
             serde_json::json!({ "jsonrpc": "2.0", "id": 1, "error": {
-                "code": -32002,
+                "code": -32603,
                 "message": "this task cannot be resumed",
-                "data": [{
-                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
-                    "domain": surface("error_info_domain"),
-                    "reason": "TASK_NOT_CANCELABLE",
-                }],
             } })
         ),
     );

@@ -1096,8 +1096,8 @@ fn a_refused_write_is_an_error_the_first_time_and_debug_after() {
 /// `durability_unavailable`, and the door's `refusal` renders this in place of the kernel's words),
 /// stated by the opening that staged them, echoing the request id: a fresh task's is predev's `503`
 /// `-32603` "the task could not be recorded" (`busbar-a2a` `receive.rs:2032-2049`); a resumed
-/// task's its `409` `-32002` "this task cannot be resumed", with the `TASK_NOT_CANCELABLE`
-/// `ErrorInfo` every A2A-defined code carries (`receive.rs:1985-2001`, `rpcerror.rs:305-318`); an
+/// task's `503` `-32603` "this task cannot be resumed" (the store's fault, as a fresh task's is;
+/// audit G2-9: predev's `409` `-32002` was the cancel-refused code); an
 /// addressed task's is none, because predev sent the hop whether or not the callback it carried was
 /// recorded (`receive.rs:2080-2096`).
 #[test]
@@ -1142,17 +1142,12 @@ fn an_opening_states_the_engines_answer_should_the_store_refuse_its_writes() {
         ALICE,
     ))
     .expect("a resumed task's opening states its answer");
-    assert_eq!(resumed.status, 409);
+    assert_eq!(resumed.status, 503);
     assert_eq!(
         resumed.envelope(),
         json!({ "jsonrpc": "2.0", "id": 7, "error": {
-            "code": -32002,
+            "code": -32603,
             "message": "this task cannot be resumed",
-            "data": [{
-                "@type": "type.googleapis.com/google.rpc.ErrorInfo",
-                "domain": "a2a-protocol.org",
-                "reason": "TASK_NOT_CANCELABLE",
-            }],
         } })
     );
 

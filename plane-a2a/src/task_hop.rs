@@ -19,7 +19,8 @@
 //!   `TaskNotCancelableError` (`-32002`, [`TASK_NOT_CANCELABLE`]): busbar's own row answers it, as
 //!   a subscribe to a terminal task is answered, and nothing is relayed.
 //! * RESUMED: the caller's message names a `contextId` under which one of its tasks on this agent
-//!   is interrupted: the newest moves back to `working` (refused `409` when it cannot).
+//!   is interrupted: the newest moves back to `working` (refused `503`, the store's fault, when
+//!   that move cannot be recorded).
 //! * FRESH: busbar mints the id from eight random bytes ([`task_identity::mint`]), the `contextId` is the
 //!   caller's or the id, and the task is submitted and dispatched to the agent before the hop
 //!   (refused `503` when it cannot be recorded). The submit carries the task store's RETENTION
@@ -142,7 +143,7 @@ pub enum Opened {
         callback: Option<Callback>,
         /// The caller's answer if the store refuses the opening's record writes (the kernel ends
         /// the unit `durability_unavailable` and the door's `refusal` renders it). A fresh task: `503`, `-32603`
-        /// ([`TASK_UNRECORDED`]); a resumed one: `409`, `-32002` ([`TASK_UNRESUMED`]). `None` for an
+        /// ([`TASK_UNRECORDED`]); a resumed one: `503`, `-32603` ([`TASK_UNRESUMED`]). `None` for an
         /// addressed task, whose hop is sent whether or not its callback was recorded.
         unrecorded: Option<AgentRefusal>,
     },
@@ -375,11 +376,13 @@ pub fn open(
             };
             match tasks::change(reach, &at, &row.task_id, &mut plan, out) {
                 Err(Halt::Pending) => return Err(Halt::Pending),
+                // The move could not be recorded: the store's fault, as a fresh task's is, never
+                // the cancel-refused code.
                 Err(Halt::Failed(_)) => {
                     return Ok(refused(
-                        STATUS_CONFLICT,
+                        STATUS_UNAVAILABLE,
                         rpc_id,
-                        CODE_TASK_NOT_CANCELABLE,
+                        CODE_INTERNAL,
                         TASK_UNRESUMED,
                     ))
                 }
@@ -392,12 +395,7 @@ pub fn open(
                 skill: None,
                 references: Vec::new(),
             };
-            let unresumed = refusal(
-                STATUS_CONFLICT,
-                rpc_id,
-                CODE_TASK_NOT_CANCELABLE,
-                TASK_UNRESUMED,
-            );
+            let unresumed = refusal(STATUS_UNAVAILABLE, rpc_id, CODE_INTERNAL, TASK_UNRESUMED);
             (task, Some(unresumed))
         }
         (None, None) => {
