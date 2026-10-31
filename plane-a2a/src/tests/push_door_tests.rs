@@ -909,3 +909,68 @@ fn a_held_attempt_asks_for_no_tick_before_its_deadline() {
     assert_eq!(drive_over(&mut host, &d, &attempting), Outcome::Ready);
     assert_eq!(next_tick_ns(&d, &attempting), start);
 }
+
+/// The `n`th send's whole framed head: the bytes the receiver was handed.
+fn sent_head(host: &TestHost, n: usize) -> &[u8] {
+    &host.heads[n]
+}
+
+/// Whether `head` carries `wanted` (a framed `Authorization` value).
+fn carries(head: &[u8], wanted: &[u8]) -> bool {
+    head.windows(wanted.len()).any(|w| w == wanted)
+}
+
+/// A RETRYING DELIVERY PRESENTS THE CREDENTIAL REGISTERED WITH ITS OWN URL (G3-1): a delivery to
+/// `U1` that failed `503` is retried after the caller re-registered `{U2, A2}`; the retry still goes
+/// to `U1` (its URL is pinned at enqueue) and must carry `A1`, never `A2`: a secret goes only to the
+/// destination it was given for.
+#[test]
+fn a_retrying_delivery_presents_the_credential_registered_with_its_own_url() {
+    let (u1, u2) = ("https://one.caller.test/cb", "https://two.caller.test/cb");
+    let auth = |c: &str| DeliveryAuth {
+        scheme: "Bearer".into(),
+        credentials: busbar_contract::abi::sdk::test_support::chip::cred(c),
+    };
+    let mut book = Book::default();
+    let row = moved(&mut book, "");
+    let d = Deliveries::default();
+    assert!(queue(&d, &row, Some(&config(u1, Some(auth("a1"))))));
+    let mut host = TestHost::answering(vec![Some((DEST_ALLOWED, &[AT_REGISTRATION][..]))], 503);
+    let (first, settled) = tick_once(&d, &mut host, 0);
+    assert_eq!(first, Attempted::Status(503));
+    let DeliverySettled::Retry(at) = settled else {
+        panic!("a 503 is retried: {settled:?}");
+    };
+    assert!(carries(sent_head(&host, 0), b"Bearer a1"));
+    // The caller re-registers while the delivery to U1 waits for its retry.
+    assert!(queue(&d, &row, Some(&config(u2, Some(auth("a2"))))));
+    host.status = 200;
+    let _ = tick_once(&d, &mut host, at);
+    assert_eq!(host.sent[1], u1, "the retry goes to the URL it was queued for");
+    assert!(
+        !carries(sent_head(&host, 1), b"Bearer a2"),
+        "the re-registered credential crossed to the old callback"
+    );
+    assert!(
+        carries(sent_head(&host, 1), b"Bearer a1"),
+        "the retry presents the credential registered with its URL"
+    );
+}
+
+/// A DELETED CONFIG'S QUEUED NOTIFICATIONS ARE NOT SENT (G3-2): the caller was answered that the
+/// config is gone, so a notification still waiting for it is dropped with its credential, not
+/// attempted to the deleted URL.
+#[test]
+fn a_deleted_configs_waiting_notifications_are_dropped() {
+    let d = queued("https://hook.caller.test/notify");
+    let tombstone = Write {
+        kind: KIND_PUSH_CONFIG,
+        key: task_key(ALICE, "t1"),
+        value: Vec::new(),
+    };
+    forget_deleted(&d, ALICE, &[tombstone]);
+    assert!(
+        d.next_due(0).is_none(),
+        "a notification to the deleted config is still attempted"
+    );
+}

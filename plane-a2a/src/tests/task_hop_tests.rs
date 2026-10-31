@@ -1506,3 +1506,97 @@ fn a_read_or_an_addressed_turn_never_sweeps() {
         "an addressed turn retires nothing"
     );
 }
+
+/// Alice's `t1` delegated to the agent and paused (`input-required`) under its context.
+fn paused(desk: &mut Desk) {
+    let mut out = Vec::new();
+    let at = Stamp {
+        caller: ALICE,
+        request_id: "r",
+        now: 150,
+    };
+    tasks::tests::dispatch(&mut desk.book, &at, "t1", MEMBER, &mut out).unwrap();
+    desk.book.apply(&out);
+    for state in [TaskState::Working, TaskState::InputRequired] {
+        out.clear();
+        tasks::transition(&mut desk.book, &at, "t1", state, &mut out).unwrap();
+        desk.book.apply(&out);
+    }
+}
+
+/// A RESUMED TASK'S INLINE CALLBACK IS ITS PUSH CONFIG (G3-3): a task with a registered config
+/// `{U1, A1}` resumed by its context with an inline `{U2, B}` delivers to `U2` presenting `B`, so
+/// the config record (which the delivery prefers) is the resumed callback, as on an addressed task.
+#[test]
+fn a_resumed_tasks_inline_callback_replaces_its_push_config() {
+    let mut desk = desk();
+    paused(&mut desk);
+    let older = crate::local::PushConfig {
+        id: "c1".into(),
+        url: "https://one.example/cb".into(),
+        authentication: Some(crate::push::DeliveryAuth {
+            scheme: "Bearer".into(),
+            credentials: busbar_contract::abi::sdk::test_support::chip::cred("a1"),
+        }),
+        version: String::new(),
+    };
+    desk.book.apply(&[Write {
+        kind: KIND_PUSH_CONFIG,
+        key: tasks::task_key(ALICE, "t1"),
+        value: crate::push::record_value(&older).unwrap(),
+    }]);
+    let envelope = send(json!({
+        "message": { "contextId": "ctx-1" },
+        "configuration": { "pushNotificationConfig": {
+            "url": "https://two.example/cb",
+            "authentication": { "schemes": ["Bearer"], "credentials": "b" },
+        } },
+    }));
+    let (task, _) = hop(opened(&mut desk, &envelope, ALICE));
+    assert_eq!(task.task_id, "t1");
+    assert!(!task.addressed, "resumed, not addressed");
+    let cfg = crate::local::held_config(&mut desk.book, ALICE, "t1")
+        .unwrap()
+        .expect("the push config");
+    assert_eq!(cfg.url, "https://two.example/cb", "the resumed callback wins");
+    assert_eq!(
+        cfg.authentication
+            .map(|a| crate::push::tests::sealed_bytes(a.authorization(&cfg.url))),
+        Some(b"Bearer b".to_vec())
+    );
+}
+
+/// AN ADDRESSED TASK'S INLINE CREDENTIAL IS NOT HELD IN PLANE MEMORY (G3-4): it is the task's push
+/// config record, so nothing rides back for the door to hold; a terminal task, which no move
+/// follows, leaves no secret behind.
+#[test]
+fn an_addressed_tasks_inline_credential_rides_back_for_no_one_to_hold() {
+    let mut desk = desk();
+    let mut out = Vec::new();
+    let at = Stamp {
+        caller: ALICE,
+        request_id: "r",
+        now: 150,
+    };
+    tasks::transition(&mut desk.book, &at, "t1", TaskState::Completed, &mut out).unwrap();
+    desk.book.apply(&out);
+    let envelope = send(json!({
+        "id": "t1",
+        "configuration": { "pushNotificationConfig": {
+            "url": "https://hook.example/t1",
+            "authentication": { "schemes": ["Bearer"], "credentials": "tok" },
+        } },
+    }));
+    let Opened::Hop { task, callback, .. } = opened(&mut desk, &envelope, ALICE) else {
+        panic!("refused");
+    };
+    assert!(task.addressed);
+    assert!(
+        callback.is_none(),
+        "an addressed task's credential rides back to plane memory"
+    );
+    let cfg = crate::local::held_config(&mut desk.book, ALICE, "t1")
+        .unwrap()
+        .expect("the push config holds it");
+    assert!(cfg.authentication.is_some());
+}
