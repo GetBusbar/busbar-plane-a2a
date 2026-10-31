@@ -126,9 +126,8 @@ pub fn read_event(
         return Err(HopRefusal::NotJson);
     }
     let payload = task_identity::payload_of(result);
-    let artifact = payload.get("artifact").is_some()
-        || payload.get("artifacts").is_some()
-        || result.get("artifactUpdate").is_some();
+    // An artifact UPDATE is a relayed chunk; a task snapshot's `artifacts` is not one.
+    let artifact = payload.get("artifact").is_some() || result.get("artifactUpdate").is_some();
     let state = task_identity::reported_task_state(result);
     let backend_task_id = task_identity::backend_task_id(result);
     let names_no_task = task_identity::names_no_task(result);
