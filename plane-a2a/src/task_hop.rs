@@ -36,8 +36,8 @@
 //! push-config verbs use ([`local::judge_callback`]), and a callback or a credential busbar cannot
 //! honour refuses the request `400`. One that passes is the task's
 //! `push_callback`, on the row it opens or resumes (in that change's own claimed write); on a task
-//! it addresses it is the task's push config, put as the push-config verbs put one, the later set
-//! winning. Its credential rides back to the door ([`Callback`]), which holds it in plane memory as
+//! it addresses or resumes it is also the task's push config, put as the push-config verbs put one,
+//! the later set winning. Its credential rides back to the door ([`Callback`]), which holds it in plane memory as
 //! the delivery does.
 
 use std::collections::BTreeMap;
@@ -297,26 +297,7 @@ pub fn open(
             // An addressed task's callback is a PUSH-CONFIG SET, replace semantics, last writer
             // wins: a put of the task's push_config record, never a write of its row, so no other
             // writer's move of the task is undone.
-            if let Some(callback) = callback.as_ref() {
-                let stored = local::PushConfig {
-                    id: inline_config(req.envelope)
-                        .and_then(|c| c.get("id"))
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_string(),
-                    url: callback.url.clone(),
-                    authentication: callback.auth.clone(),
-                    version: version.to_string(),
-                };
-                // A callback that cannot be registered leaves the task as it was: the hop goes on.
-                if let Ok(value) = crate::push::record_value(&stored) {
-                    out.push(Write {
-                        kind: KIND_PUSH_CONFIG,
-                        key: tasks::task_key(req.caller, &row.task_id),
-                        value,
-                    });
-                }
-            }
+            put_config(req, callback.as_ref(), version, &row.task_id, out);
             let task = TaskHop {
                 task_id: row.task_id,
                 context_id: row.context_id,
@@ -353,6 +334,9 @@ pub fn open(
                 }
                 Ok(_) => {}
             }
+            // A resumed task already has its push config, if any: the callback is set on it as on
+            // an addressed task, so the config a delivery prefers is the callback just given.
+            put_config(req, callback.as_ref(), version, &row.task_id, out);
             let task = TaskHop {
                 task_id: row.task_id,
                 context_id: row.context_id,
@@ -434,6 +418,37 @@ pub fn open(
         callback,
         unrecorded,
     })
+}
+
+/// PUT `callback` as `task_id`'s push_config record (a push-config set, replace semantics): the
+/// credential's home. A callback that cannot be registered leaves the task as it was.
+fn put_config(
+    req: &Request<'_>,
+    callback: Option<&Callback>,
+    version: &str,
+    task_id: &str,
+    out: &mut Vec<Write>,
+) {
+    let Some(callback) = callback else {
+        return;
+    };
+    let stored = local::PushConfig {
+        id: inline_config(req.envelope)
+            .and_then(|c| c.get("id"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        url: callback.url.clone(),
+        authentication: callback.auth.clone(),
+        version: version.to_string(),
+    };
+    if let Ok(value) = crate::push::record_value(&stored) {
+        out.push(Write {
+            kind: KIND_PUSH_CONFIG,
+            key: tasks::task_key(req.caller, task_id),
+            value,
+        });
+    }
 }
 
 /// Whether `envelope` is ADDRESSED to a task, so that a task the caller does not hold refuses it:

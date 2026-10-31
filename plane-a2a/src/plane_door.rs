@@ -1854,7 +1854,12 @@ fn settle_task(
     // Each move owes its push notification. The config reads are made on every entry, so a
     // re-entry's host calls keep their order; each notification is queued once.
     for (i, row) in moved.iter().enumerate() {
-        let config = match crate::local::held_config(&mut via, caller, &row.task_id) {
+        // Read over this piece's writes: a config the opening put is the one its moves deliver to.
+        let config = match crate::local::held_config(
+            &mut crate::tasks::Staged::new(&mut via, &writes),
+            caller,
+            &row.task_id,
+        ) {
             Err(Halt::Pending) => return pend(hop, settles),
             Err(Halt::Failed(_)) => None,
             Ok(config) => config,
