@@ -827,3 +827,40 @@ fn a_v03_cards_inbound_scheme_is_written_in_v03s_spelling() {
         assert!(served.get("securityRequirements").is_none(), "{served}");
     }
 }
+
+/// G1-5: THE BACKEND AUTHORITY IS MATCHED AS A NAME, NOT AS A SUBSTRING: a word that merely
+/// contains the host (a one-label service name in prose, a longer domain, a longer address) is no
+/// mention of it; the host itself, a one-label host with its port or in a URL, still is.
+#[test]
+fn a_word_that_only_contains_the_backend_host_is_not_a_leak() {
+    let card = |backend: &str, description: &str| {
+        json!({
+            "name": "planner", "description": description,
+            "url": format!("{backend}/a2a"),
+        })
+    };
+    for (backend, description) in [
+        ("http://travel:8080", "Plans travel itineraries"),
+        ("http://travel:8080", "a travel-agent for trips"),
+        ("https://example.com", "see notexample.com or example.community"),
+        ("http://10.0.0.1:8080", "its sibling at 10.0.0.15 answers too"),
+    ] {
+        assert!(
+            rewrite_card(&card(backend, description), backend, PUBLIC, "planner").is_ok(),
+            "{backend}: {description}"
+        );
+    }
+    for (backend, description) in [
+        ("http://travel:8080", "see http://travel:8080/docs"),
+        ("http://travel:8080", "dial travel:8080 directly"),
+        ("http://travel:8080", "the docs are at http://travel/docs"),
+        ("https://example.com", "ask example.com directly."),
+        ("http://10.0.0.1:8080", "or 10.0.0.1"),
+    ] {
+        assert_eq!(
+            rewrite_card(&card(backend, description), backend, PUBLIC, "planner"),
+            Err(ServeError::BackendLeak(vec!["$.description".to_string()])),
+            "{backend}: {description}"
+        );
+    }
+}
