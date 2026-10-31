@@ -689,9 +689,17 @@ pub fn settle_on_answer(
     let mut moved = None;
     if let Some(to) = to {
         let mut step = Vec::new();
+        // A state the task already holds (a GetTask of a working task, a second `working` event)
+        // is no move: nothing to write, and no refused write to report.
+        let mut plan = |row: &TaskRow| -> Planned {
+            if TaskState::parse(&row.state).is_ok_and(|held| held == to) {
+                return Ok(None);
+            }
+            plan_transition(to, now)(row).map(Some)
+        };
         let transitioned = {
             let mut staged = tasks::Staged::new(&mut *rec, out);
-            tasks::transition(&mut staged, &at, &task.task_id, to, &mut step)
+            tasks::change(&mut staged, &at, &task.task_id, &mut plan, &mut step)
         };
         match transitioned {
             Err(Halt::Pending) => return Err(Halt::Pending),
