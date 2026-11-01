@@ -1,0 +1,99 @@
+// Regression controls against the actual signing proxy and TCP binding shim.
+import assert from 'node:assert/strict';
+import net from 'node:net';
+import http from 'node:http';
+import crypto from 'node:crypto';
+import { spawn } from 'node:child_process';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { setTimeout as delay } from 'node:timers/promises';
+
+const directory = fileURLToPath(new URL('.', import.meta.url));
+const children = [];
+const temporary = await mkdtemp(join(tmpdir(), 'a2a-protocol-'));
+const backend = http.createServer((req, res) => {
+  res.setHeader('content-type', 'application/json');
+  res.end(JSON.stringify({ name: 'probe', 'Ā': 1, 'ÿ': 2 }));
+});
+async function listen(server) {
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  return server.address().port;
+}
+async function unusedPort() {
+  const server = net.createServer();
+  const port = await listen(server);
+  await new Promise(resolve => server.close(resolve));
+  return port;
+}
+async function start(script, port, ...args) {
+  const child = spawn(process.execPath, [join(directory, script), String(port), ...args.map(String)],
+                      { stdio: ['ignore', 'ignore', 'inherit'] });
+  children.push(child);
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (child.exitCode !== null) throw new Error(`${script} exited ${child.exitCode}`);
+    const connected = await new Promise(resolve => {
+      const socket = net.connect(port, '127.0.0.1');
+      socket.once('error', () => { socket.destroy(); resolve(false); });
+      socket.once('connect', () => { socket.destroy(); resolve(true); });
+    });
+    if (connected) return;
+    await delay(20);
+  }
+  throw new Error(`${script} did not listen`);
+}
+async function fragmentedPreface(port, firstLength) {
+  const socket = net.connect(port, '127.0.0.1');
+  try {
+    const response = new Promise((resolve, reject) => {
+      let received = Buffer.alloc(0);
+      socket.on('error', reject);
+      socket.setTimeout(3000, () => reject(new Error('no HTTP/2 SETTINGS response')));
+      socket.on('data', bytes => {
+        received = Buffer.concat([received, bytes]);
+        if (received.length >= 9) resolve(received);
+      });
+    });
+    const preface = Buffer.from('PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n');
+    socket.write(preface.subarray(0, firstLength));
+    await delay(30); // Separate TCP writes; classification must wait for the full prefix.
+    socket.write(Buffer.concat([preface.subarray(firstLength), Buffer.from([0,0,0,4,0,0,0,0,0])]));
+    const bytes = await response;
+    assert.equal(bytes[3], 4, 'first response must be an HTTP/2 SETTINGS frame, not HTTP/1');
+    assert.equal(bytes.readUInt32BE(5), 0, 'SETTINGS uses stream zero');
+  } finally {
+    socket.destroy();
+  }
+}
+try {
+  const backendPort = await listen(backend);
+  const vendorPort = await unusedPort();
+  const keyFile = join(temporary, 'issuer.spki');
+  await start('signing-vendor.mjs', vendorPort, backendPort, keyFile);
+  const response = await fetch(`http://127.0.0.1:${vendorPort}/.well-known/agent-card.json`);
+  assert.equal(response.status, 200);
+  const signed = await response.json();
+  const signature = signed.signatures[0];
+  const payload = Buffer.from('{"name":"probe","ÿ":2,"Ā":1}').toString('base64url');
+  const publicKey = crypto.createPublicKey({ key: Buffer.from(await readFile(keyFile, 'utf8'), 'base64'),
+                                            format: 'der', type: 'spki' });
+  assert(crypto.verify(null, Buffer.from(`${signature.protected}.${payload}`), publicKey,
+                       Buffer.from(signature.signature, 'base64url')), 'signature must use UTF-16 key order');
+  const shimPort = await unusedPort();
+  await start('binding-shim.mjs', shimPort, backendPort, 'fixture-token');
+  for (const length of [1, 2, 3, 23, 24]) await fragmentedPreface(shimPort, length);
+  console.log('A2A subject protocol regressions passed');
+} finally {
+  await Promise.all(children.map(child => new Promise(resolve => {
+    if (child.exitCode !== null) return resolve();
+    child.once('exit', resolve);
+    child.kill();
+  })));
+  backend.closeAllConnections();
+  await new Promise(resolve => backend.close(resolve));
+  await rm(temporary, { recursive: true, force: true });
+}

@@ -486,6 +486,11 @@ def in_task_authorization_mutations() -> None:
 
 
 def main() -> int:
+    import subprocess
+    from pathlib import Path
+    regressions = subprocess.run([sys.executable, str(Path(__file__).with_name("probe-regressions.py"))])
+    if regressions.returncode:
+        FAILURES.append("probe regression controls failed")
     print("a2a-supplement SELFTEST -- every check is made to fail on purpose")
     print("A check that does not bite here is a check that reports green over nothing.")
     in_task_authorization_mutations()

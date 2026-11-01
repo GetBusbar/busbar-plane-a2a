@@ -545,7 +545,7 @@ h2_call() { if [ "${H2_RATE_CARD_YAML-unset}" = " " ]; then echo "200 {}"; else 
 h2_usage_field() { _st_next usage "${H2_ST_USAGE:-1}"; }
 h2_put_fee() { echo '{"applied":true}'; }
 h2_admin_usage_total() { echo 80000; }
-h2_meter_row_field() { case "$3" in requests) echo 1 ;; *) echo 10000 ;; esac; }
+h2_meter_row_field() { case "$3" in requests) echo 1 ;; *) if [[ "${H2_RATE_CARD_YAML:-}" == *'bytes: 2'* ]]; then echo "${H2_ST_SPEND:-10006}"; else echo 10000; fi ;; esac; }
 h2_meter_row_quantity() { printf '%s\n' "${H2_ST_QTY-3}"; }
 h2_validate_card() { echo ok; }
 sleep() { :; }
@@ -601,6 +601,8 @@ _h2_st_case_card_epoch() {
 
 _h2_st_case_class_price() {
   _h2_st_want "class-price: control quantity 3 passes" 0 "$(_h2_st_rig h2-class-price.sh H2_ST_QTY=3)"
+  _h2_st_want "class-price: fee alone cannot pass for quantity 3" red "$(_h2_st_rig h2-class-price.sh H2_ST_QTY=3 H2_ST_SPEND=10000)"
+  _h2_st_want "class-price: wrong product cannot pass" red "$(_h2_st_rig h2-class-price.sh H2_ST_QTY=3 H2_ST_SPEND=10008)"
   _h2_st_want "class-price: no metering row (-) is red" red "$(_h2_st_rig h2-class-price.sh H2_ST_QTY=-)"
   _h2_st_want "class-price: quantity 0 is red" red "$(_h2_st_rig h2-class-price.sh H2_ST_QTY=0)"
   _h2_st_want "class-price: an EMPTY quantity read is red, not a pass" red "$(_h2_st_rig h2-class-price.sh H2_ST_QTY=)"

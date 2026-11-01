@@ -1358,6 +1358,22 @@ _assert_tck_number_with_pin() {
 selftest() {
   say "== a2a-subject SELF-TEST (the arming rule cannot be lied to) =="
   local failures=0
+  if ! node testing/a2a-subject/protocol-regressions.mjs; then
+    failures=$((failures+1))
+  fi
+  local cleanup_marker
+  cleanup_marker="$(mktemp)"
+  rm -f "$cleanup_marker"
+  (
+    reap_subject() { printf 'reaped\n' > "$cleanup_marker"; }
+    boot_busbar_a2a_subject() { exit 19; }
+    A2A_SUBJECT_BUSBAR_BIN=standin arm_subject
+  ) >/dev/null 2>&1 || true
+  if [ ! -s "$cleanup_marker" ]; then
+    say "  MISS: a failure during boot did not run EXIT cleanup"
+    failures=$((failures+1))
+  fi
+  rm -f "$cleanup_marker"
 
   # RED 1: nothing armed at all. This is the state the leg was ACTUALLY in on every run until now,
   # so it is the one case that must be watched to fail.
@@ -1471,6 +1487,7 @@ PY
 import json
 per = {'NOT-TESTED-%03d' % i: 'NOT TESTED' for i in range(21)}
 per.update({'SOME-REQ-001': 'PASS', 'PUSH-DELIVER-001': 'FAIL'})
+per.update({'CAP-SKIP-001': 'SKIPPED', 'OTHER-REQ-001': 'PASS', 'OTHER-SKIP-001': 'PASS', 'ODD-001': 'PASS'})
 per.update({'EXEC-%03d' % i: 'PASS' for i in range(114)})
 json.dump({'per_requirement': per}, open('$ctl/control-fixture.json', 'w'))
 "
@@ -1489,6 +1506,9 @@ per = {
         "task metadata off-box and must be https"]},
     "CAP-SKIP-001": {"level": "MUST", "status": "SKIPPED"},
 }
+per.update({'NOT-TESTED-%03d' % i: {'level': 'MUST', 'status': 'NOT TESTED'} for i in range(21)})
+per.update({'EXEC-%03d' % i: {'level': 'MUST', 'status': 'PASS'} for i in range(114)})
+per.update({i: {'level': 'MUST', 'status': 'PASS'} for i in ('OTHER-REQ-001', 'OTHER-SKIP-001', 'ODD-001')})
 card = {"capabilities": {"streaming": True}}
 exec(sys.argv[2])
 doc = {"per_requirement": per}
@@ -1524,6 +1544,13 @@ PY
   # premise holds. Green because both forgivenesses were evaluated and held, not because nothing
   # failed.
   _selftest_green "a waived FAIL and a justified SKIP, both premises holding," "pass"
+  _selftest_red "a report missing one declared requirement" "different requirement set" \
+    "per.pop('EXEC-113')"
+  _selftest_red "a report containing only one pass and waived entries" "different requirement set" \
+    "per = {k: per[k] for k in ('SOME-REQ-001', 'PUSH-DELIVER-001', 'CAP-SKIP-001')}"
+  _selftest_red "an all-skipped report" "NOT ONE of" \
+    "per = {k: {'level': 'MUST', 'status': 'SKIPPED'} for k in per}" \
+    <(printf '{"waived": [], "skipped": []}\n')
 
   # RED 7: an UNWAIVED MUST requirement reports FAIL. Red regardless of the suite's own row, and
   # regardless of how many other requirements pass.
@@ -1540,7 +1567,7 @@ PY
   # subject shape. The suite's own row still says 114, so the `total == 0` floor does not see it;
   # a run in which nothing executed has no number (RED 10 holds the per-requirement control half).
   _selftest_red "a run where every MUST went NOT TESTED" "NOT ONE of" \
-    "per.clear(); per.update({'EXEC-%03d' % i: {'level': 'MUST', 'status': 'NOT TESTED'} for i in range(114)})" \
+    "per = {k: {'level': 'MUST', 'status': 'NOT TESTED'} for k in per}" \
     <(printf '{"waived": [], "skipped": []}\n')
 
   # RED 10: ONE NOT TESTED the control executed, among otherwise excused ones. The excuse is per
@@ -1551,7 +1578,7 @@ PY
   # RED 11: nothing executed at all, even though every NOT TESTED is one the control also could not
   # test. Zero executed MUSTs is no number.
   _selftest_red "a run that executed no MUST at all" "NOT ONE of" \
-    "per.clear(); per.update({'NOT-TESTED-%03d' % i: {'level': 'MUST', 'status': 'NOT TESTED'} for i in range(21)})" \
+    "per = {k: {'level': 'MUST', 'status': 'NOT TESTED'} for k in per}" \
     <(printf '{"waived": [], "skipped": []}\n')
 
   # RED 12: no control baseline to read the excuse from. Refused, not read as "nothing to excuse".
@@ -1610,31 +1637,31 @@ PY
   # GREEN 4: the other premise kinds, holding: a required extension the card does not declare, and a
   # sibling requirement passing on the same run.
   _selftest_green "the card-extension and sibling-requirement premises, holding," \
-    "per.pop('PUSH-DELIVER-001')" \
+    "per['PUSH-DELIVER-001'] = {'level': 'MUST', 'status': 'PASS'}" \
     <(printf '{"waived": [], "skipped": [{"id": "CAP-SKIP-001", "why": "w", "premise": [{"kind": "card_lacks_required_extension", "uri": "urn:x"}, {"kind": "requirement_passes", "id": "SOME-REQ-001"}]}]}\n')
   # RED 25: the same premises, false: the card declares the extension required.
   _selftest_red "a required-extension premise that is false" "IS FALSE" \
-    "per.pop('PUSH-DELIVER-001'); card['capabilities']['extensions'] = [{'uri': 'urn:x', 'required': True}]" \
+    "per['PUSH-DELIVER-001'] = {'level': 'MUST', 'status': 'PASS'}; card['capabilities']['extensions'] = [{'uri': 'urn:x', 'required': True}]" \
     <(printf '{"waived": [], "skipped": [{"id": "CAP-SKIP-001", "why": "w", "premise": [{"kind": "card_lacks_required_extension", "uri": "urn:x"}]}]}\n')
 
   # GREEN 5: a SKIPPED MUST recorded NOT APPLICABLE, with its citation and a holding premise.
   _selftest_green "a not-applicable entry with a citation and a holding premise," \
-    "per.pop('PUSH-DELIVER-001')" \
+    "per['PUSH-DELIVER-001'] = {'level': 'MUST', 'status': 'PASS'}" \
     <(printf '{"waived": [], "skipped": [], "not_applicable": [{"id": "CAP-SKIP-001", "why": "w", "citation": "spec 3.3.4", "premise": [{"kind": "card_equals", "path": "capabilities.streaming", "value": true}]}]}\n')
   # RED 26: the same entry with no citation is refused.
   _selftest_red "a not-applicable entry with no citation" "names no spec" \
-    "per.pop('PUSH-DELIVER-001')" \
+    "per['PUSH-DELIVER-001'] = {'level': 'MUST', 'status': 'PASS'}" \
     <(printf '{"waived": [], "skipped": [], "not_applicable": [{"id": "CAP-SKIP-001", "why": "w", "premise": [{"kind": "card_equals", "path": "capabilities.streaming", "value": true}]}]}\n')
   # RED 27: a not-applicable entry whose premise is false (the card now serves the state) is RED.
   _selftest_red "a not-applicable entry whose premise is false" "IS FALSE" \
-    "per.pop('PUSH-DELIVER-001'); card['capabilities']['streaming'] = False" \
+    "per['PUSH-DELIVER-001'] = {'level': 'MUST', 'status': 'PASS'}; card['capabilities']['streaming'] = False" \
     <(printf '{"waived": [], "skipped": [], "not_applicable": [{"id": "CAP-SKIP-001", "why": "w", "citation": "spec 3.3.4", "premise": [{"kind": "card_equals", "path": "capabilities.streaming", "value": true}]}]}\n')
 
   # GREEN 3: a clean report (no FAIL, no SKIP, no NOT TESTED) under an EMPTY ledger is accepted: an
   # empty ledger forgives nothing, which is the strictest ledger there is, and none of the checks
   # above is one that refuses everything.
   _selftest_green "a clean report under an empty ledger" \
-    "per.pop('PUSH-DELIVER-001'); per.pop('CAP-SKIP-001')" <(printf '{"waived": [], "skipped": []}\n')
+    "per['PUSH-DELIVER-001'] = {'level': 'MUST', 'status': 'PASS'}; per['CAP-SKIP-001'] = {'level': 'MUST', 'status': 'PASS'}" <(printf '{"waived": [], "skipped": []}\n')
   rm -f "$tmp" "$pin" "$report"
   rm -rf "$ctl"
 

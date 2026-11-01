@@ -59,6 +59,10 @@ def count_from(proc):
 
 def main():
     print("A2A harness selftest")
+    regressions = subprocess.run([sys.executable, os.path.join(HERE, "protocol-regressions.py")],
+                                 capture_output=True, text=True)
+    check("protocol_probe_regressions", regressions.returncode == 0,
+          (regressions.stdout + regressions.stderr)[-2000:])
 
     # ---- 1a. GREEN: the battery loads, and its size is reported rather than assumed.
     p = py(COUNT)
