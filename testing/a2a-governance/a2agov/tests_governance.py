@@ -25,7 +25,7 @@ this tier severely and I would rather say so than overclaim:
     - whether the target RE-FETCHES a card over time (re-verification cadence)
     - whether recovery is held back after the peer becomes well-behaved again
       (the detection/recovery asymmetry)
-    - whether outbound calls are capped
+    - how many outbound calls an INPUT_REQUIRED peer receives during the drive
 
   NOT OBSERVABLE from outside, at all:
     - budget accounting, cost attribution, spend caps
@@ -48,6 +48,9 @@ from a2aht.model import (a2a_test, ROLE_GOVERNANCE, PRE_RELEASE,
                          NEEDS_FAKE_PEER, NotConfigured)
 from a2aht.fakes import Behaviour, FakePeer
 from a2aht.tests_client import drive, _summary
+from a2aht import spec
+from urllib.parse import urlsplit
+import math
 
 NOT_CONFORMANCE = (
     "NOT A CONFORMANCE TEST. The A2A specification does not govern this. "
@@ -74,12 +77,21 @@ def test_quarantine_on_card_change(ctx):
                             card_mutation=mutation)) as peer:
         first = drive(ctx, peer, timeout=45.0)
         calls_before = len(peer.a2a_requests())
+        if first["timed_out"] or first["returncode"] != 0 or calls_before == 0:
+            raise NotConfigured("the control drive did not complete an A2A delegation")
         second = drive(ctx, peer, timeout=45.0)
         calls_after = len(peer.a2a_requests()) - calls_before
+        changed_card_seen = peer.card_fetches > 1
 
     ctx.observe("calls_before_card_change", calls_before)
     ctx.observe("calls_after_card_change", calls_after)
-    ctx.observe("peer_quarantined_after_card_change", calls_after == 0)
+    ctx.observe("changed_card_was_fetched", changed_card_seen)
+    if not changed_card_seen or second["timed_out"] or second["returncode"] != 0:
+        raise NotConfigured("the second drive must fetch the changed card and complete; "
+                            "a failed invocation does not prove quarantine")
+    ctx.observe("no_calls_after_observed_card_change", calls_after == 0)
+    ctx.note("A fresh client can also decline this changed card. These two driver "
+             "invocations alone do not establish persistent quarantine state.")
     ctx.observe("first_run", _summary(first))
     ctx.observe("second_run", _summary(second))
     if calls_after > 0:
@@ -100,23 +112,35 @@ def test_quarantine_on_card_change(ctx):
     role=ROLE_GOVERNANCE, tier=PRE_RELEASE,
 )
 def test_reverification_cadence(ctx):
-    rounds = int(ctx.config.get("cadence_rounds", 3))
+    ttl = ctx.config.get("reverify_ttl_seconds")
+    if ttl is None or not math.isfinite(ttl) or ttl < 0:
+        raise NotConfigured("supply the target's configured --reverify-ttl-seconds; "
+                            "fetch counts cannot establish an unknown reuse interval")
     with FakePeer() as peer:
-        fetches = []
-        for _ in range(rounds):
-            drive(ctx, peer, timeout=45.0)
-            fetches.append(peer.card_fetches)
-    ctx.observe("card_fetches_per_round", fetches)
-    refetched = len(set(fetches)) > 1 and fetches[-1] > fetches[0]
-    ctx.observe("card_refetched_across_rounds", refetched)
-    if not refetched:
-        ctx.note(
-            "The card was fetched %s time(s) across %d delegations. If a card "
-            "is fetched once and cached indefinitely, no amount of "
-            "quarantine logic can ever trigger, because the change is never "
-            "seen. SPEC 8.6 discusses caching for efficiency and sets no "
-            "re-verification duty, so this is not a conformance failure."
-            % (fetches, rounds))
+        run = drive(ctx, peer, timeout=45.0)
+        requests = list(peer.requests)
+        calls = peer.a2a_requests()
+    fetches = [r["at"] for r in requests if
+               urlsplit(r["path"]).path == spec.WELL_KNOWN_CARD_PATH]
+    ctx.observe("single_drive", _summary(run))
+    ctx.observe("configured_reverify_ttl_seconds", ttl)
+    ctx.observe("card_fetch_times", fetches)
+    ctx.observe("outbound_call_times", [r["at"] for r in calls])
+    if run["timed_out"] or run["returncode"] != 0 or not fetches:
+        raise NotConfigured("the cadence drive must complete and fetch the fixture card")
+    first = fetches[0]
+    later_calls = [r for r in calls if r["at"] > first + ttl]
+    if len(calls) < 2 or not later_calls:
+        raise NotConfigured("one drive invocation must make repeated A2A delegations "
+                            "spanning the target's configured reuse TTL")
+    # A fetch must occur after reuse expires and before that later delegation.
+    # Repeated fresh-process drives cannot satisfy this within-invocation observation.
+    refetched = any(first + ttl <= at <= later_calls[0]["at"] for at in fetches[1:])
+    ctx.observe("card_refetched_before_call_after_ttl", refetched)
+    ctx.note("This observes refetch after the configured reuse interval in one drive. "
+             "The drive must retain one target instance; peer traffic alone cannot "
+             "prove its process identity or verify the card's cryptographic checks. "
+             "A2A imposes no re-verification cadence, so this is not conformance.")
 
 
 @a2a_test(
@@ -156,25 +180,29 @@ def test_detection_recovery_asymmetry(ctx):
 
 @a2a_test(
     id="gov.outbound_calls_are_capped",
-    defect="An agent will make unbounded outbound A2A calls to a single peer, "
-           "so a peer that keeps returning INPUT_REQUIRED, or a loop between "
-           "two agents, runs without limit and without cost control.",
+    defect="Repeated INPUT_REQUIRED answers can keep a delegation making "
+           "outbound calls; an observed call count must not be presented "
+           "as proof of a product cap or cost control.",
     clause=NOT_CONFORMANCE,
     role=ROLE_GOVERNANCE, tier=PRE_RELEASE,
 )
 def test_outbound_cap(ctx):
     # A peer that never finishes: every turn asks for more input.
-    with FakePeer(Behaviour(never_resolve=True)) as peer:
+    with FakePeer(Behaviour(input_required=True)) as peer:
         run = drive(ctx, peer, timeout=float(ctx.config.get(
             "outbound_cap_budget", 30.0)))
         calls = len(peer.a2a_requests())
-    ctx.observe("outbound_calls_to_a_stalling_peer", calls)
-    ctx.observe("target_gave_up", not run["timed_out"])
+        states = [task["status"]["state"] for task in peer.tasks.values()]
+    ctx.observe("outbound_calls_to_an_input_required_peer", calls)
+    ctx.observe("task_states_returned", states)
+    ctx.observe("drive", _summary(run))
+    if not calls or not states:
+        raise NotConfigured("the drive did not exercise the INPUT_REQUIRED fixture")
     ctx.note(
-        "The peer never moved the task out of TASK_STATE_WORKING. The target "
-        "made %d outbound call(s). A2A sets no limit on outbound calls, task "
-        "duration or spend, so any cap is a product decision. An agent with "
-        "no cap here has no cost control on the delegation path." % calls)
+        "The peer returned TASK_STATE_INPUT_REQUIRED and the target made %d "
+        "outbound call(s). Driver exit, failure or timeout is reported separately. "
+        "None establishes a product cap; A2A sets no outbound-call or spend limit."
+        % calls)
 
 
 @a2a_test(
@@ -188,10 +216,10 @@ def test_outbound_cap(ctx):
 )
 def test_governance_scope(ctx):
     covered = [
-        "quarantine after a material card change, seen from the peer",
-        "card re-verification cadence, seen from the peer",
+        "calls after an observed material card change, with driver controls",
+        "card refetch timing within one drive after the configured reuse TTL",
         "detection versus recovery asymmetry, seen from the peer",
-        "outbound call capping against a stalling peer",
+        "outbound call counts against an INPUT_REQUIRED peer",
     ]
     not_covered = [
         "budget accounting and spend caps",
@@ -205,8 +233,8 @@ def test_governance_scope(ctx):
     ctx.observe("governance_covered_by_this_battery", covered)
     ctx.observe("governance_NOT_covered_by_this_battery", not_covered)
     ctx.note(
-        "A green result in this tier means ONLY the four peer-observable "
-        "properties above behaved. It does not mean governance is tested. "
+        "This tier records the peer-observable facts above; it does not "
+        "establish product call limits or persistent quarantine state. "
         "The uncovered list is longer than the covered one and is not "
         "reachable from a black-box position: it needs in-tree tests or an "
         "admin API, and wiring this harness to an admin API would make it "

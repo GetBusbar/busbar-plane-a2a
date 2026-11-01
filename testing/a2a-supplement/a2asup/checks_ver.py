@@ -81,6 +81,8 @@ def check_ver_server_001(target: Target) -> Result:
                 f"({vocab['send_message']!r}) was answered MethodNotFound, so the agent is not "
                 f"applying that version's vocabulary"
             )
+        elif not reply.ok or not isinstance(reply.payload, dict) or not reply.payload:
+            failures.append(f"declared version {version} did not complete Send Message: {reply!r}")
 
     # 2. An ABSENT A2A-Version must be answered as 0.3 (SPEC 3.6.2, last sentence), whose name for
     #    Send Message is the slash form.
@@ -92,7 +94,9 @@ def check_ver_server_001(target: Target) -> Result:
         method_override=METHODS_0_3["send_message"],
     )
     evidence.append(f"no A2A-Version + {METHODS_0_3['send_message']!r} -> {absent_0_3!r}")
-    if absent_0_3.code in {METHOD_NOT_FOUND, VERSION_NOT_SUPPORTED}:
+    supports_0_3 = any(".".join(version.split(".")[:2]) == "0.3" for version in declared)
+    refused_unsupported_0_3 = (not supports_0_3 and absent_0_3.code == VERSION_NOT_SUPPORTED)
+    if not refused_unsupported_0_3 and (not absent_0_3.ok or not isinstance(absent_0_3.payload, dict) or not absent_0_3.payload):
         failures.append(
             f"with no A2A-Version header the agent must apply 0.3 semantics, but 0.3's own method "
             f"name {METHODS_0_3['send_message']!r} was answered {absent_0_3.code!r}"
@@ -107,7 +111,8 @@ def check_ver_server_001(target: Target) -> Result:
         method_override=METHODS_0_3["send_message"],
     )
     evidence.append(f"A2A-Version: '' + {METHODS_0_3['send_message']!r} -> {empty_0_3!r}")
-    if empty_0_3.code in {METHOD_NOT_FOUND, VERSION_NOT_SUPPORTED}:
+    refused_unsupported_0_3 = (not supports_0_3 and empty_0_3.code == VERSION_NOT_SUPPORTED)
+    if not refused_unsupported_0_3 and (not empty_0_3.ok or not isinstance(empty_0_3.payload, dict) or not empty_0_3.payload):
         failures.append(
             f"an EMPTY A2A-Version must be interpreted as 0.3, but 0.3's own method name was "
             f"answered {empty_0_3.code!r}"
@@ -127,7 +132,7 @@ def check_ver_server_001(target: Target) -> Result:
         f"A2A-Version: 1.0 + 0.3's name {METHODS_0_3['send_message']!r} -> {crossed!r} "
         f"(the discriminator: an agent applying 1.0 semantics does not have this name)"
     )
-    ignores_version = crossed.ok
+    ignores_version = crossed.ok or crossed.code not in {METHOD_NOT_FOUND, VERSION_NOT_SUPPORTED}
 
     if failures:
         return Result(req.id, Verdict.FAIL, "; ".join(failures), evidence)
@@ -135,11 +140,8 @@ def check_ver_server_001(target: Target) -> Result:
         return Result(
             req.id,
             Verdict.FAIL,
-            "every version the card declares is accepted, and an absent or empty header is "
-            f"answered as 0.3 -- but a request explicitly declaring A2A-Version: 1.0 was ALSO "
-            f"answered on 0.3's method name {METHODS_0_3['send_message']!r}. The agent is "
-            "answering both vocabularies regardless of the header, which is not processing "
-            "requests using the semantics of the REQUESTED version; it is ignoring the request.",
+            f"the crossed 1.0/0.3 method probe did not return MethodNotFound or "
+            f"VersionNotSupported: {crossed!r}; version-dependent dispatch was not established",
             evidence,
         )
     return Result(
@@ -176,6 +178,9 @@ def check_ver_client_002(target: Target) -> Result:
     )
     evidence.append(f"A2A-Version: {major_minor} -> {plain!r}")
     evidence.append(f"A2A-Version: {with_patch} -> {patched!r}")
+    if not plain.ok or not isinstance(plain.payload, dict) or not plain.payload:
+        return Result(req.id, Verdict.FAIL, "the unpatched positive control did not complete Send Message",
+                      evidence)
 
     if patched.code == VERSION_NOT_SUPPORTED:
         return Result(
@@ -186,7 +191,7 @@ def check_ver_client_002(target: Target) -> Result:
             f"negotiation, which SPEC 3.6 forbids in as many words.",
             evidence,
         )
-    if plain.ok != patched.ok:
+    if not patched.ok or not isinstance(patched.payload, dict) or not patched.payload:
         return Result(
             req.id,
             Verdict.FAIL,
@@ -269,6 +274,8 @@ def check_ver_client_001(target: Target) -> Result:
     for record in protocol:
         headers = {str(k).lower(): v for k, v in (record.get("headers") or {}).items()}
         query = record.get("query") or {}
+        # SPEC 3.6.2 gives an empty version the meaning 0.3. This check proves the
+        # header/parameter is present; it does not prove the negotiated version is compatible.
         has_header = "a2a-version" in headers
         # SPEC 3.6.1 explicitly permits the version as a request PARAMETER instead of a header.
         has_param = any(str(k).lower() == "a2a-version" for k in query)

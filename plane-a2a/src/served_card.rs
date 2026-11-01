@@ -31,7 +31,8 @@
 //! A rewritten card is no longer the document the vendor signed, so its signature is dropped and
 //! busbar signs the document it publishes, over the same canonicalisation it demands of every card it
 //! verifies. The backend's security schemes describe how to reach the BACKEND; the served card
-//! advertises exactly busbar's own inbound credential, in the normative proto spelling.
+//! advertises exactly busbar's own inbound credential, in the normative proto spelling (a v0.3
+//! card in v0.3's own: `{type: "http", ...}` required under `security`).
 
 use serde_json::{json, Map, Value};
 
@@ -143,6 +144,15 @@ pub fn agent_endpoint(public_url: &str, agent_id: &str) -> Option<String> {
     )
 }
 
+/// The sentence that describes busbar's inbound credential, in either card version's spelling.
+fn inbound_description() -> String {
+    format!(
+        "A busbar credential of kind `{CREDENTIAL_KIND_A2A_INBOUND}`, presented on the \
+         `{INBOUND_HEADER}` header. busbar authorises it against this fronted agent and \
+         meters the task against the presenting key's budget."
+    )
+}
+
 /// THE ONE DESCRIPTION of how a caller authenticates to this plane (proto `SecurityScheme`, a
 /// oneof whose variant key names the mechanism).
 fn inbound_security_schemes() -> Map<String, Value> {
@@ -152,12 +162,23 @@ fn inbound_security_schemes() -> Map<String, Value> {
         json!({
             "httpAuthSecurityScheme": {
                 "scheme": INBOUND_AUTH_SCHEME,
-                "description": format!(
-                    "A busbar credential of kind `{CREDENTIAL_KIND_A2A_INBOUND}`, presented on the \
-                     `{INBOUND_HEADER}` header. busbar authorises it against this fronted agent and \
-                     meters the task against the presenting key's budget."
-                ),
+                "description": inbound_description(),
             }
+        }),
+    );
+    schemes
+}
+
+/// The same scheme in v0.3's spelling (v0.3.0 `types.ts` `HTTPAuthSecurityScheme`:
+/// `{type: "http", scheme, description}`), for a fronted v0.3 card.
+fn inbound_security_schemes_v03() -> Map<String, Value> {
+    let mut schemes = Map::new();
+    schemes.insert(
+        INBOUND_SCHEME_NAME.to_string(),
+        json!({
+            "type": "http",
+            "scheme": INBOUND_AUTH_SCHEME,
+            "description": inbound_description(),
         }),
     );
     schemes
@@ -322,7 +343,7 @@ pub fn rewrite_card(
         servable |= match out.get("preferredTransport") {
             Some(Value::String(t)) => can_serve(t),
             Some(_) => false,
-            None => can_serve(AGENT_ADDRESS_BINDINGS[0]),
+            None => true,
         };
     }
     if offered && !servable {
@@ -340,14 +361,25 @@ pub fn rewrite_card(
     out.remove("signatures");
     out.remove("security");
     out.remove("securityRequirements");
-    out.insert(
-        "securitySchemes".to_string(),
-        Value::Object(inbound_security_schemes()),
-    );
-    out.insert(
-        "securityRequirements".to_string(),
-        inbound_security_requirement(),
-    );
+    // IN THE CARD'S OWN VERSION'S SPELLING: a v0.3 card (no `supportedInterfaces`, its `url` or
+    // `preferredTransport` stated) names the scheme as v0.3 does and requires it under `security`;
+    // every other card in the normative proto spelling.
+    if !v10 && (out.contains_key("url") || out.contains_key("preferredTransport")) {
+        out.insert(
+            "securitySchemes".to_string(),
+            Value::Object(inbound_security_schemes_v03()),
+        );
+        out.insert("security".to_string(), json!([{ INBOUND_SCHEME_NAME: [] }]));
+    } else {
+        out.insert(
+            "securitySchemes".to_string(),
+            Value::Object(inbound_security_schemes()),
+        );
+        out.insert(
+            "securityRequirements".to_string(),
+            inbound_security_requirement(),
+        );
+    }
     // THE AGENT'S OWN CAPABILITIES, as it states them: busbar relays a fronted agent's extended
     // card read to the agent itself, so the served card may promise one only where the agent's
     // card does. A card stating none is served with an empty `capabilities` (the member the card
@@ -431,13 +463,43 @@ fn rewrite_backend_urls(v: &mut Value, backend_host: &str, endpoint: &str) {
     }
 }
 
-/// Every remaining mention of the backend host, with its JSON path; busbar's own endpoint (`ours`,
-/// exact) is never a mention.
+/// Whether `text` names the backend `host` (lowercase): an occurrence bounded by characters no
+/// hostname continues with (so `notexample.com`, `example.community` and `10.0.0.15` do not name
+/// `example.com` or `10.0.0.1`). A one-label host (`travel`) is also an ordinary word, so it names
+/// the backend only as an authority: after `//` or `@`, or followed by `:` and a port.
+fn names_host(text: &str, host: &str) -> bool {
+    let text = text.to_lowercase();
+    let b = text.as_bytes();
+    let label = |c: u8| c.is_ascii_alphanumeric() || c == b'-';
+    let one_label = !host.contains(['.', ':']);
+    text.match_indices(host).any(|(at, _)| {
+        let end = at + host.len();
+        let before = at.checked_sub(1).map(|i| b[i]);
+        let after = b.get(end).copied();
+        // A longer name around it: a label character, or a dot joined to another label.
+        let longer_before =
+            before.is_some_and(|c| label(c) || (c == b'.' && at >= 2 && label(b[at - 2])));
+        let longer_after = after
+            .is_some_and(|c| label(c) || (c == b'.' && b.get(end + 1).is_some_and(|n| label(*n))));
+        if longer_before || longer_after {
+            return false;
+        }
+        if !one_label {
+            return true;
+        }
+        let authority = text[..at].ends_with("//") || before == Some(b'@');
+        let ported = after == Some(b':') && b.get(end + 1).is_some_and(u8::is_ascii_digit);
+        authority || ported
+    })
+}
+
+/// Every remaining mention of the backend host ([`names_host`]), with its JSON path; busbar's own
+/// endpoint (`ours`, exact) is never a mention.
 fn collect_mentions(v: &Value, backend_host: &str, ours: &str, out: &mut Vec<String>) {
     fn walk(v: &Value, host: &str, ours: &str, path: &str, out: &mut Vec<String>) {
         match v {
             Value::String(s) => {
-                if s != ours && s.to_lowercase().contains(host) {
+                if s != ours && names_host(s, host) {
                     out.push(path.to_string());
                 }
             }
@@ -448,7 +510,7 @@ fn collect_mentions(v: &Value, backend_host: &str, ours: &str, out: &mut Vec<Str
             }
             Value::Object(o) => {
                 for (k, x) in o {
-                    if k.to_lowercase().contains(host) {
+                    if names_host(k, host) {
                         out.push(format!("{path}.{k} (member NAME)"));
                     }
                     walk(x, host, ours, &format!("{path}.{k}"), out);

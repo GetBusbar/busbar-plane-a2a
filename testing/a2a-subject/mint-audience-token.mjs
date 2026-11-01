@@ -44,9 +44,10 @@
 import { createPrivateKey, sign } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
-const [keyPath, plainToken, audience] = process.argv.slice(2);
+const [keyPath, tokenArgument, audience] = process.argv.slice(2);
+const plainToken = tokenArgument === '-' ? readFileSync(0, 'utf8').trim() : tokenArgument;
 if (!keyPath || !plainToken || !audience) {
-  console.error('usage: mint-audience-token.mjs <signing-key-file> <plain-token> <audience>');
+  console.error('usage: mint-audience-token.mjs <signing-key-file> - <audience> (token on stdin)');
   process.exit(2);
 }
 
@@ -78,7 +79,7 @@ const payload = JSON.parse(
   Buffer.from(plainToken.slice(PREFIX.length).split('.')[0], 'base64url').toString('utf8'),
 );
 if (!payload.sub || !payload.exp || !payload.kid) {
-  console.error(`the plain token's payload is missing sub/exp/kid: ${JSON.stringify(payload)}`);
+  console.error('the plain token payload is missing sub/exp/kid');
   process.exit(2);
 }
 

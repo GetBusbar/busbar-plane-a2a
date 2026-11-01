@@ -298,3 +298,64 @@ fn a_failed_v03_mirror_read_rearms_in_the_same_declared_dialect() {
         "an unanswered rearm does not loop"
     );
 }
+
+#[test]
+fn mirror_debug_omits_the_callback_capability() {
+    let flight = Flight {
+        stage: Stage::Mirror,
+        method: method::CREATE_PUSH_CONFIG,
+        backend_task: "b-1".into(),
+        create: create_params("b-1", "https://gw.example/a2a/push", "secret-capability"),
+        hop: hop(),
+    };
+    let text = format!("{flight:?}");
+    assert!(!text.contains("secret-capability"));
+    assert!(!text.contains("authentication"));
+    assert!(text.contains("Mirror"));
+}
+
+#[test]
+fn cancelling_a_mirror_wipes_the_retained_rearm_capability() {
+    const CREDENTIAL: &str = "callback-credential-custody-canary";
+    crate::tests::request_custody_probe::assert_wiped(|| {
+        drop(Flight {
+            stage: Stage::Rearm,
+            method: method::GET_PUSH_CONFIG,
+            backend_task: "mirror-custody-task".into(),
+            create: create_params(
+                "mirror-custody-task",
+                "https://callback.example",
+                CREDENTIAL,
+            ),
+            hop: hop(),
+        });
+    });
+}
+
+#[test]
+fn mirror_producer_trees_preserve_the_borrowed_capability_on_success_and_refusal() {
+    const CREDENTIAL: &str = "callback-credential-custody-canary";
+    let create = create_params(
+        "mirror-custody-task",
+        "https://callback.example",
+        CREDENTIAL,
+    );
+    for version in ["0.3", crate::framed::DEFAULT_VERSION] {
+        for url in ["https://agent.example/rpc", "not a url"] {
+            crate::tests::request_custody_probe::assert_wiped(|| {
+                let issued = request(
+                    Binding::JsonRpc,
+                    url,
+                    version,
+                    method::CREATE_PUSH_CONFIG,
+                    &create,
+                );
+                if let Some(issued) = issued {
+                    let body = String::from_utf8_lossy(&issued.body);
+                    assert!(body.contains(CREDENTIAL));
+                }
+            });
+            assert_eq!(create["authentication"]["credentials"], CREDENTIAL);
+        }
+    }
+}

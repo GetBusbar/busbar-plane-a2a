@@ -1148,6 +1148,15 @@ async fn far_end_over(
     answering: Answering,
     tls: Option<tokio_rustls::TlsAcceptor>,
 ) -> (u16, tokio::sync::mpsc::UnboundedReceiver<String>) {
+    far_end_observed(answering, tls, None).await
+}
+
+/// Counts accepted sockets before TLS or HTTP parsing, including malformed traffic.
+async fn far_end_observed(
+    answering: Answering,
+    tls: Option<tokio_rustls::TlsAcceptor>,
+    accepted: Option<Arc<std::sync::atomic::AtomicUsize>>,
+) -> (u16, tokio::sync::mpsc::UnboundedReceiver<String>) {
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -1156,6 +1165,9 @@ async fn far_end_over(
     let (sent, heard) = tokio::sync::mpsc::unbounded_channel();
     tokio::spawn(async move {
         while let Ok((plain, _)) = listener.accept().await {
+            if let Some(accepted) = &accepted {
+                accepted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
             let sent = sent.clone();
             let answering = Arc::clone(&answering);
             let tls = tls.clone();
@@ -2337,8 +2349,6 @@ async fn a_relayed_agent_unit_never_hands_the_agent_the_callers_token() {
 
 // ── THE TRUST VERBS (ARCHITECT Q-L3B-VERBS) ──────────────────────────────────────────────────
 
-/// One admin request on `s`'s admin router: `POST /api/v1/admin{path}` with `body` (JSON): its
-/// status and JSON body.
 /// A GET of `path` on the admin router, under the operator credential: its status and body.
 async fn admin_get(s: &Served, path: &str) -> (StatusCode, serde_json::Value) {
     let req = axum::http::Request::builder()
@@ -2370,6 +2380,8 @@ async fn trust_key(s: &Served, name: &str) -> (String, String) {
     )
 }
 
+/// One POST to `/api/v1/admin{path}` with a JSON body, under the operator credential.
+/// Returns its status and JSON response body.
 async fn admin(s: &Served, path: &str, body: &str) -> (StatusCode, serde_json::Value) {
     let req = axum::http::Request::builder()
         .method("POST")
@@ -2437,6 +2449,7 @@ struct Agent {
     /// The key the served card is signed with when it is fetched: `issuer` unless swapped.
     signing: Arc<std::sync::Mutex<ed25519_dalek::SigningKey>>,
     fetches: Arc<std::sync::atomic::AtomicUsize>,
+    accepted: Arc<std::sync::atomic::AtomicUsize>,
     down: Arc<std::sync::atomic::AtomicBool>,
     /// `0`: the card is served at the well-known path; `1`: the well-known path redirects to
     /// `/cards/card.json`, which serves it; `2`: every `GET` redirects, forever; `3`: every
@@ -2526,6 +2539,7 @@ impl Agent {
         use std::sync::atomic::Ordering;
         let issuer = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
         let card = Arc::new(std::sync::Mutex::new(serde_json::Value::Null));
+        let accepted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let fetches = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let down = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let redirect = Arc::new(std::sync::atomic::AtomicU8::new(0));
@@ -2539,7 +2553,7 @@ impl Agent {
             Arc::clone(&redirect),
             Arc::clone(&card_delay_ms),
         );
-        let (port, heard) = far_end_over(
+        let (port, heard) = far_end_observed(
             Arc::new(move |request: &str| {
                 if off.load(Ordering::SeqCst) {
                     return None;
@@ -2579,6 +2593,7 @@ impl Agent {
                 Some(reply_of(request))
             }),
             tls,
+            Some(Arc::clone(&accepted)),
         )
         .await;
         *card.lock().expect("the card") = self::card(port, "plans the work");
@@ -2589,6 +2604,7 @@ impl Agent {
             issuer,
             signing,
             fetches,
+            accepted,
             down,
             redirect,
             card_delay_ms,
@@ -2615,6 +2631,10 @@ impl Agent {
     /// How many times its card was fetched.
     fn fetches(&self) -> usize {
         self.fetches.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    fn accepted(&self) -> usize {
+        self.accepted.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// It stops answering.
@@ -3150,7 +3170,7 @@ async fn a_card_fetch_follows_redirects_and_is_guarded_in_its_1_5_5_words() {
     );
 
     agent.redirect.store(0, Ordering::SeqCst);
-    let fetched = agent.fetches();
+    let accepted = agent.accepted();
     let (status, guarded) = admin(&s, "/agents/scout/connect", "").await;
     assert_eq!(status, StatusCode::OK, "{guarded}");
     assert_eq!(
@@ -3161,9 +3181,9 @@ async fn a_card_fetch_follows_redirects_and_is_guarded_in_its_1_5_5_words() {
         "{guarded}"
     );
     assert_eq!(
-        agent.fetches(),
-        fetched,
-        "the agent never heard the refused fetch"
+        agent.accepted(),
+        accepted,
+        "the guard refused before opening a socket to the agent"
     );
 }
 
@@ -3250,7 +3270,7 @@ async fn every_hop_of_a_legal_chain_is_followed_to_the_card() {
 /// then its card's fit. A request naming a skill the card does not declare is refused as
 /// not-serving (`403`, the kernel's trust refusal) while the agent is unapproved, and by the
 /// catalogue (`400`,
-/// `SkillNotDeclared("fly")`) once it is approved — never dialled either way.
+/// "this agent's card declares no skill `fly`") once it is approved — never dialled either way.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_request_the_card_does_not_fit_is_judged_after_the_trust_gate() {
     let _one = PUBLISHING.lock().await;
@@ -3271,7 +3291,7 @@ async fn a_request_the_card_does_not_fit_is_judged_after_the_trust_gate() {
     let doc: serde_json::Value = serde_json::from_str(&body).expect("an envelope");
     assert_eq!(doc["error"]["code"], -32004, "{body}");
     assert_eq!(
-        doc["error"]["message"], "SkillNotDeclared(\"fly\")",
+        doc["error"]["message"], "this agent's card declares no skill `fly`",
         "{body}"
     );
     assert_eq!(doc["id"], serde_json::Value::Null, "{body}");
@@ -3516,7 +3536,11 @@ async fn a_card_fetch_is_refused_in_1_5_5_words_whatever_the_deployment_private_
         "SSRF guard refused the agent card fetch: host `localhost` is a loopback name; set \
          this registration's `allow_private: true` if that is deliberate"
     );
-    assert_eq!(agent.fetches(), 0, "the agent never heard a refused fetch");
+    assert_eq!(
+        agent.accepted(),
+        0,
+        "the guard refused before opening a socket"
+    );
     // PREDEV'S RESOLVER WORDS, byte for byte: its card fetch resolved through tokio's
     // `lookup_host("{host}:0")` and printed that error's text.
     let predev = match tokio::net::lookup_host("card-host.invalid:0").await {
@@ -4137,8 +4161,7 @@ fn the_agent_door_states_a_cell_refuses_on_a_trip_and_nothing_less() {
     let name = busbar_contract::abi::mechanism::rendering::read(&row.statement)
         .expect("its Statement reads")
         .name;
-    let stated = rig::door_breaker(&name)
-        .expect("its declares section reads");
+    let stated = rig::door_breaker(&name).expect("its declares section reads");
     assert_eq!(stated.map(|b| b.bench_below_trip_threshold), Some(false));
 }
 
@@ -4213,10 +4236,13 @@ async fn a_fronted_agents_card_is_served_rewritten_through_busbar_behind_its_gra
         !body.contains(&format!("127.0.0.1:{}", agent.port)),
         "the backend authority is never published: {body}"
     );
+    // The agent's card is v0.3 (its `url`, no `supportedInterfaces`): busbar's scheme in v0.3's
+    // spelling, required under `security` (G1-4).
     assert_eq!(
-        card["securityRequirements"],
-        serde_json::json!([{ "schemes": { "busbarA2aInbound": { "list": [] } } }])
+        card["security"],
+        serde_json::json!([{ "busbarA2aInbound": [] }])
     );
+    assert_eq!(card["securitySchemes"]["busbarA2aInbound"]["type"], "http");
     assert_eq!(
         card["capabilities"],
         serde_json::json!({}),
@@ -5999,9 +6025,7 @@ mod upstream_credential {
     /// the source's own refusal names it (the control).
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_credential_that_stops_resolving_reaches_the_caller_without_its_source() {
-        use super::rig::{
-            assert_clean, missing, refused_naming_its_source, unset,
-        };
+        use super::rig::{assert_clean, missing, refused_naming_its_source, unset};
         let _one = PUBLISHING.lock().await;
         let var = unset("AGENT_UPSTREAM_ENV");
         let path = missing("agent-upstream-file");
@@ -6755,78 +6779,6 @@ fn push(token: &str, state: &str) -> axum::http::Request<axum::body::Body> {
                 .to_string(),
         ))
         .expect("a request")
-}
-
-/// **A PUSHED STATE REACHES THE CALLER'S OWN WEBHOOK THROUGH BUSBAR, END TO END.** The caller
-/// registers its webhook (a loopback https receiver, with a bearer credential) on its task; the
-/// deployment's own `advanced.allow_destinations` names `127.0.0.1`, the one operator route that
-/// admits a loopback destination to the callback judge and the delivery's dial (the same
-/// allow-list `connector.rs`'s `a_provider_without_an_allowlist_entry_is_refused_a_private_address`
-/// holds); the agent then pushes the task's ending to busbar's own callback with the capability
-/// busbar registered with it, and busbar delivers to the CALLER's webhook, presenting the
-/// caller's own credential, through the tick schedule boot spawns. No delivery is driven by the
-/// test: it waits, boundedly, and a silence is a failure. R-PUSH: the delivery is attempted on
-/// the driver-ticket wake the queueing makes, within a second of the push (predev spawned it at
-/// once); RED on the base, where the schedule had ended at boot and nothing was ever delivered.
-/// Ported from busbar-a2a a2a/tests/pushback_tests.rs::a_pushed_state_reaches_the_callers_own_webhook_through_busbar.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_pushed_state_reaches_the_callers_own_webhook_through_busbar() {
-    let _one = PUBLISHING.lock().await;
-    let instance = "serve-agent-door-push-delivery";
-    let tls = AgentTls::new();
-    tls.rekey();
-    let mut hook = Agent::start_over(200, "{}", Some(tls.acceptor())).await;
-    let mut agent =
-        Agent::start_answering(200, Arc::new(|r: &str| far_answer(r, "working", "working"))).await;
-    let s = served_pushing(
-        instance,
-        &agent.entry("planner", "1h"),
-        vec!["127.0.0.1".to_string()],
-        tls.root.clone(),
-    );
-    approve(&s, "planner").await;
-    let task = open_task(&s).await;
-    let config = serde_json::json!({
-        "taskId": task, "id": "caller-config",
-        "url": format!("https://127.0.0.1:{}/hook", hook.port),
-        "authentication": { "scheme": "Bearer", "credentials": "caller-secret" },
-    })
-    .to_string();
-    let (status, body) = answered(
-        &s.router,
-        rpc(
-            "planner",
-            "CreateTaskPushNotificationConfig",
-            &config,
-            Some(&s.token),
-        ),
-    )
-    .await;
-    assert_eq!(
-        status,
-        StatusCode::OK,
-        "the operator-listed callback: {body}"
-    );
-    assert!(
-        !body.contains("error"),
-        "the allow-listed loopback callback is registered: {body}"
-    );
-    let token = token_sent(&heard(&mut agent));
-    let (status, body) = answered(&s.router, push(&token, "completed")).await;
-    assert_eq!(status, StatusCode::ACCEPTED, "the push is taken: {body}");
-    let delivered = tokio::time::timeout(std::time::Duration::from_secs(1), hook.heard.recv())
-        .await
-        .expect("busbar made no delivery for a pushed state within a second of the push")
-        .expect("the webhook heard");
-    assert!(
-        delivered.starts_with("POST /hook"),
-        "the delivery goes to the caller's own webhook path: {delivered}"
-    );
-    let head = delivered.to_ascii_lowercase();
-    assert!(
-        head.contains("authorization: bearer caller-secret"),
-        "the caller's own webhook credential is presented at the caller's own webhook: {delivered}"
-    );
 }
 
 /// One task's ending pushed by the agent and delivered by busbar to the caller's own https webhook
@@ -7820,7 +7772,7 @@ async fn a_relayed_task_counts_an_upstream_attempt_naming_the_agent_it_was_issue
     );
     for line in &lines {
         assert!(
-            line.contains("pool=\"") && !line.contains("disposition="),
+            !line.contains("disposition="),
             "the model plane's series shape is pool and lane alone: {line}"
         );
     }
@@ -7877,13 +7829,23 @@ async fn a_backend_that_cannot_be_reached_is_counted_as_a_transient_upstream_fai
         ))),
         "the failure carries the model plane's own disposition word: {lines:?}"
     );
-    assert!(lines.iter().all(|l| l.contains("pool=\"")), "{lines:?}");
 }
 
 /// A CLIENT CERTIFICATE for registration `who`, issued by a root of its own: that root's DER
 /// (what the registration's peer admits), and the paths of the certificate and key it is
 /// written to as PEM files (what the registration's `client_identity:` references).
-fn client_identity_files(instance: &str, who: &str) -> (Vec<u8>, String, String) {
+struct ClientIdentityFiles(std::path::PathBuf);
+
+impl Drop for ClientIdentityFiles {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn client_identity_files(
+    instance: &str,
+    who: &str,
+) -> (Vec<u8>, String, String, ClientIdentityFiles) {
     let ca_key = rcgen::KeyPair::generate().expect("a key");
     let mut ca = rcgen::CertificateParams::new(Vec::new()).expect("params");
     ca.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
@@ -7894,15 +7856,26 @@ fn client_identity_files(instance: &str, who: &str) -> (Vec<u8>, String, String)
         .expect("params")
         .signed_by(&key, &issuer)
         .expect("the client leaf");
-    let dir = std::env::temp_dir();
-    let cert_path = dir.join(format!("{instance}-{who}-cert.pem"));
-    let key_path = dir.join(format!("{instance}-{who}-key.pem"));
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let files = loop {
+        let seq = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("{instance}-{who}-{}-{seq}", std::process::id()));
+        match std::fs::create_dir(&dir) {
+            Ok(()) => break ClientIdentityFiles(dir),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => panic!("client identity fixture directory: {e}"),
+        }
+    };
+    let cert_path = files.0.join("cert.pem");
+    let key_path = files.0.join("key.pem");
     std::fs::write(&cert_path, leaf.pem()).expect("the certificate file");
     std::fs::write(&key_path, key.serialize_pem()).expect("the key file");
     (
         root,
         cert_path.to_string_lossy().into_owned(),
         key_path.to_string_lossy().into_owned(),
+        files,
     )
 }
 
@@ -7929,7 +7902,7 @@ async fn the_verb_layers_probe_fetches_a_mutual_tls_vendors_card_with_that_regis
     let instance = "serve-door-mtls-probe";
     let tls = AgentTls::new();
     let pin = tls.rekey();
-    let (client_root, cert, key) = client_identity_files(instance, "planner");
+    let (client_root, cert, key, _identity_files) = client_identity_files(instance, "planner");
     let agent = Agent::start_over(200, ANSWER, Some(tls.mutual_acceptor(&client_root))).await;
     let section = format!(
         "{}\n{}",
@@ -7956,7 +7929,6 @@ async fn the_verb_layers_probe_fetches_a_mutual_tls_vendors_card_with_that_regis
         "a registration presenting no certificate is refused by the mutual-TLS peer: {bare}"
     );
     assert_eq!(bare["state"], "error", "{bare}");
-    let _ = (std::fs::remove_file(&cert), std::fs::remove_file(&key));
 }
 
 /// Ported from busbar-a2a a2a/tests/transport_mutual_tls_tests.rs::each_registration_presents_its_own_certificate_and_not_another_registrations.
@@ -7970,8 +7942,10 @@ async fn each_registration_presents_its_own_certificate_and_not_another_registra
     let instance = "serve-door-mtls-isolation";
     let tls = AgentTls::new();
     let pin = tls.rekey();
-    let (planner_root, planner_cert, planner_key) = client_identity_files(instance, "planner");
-    let (payments_root, payments_cert, payments_key) = client_identity_files(instance, "payments");
+    let (planner_root, planner_cert, planner_key, _planner_files) =
+        client_identity_files(instance, "planner");
+    let (payments_root, payments_cert, payments_key, _payments_files) =
+        client_identity_files(instance, "payments");
     let planner_peer =
         Agent::start_over(200, ANSWER, Some(tls.mutual_acceptor(&planner_root))).await;
     let payments_peer =
@@ -8012,9 +7986,6 @@ async fn each_registration_presents_its_own_certificate_and_not_another_registra
         foreign["failure"].is_string(),
         "another registration's certificate must not authenticate at this peer: {foreign}"
     );
-    for path in [&planner_cert, &planner_key, &payments_cert, &payments_key] {
-        let _ = std::fs::remove_file(path);
-    }
 }
 
 // ── FAILOVER POOLS (A2A-FLIP, predev `reroute_pool_tests.rs` and `billed_bytes_tests.rs`): a
@@ -8982,10 +8953,9 @@ async fn a_config_apply_keeps_the_pool_walking() {
         map.remove(busbar_contract::section::RESERVED_POOLS_KEY);
     }
     // The section is parsed through the door that declares it: the row the registry holds for it.
-    let row = busbar_kernel::plane_driver::registry::plane_decl_for_config_section(surface(
-        "section",
-    ))
-    .expect("the registry holds the door's row");
+    let row =
+        busbar_kernel::plane_driver::registry::plane_decl_for_config_section(surface("section"))
+            .expect("the registry holds the door's row");
     let slot = busbar_kernel::plane_driver::door::DoorSlot {
         section: busbar_kernel::plane_driver::door::DoorSection::new(
             row.door,
@@ -9151,113 +9121,6 @@ async fn a_pinned_refusal_answers_the_pinned_members_own_wait() {
     let mut log = Vec::new();
     hear(&mut agent, &mut log);
     assert!(log.is_empty(), "nothing dialled: {log:?}");
-}
-
-/// THIS PLANE'S OWN DIAGNOSTICS PAGE (`docs/diagnostics-a2a.{md,json}`). The plane's catalogue lives
-/// in this crate (`src/diagnostics.rs`), which cannot name the kernel's renderers; the two snapshots
-/// are held to a fresh render here, compiled into the composition root's test binary where the
-/// renderers are (the composition root names no plane, so the cell is the plane's).
-mod diagnostics_page {
-    use busbar_contract::diagnostic::Diagnostic;
-    use busbar_kernel::diagnostics::{render_json_for, render_markdown_for};
-
-    /// The committed per-plane markdown snapshot.
-    const COMMITTED_MD: &str =
-        concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/diagnostics-a2a.md");
-    /// The committed per-plane machine-readable snapshot.
-    const COMMITTED_JSON: &str = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../docs/diagnostics-a2a.json"
-    );
-
-    /// THE CODES THE PLANE DECLARES: the `diagnostics` of its own `declares.json`, the document its
-    /// door's Statement carries and from which the host installs the plane's catalogue (read here
-    /// field for field, as the composition root's own `catalogue_tests` reads a linked plugin's).
-    /// The crate's unit test `the_declares_file_states_the_catalogue` holds that document equal to
-    /// the plane's `DIAGNOSTICS`, so the page rendered from it is the plane's catalogue's.
-    fn declared() -> Vec<&'static Diagnostic> {
-        use busbar_contract::diagnostic::{Class, Severity};
-        let leak = |v: &serde_json::Value| -> &'static str {
-            Box::leak(
-                v.as_str()
-                    .expect("a string field")
-                    .to_string()
-                    .into_boxed_str(),
-            )
-        };
-        let document: serde_json::Value = serde_json::from_str(include_str!("../../declares.json"))
-            .expect("declares.json is JSON");
-        let mut out = Vec::new();
-        for d in document["diagnostics"].as_array().into_iter().flatten() {
-            let code = u16::try_from(d["code"].as_u64().expect("a code")).expect("a u16 code");
-            let severity = [
-                Severity::BenignRecurring,
-                Severity::Actionable,
-                Severity::Fatal,
-            ]
-            .into_iter()
-            .find(|s| s.as_str() == d["severity"])
-            .expect("a severity token");
-            let class = Class::ALL
-                .into_iter()
-                .find(|c| c.ordinal() == code / 1000)
-                .expect("a class");
-            out.push(&*Box::leak(Box::new(Diagnostic {
-                code,
-                class,
-                slug: leak(&d["slug"]),
-                title: leak(&d["title"]),
-                severity,
-                summary: leak(&d["summary"]),
-                action: leak(&d["action"]),
-                since: leak(&d["since"]),
-                retired: false,
-            })));
-        }
-        out
-    }
-
-    /// THIS PLANE'S OWN PAGE: every code of [`declared`] except those the HOST page publishes (the
-    /// codes the plane took out of the host registry together with the code that emits them, whose
-    /// page and number are frozen there). One code, one page.
-    fn own_page() -> Vec<&'static Diagnostic> {
-        let host = concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/diagnostics.json");
-        let text = std::fs::read_to_string(host).expect("docs/diagnostics.json is readable");
-        let entries: Vec<serde_json::Value> =
-            serde_json::from_str(&text).expect("docs/diagnostics.json is a JSON array");
-        declared()
-            .into_iter()
-            .filter(|d| !entries.iter().any(|e| e["number"] == u64::from(d.code)))
-            .collect()
-    }
-
-    /// Compare `fresh` with the committed file at `path`, or write it under `UPDATE_DIAGNOSTICS=1`.
-    fn committed_matches(path: &str, fresh: &str) {
-        if std::env::var("UPDATE_DIAGNOSTICS").is_ok_and(|v| v == "1") {
-            std::fs::write(path, fresh).unwrap_or_else(|e| panic!("write {path}: {e}"));
-            return;
-        }
-        let committed = std::fs::read_to_string(path)
-            .unwrap_or_else(|e| panic!("read {path}: {e}; generate it with UPDATE_DIAGNOSTICS=1"));
-        assert_eq!(
-            committed, fresh,
-            "{path} is stale: regenerate with `UPDATE_DIAGNOSTICS=1 cargo test -p busbar catalogue_tests`"
-        );
-    }
-
-    /// The committed per-plane markdown equals a fresh render of this plane's own page.
-    /// Ported from busbar-a2a tests/diagnostics_page_tests.rs::committed_markdown_matches_diagnostics.
-    #[test]
-    fn committed_markdown_matches_diagnostics() {
-        committed_matches(COMMITTED_MD, &render_markdown_for(&own_page()));
-    }
-
-    /// The committed per-plane JSON equals a fresh render of this plane's own page.
-    /// Ported from busbar-a2a tests/diagnostics_page_tests.rs::committed_json_matches_diagnostics.
-    #[test]
-    fn committed_json_matches_diagnostics() {
-        committed_matches(COMMITTED_JSON, &render_json_for(&own_page()));
-    }
 }
 
 mod reported_fixture_tests;

@@ -24,16 +24,20 @@
 //!   files it ([`Deliveries::take_owed`]).
 //!
 //! The caller's webhook credential ([`DeliveryAuth`], a [`Cred`]) has its home in the push_config
-//! host record (`PushConfig::authentication`, written only through [`record_value`]). It is held
-//! here, in plane memory, from when the task's config (or its inline callback) names it until the
-//! task ends (its terminal delivery settles, or it ends with nothing to deliver) or the config is
-//! deleted; it is never logged or printed, and joins the request, sealed, only after the judge has
-//! passed. busbar's own callback token ([`Tokens`]) is a capability for one task,
+//! host record (`PushConfig::authentication`, written only through [`record_value`]). Each queued
+//! [`Delivery`] carries the credential registered WITH ITS URL, taken when it is queued, so a
+//! delivery waiting or retrying when the caller re-registers never presents the new credential to
+//! the old URL. Inline callbacks use that same durable config record; there is no separate
+//! task-wide credential map. Config deletion withdraws its waiting and pending deliveries.
+//! Credentials are never logged and join the request sealed only after the destination judge
+//! passes. busbar's own callback token ([`Tokens`]) is a capability for one task,
 //! `<task-id>.<signature>`, minted through the host's signing service (the plane never holds the
 //! key) and verified by signing again and comparing in constant time; it is never logged or
 //! audited. [`PushLimiter`] bounds how often one task's token may be spent.
 
+use busbar_contract::abi::mechanism::ticket::Ticket;
 use std::collections::{BTreeMap, VecDeque};
+use std::sync::Arc;
 
 use busbar_contract::abi::sdk::cred::{Cred, Seal};
 use busbar_contract::abi::sdk::exchange::{Request, SealedField};
@@ -240,6 +244,13 @@ pub struct Delivery {
     pub body: Vec<u8>,
     /// The task had reached a terminal state: the last delivery it gets.
     pub terminal: bool,
+    /// The credential registered with [`Delivery::url`], taken when the delivery was queued.
+    pub auth: Option<DeliveryAuth>,
+    /// Queued under the task's durable push config, whether registered inline or through CRUD.
+    /// Deleting that config withdraws this authority ([`Deliveries::forget_task`]).
+    pub from_config: bool,
+    /// A move whose config read failed; resolved by the delivery worker before judging or sending.
+    pub(crate) unresolved: Option<Box<crate::TaskRow>>,
 }
 
 impl Delivery {
@@ -252,6 +263,9 @@ impl Delivery {
             url: task.push_callback.clone()?,
             body: notification_body(task),
             terminal: task.state.is_terminal(),
+            auth: None,
+            from_config: false,
+            unresolved: None,
         })
     }
 }
@@ -279,13 +293,23 @@ pub struct Owed {
     pub kind: &'static str,
 }
 
-/// The instance's push book: the queues, the drops, the credentials, the outcomes owed.
+/// An exact entry of this delivery book, retained until its filing is acknowledged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OwedReceipt {
+    id: u64,
+    owner: Option<Ticket>,
+    pub(crate) outcome: Owed,
+}
+
+/// The instance's push book: the queues, the drops, the captured credentials, the outcomes owed.
 #[derive(Debug, Default)]
 struct Book {
+    /// Original callback attempts survive cancellation and SDK parked-state destruction.
+    publications: Vec<crate::conditional_publication::Journal>,
     queues: BTreeMap<String, VecDeque<Waiting>>,
     dropped: u64,
-    auths: BTreeMap<String, DeliveryAuth>,
-    owed: VecDeque<Owed>,
+    owed: VecDeque<OwedReceipt>,
+    next_owed: u64,
     unfiled: u64,
     /// The [`Book::dropped`] and [`Book::unfiled`] counts already reported as metrics.
     reported: (u64, u64),
@@ -293,6 +317,43 @@ struct Book {
     last_served: Option<String>,
     /// An attempt is held across `drive` entries: no wake is raised for a queued notification.
     holding: bool,
+}
+
+impl Book {
+    fn enqueue(&mut self, delivery: Delivery, now_ns: u64) -> bool {
+        let queue = self.queues.entry(delivery.task_id.clone()).or_default();
+        let mut dropped = false;
+        if queue.len() >= QUEUE_CAPACITY {
+            let oldest = usize::from(queue.front().is_some_and(|waiting| waiting.open));
+            dropped = queue.remove(oldest).is_some();
+            self.dropped += u64::from(dropped);
+        }
+        queue.push_back(Waiting {
+            delivery,
+            attempts: 0,
+            not_before_ns: now_ns,
+            wait_ns: None,
+            open: false,
+        });
+        dropped
+    }
+
+    fn forget_config(&mut self, key: &str) {
+        let Some((caller, task_id)) = key.split_once('/') else {
+            return;
+        };
+        if let Some(queue) = self.queues.get_mut(task_id) {
+            queue.retain(|waiting| {
+                !(waiting.delivery.from_config && waiting.delivery.caller == caller)
+            });
+            if queue.is_empty() {
+                self.queues.remove(task_id);
+            }
+        }
+        for journal in &self.publications {
+            journal.withdraw_config(key);
+        }
+    }
 }
 
 /// What [`Deliveries::settle`] did with the head of a task's queue.
@@ -310,24 +371,183 @@ pub enum DeliverySettled {
 #[derive(Debug, Default)]
 pub struct Deliveries {
     book: Keyed<(), Book>,
-    wake: Wakeup,
+    wake: Arc<Wakeup>,
 }
 
 /// The way to wake the instance's driver ticket (R-PUSH): armed by the first `tick`, which is the
 /// op that carries the ticket.
-type Wakeup = Keyed<(), Box<dyn Fn() + Send + Sync>>;
+pub(crate) type Wakeup = Keyed<(), Arc<dyn Fn() + Send + Sync>>;
 
 impl Deliveries {
+    /// Retain the exact shared attempt before lending its Commit intent to the host.
+    pub(crate) fn retain_publication(&self, journal: &crate::conditional_publication::Journal) {
+        if !journal.has_commit() {
+            return;
+        }
+        journal.owner_wake(Arc::downgrade(&self.wake));
+        self.with(|b| {
+            if journal.completed() || !journal.has_commit() {
+                return;
+            }
+            if !b.publications.iter().any(|held| held.same_owner(journal)) {
+                b.publications.push(journal.clone());
+            }
+        });
+    }
+
+    pub(crate) fn publications(&self) -> Vec<crate::conditional_publication::Journal> {
+        self.with(|b| b.publications.clone())
+    }
+
+    pub(crate) fn release_publication(&self, journal: &crate::conditional_publication::Journal) {
+        self.with(|b| {
+            journal.released();
+            b.publications.retain(|held| !held.same_owner(journal));
+        });
+    }
+
+    /// Deletion and retained-notification enqueue share this existing book lock. A late receipt
+    /// cannot restore delivery authority after another callback withdrew the configuration.
+    pub(crate) fn apply_publication(
+        &self,
+        journal: &crate::conditional_publication::Journal,
+    ) -> crate::conditional_publication::Applied {
+        let (effects, queued, deleted, deferred) = self.with(|book| {
+            let effects = journal.applied_effects();
+            let deleted: Vec<_> = effects
+                .deletes
+                .iter()
+                .filter(|write| {
+                    write.kind == crate::records::KIND_PUSH_CONFIG && write.value.is_empty()
+                })
+                .map(|write| write.key.as_str())
+                .collect();
+            for key in &deleted {
+                book.forget_config(key);
+            }
+            let mut queued = false;
+            let mut deferred = 0;
+            for (row, config) in &effects.notify {
+                let key = crate::tasks::task_key(&row.principal, &row.task_id);
+                if deleted.contains(&key.as_str()) {
+                    continue;
+                }
+                let delivery = match config {
+                    Some(Ok(Some(config))) => crate::push_door::captured(row, Some(config)),
+                    Some(Ok(None)) => None,
+                    None | Some(Err(())) => {
+                        deferred += 1;
+                        Some(crate::push_door::deferred(row))
+                    }
+                };
+                if let Some(delivery) = delivery {
+                    book.enqueue(delivery, 0);
+                    queued = true;
+                }
+            }
+            let withdrew = !deleted.is_empty();
+            (effects, queued, withdrew, deferred)
+        });
+        for _ in 0..deferred {
+            busbar_contract::diag_warn!(
+                crate::diagnostics::A2A_PUSH_CHECK_UNAVAILABLE,
+                "a2a: notification config unavailable; retained for delivery retry"
+            );
+        }
+        if deleted {
+            self.wake_unconditionally();
+        } else if queued {
+            self.wake();
+        }
+        effects
+    }
+
+    pub(crate) fn forget_config(&self, key: &str) {
+        self.with(|book| book.forget_config(key));
+        self.wake_unconditionally();
+    }
+
+    /// Ordinary replay still authenticates before notification/token effects. Deletion custody
+    /// alone can be drained early, atomically with retained-journal suppression.
+    pub(crate) fn apply_deletions(&self, journal: &crate::conditional_publication::Journal) {
+        let deleted = self.with(|book| {
+            let mut deleted = false;
+            for write in journal.committed_writes() {
+                if write.kind == crate::records::KIND_PUSH_CONFIG && write.value.is_empty() {
+                    book.forget_config(&write.key);
+                    deleted = true;
+                }
+            }
+            deleted
+        });
+        if deleted {
+            self.wake_unconditionally();
+        }
+    }
+
+    fn wake_unconditionally(&self) {
+        let wake = self.wake.with(&(), |armed| armed.cloned());
+        if let Some(wake) = wake {
+            wake();
+        }
+    }
+
+    /// Frame the credential captured with this delivery's URL, never a later task config.
+    #[must_use]
+    pub fn request(&self, delivery: &Delivery) -> (Request, Vec<SealedField>) {
+        request(delivery)
+    }
+
+    /// Whether this is still the open head. Deleting its config withdraws it before a pending
+    /// attempt resumes; another waiting delivery cannot be mistaken for an open attempt.
+    pub(crate) fn current(&self, delivery: &Delivery) -> bool {
+        self.with(|b| {
+            b.queues
+                .get(&delivery.task_id)
+                .and_then(|q| q.front())
+                .is_some_and(|w| w.open && w.delivery == *delivery)
+        })
+    }
+
     fn with<R>(&self, f: impl FnOnce(&mut Book) -> R) -> R {
         self.book
             .with_all(|m| f(m.entry(()).or_insert_with(Book::default)))
+    }
+
+    pub(crate) fn resolve(&self, old: &Delivery, replacement: Delivery) -> bool {
+        self.with(|b| {
+            let Some(head) = b
+                .queues
+                .get_mut(&old.task_id)
+                .and_then(|q| q.front_mut())
+                .filter(|w| w.open && w.delivery == *old)
+            else {
+                return false;
+            };
+            head.delivery = replacement;
+            true
+        })
+    }
+
+    pub(crate) fn discard(&self, delivery: &Delivery) {
+        self.with(|b| {
+            let Some(q) = b.queues.get_mut(&delivery.task_id) else {
+                return;
+            };
+            if q.front().is_some_and(|w| w.open && w.delivery == *delivery) {
+                q.pop_front();
+            }
+            if q.is_empty() {
+                b.queues.remove(&delivery.task_id);
+            }
+        });
     }
 
     /// Arm the wake of the instance's driver ticket, once: a queued delivery is attempted on that
     /// wake, not at the next scheduled `tick` (R-PUSH: a wake runs `drive`, then re-polls `tick`).
     pub fn arm(&self, wake: impl FnOnce() -> Box<dyn Fn() + Send + Sync>) {
         self.wake.with_all(|armed| {
-            armed.entry(()).or_insert_with(wake);
+            armed.entry(()).or_insert_with(|| Arc::from(wake()));
         });
     }
 
@@ -341,11 +561,10 @@ impl Deliveries {
         if self.with(|b| b.holding) {
             return;
         }
-        self.wake.with(&(), |armed| {
-            if let Some(wake) = armed {
-                wake();
-            }
-        });
+        let wake = self.wake.with(&(), |armed| armed.cloned());
+        if let Some(wake) = wake {
+            wake();
+        }
     }
 
     /// Whether an attempt is held across `drive` entries (set while its exchange pends, cleared when
@@ -357,23 +576,7 @@ impl Deliveries {
     /// File `delivery` behind its task's earlier ones. Answers whether the oldest waiting one was
     /// dropped (and counted) to make room. An attempt in progress is never the one dropped.
     pub fn enqueue(&self, delivery: Delivery, now_ns: u64) -> bool {
-        self.with(|b| {
-            let queue = b.queues.entry(delivery.task_id.clone()).or_default();
-            let mut dropped = false;
-            if queue.len() >= QUEUE_CAPACITY {
-                let oldest = usize::from(queue.front().is_some_and(|w| w.open));
-                dropped = queue.remove(oldest).is_some();
-                b.dropped += u64::from(dropped);
-            }
-            queue.push_back(Waiting {
-                delivery,
-                attempts: 0,
-                not_before_ns: now_ns,
-                wait_ns: None,
-                open: false,
-            });
-            dropped
-        })
+        self.with(|book| book.enqueue(delivery, now_ns))
     }
 
     /// The one delivery to attempt now, for one `tick` op: the tasks' queues are served in turn,
@@ -408,15 +611,73 @@ impl Deliveries {
     /// dropped and counted ([`Deliveries::unfiled`]).
     pub fn owe(&self, delivery: &Delivery, end: Attempted) {
         self.with(|b| {
+            let Some(id) = b.next_owed.checked_add(1) else {
+                b.unfiled += 1;
+                return;
+            };
+            b.next_owed = id;
             if b.owed.len() >= MAX_OWED {
-                b.owed.pop_front();
+                let Some(unowned) = b.owed.iter().position(|receipt| receipt.owner.is_none())
+                else {
+                    b.unfiled += 1;
+                    return;
+                };
+                b.owed.remove(unowned);
                 b.unfiled += 1;
             }
-            b.owed.push_back(Owed {
-                caller: delivery.caller.clone(),
-                task_id: delivery.task_id.clone(),
-                kind: end.record_kind(),
+            b.owed.push_back(OwedReceipt {
+                id,
+                owner: None,
+                outcome: Owed {
+                    caller: delivery.caller.clone(),
+                    task_id: delivery.task_id.clone(),
+                    kind: end.record_kind(),
+                },
             });
+        });
+    }
+
+    /// Inspect the same bounded outcome selection without transferring ownership before Applied.
+    pub(crate) fn peek_owed(
+        &self,
+        owner: Ticket,
+        caller: &str,
+        except: Option<&str>,
+    ) -> Vec<OwedReceipt> {
+        self.with(|b| {
+            let mut selected: Vec<OwedReceipt> = Vec::new();
+            let mut seen = std::collections::BTreeSet::new();
+            for receipt in &mut b.owed {
+                let owed = &receipt.outcome;
+                if owed.caller == caller
+                    && except != Some(owed.task_id.as_str())
+                    && seen.insert(owed.task_id.clone())
+                {
+                    let held = receipt.owner.get_or_insert(owner);
+                    if *held == owner {
+                        selected.push(receipt.clone());
+                    }
+                }
+            }
+            selected
+        })
+    }
+
+    /// Remove only the exact locally numbered outcome whose conditional filing applied.
+    pub(crate) fn acknowledge_owed(&self, receipt: &OwedReceipt) {
+        self.with(|b| {
+            if let Some(at) = b.owed.iter().position(|held| held == receipt) {
+                b.owed.remove(at);
+            }
+        });
+    }
+
+    /// Return an unsubmitted filing to the queue; a submitted unknown attempt stays held.
+    pub(crate) fn release_owed(&self, receipt: &OwedReceipt) {
+        self.with(|b| {
+            if let Some(held) = b.owed.iter_mut().find(|held| &**held == receipt) {
+                held.owner = None;
+            }
         });
     }
 
@@ -424,18 +685,21 @@ impl Deliveries {
     /// change of that task's chain, and one piece makes one change of a chain), and none for
     /// `except` (the task the piece itself changes). The rest stay owed.
     #[must_use]
+    #[cfg(test)]
     pub fn take_owed(&self, caller: &str, except: Option<&str>) -> Vec<Owed> {
         self.with(|b| {
             let mut taken: Vec<Owed> = Vec::new();
             let mut kept = VecDeque::with_capacity(b.owed.len());
-            for owed in b.owed.drain(..) {
+            for receipt in b.owed.drain(..) {
+                let owed = &receipt.outcome;
                 let mine = owed.caller == caller
+                    && receipt.owner.is_none()
                     && except != Some(owed.task_id.as_str())
                     && !taken.iter().any(|t| t.task_id == owed.task_id);
                 if mine {
-                    taken.push(owed);
+                    taken.push(receipt.outcome);
                 } else {
-                    kept.push_back(owed);
+                    kept.push_back(receipt);
                 }
             }
             b.owed = kept;
@@ -459,7 +723,7 @@ impl Deliveries {
 
     /// Settle the open attempt on `task_id`'s head, the attempt having ENDED at `now_ns`: done, or
     /// back in the queue for its next attempt, its wait counted from `now_ns` (`jitter` is a
-    /// random byte, [`jittered_ms`]). A terminal task's last delivery forgets its credential.
+    /// random byte, [`jittered_ms`]).
     pub fn settle(
         &self,
         task_id: &str,
@@ -516,12 +780,9 @@ impl Deliveries {
                 }
                 return DeliverySettled::Retry(head.not_before_ns);
             }
-            let terminal = queue.pop_front().is_some_and(|w| w.delivery.terminal);
+            queue.pop_front();
             if queue.is_empty() {
                 b.queues.remove(task_id);
-            }
-            if terminal {
-                b.auths.remove(task_id);
             }
             DeliverySettled::Done(end.record_kind())
         })
@@ -548,29 +809,37 @@ impl Deliveries {
         })
     }
 
-    /// Hold the credential `task_id`'s receiver wants presented; `None` drops the one held (a
-    /// replaced config that names none has withdrawn it).
-    pub fn remember_auth(&self, task_id: &str, auth: Option<DeliveryAuth>) {
-        self.with(|b| match auth {
-            Some(a) => b.auths.insert(task_id.to_string(), a),
-            None => b.auths.remove(task_id),
+    /// FORGET what `task_id`'s deleted push config was queued for: every waiting delivery queued for
+    /// the config ([`Delivery::from_config`]) is dropped, credential and all, and one in flight is
+    /// not retried. Inline and CRUD registrations share this same durable config. A pending
+    /// exchange is abandoned on its next driver entry; bytes already transmitted cannot be undone.
+    pub fn forget_task(&self, task_id: &str) {
+        self.with(|b| {
+            let Some(queue) = b.queues.get_mut(task_id) else {
+                return;
+            };
+            queue.retain(|w| !w.delivery.from_config);
+            if queue.is_empty() {
+                b.queues.remove(task_id);
+            }
         });
-    }
-
-    /// The request for `delivery`, its credential attached as a sealed field. Call it only once
-    /// the destination judge has passed: no refused destination ever sees the credential.
-    #[must_use]
-    pub fn request(&self, delivery: &Delivery) -> (Request, Vec<SealedField>) {
-        let auth = self.with(|b| b.auths.get(&delivery.task_id).cloned());
-        request(delivery, auth.as_ref())
+        // Wake even a held attempt: drive abandons its now-withdrawn exchange before continuing.
+        self.wake.with(&(), |armed| {
+            if let Some(wake) = armed {
+                wake();
+            }
+        });
     }
 }
 
 /// The POST one delivery sends: the callback's path and query as the target, the content type,
-/// the caller's credential when it gave one, and the body. The credential is the SEALED field
-/// after the content type (`Exchange::request_sealed`): the plane never holds its value.
+/// the credential registered with its URL when the caller gave one ([`Delivery::auth`]), and the
+/// body. The credential is the SEALED field after the content type (`Exchange::request_sealed`):
+/// the plane never holds its value. Call it only once the destination judge has passed: no refused
+/// destination ever sees the credential.
 #[must_use]
-pub fn request(delivery: &Delivery, auth: Option<&DeliveryAuth>) -> (Request, Vec<SealedField>) {
+pub fn request(delivery: &Delivery) -> (Request, Vec<SealedField>) {
+    let auth = delivery.auth.as_ref();
     let target = url::Url::parse(&delivery.url).map_or_else(
         |_| "/".to_string(),
         |u| match u.query() {

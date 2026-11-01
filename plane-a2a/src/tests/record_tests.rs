@@ -76,3 +76,21 @@ fn task_event_rows_round_trip_through_the_task_event_envelope() {
         event
     );
 }
+
+#[test]
+fn task_debug_does_not_reveal_a_callback_url_credential() {
+    let task: TaskRow = serde_json::from_value(serde_json::json!({
+        "task_id":"t", "context_id":"c", "principal":"caller", "direction":"outbound",
+        "state":"working", "agent_id":"agent", "artifact_cursor":0,
+        "push_callback":"https://receiver.example/cb?token=secret-webhook-token",
+        "created_at":1, "updated_at":1
+    }))
+    .unwrap();
+    assert!(!format!("{task:?}").contains("secret-webhook-token"));
+    assert!(
+        serde_json::to_string(&task)
+            .unwrap()
+            .contains("secret-webhook-token"),
+        "the durable schema and bytes remain complete"
+    );
+}

@@ -24,6 +24,7 @@ import time
 import urllib.parse
 
 from . import spec, transport
+from .process_fixture import owns_listener
 
 
 class TargetError(Exception):
@@ -75,12 +76,22 @@ class Target:
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             start_new_session=True,
         )
-        if not transport.wait_for_port(self.host, int(self.port),
-                                       self.launch_ready_seconds):
+        deadline = time.monotonic() + self.launch_ready_seconds
+        ready = False
+        # Observe exit without reaping: the reserved child PID also protects
+        # its session/group identity until stop has finished signaling it.
+        while time.monotonic() < deadline:
+            if os.waitid(os.P_PID, self._proc.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT):
+                break
+            if owns_listener(self._proc.pid, self.port, self.host):
+                ready = True
+                break
+            time.sleep(0.1)
+        if not ready:
             out = self._drain()
             self.stop()
             raise TargetError(
-                "target '%s' did not open %s:%s within %.0fs.\n"
+                "target '%s' did not own a listener at %s:%s within %.0fs.\n"
                 "launch command: %s\nprocess output:\n%s"
                 % (self.label, self.host, self.port, self.launch_ready_seconds,
                    self.launch, out)
@@ -105,22 +116,37 @@ class Target:
             return "(output unavailable)"
 
     def stop(self):
-        if self._proc and self._proc.poll() is None:
+        proc = self._proc
+        if not proc:
+            return
+        # Keep the child unreaped while signaling its session. WNOWAIT reserves
+        # the PID even if the leader exited; a recycled foreign group can never
+        # inherit the numeric group id before our last signal.
+        try:
             try:
-                os.killpg(os.getpgid(self._proc.pid), signal.SIGTERM)
-            except Exception:
+                exited = os.waitid(os.P_PID, proc.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+            except ChildProcessError:
+                # An outside caller already reaped it; numeric group custody
+                # is gone, so do not signal that historical group id.
+                exited = True
+            else:
                 try:
-                    self._proc.terminate()
-                except Exception:
+                    os.killpg(proc.pid, signal.SIGTERM)
+                except ProcessLookupError:
                     pass
-            try:
-                self._proc.wait(timeout=10)
-            except Exception:
+                deadline = time.monotonic() + 10
+                while not exited and time.monotonic() < deadline:
+                    time.sleep(0.1)
+                    exited = os.waitid(os.P_PID, proc.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
                 try:
-                    os.killpg(os.getpgid(self._proc.pid), signal.SIGKILL)
-                except Exception:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
                     pass
-        self._proc = None
+            proc.wait()
+        finally:
+            if proc.stdout:
+                proc.stdout.close()
+            self._proc = None
 
     def __enter__(self):
         self.start()

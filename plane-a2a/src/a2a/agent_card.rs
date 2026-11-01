@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! THE AGENT CARD, as the plane reads it: busbar's own structs, transcribed from the A2A
-//! specification (moved from the served engine's `busbar-a2a` `card.rs`, which re-exports them).
+//! specification. Card publication and rewriting live in [`crate::served_card`].
 //!
 //! `#[serde(default)]` throughout, and unknown members are IGNORED rather than refused: an upstream
 //! on a newer protocol revision must not become unreadable the moment it adds a member. A JSON
@@ -171,5 +171,5 @@ pub fn parse(card: &Value) -> Option<AgentCard> {
     if !card.is_object() {
         return None;
     }
-    serde_json::from_value(card.clone()).ok()
+    AgentCard::deserialize(card).ok()
 }

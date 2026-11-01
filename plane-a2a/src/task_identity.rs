@@ -134,7 +134,7 @@ pub fn translate_request(
     envelope: &[u8],
     backend_of: &dyn Fn(&str) -> Option<String>,
 ) -> Option<Vec<u8>> {
-    let reading: Value = serde_json::from_slice(&crate::answer_bytes::readable(envelope)).ok()?;
+    let reading = crate::answer_bytes::read_json(envelope).ok()?;
     crate::answer_bytes::translate_ids(
         envelope,
         task_members(&reading),
@@ -392,11 +392,10 @@ pub fn about_task(refusal: &AgentRefusal, task_id: &str) -> Value {
 pub const fn status_of_code(code: i64) -> Option<u32> {
     Some(match code {
         -32001 | -32601 => 404,
-        -32002 => 409,
-        -32003 | -32004 | -32007 | -32008 | -32009 | -32600 | -32602 | -32700 => 400,
-        -32005 => 415,
-        -32006 => 502,
-        -32603 => 500,
+        -32002 | -32003 | -32004 | -32005 | -32007 | -32008 | -32009 | -32600 | -32602 | -32700 => {
+            400
+        }
+        -32006 | -32603 => 500,
         _ => return None,
     })
 }

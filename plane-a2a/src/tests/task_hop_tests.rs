@@ -23,6 +23,7 @@ struct Desk {
     random: [u8; MINT_BYTES],
     draws: usize,
     verdict: u64,
+    refuse_publication: bool,
 }
 
 impl Records for Desk {
@@ -34,6 +35,20 @@ impl Records for Desk {
     }
     fn claim(&mut self, kind: &str, key: &str, ttl_ms: u64) -> Result<bool, Halt> {
         self.book.claim(kind, key, ttl_ms)
+    }
+    fn observe_chain_life(&mut self, kind: &str, scope: &str) -> Result<Option<Vec<u8>>, Halt> {
+        self.book.observe_chain_life(kind, scope)
+    }
+    fn publish(
+        &mut self,
+        predicates: &[tasks::Predicate],
+        chains: &[tasks::ChainLife],
+        writes: &[Write],
+    ) -> Result<bool, Halt> {
+        if self.refuse_publication {
+            return Err(Halt::Failed("store refused publication".into()));
+        }
+        self.book.publish(predicates, chains, writes)
     }
 }
 
@@ -64,6 +79,7 @@ fn desk() -> Desk {
         random: [1, 2, 3, 4, 5, 6, 7, 8],
         draws: 0,
         verdict: DEST_ALLOWED,
+        refuse_publication: false,
     }
 }
 
@@ -91,6 +107,7 @@ fn opened_with(
         member: MEMBER,
         addressed: None,
         now: 300,
+        sweep: true,
     };
     let opened = open(desk, &req, &json!(7), backends, &mut out).unwrap();
     desk.book.apply(&out);
@@ -225,13 +242,16 @@ fn an_interrupted_task_on_the_agent_under_the_callers_context_resumes_as_working
 #[test]
 fn a_task_that_cannot_be_recorded_is_refused_503_in_the_engines_words() {
     let mut desk = desk();
-    desk.book
-        .claim(KIND_TASK_EVENT, &event_key(ALICE, MINTED, 1), 0)
-        .unwrap();
+    desk.refuse_publication = true;
+    let before = desk.book.clone();
     let Opened::Refused(reply) = opened(&mut desk, &send(json!({})), ALICE) else {
         panic!("not refused");
     };
     assert_eq!(reply.status, 503);
+    assert_eq!(
+        desk.book, before,
+        "refused publication creates no row or event"
+    );
     let body: Value = serde_json::from_slice(&reply.body).unwrap();
     assert_eq!(
         body,
@@ -260,6 +280,7 @@ fn a_held_task_id_whose_far_end_id_is_known_is_sent_on_as_the_far_ends() {
 
 fn settled(desk: &mut Desk, task: &TaskHop, how: &TaskSettled) -> usize {
     let mut out = Vec::new();
+    let before = desk.book.publications.len();
     settle_on_answer(
         &mut desk.book,
         task,
@@ -271,7 +292,8 @@ fn settled(desk: &mut Desk, task: &TaskHop, how: &TaskSettled) -> usize {
     )
     .unwrap();
     desk.book.apply(&out);
-    out.len()
+    assert!(out.is_empty(), "acknowledged records are not emitted again");
+    desk.book.publications[before..].iter().map(Vec::len).sum()
 }
 
 #[test]
@@ -368,6 +390,7 @@ fn an_inline_callback_the_floor_refuses_refuses_the_request_before_anything_open
             member: MEMBER,
             addressed: None,
             now: 300,
+            sweep: true,
         };
         let opened = open(&mut desk, &req, &json!(7), &|_| None, &mut out).unwrap();
         let (status, code, message) = refusal_of(opened);
@@ -407,18 +430,29 @@ fn an_inline_callback_that_passes_is_the_opened_tasks_callback() {
     let Opened::Hop { task, callback, .. } = opened(&mut desk, &envelope, ALICE) else {
         panic!("refused");
     };
-    let callback = callback.expect("the callback rides back");
+    assert!(
+        callback.is_none(),
+        "credential ownership is durable, not held by the hop"
+    );
+    let callback = local::held_config(&mut desk.book, ALICE, &task.task_id)
+        .unwrap()
+        .expect("durable callback");
     assert_eq!(callback.url, "https://hook.example/cb?k=v");
     assert_eq!(
-        callback.auth.map(|a| crate::push::tests::sealed_bytes(
-            a.authorization("https://hook.example/cb?k=v")
-        )),
+        callback
+            .authentication
+            .map(|a| crate::push::tests::sealed_bytes(
+                a.authorization("https://hook.example/cb?k=v")
+            )),
         Some(b"Bearer tok".to_vec())
     );
     let held = get(&mut desk.book, ALICE, &task.task_id, 300)
         .unwrap()
         .unwrap();
-    assert_eq!(held.row.push_callback, "https://hook.example/cb?k=v");
+    assert!(
+        held.row.push_callback.is_empty(),
+        "deletion cannot resurrect a redundant row URL"
+    );
     assert_eq!(held.next_seq, 3, "submitted and delegated, nothing more");
 }
 
@@ -578,11 +612,15 @@ fn every_spelling_of_the_callback_is_found_so_every_spelling_is_guarded() {
             "the {label} spelling must be FOUND, because what is not found is not guarded"
         );
         let mut desk = desk();
-        let Opened::Hop { callback, .. } = opened(&mut desk, &envelope, ALICE) else {
+        let Opened::Hop { task, callback, .. } = opened(&mut desk, &envelope, ALICE) else {
             panic!("the {label} spelling was refused");
         };
+        assert!(callback.is_none());
         assert_eq!(
-            callback.map(|c| c.url).as_deref(),
+            local::held_config(&mut desk.book, ALICE, &task.task_id)
+                .unwrap()
+                .map(|c| c.url)
+                .as_deref(),
             Some("https://hook.example/a"),
             "{label}"
         );
@@ -634,6 +672,7 @@ fn opened_writing(desk: &mut Desk, envelope: &Value) -> (Opened, Vec<Write>) {
         member: MEMBER,
         addressed: None,
         now: 300,
+        sweep: true,
     };
     let opened = open(desk, &req, &json!(7), &|_| None, &mut out).unwrap();
     desk.book.apply(&out);
@@ -962,6 +1001,7 @@ fn refused_settle(how: &TaskSettled) -> (Result<Option<TaskRow>, Halt>, usize, V
     let (task, _) = hop(opened(&mut desk, &send(json!({})), ALICE));
     let (sent, heard) = std::sync::mpsc::channel();
     let mut out = Vec::new();
+    let before = desk.book.publications.len();
     let answer = tracing::subscriber::with_default(Capture(sent), || {
         settle_on_answer(
             &mut desk.book,
@@ -974,7 +1014,12 @@ fn refused_settle(how: &TaskSettled) -> (Result<Option<TaskRow>, Halt>, usize, V
         )
     });
     let lines = heard.try_iter().map(|(_, line)| line).collect();
-    (answer, out.len(), lines)
+    assert!(
+        out.is_empty(),
+        "guarded records never use ordinary output writes"
+    );
+    let committed = desk.book.publications[before..].iter().map(Vec::len).sum();
+    (answer, committed, lines)
 }
 
 /// **A REFUSED CURSOR WRITE IS SURFACED, AND THE ANSWER STANDS.** Ported from origin/predev
@@ -1055,11 +1100,11 @@ fn a_transition_the_store_refuses_is_surfaced_and_the_answer_stands() {
     }
 }
 
-/// **ERROR ONCE, THEN DEBUG**, per condition, as predev latched it (`receive.rs:3195-3201`): the
-/// first refusal of a kind is logged at ERROR and every one after it at DEBUG; a different kind has
+/// **WARNING ONCE, THEN DEBUG**, per condition, as the diagnostic catalog declares: the
+/// first refusal of a kind is logged at WARN and every one after it at DEBUG; a different kind has
 /// its own latch. The latches here are the test's own, so the order is not the process's.
 #[test]
-fn a_refused_write_is_an_error_the_first_time_and_debug_after() {
+fn a_refused_write_is_a_warning_the_first_time_and_debug_after() {
     use tracing::Level;
     let latches = Latches::default();
     let (sent, heard) = std::sync::mpsc::channel();
@@ -1072,8 +1117,8 @@ fn a_refused_write_is_an_error_the_first_time_and_debug_after() {
     let levels: Vec<Level> = heard.try_iter().map(|(level, _)| level).collect();
     assert_eq!(
         levels,
-        [Level::ERROR, Level::DEBUG, Level::DEBUG, Level::ERROR],
-        "error on the first refusal of a kind, debug on the rest"
+        [Level::WARN, Level::DEBUG, Level::DEBUG, Level::WARN],
+        "warning on the first refusal of a kind, debug on the rest"
     );
 }
 
@@ -1081,8 +1126,7 @@ fn a_refused_write_is_an_error_the_first_time_and_debug_after() {
 /// `durability_unavailable`, and the door's `refusal` renders this in place of the kernel's words),
 /// stated by the opening that staged them, echoing the request id: a fresh task's is predev's `503`
 /// `-32603` "the task could not be recorded" (`busbar-a2a` `receive.rs:2032-2049`); a resumed
-/// task's its `409` `-32002` "this task cannot be resumed", with the `TASK_NOT_CANCELABLE`
-/// `ErrorInfo` every A2A-defined code carries (`receive.rs:1985-2001`, `rpcerror.rs:305-318`); an
+/// task's is `503` `-32603` "this task cannot be resumed": a storage failure is retryable. An
 /// addressed task's is none, because predev sent the hop whether or not the callback it carried was
 /// recorded (`receive.rs:2080-2096`).
 #[test]
@@ -1127,17 +1171,12 @@ fn an_opening_states_the_engines_answer_should_the_store_refuse_its_writes() {
         ALICE,
     ))
     .expect("a resumed task's opening states its answer");
-    assert_eq!(resumed.status, 409);
+    assert_eq!(resumed.status, 503);
     assert_eq!(
         resumed.envelope(),
         json!({ "jsonrpc": "2.0", "id": 7, "error": {
-            "code": -32002,
+            "code": -32603,
             "message": "this task cannot be resumed",
-            "data": [{
-                "@type": "type.googleapis.com/google.rpc.ErrorInfo",
-                "domain": "a2a-protocol.org",
-                "reason": "TASK_NOT_CANCELABLE",
-            }],
         } })
     );
 
@@ -1187,6 +1226,7 @@ fn a_task_verb_naming_a_task_the_caller_does_not_hold_is_refused_task_not_found(
                 member: MEMBER,
                 addressed: None,
                 now: 300,
+                sweep: true,
             };
             let opened = open(&mut d, &req, &json!(7), &far, &mut out).unwrap();
             let Opened::Refused(reply) = opened else {
@@ -1210,7 +1250,7 @@ fn a_task_verb_naming_a_task_the_caller_does_not_hold_is_refused_task_not_found(
             assert!(out.is_empty(), "{envelope}: nothing is written: {out:?}");
             assert_eq!(d.draws, 0, "{envelope}: no id is minted");
             assert_eq!(d.book, before, "{envelope}: the store is untouched");
-            bodies.push(reply.body);
+            bodies.push(reply.body.clone());
         }
         assert_eq!(
             bodies[0], bodies[1],
@@ -1263,6 +1303,7 @@ fn writes_of(desk: &mut Desk, envelope: &Value) -> Vec<Write> {
         member: MEMBER,
         addressed: None,
         now: 300,
+        sweep: true,
     };
     let opened = open(desk, &req, &json!(7), &|_| None, &mut out).unwrap();
     assert!(matches!(opened, Opened::Hop { .. }), "{opened:?}");
@@ -1398,6 +1439,7 @@ fn opened_at(d: &mut Desk, envelope: &Value, now: u64) -> Opened {
         member: MEMBER,
         addressed: None,
         now,
+        sweep: true,
     };
     let opened = open(d, &req, &json!(7), &|_| None, &mut out).unwrap();
     d.book.apply(&out);
@@ -1512,3 +1554,27 @@ fn a_read_or_an_addressed_turn_never_sweeps() {
 
 #[path = "inline_push_custody.rs"]
 mod inline_push_custody;
+
+#[test]
+fn streamed_submitted_does_not_regress_state_or_lose_its_artifact() {
+    let mut desk = desk();
+    let (task, _) = hop(opened(&mut desk, &send(json!({})), ALICE));
+    let event = TaskSettled::Event {
+        state: Some(TaskState::Submitted),
+        artifact: false,
+        backend_id: None,
+    };
+    assert_eq!(settled(&mut desk, &task, &event), 0);
+    let event = TaskSettled::Event {
+        state: Some(TaskState::Submitted),
+        artifact: true,
+        backend_id: None,
+    };
+    assert_eq!(settled(&mut desk, &task, &event), 2);
+    let row = get(&mut desk.book, ALICE, MINTED, 400)
+        .unwrap()
+        .unwrap()
+        .row;
+    assert_eq!(row.state, "working");
+    assert_eq!(row.artifact_cursor, 1);
+}

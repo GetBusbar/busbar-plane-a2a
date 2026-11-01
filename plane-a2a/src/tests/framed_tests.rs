@@ -65,11 +65,10 @@ fn an_rpc_is_named_by_its_target_alone() {
 /// ProtoJSON as the params.
 #[test]
 fn a_request_message_composes_the_json_rpc_request_it_is() {
-    let message = pb::GetTaskRequest {
-        id: "t-1".into(),
-        history_length: Some(2),
-        ..Default::default()
-    }
+    let message = crate::proto::custody::initialized::<pb::GetTaskRequest>(|__custody_message| {
+        __custody_message.id = "t-1".into();
+        __custody_message.history_length = Some(2);
+    })
     .encode_to_vec();
     let composed: Value =
         serde_json::from_slice(&compose(Rpc::GetTask, &message).expect("composes")).unwrap();
@@ -325,7 +324,6 @@ fn the_card_narrowing_removes_only_the_member_the_proto_has_no_field_for() {
         assert_eq!(narrowed["capabilities"][kept], Value::Bool(true), "{kept}");
     }
     assert_eq!(narrowed["skills"][0]["id"], "planner");
-    assert!(!UNMODELLED_CARD_MEMBERS.is_empty());
 }
 
 /// Neither send RPC can turn an absent required message into a new user request.
@@ -342,14 +340,14 @@ fn a_send_with_no_message_is_invalid_argument() {
 /// A supplied message keeps its identity; the legacy mint helper is not selected for it.
 #[test]
 fn a_supplied_send_message_keeps_the_callers_identity() {
-    let some = pb::SendMessageRequest {
-        message: Some(pb::Message {
-            message_id: "caller-message".into(),
-            role: pb::Role::User as i32,
-            ..Default::default()
-        }),
-        ..Default::default()
-    }
+    let some = crate::proto::custody::initialized::<pb::SendMessageRequest>(|__custody_message| {
+        __custody_message.message = Some(crate::proto::custody::initialized::<pb::Message>(
+            |__custody_message| {
+                __custody_message.message_id = "caller-message".into();
+                __custody_message.role = pb::Role::User as i32;
+            },
+        ));
+    })
     .encode_to_vec();
     assert!(!mints_message_id(Rpc::SendMessage, &some));
     for rpc in [Rpc::SendMessage, Rpc::SendStreamingMessage] {
@@ -369,6 +367,14 @@ fn the_legacy_message_id_helper_uses_a_v7_uuid() {
     assert_eq!(minted["params"]["message"]["messageId"], id);
     assert_eq!(minted["params"]["message"]["role"], "ROLE_USER");
     assert!(minted["params"]["message"].get("parts").is_none());
+}
+
+/// The next complete frame of `buf`, consumed from it ([`frame_end`]).
+fn take_frame(buf: &mut Vec<u8>) -> Option<String> {
+    let (at, len) = frame_end(buf)?;
+    let frame = String::from_utf8_lossy(&buf[..at]).into_owned();
+    buf.drain(..at + len);
+    Some(frame)
 }
 
 /// SSE FRAMES ARE TAKEN WHOLE OR NOT AT ALL (the engine's `grpc_tests.rs`, ported): a frame split
@@ -405,11 +411,6 @@ fn every_sse_frame_terminator_is_recognised() {
 #[test]
 fn the_extended_card_is_served_over_grpc_at_the_path_the_proto_defines() {
     let target = format!("{SERVICE_PATH}/GetExtendedAgentCard");
-    assert_eq!(
-        target,
-        format!("/{}/GetExtendedAgentCard", crate::proto::SERVICE_NAME),
-        "the path a generated client dials is the proto's, not busbar's"
-    );
     assert_eq!(Rpc::of_target(&target), Some(Rpc::GetExtendedAgentCard));
 
     let skill = serde_json::json!({
@@ -443,4 +444,26 @@ fn the_extended_card_is_served_over_grpc_at_the_path_the_proto_defines() {
         ["planner"],
         "the transcode preserves the document's skill ids"
     );
+}
+
+#[test]
+fn null_error_is_not_a_terminal_event_and_an_unfinished_frame_is_not_dispatched() {
+    assert!(event(r#"data: {"error":null}"#).is_none());
+    let tail = br#"data: {"error":{"code":-32603,"message":"failure"}}"#;
+    assert_eq!(
+        event_messages(Rpc::SendStreamingMessage, tail),
+        (Vec::new(), None)
+    );
+    let mut complete = tail.to_vec();
+    complete.extend_from_slice(b"\n\n");
+    assert!(event_messages(Rpc::SendStreamingMessage, &complete)
+        .1
+        .is_some());
+}
+
+#[test]
+fn protojson_backend_errors_do_not_echo_backend_bytes() {
+    let bytes = br#"{"jsonrpc":"2.0","id":1,"result":{"secret-backend-member":true}}"#;
+    let error = answer_message(Rpc::GetTask, 200, bytes).unwrap_err();
+    assert!(!format!("{error:?}").contains("secret-backend-member"));
 }

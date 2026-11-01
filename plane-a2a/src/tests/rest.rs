@@ -245,11 +245,11 @@ fn path_captures_decode_as_the_router_did() {
 /// key keeps the last value.
 #[test]
 fn query_components_decode_as_the_extractor_did() {
-    let q = query_map(Some("a=1+2&b=%41&a=3&&c"));
+    let q = query_map(Some("a=1+2&b=%41&a=3&&c")).unwrap();
     assert_eq!(q.get("a").map(String::as_str), Some("3"));
     assert_eq!(q.get("b").map(String::as_str), Some("A"));
     assert_eq!(q.get("c").map(String::as_str), Some(""));
-    assert!(query_map(None).is_empty());
+    assert!(query_map(None).unwrap().is_empty());
 }
 
 /// RE-FRAMED BY WHAT IT IS: a result is the body verbatim, an error the AIP-193 document at the
@@ -426,4 +426,28 @@ fn only_the_protos_non_string_query_members_are_typed() {
             json!({"taskId": "t-1", "pageToken": "42", "pageSize": 3})
         )
     );
+}
+
+#[test]
+fn rest_queries_refuse_invalid_utf8_and_wrong_proto_scalar_types() {
+    let list = route("GET", "/a2a/tasks");
+    for query in [
+        "pageToken=%FF",
+        "contextId=%C0%AF",
+        "includeArtifacts=1",
+        "pageSize=true",
+        "historyLength=2147483648",
+    ] {
+        let error = compose(list, &format!("/a2a/tasks?{query}"), b"").unwrap_err();
+        assert_eq!((error.status, error.code), (400, -32602));
+    }
+    let value = composed(
+        "GET",
+        "/a2a/tasks",
+        "/a2a/tasks?includeArtifacts=true&pageSize=2&pageToken=%EF%BF%BD",
+        b"",
+    );
+    assert_eq!(value["params"]["includeArtifacts"], true);
+    assert_eq!(value["params"]["pageSize"], 2);
+    assert_eq!(value["params"]["pageToken"], "\u{fffd}");
 }

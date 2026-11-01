@@ -22,13 +22,24 @@ impl Records for RefusesDispatch {
         self.book.list(kind, prefix)
     }
     fn claim(&mut self, kind: &str, key: &str, ttl_ms: u64) -> Result<bool, Halt> {
-        if kind == KIND_TASK_EVENT && key == event_key(ALICE, "fresh", 2) {
-            match self.refusal {
-                Refusal::Taken => Ok(false),
-                Refusal::Store => Err(Halt::Failed("dispatch write unavailable".into())),
-            }
-        } else {
-            self.book.claim(kind, key, ttl_ms)
+        self.book.claim(kind, key, ttl_ms)
+    }
+    fn observe_chain_life(&mut self, kind: &str, scope: &str) -> Result<Option<Vec<u8>>, Halt> {
+        self.book.observe_chain_life(kind, scope)
+    }
+    fn publish(
+        &mut self,
+        _predicates: &[Predicate],
+        _chains: &[ChainLife],
+        writes: &[Write],
+    ) -> Result<bool, Halt> {
+        assert_eq!(
+            writes.iter().filter(|w| w.kind == KIND_TASK_EVENT).count(),
+            2
+        );
+        match self.refusal {
+            Refusal::Taken => Ok(false),
+            Refusal::Store => Err(Halt::Failed("dispatch write unavailable".into())),
         }
     }
 }

@@ -12,6 +12,9 @@
 use std::error::Error;
 use std::path::PathBuf;
 
+#[path = "build/custody.rs"]
+mod custody;
+
 const PROTO_FILES: &[&str] = &["proto/a2a.proto"];
 const PROTO_INCLUDES: &[&str] = &["proto"];
 const PROTOJSON_PACKAGES: &[&str] = &[".lf.a2a.v1"];
@@ -84,6 +87,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let descriptor_path = out_dir.join("a2a-descriptor.bin");
     let mut config = prost_build::Config::new();
     config
+        .prost_path("crate::proto::custody::prost")
         .protoc_executable(protoc_bin_vendored::protoc_bin_path()?)
         .out_dir(&out_dir)
         .file_descriptor_set_path(&descriptor_path)
@@ -128,7 +132,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         generated = patched;
     }
-    std::fs::write(serde_path, generated)?;
+    std::fs::write(serde_path, custody::serde(&generated)?)?;
+    let messages_path = out_dir.join("lf.a2a.v1.rs");
+    let messages = std::fs::read_to_string(&messages_path)?;
+    std::fs::write(messages_path, custody::messages(&messages)?)?;
     Ok(())
 }
 

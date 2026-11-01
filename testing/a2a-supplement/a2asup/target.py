@@ -108,7 +108,8 @@ class Target:
             elif iface.binding == "http_json":
                 made[iface.binding] = RestBinding(iface.url)
             elif iface.binding == "grpc":
-                made[iface.binding] = GrpcBinding(_authority(iface.url))
+                made[iface.binding] = GrpcBinding(
+                    _authority(iface.url), secure=urlparse(iface.url).scheme == "https")
         return made
 
     def versions_declared(self) -> list[str]:
@@ -119,5 +120,7 @@ def _authority(url: str) -> str:
     """`host:port` for a gRPC channel, from the URL the card publishes for that interface."""
     parsed = urlparse(url if "//" in url else f"//{url}")
     host = parsed.hostname or "127.0.0.1"
+    if ":" in host:
+        host = f"[{host}]"
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
     return f"{host}:{port}"

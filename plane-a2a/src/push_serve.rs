@@ -17,14 +17,14 @@
 //! 5. the body is JSON, or `400`;
 //! 6. the state it reports is recorded on the task's own chain through the one transition table
 //!    (a push reporting no state this build can read, or the state already held, is `202` and moves
-//!    nothing, queuing no notification; a move that cannot be recorded is still `202`);
+//!    nothing, queuing no notification; storage or signing failure answers retryable `503`);
 //! 7. the caller's own delivery is queued from busbar's own row, never from the pushed body.
 
 use std::task::Poll;
 
 use busbar_contract::abi::mechanism::call::Outcome;
 use busbar_contract::abi::plane::{ServeIn, ServeOut, AUDIT_NONE};
-use busbar_contract::abi::sdk::{Instance, Lent, Out};
+use busbar_contract::abi::sdk::{Instance, Lent, Out, ServiceError};
 use serde_json::{json, Value};
 
 use crate::a2a::task::{Task, TaskState};
@@ -66,23 +66,109 @@ fn accepted(input: &Lent<'_, ServeIn>, out: &mut Out<'_, ServeOut>, writes: &[Wr
 
 /// What a push keeps across its op's PENDING entries: it has already spent its push-volume budget,
 /// so a re-entry does not spend it twice.
-struct Admitted;
+#[derive(Default)]
+struct Admitted {
+    charged: bool,
+    publication: crate::conditional_publication::Journal,
+    prepared: Option<Prepared>,
+    refusal: Option<(u32, &'static str)>,
+}
+impl Drop for Admitted {
+    fn drop(&mut self) {
+        self.publication.owner_dropped();
+    }
+}
+struct Prepared {
+    writes: Vec<Write>,
+}
+const UNAVAILABLE: &str = "the push report could not be checked or recorded; retry this request";
 
-/// The host's signature of `task_id`'s token input, on handle `seq` of the op's ticket.
+fn cached_refusal(
+    instance: &Instance<'_, A2aDoor>,
+    input: &Lent<'_, ServeIn>,
+    out: &mut Out<'_, ServeOut>,
+    mut state: Admitted,
+    status: u32,
+    message: &'static str,
+) -> Outcome {
+    state.refusal = Some((status, message));
+    let outcome = refused(input, out, status, message, &[]);
+    if outcome != Outcome::Ready {
+        instance.park(state);
+    } else {
+        if let Some(plane) = instance.get() {
+            crate::push_door::apply_publication(plane, &state.publication);
+            state.publication.finished();
+            if state.publication.completed() {
+                plane.deliveries.release_publication(&state.publication);
+            }
+        }
+    }
+    outcome
+}
+
+fn unavailable(
+    instance: &Instance<'_, A2aDoor>,
+    input: &Lent<'_, ServeIn>,
+    out: &mut Out<'_, ServeOut>,
+    state: Admitted,
+) -> Outcome {
+    busbar_contract::diag_warn!(
+        crate::diagnostics::A2A_PUSH_CHECK_UNAVAILABLE,
+        "a2a: push check or task store unavailable; answered 503 for retry"
+    );
+    cached_refusal(instance, input, out, state, 503, UNAVAILABLE)
+}
+
+/// The signature retains the service's Pending/Short/failure distinction. A failed signer is
+/// not evidence that a caller presented an invalid capability.
 fn signature(
     plane: &A2aDoor,
     ticket: busbar_contract::abi::mechanism::ticket::Ticket,
-    seq: u32,
     task_id: &str,
-) -> Option<Vec<u8>> {
-    let mut signer = crate::task_door::HostSigner {
-        services: plane.services.as_ref(),
-        ticket,
-        seq,
-    };
-    signer
-        .signed(&crate::push::token_input(task_id))
-        .map(|(_, sig)| sig)
+) -> Result<Vec<u8>, ServiceError> {
+    let services = plane.services.as_ref().ok_or(ServiceError::Unserved)?;
+    let handle = crate::task_door::handle(ticket, 0);
+    let data = crate::push::token_input(task_id);
+    let mut bytes = vec![0u8; 1024];
+    let mut spans = vec![crate::task_door::ABSENT_SPAN; 2];
+    match services.sign(handle, &data, &mut bytes, &mut spans) {
+        Ok(signature) => return Ok(signature.signature.to_vec()),
+        Err(ServiceError::Short {
+            bytes: needed,
+            items,
+        }) => {
+            let size = |n| usize::try_from(n).unwrap_or(usize::MAX);
+            bytes.resize(size(needed), 0);
+            spans.resize(size(items), crate::task_door::ABSENT_SPAN);
+        }
+        Err(error) => return Err(error),
+    }
+    services
+        .sign(handle, &data, &mut bytes, &mut spans)
+        .map(|s| s.signature.to_vec())
+}
+
+fn finish_prepared(
+    plane: &A2aDoor,
+    instance: &Instance<'_, A2aDoor>,
+    input: &Lent<'_, ServeIn>,
+    out: &mut Out<'_, ServeOut>,
+    mut state: Admitted,
+) -> Outcome {
+    let prepared = state.prepared.take().expect("prepared push answer");
+    let outcome = accepted(input, out, &prepared.writes);
+    if outcome != Outcome::Ready {
+        state.prepared = Some(prepared);
+        instance.park(state);
+        return outcome;
+    }
+    crate::push_door::apply_publication(plane, &state.publication);
+    state.publication.finished();
+    if state.publication.completed() {
+        plane.deliveries.release_publication(&state.publication);
+    }
+    outcome
 }
 
 /// THE MOVE A PUSHED `document` ASKS OF A TASK IN `held`: the state it reports, when it reports one
@@ -100,6 +186,36 @@ pub(crate) fn serve(
     mut out: Out<'_, ServeOut>,
 ) -> Outcome {
     let ticket = instance.ticket();
+    let mut state = match instance.resume::<Admitted>() {
+        Some(state) => *state,
+        None if instance.resuming() => return Outcome::Failed,
+        None => Admitted::default(),
+    };
+    let entered = state
+        .publication
+        .enter(ticket, input.head().extensions().bytes());
+    if entered.is_err() {
+        crate::push_door::apply_publication(plane, &state.publication);
+        instance.park(state);
+        return Outcome::Failed;
+    }
+    plane.deliveries.apply_deletions(&state.publication);
+    if let Some(outcome) = state
+        .publication
+        .pending(&plane.publication_leases, &mut out)
+    {
+        if outcome != Outcome::Pending {
+            crate::push_door::apply_publication(plane, &state.publication);
+        }
+        instance.park(state);
+        return outcome;
+    }
+    if let Some((status, message)) = state.refusal {
+        return cached_refusal(instance, &input, &mut out, state, status, message);
+    }
+    if state.prepared.is_some() {
+        return finish_prepared(plane, instance, &input, &mut out, state);
+    }
     let fields = input.fields();
     let authorization = fields
         .iter()
@@ -114,101 +230,154 @@ pub(crate) fn serve(
     //    constant time.
     let Some((task_id, caller, presented)) = plane.tokens.claim_of_authorization(authorization)
     else {
-        return refused(&input, &mut out, 401, UNAUTHORISED, &[]);
+        return cached_refusal(instance, &input, &mut out, state, 401, UNAUTHORISED);
     };
-    let verified = signature(plane, ticket, 0, &task_id)
-        .is_some_and(|sig| crate::push::verified(&sig, presented));
-    if !verified {
-        return refused(&input, &mut out, 401, UNAUTHORISED, &[]);
+    let signed = match signature(plane, ticket, &task_id) {
+        Ok(signature) => signature,
+        Err(ServiceError::Pending) => {
+            instance.park(state);
+            return Outcome::Pending;
+        }
+        Err(_) => return unavailable(instance, &input, &mut out, state),
+    };
+    if !crate::push::verified(&signed, presented) {
+        return cached_refusal(instance, &input, &mut out, state, 401, UNAUTHORISED);
     }
     let Some(host) = plane.host.as_ref() else {
-        return refused(&input, &mut out, 401, UNAUTHORISED, &[]);
+        return unavailable(instance, &input, &mut out, state);
     };
-    let Poll::Ready(Ok(reading)) = host.connector_from(ticket, 1).clock_now() else {
-        return Outcome::Failed;
+    let reading = match host.connector_from(ticket, 1).clock_now() {
+        Poll::Pending => {
+            instance.park(state);
+            return Outcome::Pending;
+        }
+        Poll::Ready(Err(_)) => return unavailable(instance, &input, &mut out, state),
+        Poll::Ready(Ok(reading)) => reading,
     };
     let now = reading.wall_ns / 1_000_000_000;
     // 2. THE VOLUME BOUND, before any of the cost it bounds; spent once across re-entries.
-    let resumed = instance.resume::<Admitted>().is_some();
-    if !resumed && !plane.pushes.admit(&task_id, now) {
+    if !state.charged && !plane.pushes.admit(&task_id, now) {
         let window = crate::push::PUSH_RATE_WINDOW_SECS.to_string();
-        return refused(
+        let outcome = refused(
             &input,
             &mut out,
             429,
             RATE_LIMITED,
             &[("retry-after", window.as_str())],
         );
+        if outcome != Outcome::Ready {
+            instance.park(state);
+        }
+        return outcome;
     }
+    state.charged = true;
     // 3. THE BODY'S CEILING.
     let body = input.body().bytes();
     if body.len() > MAX_PUSH_BODY {
-        return refused(
+        return cached_refusal(
+            instance,
             &input,
             &mut out,
+            state,
             413,
             "a push notification is one task document",
-            &[],
         );
     }
-    let mut via = crate::task_door::Via::new(host, plane.services, ticket, 2, &plane.grown);
+    let mut via = crate::task_door::Via::new(host, plane.services, ticket, 2, &plane.grown)
+        .publishing(&state.publication);
     // 4. THE TASK, held and live.
-    let pend = || {
-        instance.park(Admitted);
-        Outcome::Pending
+    let pend = |state: Admitted, out: &mut Out<'_, ServeOut>| {
+        plane.deliveries.retain_publication(&state.publication);
+        let outcome = state
+            .publication
+            .pending(&plane.publication_leases, out)
+            .unwrap_or(Outcome::Pending);
+        if outcome != Outcome::Pending {
+            crate::push_door::apply_publication(plane, &state.publication);
+        }
+        instance.park(state);
+        outcome
     };
     let held = match tasks::get(&mut via, &caller, &task_id, now) {
-        Err(Halt::Pending) => return pend(),
-        Err(Halt::Failed(_)) | Ok(None) => {
-            return refused(&input, &mut out, 401, UNAUTHORISED, &[]);
-        }
+        Err(Halt::Pending) => return pend(state, &mut out),
+        Err(Halt::Failed(_)) => return unavailable(instance, &input, &mut out, state),
+        Ok(None) => return cached_refusal(instance, &input, &mut out, state, 401, UNAUTHORISED),
         Ok(Some(held)) => held,
     };
     let Ok(task) = Task::from_row(&held.row) else {
-        return refused(&input, &mut out, 401, UNAUTHORISED, &[]);
+        return cached_refusal(instance, &input, &mut out, state, 401, UNAUTHORISED);
     };
     if task.state.is_terminal() {
-        plane.tokens.forget(&task_id);
-        return refused(&input, &mut out, 401, UNAUTHORISED, &[]);
+        return cached_refusal(instance, &input, &mut out, state, 401, UNAUTHORISED);
     }
     // 5. A JSON DOCUMENT.
-    let Ok(document) = serde_json::from_slice::<Value>(body) else {
-        return refused(
+    let Ok(document) = serde_json::from_slice::<crate::request_json::RequestJson>(body) else {
+        return cached_refusal(
+            instance,
             &input,
             &mut out,
+            state,
             400,
             "a push notification is a JSON task document",
-            &[],
         );
     };
     // 6. THE MOVE, through the one transition table, read by the one reader of a task's state. A
     //    push that reports no state, or the state the task holds, moves nothing: `202`, nothing
     //    recorded and no notification queued.
     let Some(reported) = push_move(task.state, &document) else {
-        return accepted(&input, &mut out, &[]);
+        let outcome = accepted(&input, &mut out, &[]);
+        if outcome == Outcome::Ready {
+            state.publication.finished();
+        } else {
+            instance.park(state);
+        }
+        return outcome;
     };
+    if !task.state.can_transition_to(reported) {
+        let outcome = accepted(&input, &mut out, &[]);
+        if outcome == Outcome::Ready {
+            state.publication.finished();
+        } else {
+            instance.park(state);
+        }
+        return outcome;
+    }
     let mut writes = Vec::new();
     let at = Stamp {
         caller: &caller,
         request_id: "",
         now,
     };
-    let moved = match tasks::transition(&mut via, &at, &task_id, reported, &mut writes) {
-        Err(Halt::Pending) => return pend(),
-        // A move that cannot be recorded (commonly a push about a task already terminal) is the
-        // agent being redundant: `202` stops its retry loop.
-        Err(Halt::Failed(_)) | Ok(None) => return accepted(&input, &mut out, &[]),
-        Ok(Some(row)) => row,
+    let mut plan = |row: &crate::TaskRow| -> tasks::Planned {
+        let held = TaskState::parse(&row.state).map_err(|error| error.to_string())?;
+        if held == reported || !held.can_transition_to(reported) {
+            return Ok(None);
+        }
+        crate::a2a::task::plan_transition(reported, now)(row).map(Some)
     };
-    // 7. THE CALLER'S OWN DELIVERY, from busbar's row.
-    match crate::push_door::queue_moved(&plane.deliveries, &mut via, &caller, &moved) {
-        Err(Halt::Pending) => return pend(),
-        Err(Halt::Failed(_)) | Ok(_) => {}
-    }
-    // The ending spends the token, once the answer is final: forgotten before a PENDING entry,
-    // the re-entry would find no token and refuse the very report that ended the task.
-    if reported.is_terminal() {
-        plane.tokens.forget(&task_id);
-    }
-    accepted(&input, &mut out, &writes)
+    via.effects(crate::conditional_publication::Draft {
+        notify: true,
+        ..Default::default()
+    });
+    match tasks::change(&mut via, &at, &task_id, &mut plan, &mut writes) {
+        Err(Halt::Pending) => return pend(state, &mut out),
+        // Table refusals are no-ops in the plan, including a concurrent state change.
+        // A host/store failure remains retryable.
+        Err(Halt::Failed(_)) => return unavailable(instance, &input, &mut out, state),
+        Ok(None) => {
+            let outcome = accepted(&input, &mut out, &[]);
+            if outcome == Outcome::Ready {
+                state.publication.finished();
+                if state.publication.completed() {
+                    plane.deliveries.release_publication(&state.publication);
+                }
+            } else {
+                instance.park(state);
+            }
+            return outcome;
+        }
+        Ok(Some(_)) => {}
+    };
+    state.prepared = Some(Prepared { writes });
+    finish_prepared(plane, instance, &input, &mut out, state)
 }

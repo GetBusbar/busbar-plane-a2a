@@ -73,7 +73,7 @@ fn unreadable_grpc_replies_blame_the_backend_and_retain_http_status_precedence()
             relay.moved(),
             (sent.len() + crate::framed::MESSAGE_PREFIX + wire.len()) as u64
         );
-        let text = String::from_utf8(reply.body).unwrap();
+        let text = String::from_utf8(reply.body.clone()).unwrap();
         assert!(
             !text.contains("unframable")
                 && !text.contains("PRIVATE")
@@ -128,7 +128,7 @@ fn a_final_piece_with_a_whole_event_and_a_partial_next_event_keeps_only_the_whol
     let end = part(relay.on_piece(far(None, &wire, true)));
     assert!(end.head && end.last);
     assert_eq!(
-        String::from_utf8(end.body)
+        String::from_utf8(end.body.clone())
             .unwrap()
             .matches("data: ")
             .count(),

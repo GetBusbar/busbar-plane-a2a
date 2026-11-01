@@ -146,6 +146,11 @@ def test_wrong_types(ctx):
                        "params": body}
         resp = _post_raw(ctx, json.dumps(payload))
         _survived(ctx, resp, "a request with %s" % name.replace("_", " "))
+        response = resp.json_or_none()
+        ctx.assert_must(resp.status >= 400 or (isinstance(response, dict) and
+                        isinstance(response.get("error"), dict)),
+                        "a request with %s was accepted" % name,
+                        "SPEC 3.3.2 requires validation of protocol field types.")
         statuses[name] = resp.status
     ctx.observe("wrong_type_statuses", statuses)
 
@@ -169,8 +174,9 @@ def test_missing_required(ctx):
         "least one element.'",
     )
     ctx.observe("missing_parts_error", call.error_name or call.error_code)
+    _survived(ctx, call.http, "a message with missing parts")
 
-    call2 = ctx.target.call("SendMessage", {"message": {"role": "ROLE_USER",
+    call2 = ctx.target.call("SendMessage", {"message": {"messageId": str(uuid.uuid4()), "role": "ROLE_USER",
                                                         "parts": []}})
     ctx.assert_must(
         call2.error is not None,
@@ -178,6 +184,7 @@ def test_missing_required(ctx):
         "SPEC 5.7: 'Arrays marked as required MUST contain at least one "
         "element.'",
     )
+    _survived(ctx, call2.http, "a message with empty parts")
 
 
 @a2a_test(
@@ -218,16 +225,16 @@ def test_unknown_fields(ctx):
 )
 def test_deep_nesting(ctx):
     depth = int(ctx.config.get("nesting_depth", 2000))
-    node = {"leaf": True}
-    for _ in range(depth):
-        node = {"n": node}
+    # Construct the JSON iteratively so this probes the peer's parser, not json.dumps' stack.
+    node = '{"n":' * depth + '{"leaf":true}' + '}' * depth
     msg = {"messageId": str(uuid.uuid4()), "role": "ROLE_USER",
-           "parts": [{"data": node}]}
+           "parts": [{"data": "NESTED_DATA"}]}
     payload = {"message": msg}
     if _binding(ctx) == "JSONRPC":
         payload = {"jsonrpc": "2.0", "id": 1, "method": "SendMessage",
                    "params": payload}
-    resp = _post_raw(ctx, json.dumps(payload))
+    encoded = json.dumps(payload).replace('"NESTED_DATA"', node, 1)
+    resp = _post_raw(ctx, encoded)
     _survived(ctx, resp, "a %d-deep nested data part" % depth)
     ctx.observe("deep_nesting_depth", depth)
     ctx.observe("deep_nesting_status", resp.status)
@@ -235,7 +242,7 @@ def test_deep_nesting(ctx):
     # the NEXT request is the failure mode this catches.
     after = ctx.target.call("SendMessage", send_params("still alive?"))
     ctx.assert_must(
-        after.error is None or (after.http and after.http.status < 500),
+        after.error is None,
         "the agent did not survive a deeply nested payload: the following "
         "request returned %s"
         % (after.http.status if after.http else after.error),
@@ -261,6 +268,7 @@ def test_oversized(ctx):
         payload = {"jsonrpc": "2.0", "id": 1, "method": "SendMessage",
                    "params": payload}
     resp = _post_raw(ctx, json.dumps(payload))
+    _survived(ctx, resp, "an oversized message")
     ctx.observe("oversize_bytes", size)
     ctx.observe("oversize_status", resp.status)
     # THE SPEC SETS NO MAXIMUM MESSAGE SIZE ANYWHERE. Accepting an 8MB message
@@ -304,7 +312,7 @@ def test_truncated_body(ctx):
     # The real assertion: the agent still serves other callers afterwards.
     after = ctx.target.call("SendMessage", send_params("alive after truncate"))
     ctx.assert_must(
-        after.error is None or (after.http and after.http.status < 500),
+        after.error is None,
         "after a truncated request body, a subsequent well-formed request "
         "returned %s"
         % (after.http.status if after.http else after.error),
@@ -327,8 +335,11 @@ def test_connect_and_stall(ctx):
     if _binding(ctx) == "HTTP+JSON":
         url += "/message:send"
     budget = float(ctx.config.get("stall_seconds", 8.0))
+    healthy = []
     closed_after = transport.raw_connect_and_stall(
-        url, budget, insecure=ctx.target.insecure)
+        url, budget, insecure=ctx.target.insecure,
+        while_stalled=lambda: healthy.append(
+            ctx.target.call("SendMessage", send_params("alive during stall"))))
     # Deliberately NOT an assertion on elapsed time. The recorded value is
     # whether the peer closed within the budget at all, which is a property of
     # the code; the exact seconds are a property of the machine.
@@ -336,9 +347,9 @@ def test_connect_and_stall(ctx):
     ctx.observe("stall_budget_seconds", budget)
     # Concurrency is the thing that actually matters, so prove the agent still
     # serves someone else while we are stalling it.
-    after = ctx.target.call("SendMessage", send_params("alive during stall"))
+    after = healthy[0]
     ctx.assert_must(
-        after.error is None or (after.http and after.http.status < 500),
+        after.error is None,
         "while one connection was stalled, a second well-formed request "
         "returned %s" % (after.http.status if after.http else after.error),
         "An agent that cannot serve a second caller while one connection is "
@@ -382,7 +393,7 @@ def test_client_disconnect_midstream(ctx):
         )
     after = ctx.target.call("SendMessage", send_params("alive after abort"))
     ctx.assert_must(
-        after.error is None or (after.http and after.http.status < 500),
+        after.error is None,
         "after a mid-stream client disconnect the agent returned %s to the "
         "next caller" % (after.http.status if after.http else after.error),
         "SPEC 3.5.2 requires stream lifecycles be independent.",
@@ -438,12 +449,22 @@ def test_response_to_nothing(ctx):
         ("GetTask", {"id": ghost}),
         ("ListTaskPushNotificationConfigs", {"taskId": ghost}),
     ):
+        if method == "ListTaskPushNotificationConfigs" and not ctx.target.capability("pushNotifications"):
+            ctx.observe("ghost_push_config_probe", "not applicable: push notifications undeclared")
+            continue
         call = ctx.target.call(method, params)
         outcomes[method] = call.error_name or call.error_code or "ACCEPTED"
         ctx.assert_must(
-            call.error is not None,
-            "%s on a task id the agent never issued (%s) succeeded"
-            % (method, ghost),
+            call.error is not None and
+            ((call.binding == "JSONRPC" and
+              call.error_code == spec.ERROR_MAP["TaskNotFoundError"][0]) or
+             (call.binding == "HTTP+JSON" and call.http is not None and
+              call.http.status == 404 and any(
+                  detail.get("domain") == spec.ERROR_INFO_DOMAIN and
+                  detail.get("reason") == "TASK_NOT_FOUND"
+                  for detail in call.error_details()))),
+            "%s on a task id the agent never issued (%s) did not return TaskNotFoundError: %r"
+            % (method, ghost, call.error),
             "SPEC 3.3.2: 'Servers MUST return a not found error when a "
             "requested resource does not exist or is not accessible to the "
             "authenticated client.'",
@@ -586,6 +607,8 @@ def test_concurrent_tasks(ctx):
             markers[task["id"]] = marker
 
     ctx.observe("concurrent_tasks_created", len(task_ids))
+    if not task_ids:
+        raise Inapplicable("the agent answered with Messages; no task isolation was exercised")
     ctx.assert_must(
         len(set(task_ids)) == len(task_ids),
         "concurrent SendMessage calls produced duplicate task ids: %s"
@@ -594,15 +617,17 @@ def test_concurrent_tasks(ctx):
         "they create.'",
     )
 
-    # Content isolation. Each task's own marker must appear in its own result
-    # and no other task's marker may.
+    # An echo/history fixture is needed to decide marker isolation. A general
+    # agent is not required to echo input in its artifacts.
     crossovers = []
+    observed_own = 0
     for task_id, marker in markers.items():
         got = ctx.target.call("GetTask", {"id": task_id})
-        if got.error is not None:
-            continue
+        ctx.assert_must(got.error is None, "a concurrent task could not be read",
+                        "SPEC 3.1.3 permits retrieval of the task just created.")
         task = got.result.get("task") if isinstance(got.result, dict) and "task" in got.result else got.result
         blob = json.dumps(task)
+        observed_own += marker in blob
         for other_id, other_marker in markers.items():
             if other_id != task_id and other_marker in blob:
                 crossovers.append((task_id, other_marker))
@@ -612,6 +637,8 @@ def test_concurrent_tasks(ctx):
         "SPEC 13.1 Data Access and Authorization Scoping, and SPEC 3.4.2's "
         "requirement that each task be a distinct unit of work.",
     )
+    if observed_own != len(markers):
+        raise Inapplicable("task ids were unique, but not every task exposed its own marker; content isolation was not established")
 
 
 @a2a_test(

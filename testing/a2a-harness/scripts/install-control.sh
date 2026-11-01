@@ -9,7 +9,9 @@ set -euo pipefail
 
 CONTROL_GO_VERSION="v2.4.0"       # github.com/a2aproject/a2a-go
 CONTROL_PY_VERSION="1.1.2"        # PyPI a2a-sdk
-CONTROL_PY_TAG="v1.1.2"           # github.com/a2aproject/a2a-python (samples)
+CONTROL_PY_SHA="3e6fa6a41d64f0581202df214a0515a0b0194832" # same sample commit as conformance/a2a.sh
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+umask 077
 
 BIN_DIR="${A2AHT_CONTROL_BIN:-$HOME/.a2aht/bin}"
 SRC_DIR="${A2AHT_CONTROL_SRC:-$HOME/.a2aht/src}"
@@ -28,13 +30,16 @@ install_go() {
 install_py() {
   echo "installing control: a2a-python ${CONTROL_PY_VERSION}"
   python3 -m venv "$SRC_DIR/venv"
-  "$SRC_DIR/venv/bin/pip" install -q --upgrade pip
-  "$SRC_DIR/venv/bin/pip" install -q \
-    "a2a-sdk[http-server]==${CONTROL_PY_VERSION}" grpcio fastapi uvicorn
-  if [ ! -d "$SRC_DIR/a2a-python" ]; then
-    git clone -q --depth 1 --branch "${CONTROL_PY_TAG}" \
-      https://github.com/a2aproject/a2a-python.git "$SRC_DIR/a2a-python"
+  "$SRC_DIR/venv/bin/pip" install -q --require-hashes --only-binary=:all: \
+    -r "$HERE/../../conformance/requirements-py.txt"
+  if [ ! -d "$SRC_DIR/a2a-python/.git" ]; then
+    git init -q "$SRC_DIR/a2a-python"
+    git -C "$SRC_DIR/a2a-python" remote add origin https://github.com/a2aproject/a2a-python.git
+    git -C "$SRC_DIR/a2a-python" fetch -q --depth 1 origin "$CONTROL_PY_SHA"
+    git -C "$SRC_DIR/a2a-python" -c advice.detachedHead=false checkout -q FETCH_HEAD
   fi
+  [ "$(git -C "$SRC_DIR/a2a-python" rev-parse HEAD)" = "$CONTROL_PY_SHA" ] \
+    || { echo "cached python samples do not match the pinned commit" >&2; return 1; }
   echo "  installed: $SRC_DIR/venv, samples at $SRC_DIR/a2a-python/samples"
 }
 

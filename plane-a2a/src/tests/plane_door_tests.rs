@@ -48,7 +48,7 @@ fn the_target_line_answers_the_bare_result_and_an_aip193_refusal() {
 fn the_document_line_and_a_partial_answer_are_left_alone() {
     let ok = json!({ "jsonrpc": "2.0", "id": 7, "result": { "kind": "task" } });
     assert_eq!(for_line(reply(200, &ok), false), reply(200, &ok));
-    let to_far = PieceAnswer::ToFarEnd(b"{}".to_vec());
+    let to_far = PieceAnswer::ToFarEnd(b"{}".to_vec().into());
     assert_eq!(for_line(to_far.clone(), true), to_far);
     assert_eq!(for_line(PieceAnswer::Nothing, true), PieceAnswer::Nothing);
 }
@@ -57,18 +57,30 @@ fn the_document_line_and_a_partial_answer_are_left_alone() {
 fn an_outbox_keeps_sensitive_bytes_in_order_across_a_short_write_and_replacement() {
     let first = br#"{"credential":"first-secret"}"#;
     let second = br#"{"credential":"second-secret"}"#;
-    let mut outbox = Outbox::of(PieceAnswer::ToFarEnd(first.to_vec())).expect("first answer");
+    let mut outbox =
+        Outbox::of(PieceAnswer::ToFarEnd(first.to_vec().into())).expect("first answer");
     let cut = first.len() / 2;
     let mut emitted = outbox.bytes[..cut].to_vec();
     assert_eq!(&outbox.bytes[cut..], &first[cut..]);
     emitted.extend_from_slice(&outbox.bytes[cut..]);
     assert_eq!(emitted, first, "a short write preserves the exact suffix");
-    outbox = Outbox::of(PieceAnswer::ToFarEnd(second.to_vec())).expect("next answer");
+    outbox = Outbox::of(PieceAnswer::ToFarEnd(second.to_vec().into())).expect("next answer");
     assert_eq!(
         outbox.bytes.as_slice(),
         second,
         "replacement keeps the new body"
     );
+}
+
+#[test]
+fn cancelling_and_replacing_an_outbox_wipes_its_initialized_body_and_queued_messages() {
+    use crate::tests::raw_custody_probe::{assert_wiped, SECRET};
+    assert_wiped(|| {
+        let mut outbox = Outbox::of(PieceAnswer::ToFarEnd(SECRET.to_vec().into())).unwrap();
+        outbox.queue.push_back(SECRET.to_vec().into());
+        outbox = Outbox::of(PieceAnswer::Nothing).unwrap();
+        assert!(outbox.bytes.is_empty());
+    });
 }
 
 /// On the HTTP+JSON line each event of an answer in events leaves as its bare result.
@@ -109,7 +121,7 @@ fn envelope(method: &str) -> Value {
 fn a_request_whose_answer_is_events_gets_an_events_hop() {
     for method in ["message/stream", "tasks/resubscribe"] {
         let hop = hop_of(&request(method), false, &mut Some(envelope(method))).expect(method);
-        assert!(hop.opening.is_some(), "{method}: about a task");
+        assert!(hop.opening, "{method}: about a task");
         assert_eq!(hop.subscribe, method == "tasks/resubscribe", "{method}");
     }
     let unlisted = AgentDisposition::Unlisted {
@@ -144,7 +156,7 @@ fn a_request_whose_answer_is_events_gets_an_events_hop() {
         false,
         &mut Some(envelope("message/send")),
     );
-    assert!(unary.is_some_and(|h| !h.subscribe && h.opening.is_some()));
+    assert!(unary.is_some_and(|h| !h.subscribe && h.opening));
     assert!(hop_of(
         &request("tasks/list"),
         false,
@@ -163,7 +175,7 @@ fn a_request_whose_answer_is_events_gets_an_events_hop() {
 fn a_hop_takes_the_request_and_no_hop_leaves_it() {
     let mut sent = Some(envelope("message/send"));
     let hop = hop_of(&request("message/send"), false, &mut sent).expect("a task hop");
-    assert_eq!(hop.request, Some(envelope("message/send")));
+    assert_eq!(hop.request.as_deref(), Some(&envelope("message/send")));
     assert!(sent.is_none(), "the hop took the request");
     let mut listed = Some(envelope("tasks/list"));
     assert!(hop_of(&request("tasks/list"), false, &mut listed).is_none());
@@ -807,7 +819,7 @@ fn an_addressed_extended_card_read_is_relayed_as_a_task_less_hop() {
         "the plane's own endpoint answers it locally"
     );
     let mut hop = hop_of(&asked, true, &mut Some(envelope.clone())).expect("a hop to the agent");
-    assert!(hop.opening.is_none(), "a card read opens no task");
+    assert!(!hop.opening, "a card read opens no task");
     hop.relay.bind(crate::binding::Binding::JsonRpc, &envelope);
     let PieceAnswer::Attempt(attempt) = hop.relay.on_piece(relay::Piece {
         from: relay::From::Kernel(Some("https://backend.agent.test/a2a")),

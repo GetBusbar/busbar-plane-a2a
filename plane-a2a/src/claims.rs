@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (C) 2026 Busbar Inc and contributors
+
 //! The transports this plane's claims name. A claim is the only way a plane names a transport, and
 //! it names it as a claim, never as a connection; the claims themselves are the door's
 //! ([`crate::statement`]).

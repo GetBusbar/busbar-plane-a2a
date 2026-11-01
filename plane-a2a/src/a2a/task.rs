@@ -360,15 +360,17 @@ impl Task {
 ///
 /// `from` is the state BEFORE the move and it is load-bearing: an `interrupted → working` move is a
 /// RESUME, a distinct event from a fresh `working`, and the two are only separable by looking at the
-/// prior state. The fallthrough is `working`, matching the pre-cleave inline mapping byte-for-byte.
+/// prior state. Submitted keeps the legacy `working` mapping; every state is named explicitly.
 pub fn event_kind_for_transition(from: TaskState, to: TaskState) -> &'static str {
     use busbar_contract::vocab::{EV_INTERRUPTED, EV_RESUMED, EV_TERMINAL, EV_WORKING};
     match to {
         TaskState::Working if from.is_interrupted() => EV_RESUMED,
         TaskState::Working => EV_WORKING,
-        s if s.is_interrupted() => EV_INTERRUPTED,
-        s if s.is_terminal() => EV_TERMINAL,
-        _ => EV_WORKING,
+        TaskState::InputRequired | TaskState::AuthRequired => EV_INTERRUPTED,
+        TaskState::Completed | TaskState::Failed | TaskState::Canceled | TaskState::Rejected => {
+            EV_TERMINAL
+        }
+        TaskState::Submitted => EV_WORKING,
     }
 }
 

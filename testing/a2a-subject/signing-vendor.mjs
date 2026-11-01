@@ -45,10 +45,7 @@ function jcs(v) {
   }
   if (typeof v === "string") return JSON.stringify(v);
   if (Array.isArray(v)) return "[" + v.map(jcs).join(",") + "]";
-  const names = Object.keys(v).sort((a, b) => {
-    const ua = Buffer.from(a, "utf16le"), ub = Buffer.from(b, "utf16le");
-    return ua.compare(ub);
-  });
+  const names = Object.keys(v).sort(); // JavaScript compares UTF-16 code units, as JCS requires.
   return "{" + names.map((n) => JSON.stringify(n) + ":" + jcs(v[n])).join(",") + "}";
 }
 
@@ -76,19 +73,25 @@ const CARD_PATHS = new Set(["/.well-known/agent-card.json", "/.well-known/agent.
 // a side effect on a file descriptor, which is why it is safe to leave in the shared vendor rather
 // than forking a second one.
 const RECORD_TO = process.env.A2A_VENDOR_RECORD || "";
-const recordStream = RECORD_TO ? fs.createWriteStream(RECORD_TO, { flags: "a" }) : null;
+const recordStream = RECORD_TO ? fs.createWriteStream(RECORD_TO, { flags: "a", mode: 0o600 }) : null;
 
 function record(req, url) {
   if (!recordStream) return;
   const query = {};
   for (const [k, v] of url.searchParams) query[k] = v;
+  const headers = { ...req.headers };
+  for (const name of Object.keys(headers)) {
+    if (['authorization', 'proxy-authorization', 'cookie', 'set-cookie'].includes(name.toLowerCase())) {
+      headers[name] = '[redacted]';
+    }
+  }
   recordStream.write(
     JSON.stringify({
       at: new Date().toISOString(),
       method: req.method,
       path: url.pathname,
       query,
-      headers: req.headers,
+      headers,
     }) + "\n",
   );
 }

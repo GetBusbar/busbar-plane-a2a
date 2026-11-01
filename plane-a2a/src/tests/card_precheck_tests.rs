@@ -50,6 +50,7 @@ fn a_card_fetch_without_host_services_is_refused() {
     .unwrap();
     let at = LookAt {
         plane: &plane,
+        generation: 1,
         ticket: Ticket {
             slot: 4,
             generation: 1,
@@ -151,6 +152,7 @@ fn the_canonical_paths_refusal_survives_the_legacy_paths() {
     };
     let at = LookAt {
         plane: &plane,
+        generation: 1,
         ticket: Ticket {
             slot: 4,
             generation: 1,

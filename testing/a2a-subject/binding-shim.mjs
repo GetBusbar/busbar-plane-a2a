@@ -39,14 +39,23 @@
 import net from 'node:net';
 import http from 'node:http';
 import http2 from 'node:http2';
+import { readFileSync } from 'node:fs';
 
-const [listenPort, upstreamPort, token] = process.argv.slice(2);
+const [listenPort, upstreamPort, tokenArgument] = process.argv.slice(2);
+const token = tokenArgument === '-' ? readFileSync(0, 'utf8').trim() : tokenArgument;
 if (!listenPort || !upstreamPort || !token) {
-  console.error('usage: binding-shim.mjs <listen-port> <upstream-port> <bearer-token>');
+  console.error('usage: binding-shim.mjs <listen-port> <upstream-port> - (token on stdin)');
   process.exit(2);
 }
 
 const UPSTREAM = `127.0.0.1:${upstreamPort}`;
+const authorities = new Set([`127.0.0.1:${listenPort}`, `localhost:${listenPort}`]);
+function belongsToFixture(headers) {
+  const authority = headers[':authority'] || headers.host;
+  if (!authorities.has(authority)) return false;
+  if (headers.origin === undefined) return true;
+  return headers.origin === `http://${authority}`;
+}
 
 // THE UPSTREAM SOCKET IS NEVER POOLED, AND THAT IS A CORRECTNESS FIX RATHER THAN A TUNING CHOICE.
 //
@@ -75,6 +84,11 @@ const upstreamAgent = new http.Agent({ keepAlive: false, maxSockets: Infinity })
 
 // ── THE HTTP/1.1 HALF: the JSON-RPC binding, and every discovery document beside it. ──
 const h1 = http.createServer((req, res) => {
+  if (!belongsToFixture(req.headers)) {
+    res.writeHead(403);
+    res.end('request does not belong to this local fixture');
+    return;
+  }
   const headers = { ...req.headers, host: UPSTREAM };
   const alreadyAuthenticated = Object.keys(headers).some((h) => h.toLowerCase() === 'authorization');
   if (!alreadyAuthenticated) headers.authorization = `Bearer ${token}`;
@@ -151,6 +165,11 @@ const h1 = http.createServer((req, res) => {
 // all — needs nothing special: it arrives as ordinary response headers and is forwarded as such.
 const h2 = http2.createServer();
 h2.on('stream', (stream, headers) => {
+  if (!belongsToFixture(headers)) {
+    stream.respond({ ':status': 403 });
+    stream.end('request does not belong to this local fixture');
+    return;
+  }
   const out = { ...headers, ':authority': UPSTREAM };
   delete out.host;
   const alreadyAuthenticated = Object.keys(out).some((h) => h.toLowerCase() === 'authorization');
@@ -297,18 +316,26 @@ const h2Port = h2.listen(0, '127.0.0.1');
 // The disproof that it was ever busbar's: busbar answered every one of those 270 direct calls.
 const dispatcher = net.createServer((socket) => {
   socket.on('error', () => {});
-  socket.once('data', (chunk) => {
+  const preface = Buffer.from('PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n');
+  let buffered = Buffer.alloc(0);
+  const classify = (chunk) => {
+    buffered = Buffer.concat([buffered, chunk]);
+    const prefix = buffered.subarray(0, Math.min(buffered.length, preface.length));
+    const matches = prefix.equals(preface.subarray(0, prefix.length));
+    if (matches && buffered.length < preface.length) return;
+    socket.removeListener('data', classify);
     socket.pause();
-    const port = (chunk.toString('ascii', 0, 3) === 'PRI' ? h2Port : h1Port).address().port;
+    const port = (matches ? h2Port : h1Port).address().port;
     const inner = net.connect(port, '127.0.0.1', () => {
-      inner.write(chunk);
+      inner.write(buffered);
       // `pipe()` resumes the socket, so nothing buffered while it was paused is lost — it is
       // delivered here, in order, behind the chunk that was read off it first.
       socket.pipe(inner);
       inner.pipe(socket);
     });
     inner.on('error', () => socket.destroy());
-  });
+  };
+  socket.on('data', classify);
 });
 
 dispatcher.listen(Number(listenPort), '127.0.0.1');

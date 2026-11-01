@@ -19,8 +19,11 @@ use serde::de::{self, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde::ser::{self, Serializer};
 use serde::{Deserialize, Serialize};
 
+use crate::proto::custody::{Decode, Guard, Seed, Wipe};
+
 /// `google.protobuf.Struct`.
 #[derive(Clone, PartialEq, prost::Message)]
+#[prost(prost_path = "crate::proto::custody::prost")]
 pub struct Struct {
     /// The members.
     #[prost(map = "string, message", tag = "1")]
@@ -29,6 +32,7 @@ pub struct Struct {
 
 /// `google.protobuf.Value`.
 #[derive(Clone, PartialEq, prost::Message)]
+#[prost(prost_path = "crate::proto::custody::prost")]
 pub struct Value {
     /// Which value it is.
     #[prost(oneof = "value::Kind", tags = "1, 2, 3, 4, 5, 6")]
@@ -39,6 +43,7 @@ pub struct Value {
 pub mod value {
     /// The kind of a [`super::Value`]: the protobuf `oneof`, one variant per member by its tag.
     #[derive(Clone, PartialEq, prost::Oneof)]
+    #[prost(prost_path = "crate::proto::custody::prost")]
     pub enum Kind {
         /// `null`.
         #[prost(enumeration = "super::NullValue", tag = "1")]
@@ -63,6 +68,7 @@ pub mod value {
 
 /// `google.protobuf.ListValue`.
 #[derive(Clone, PartialEq, prost::Message)]
+#[prost(prost_path = "crate::proto::custody::prost")]
 pub struct ListValue {
     /// The elements.
     #[prost(message, repeated, tag = "1")]
@@ -88,6 +94,65 @@ pub struct Timestamp {
     pub nanos: i32,
 }
 
+impl Wipe for Struct {
+    fn wipe(&mut self) {
+        self.fields.wipe();
+    }
+}
+impl Wipe for Value {
+    fn wipe(&mut self) {
+        self.kind.wipe();
+    }
+}
+impl Wipe for ListValue {
+    fn wipe(&mut self) {
+        self.values.wipe();
+    }
+}
+impl Wipe for Timestamp {
+    fn wipe(&mut self) {}
+}
+impl Wipe for NullValue {
+    fn wipe(&mut self) {}
+}
+impl Wipe for value::Kind {
+    fn wipe(&mut self) {
+        match self {
+            Self::String(value) => value.wipe(),
+            Self::Struct(value) => value.wipe(),
+            Self::List(value) => value.wipe(),
+            Self::Null(_) | Self::Number(_) | Self::Bool(_) => {}
+        }
+    }
+}
+
+macro_rules! owned {
+    ($($ty:ty),* $(,)?) => { $(impl Drop for $ty {
+        fn drop(&mut self) { self.wipe(); }
+    })* };
+}
+owned!(Struct, Value, ListValue, value::Kind);
+
+macro_rules! decode {
+    ($($ty:ty),* $(,)?) => { $(impl<'de> Decode<'de> for $ty {
+        fn decode<D: Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+            Self::deserialize(de)
+        }
+    })* };
+}
+decode!(Struct, Value, ListValue, Timestamp, NullValue);
+
+impl crate::proto::custody::prost::MapValue for Value {
+    fn merge_value(
+        wire: prost::encoding::WireType,
+        value: &mut Self,
+        buf: &mut impl prost::bytes::Buf,
+        ctx: prost::encoding::DecodeContext,
+    ) -> Result<(), prost::DecodeError> {
+        prost::encoding::message::merge(wire, value, buf, ctx)
+    }
+}
+
 // ── Struct, Value, ListValue: the JSON value they are ─────────────────────────────────────────
 
 impl Serialize for Struct {
@@ -105,11 +170,20 @@ impl<'de> Deserialize<'de> for Struct {
                 f.write_str("google.protobuf.Struct")
             }
             fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Struct, A::Error> {
-                let mut fields = HashMap::new();
-                while let Some((key, value)) = map.next_entry()? {
-                    fields.insert(key, value);
+                let mut fields = Guard::new(HashMap::<String, Value>::new());
+                while let Some(key) = map.next_key_seed(Seed::<String>::new())? {
+                    let mut key = Guard::new(key);
+                    let value = map.next_value_seed(Seed::<Value>::new())?;
+                    if let Some(previous) = fields.get_mut(&*key) {
+                        previous.wipe();
+                        *previous = value;
+                    } else {
+                        fields.insert(key.take(), value);
+                    }
                 }
-                Ok(Struct { fields })
+                Ok(Struct {
+                    fields: fields.take(),
+                })
             }
         }
         deserializer.deserialize_map(StructVisitor)
@@ -131,11 +205,13 @@ impl<'de> Deserialize<'de> for ListValue {
                 f.write_str("google.protobuf.ListValue")
             }
             fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<ListValue, A::Error> {
-                let mut values = Vec::new();
+                let mut values = Guard::new(Vec::new());
                 while let Some(value) = seq.next_element()? {
                     values.push(value);
                 }
-                Ok(ListValue { values })
+                Ok(ListValue {
+                    values: values.take(),
+                })
             }
         }
         deserializer.deserialize_seq(ListValueVisitor)
@@ -212,7 +288,7 @@ impl<'de> Deserialize<'de> for value::Kind {
 
 struct KindVisitor;
 
-/// The largest integer a double holds exactly is `2^53`; past it a JSON integer is refused.
+/// Integer tokens are accepted strictly inside `(-2^53, 2^53)`.
 const EXACT: i64 = 1 << f64::MANTISSA_DIGITS;
 
 const OUT_OF_RANGE_INTEGRAL: &str = "out of range integral type conversion attempted";
@@ -283,27 +359,26 @@ impl<'de> Visitor<'de> for KindVisitor {
         Ok(value::Kind::String(v))
     }
     fn visit_none<E: de::Error>(self) -> Result<value::Kind, E> {
-        Ok(value::Kind::Null(0))
+        Ok(value::Kind::Null(NullValue::NullValue as i32))
     }
     fn visit_some<D: Deserializer<'de>>(self, de: D) -> Result<value::Kind, D::Error> {
         Deserialize::deserialize(de)
     }
     fn visit_unit<E: de::Error>(self) -> Result<value::Kind, E> {
-        Ok(value::Kind::Null(0))
+        Ok(value::Kind::Null(NullValue::NullValue as i32))
     }
     fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<value::Kind, A::Error> {
-        let mut values = Vec::new();
+        let mut values = Guard::new(Vec::new());
         while let Some(value) = seq.next_element()? {
             values.push(value);
         }
-        Ok(value::Kind::List(ListValue { values }))
+        Ok(value::Kind::List(ListValue {
+            values: values.take(),
+        }))
     }
-    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<value::Kind, A::Error> {
-        let mut fields = HashMap::new();
-        while let Some((key, value)) = map.next_entry()? {
-            fields.insert(key, value);
-        }
-        Ok(value::Kind::Struct(Struct { fields }))
+    fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<value::Kind, A::Error> {
+        Struct::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+            .map(value::Kind::Struct)
     }
 }
 
@@ -377,19 +452,18 @@ fn civil(seconds: i64, nanos: i32) -> Option<(i64, u32, u32, u32, u32)> {
     Some((year, month, day, of_day, nanos))
 }
 
-/// Whether the calendar represents `(seconds, nanos)` (the SDK model's rule, `chrono`'s range).
+/// Whether `(seconds, nanos)` is within the protobuf Timestamp range (years 0001–9999).
 #[must_use]
 pub fn representable(seconds: i64, nanos: i32) -> bool {
-    civil(seconds, nanos).is_some()
+    (-62_135_596_800..=253_402_300_799).contains(&seconds) && (0..1_000_000_000).contains(&nanos)
 }
 
 impl Timestamp {
-    /// Its RFC 3339 form, as `chrono`'s `to_rfc3339` wrote a UTC time (four-digit years, signed
-    /// past `0..=9999`; the fraction in 0, 3, 6 or 9 digits), Z-normalised as the protobuf JSON
-    /// mapping writes a `Timestamp` ("generated output will always be Z-normalized").
+    /// Its protobuf JSON form: a four-digit year in 0001–9999, the fraction in 0, 3, 6 or 9
+    /// digits, and UTC's `Z` suffix. Values outside the protobuf range are refused.
     fn rfc3339(self) -> Result<String, &'static str> {
-        if self.nanos < 0 {
-            return Err(OUT_OF_RANGE_INTEGRAL);
+        if !representable(self.seconds, self.nanos) {
+            return Err("timestamp is outside the protobuf seconds or nanoseconds range");
         }
         let (year, month, day, of_day, nanos) =
             civil(self.seconds, self.nanos).ok_or("invalid or out-of-range datetime")?;
@@ -410,13 +484,14 @@ impl Timestamp {
             of_day / 3600,
             of_day / 60 % 60
         );
-        if nano == 0 {
-        } else if nano % 1_000_000 == 0 {
-            let _ = write!(out, ".{:03}", nano / 1_000_000);
-        } else if nano % 1_000 == 0 {
-            let _ = write!(out, ".{:06}", nano / 1_000);
-        } else {
-            let _ = write!(out, ".{nano:09}");
+        if nano != 0 {
+            if nano % 1_000_000 == 0 {
+                let _ = write!(out, ".{:03}", nano / 1_000_000);
+            } else if nano % 1_000 == 0 {
+                let _ = write!(out, ".{:06}", nano / 1_000);
+            } else {
+                let _ = write!(out, ".{nano:09}");
+            }
         }
         out.push('Z');
         Ok(out)
@@ -600,10 +675,14 @@ impl std::str::FromStr for Timestamp {
             return Err(ParseError::OutOfRange);
         }
         let local = days * SECS_PER_DAY + i64::from(hour * 3600 + min * 60 + sec);
-        Ok(Timestamp {
+        let timestamp = Timestamp {
             seconds: local - i64::from(east),
             nanos: i32::try_from(nano).map_err(|_| ParseError::OutOfRange)?,
-        })
+        };
+        if !(1..=9999).contains(&year) || !representable(timestamp.seconds, timestamp.nanos) {
+            return Err(ParseError::OutOfRange);
+        }
+        Ok(timestamp)
     }
 }
 
@@ -623,6 +702,9 @@ impl<'de> Deserialize<'de> for Timestamp {
             }
             fn visit_str<E: de::Error>(self, s: &str) -> Result<Timestamp, E> {
                 s.parse().map_err(de::Error::custom)
+            }
+            fn visit_string<E: de::Error>(self, s: String) -> Result<Timestamp, E> {
+                self.visit_str(&Guard::new(s))
             }
         }
         deserializer.deserialize_str(TimestampVisitor)

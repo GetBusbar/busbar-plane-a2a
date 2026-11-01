@@ -11,9 +11,12 @@
 /// produce `/some/prefix/a2a/agents/x` here while the router serves `/a2a/agents/x` — two spellings
 /// of one endpoint, one of which 404s.
 ///
-/// `None` when `public_url` is not a URL.
+/// `None` when `public_url` is not an HTTP(S) URL with a host.
 pub fn absolute(public_url: &str, path: &str) -> Option<String> {
     let mut u = url::Url::parse(public_url).ok()?;
+    if !matches!(u.scheme(), "http" | "https") || u.host_str().is_none() {
+        return None;
+    }
     u.set_path(path);
     u.set_query(None);
     u.set_fragment(None);

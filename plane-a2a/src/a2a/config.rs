@@ -30,8 +30,8 @@
 //!
 //! `unpinned` is accepted and named out loud rather than being spelled as an absent field, because
 //! an operator reading a list of registrations needs to SEE which entries have no root. It is legal
-//! to write and impossible to approve: the cap lives in the approval step, and this file only refuses to let it carry key material it would
-//! never use.
+//! to write and impossible to approve. The kernel's `TRUST_KEYS` declaration judges
+//! the mechanism and its key material; this module does not duplicate that check.
 //!
 //! ## The pin is the peer's identity; `client_identity:` is busbar's
 //!
@@ -199,7 +199,8 @@ pub struct AgentDefCfg {
     /// The A2A protocol version an operator states for this registration. ACCEPTED AND READ BY
     /// NOTHING: the key is accepted so a config that states it still parses, but the
     /// plane pins nothing on it: the card is fetched at both well-known paths, canonical first
-    /// ([`crate::card_trust`]), whatever version it names.
+    /// ([`crate::card_trust`]), whatever version it names. A successful section open warns once
+    /// that these settings are ignored; it never logs their values.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub protocol_version: Option<String>,
     /// MAY THIS AGENT LIVE ON A PRIVATE OR LOOPBACK ADDRESS, AND BE REACHED OVER PLAINTEXT.
@@ -232,9 +233,9 @@ pub struct AgentDefCfg {
     /// plus its lease policy. Never the secret, never the caller's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upstream_credential: Option<super::creds::OutboundCredential>,
-    /// Which fronted agents may delegate here (the egress policy).
-    /// Judged for shape only ([`validate_agent`] refuses an empty name) and READ BY NOTHING: the
-    /// plane has no delegating-from path, so no request is ever judged against this list.
+    /// Which fronted agents may delegate here (the egress policy). Nothing in this build enforces
+    /// the list, so [`validate_agent`] refuses a non-empty one. Retained in the grammar so the
+    /// refusal names the unsupported control instead of calling the key unknown.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub egress_scopes: Vec<String>,
     /// Hooks attached to THIS agent, by bare name from the top-level `hooks:` map. ADDS to the
@@ -263,6 +264,24 @@ pub struct AgentsCfg {
 }
 
 impl AgentsCfg {
+    /// Report accepted-but-ignored version settings once when the successfully judged section
+    /// opens. Only registration names are logged, never the supplied version or other config.
+    pub(crate) fn warn_ignored_protocol_versions(&self) {
+        let agents: Vec<&str> = self
+            .agents
+            .iter()
+            .filter(|(_, definition)| definition.protocol_version.is_some())
+            .map(|(name, _)| name.as_str())
+            .collect();
+        if !agents.is_empty() {
+            busbar_contract::diag_warn!(
+                crate::diagnostics::A2A_PROTOCOL_VERSION_IGNORED,
+                agents = ?agents,
+                "A2A protocol_version settings are ignored; card discovery does not pin a protocol version from this setting"
+            );
+        }
+    }
+
     /// The pool `agent` is a member of, by name, and its members in declared order: the first pool
     /// naming it, in the order the section states them.
     #[must_use]
@@ -312,9 +331,13 @@ impl<'de> Deserialize<'de> for AgentsCfg {
 }
 
 /// `url` as a refusal may repeat it: any userinfo in its authority (everything before the last `@`
-/// ahead of the path) replaced by `***`, so no refusal repeats a credential a URL carried.
+/// ahead of the path) replaced by `***`. A malformed URL is omitted entirely: its credential
+/// boundaries cannot be inferred safely from delimiters in the raw input.
 #[must_use]
 pub fn without_userinfo(url: &str) -> std::borrow::Cow<'_, str> {
+    if busbar_contract::net::parse_url(url).is_err() {
+        return std::borrow::Cow::Borrowed("<malformed URL omitted>");
+    }
     let start = url.find("://").map_or(0, |i| i + 3);
     let authority_end = url[start..]
         .find(['/', '?', '#'])
@@ -336,6 +359,14 @@ pub fn without_userinfo(url: &str) -> std::borrow::Cow<'_, str> {
 pub fn validate_agent(name: &str, def: &AgentDefCfg) -> Result<(), String> {
     let at = format!("`agents.{name}`");
 
+    // Use the same predicate that counts the actual trailing-separator route claims.
+    if crate::statement::agent_claim_count([name]) == 0 {
+        return Err(format!(
+            "{at}: an agent name must be one plain path segment (letters, digits, `-`, `_`, `.`, \
+             `~`; not `.` or `..`): it names the agent's `/a2a/agents/<name>/` endpoint"
+        ));
+    }
+
     if def.url.trim().is_empty() {
         return Err(format!("{at}: `url:` must name the agent's A2A endpoint"));
     }
@@ -344,14 +375,22 @@ pub fn validate_agent(name: &str, def: &AgentDefCfg) -> Result<(), String> {
     // URL with a host, and no userinfo, which is refused without being repeated (a password in a
     // URL is a credential, and a refusal is logged).
     let parsed = busbar_contract::net::parse_url(&def.url);
-    let scheme_ok = (def.url.starts_with("https://") || def.url.starts_with("http://"))
-        && parsed
+    let scheme_ok = def.url.split_once("://").is_some_and(|(scheme, _)| {
+        scheme.eq_ignore_ascii_case("https") || scheme.eq_ignore_ascii_case("http")
+    });
+    if !scheme_ok
+        || parsed
             .as_ref()
-            .is_ok_and(|p| p.scheme == "https" || p.scheme == "http");
-    if !scheme_ok {
+            .is_ok_and(|p| p.scheme != "https" && p.scheme != "http")
+    {
         return Err(format!(
             "{at}: `url:` must be an http:// or https:// endpoint, got `{}`",
             without_userinfo(&def.url)
+        ));
+    }
+    if let Err(why) = parsed.as_ref() {
+        return Err(format!(
+            "{at}: `url:` is malformed ({why}); the supplied URL is omitted"
         ));
     }
     if parsed.as_ref().is_ok_and(|p| p.userinfo) {
@@ -368,7 +407,7 @@ pub fn validate_agent(name: &str, def: &AgentDefCfg) -> Result<(), String> {
     // THE CLIENT IDENTITY, matched against the mechanism and the scheme the same way the pin is
     // matched against its material. `mtls` is defined as "served behind mutual TLS"; a registration
     // that claims it and names no certificate cannot get past the peer's `CertificateRequired`
-    // alert, and it would fail six hours later on a re-verification tick rather than here.
+    // alert, and it would fail on the next verify-on-call lookup rather than here.
     if def.pin.mechanism == PinMechanism::MutualTls && def.client_identity.is_none() {
         return Err(format!(
             "{at}: `pin.mechanism: mtls` needs `client_identity:` — the `cert:` and `key:` \
@@ -380,7 +419,7 @@ pub fn validate_agent(name: &str, def: &AgentDefCfg) -> Result<(), String> {
     // A client certificate is a TLS-handshake object. Over `http://` there is no handshake to put it
     // in, so an operator who wrote one there is being protected by nothing while reading the config
     // as though they were.
-    if def.client_identity.is_some() && def.url.starts_with("http://") {
+    if def.client_identity.is_some() && parsed.as_ref().is_ok_and(|p| p.scheme == "http") {
         return Err(format!(
             "{at}: `client_identity:` is a TLS client certificate and `url:` is `http://`, which \
              has no handshake to present it in. Name an `https://` endpoint, or drop the identity."
@@ -412,13 +451,10 @@ pub fn validate_agent(name: &str, def: &AgentDefCfg) -> Result<(), String> {
         }
     }
 
-    for scope in &def.egress_scopes {
-        if scope.trim().is_empty() {
-            return Err(format!(
-                "{at}: `egress_scopes:` contains an empty name; an empty scope grants nothing and \
-                 reads as though it grants something"
-            ));
-        }
+    if !def.egress_scopes.is_empty() {
+        return Err(format!(
+            "{at}: `egress_scopes:` is not enforced by this build; remove it"
+        ));
     }
 
     // A dotted hook reference is refused by the kernel, which sees every section; this validator

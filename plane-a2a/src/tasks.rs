@@ -2,8 +2,8 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! The task store, over host records. The plane holds no store: it reads through `records.get` /
-//! `records.list`, decides a write with `records.claim`, and says every write as a `RECORD_PUT` in
-//! its `on_piece` answer. [`Records`] is that reach; the door serves it through the SDK connector,
+//! `records.list`, then conditionally publishes exact row comparisons and mutations through the
+//! host's atomic record exchange. [`Records`] is that reach; the door serves it through the SDK connector,
 //! a test through a map.
 //!
 //! * KEYS ARE PRINCIPAL-PREFIXED: `<caller>/<task>` for a task, `<caller>/<task>/<seq>` for one of
@@ -11,16 +11,16 @@
 //!   per-principal reference the kernel lends on every piece (lower-case hex, so it holds no `/`):
 //!   a key under another caller's prefix is one this caller can never name, which is how a foreign
 //!   task reads exactly as a missing one.
-//! * A CHANGE IS RACE-SAFE: every write of a task consumes the next sequence of its chain, and the
-//!   sequence is won with `records.claim` on `<caller>/<task>/<seq>` before anything is written. A
-//!   writer that loses re-reads and tries the next one.
+//! * A change compares the exact task bytes it read and atomically publishes its new row and
+//!   event. A definitive condition conflict rereads on fresh service handles before replanning.
+//!   An uncertain result keeps the same immutable host attempt, without a replay-token claim.
 //! * The hash chain is the host's: the task-event kind is declared chained, length-prefixed with
 //!   its scope digested (`crate::statement`'s `RECORD_CHAINS`). An event is an append
 //!   to the chain keyed `<caller>/<task>` (`<caller>` the kernel's opaque caller reference, never
 //!   the principal) carrying only its own fields ([`suffix`]); the host frames `prev, scope, seq`
 //!   ahead of them,
 //!   seals, keeps and verifies the chain. The task record carries the chain's next sequence, which
-//!   a change claims to stay race-safe.
+//!   a change advances with the same atomic publication.
 //! * Restore ([`restore`]) is the boot rehydrate over the records: the tasks counted
 //!   active, terminal or unreadable, and each active task's chain, and only those, read back
 //!   verified by the host, a break named so the door reports it.
@@ -47,15 +47,46 @@ pub const TERMINAL_TTL_SECS: u64 = 300;
 /// The most terminal tasks kept; past it the oldest go first. An active task is never counted
 /// against it and never evicted.
 pub const MAX_RETAINED: usize = 4096;
-/// How long a won sequence claim stands. Only writers racing inside one op contend for it; a claim
-/// whose writer never wrote frees its sequence again after this, in milliseconds.
+/// The existing replay-token TTL, retained for legacy claim callers. Task publication and
+/// retention do not acquire claims and do not interpret this TTL as an ownership lease.
+#[cfg(test)]
 pub const CLAIM_TTL_MS: u64 = 60_000;
-/// How many times a change re-reads after losing its sequence to another writer.
+/// How many times a change rereads after a definitive atomic condition conflict.
 const TRIES: usize = 3;
 /// The most settled tasks one submit's [`retention_sweep`] retires: a submit opens one task, so a
 /// sweep that may retire this many keeps the settled tasks bounded under any mix of submits, the
 /// rest waiting for the next submit's.
 pub const SWEEP_BUDGET: usize = 32;
+
+/// How long a sweep that left nothing behind holds off the next one, in seconds: the sweep reads
+/// every caller's task rows, so it is not paid on every submit.
+pub const SWEEP_INTERVAL_SECS: u64 = 30;
+
+/// WHEN THE NEXT [`retention_sweep`] IS DUE, per instance: at once while the last one spent its
+/// whole budget (more may wait), else [`SWEEP_INTERVAL_SECS`] after it. Plane memory; a restart
+/// sweeps on its first submit.
+#[derive(Debug, Default)]
+pub struct SweepGate {
+    last: busbar_contract::abi::sdk::publish::Keyed<(), (u64, bool)>,
+}
+
+impl SweepGate {
+    /// Whether a submit at `now` sweeps.
+    #[must_use]
+    pub fn due(&self, now: u64) -> bool {
+        self.last.with_all(|m| {
+            m.get(&()).is_none_or(|(at, backlog)| {
+                *backlog || now >= at.saturating_add(SWEEP_INTERVAL_SECS)
+            })
+        })
+    }
+
+    /// A sweep at `now` retired `touched` tasks of its `budget`.
+    pub fn swept(&self, now: u64, touched: usize, budget: usize) {
+        self.last
+            .with_all(|m| m.insert((), (now, touched >= budget)));
+    }
+}
 
 /// Why a step on the records did not finish.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,6 +115,58 @@ pub trait Records {
     /// # Errors
     /// [`Halt`].
     fn claim(&mut self, kind: &str, key: &str, ttl_ms: u64) -> Result<bool, Halt>;
+
+    /// Compare every predicate and publish all writes in one host transaction. `true` means
+    /// Applied; `false` means a definitive condition conflict with no effects. Pending and
+    /// uncertain outcomes retain the same immutable request and must never become `false`.
+    fn publish(
+        &mut self,
+        _predicates: &[Predicate],
+        _chains: &[ChainLife],
+        _writes: &[Write],
+    ) -> Result<bool, Halt> {
+        Err(Halt::Failed(
+            "conditional record publication unavailable".into(),
+        ))
+    }
+
+    /// Observe the chain incarnation before reading the task for a mutation. Replayed reads
+    /// retain this exact answer; a definitive conflict starts a fresh observation and task read.
+    fn observe_chain_life(&mut self, _kind: &str, _scope: &str) -> Result<Option<Vec<u8>>, Halt> {
+        Err(Halt::Failed(
+            "conditional chain observation unavailable".into(),
+        ))
+    }
+}
+
+/// An exact pre-state comparison. Bytes come directly from the host, without reserialization.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Predicate {
+    /// The declared record kind.
+    pub kind: &'static str,
+    /// The existing logical key, including its caller scope.
+    pub key: String,
+    /// Exact existing bytes, or absence.
+    pub expected: Option<Vec<u8>>,
+}
+
+/// The original incarnation of a chain, observed before the task bytes used by a plan.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChainLife {
+    /// The declared chained kind.
+    pub kind: &'static str,
+    /// The existing caller/task chain scope.
+    pub scope: String,
+    /// Exact host life bytes, or absence for a chain with no recorded incarnation yet.
+    pub expected: Option<Vec<u8>>,
+}
+
+fn observe(rec: &mut dyn Records, key: &str) -> Result<ChainLife, Halt> {
+    Ok(ChainLife {
+        kind: KIND_TASK_EVENT,
+        scope: key.to_string(),
+        expected: rec.observe_chain_life(KIND_TASK_EVENT, key)?,
+    })
 }
 
 /// THE RECORDS AS ONE PIECE SEES THEM ONCE IT HAS WRITTEN: a read of a record the piece already
@@ -142,6 +225,19 @@ impl Records for Staged<'_> {
     fn claim(&mut self, kind: &str, key: &str, ttl_ms: u64) -> Result<bool, Halt> {
         self.rec.claim(kind, key, ttl_ms)
     }
+
+    fn publish(
+        &mut self,
+        predicates: &[Predicate],
+        chains: &[ChainLife],
+        writes: &[Write],
+    ) -> Result<bool, Halt> {
+        self.rec.publish(predicates, chains, writes)
+    }
+
+    fn observe_chain_life(&mut self, kind: &str, scope: &str) -> Result<Option<Vec<u8>>, Halt> {
+        self.rec.observe_chain_life(kind, scope)
+    }
 }
 
 /// One record write the answer carries out: a `RECORD_PUT`; an empty value is a tombstone. On the
@@ -182,6 +278,7 @@ pub fn task_key(caller: &str, task: &str) -> String {
 /// chain `<caller>/<task>` (`busbar_contract::services::chain_key`), and the key a change claims
 /// the sequence under.
 #[must_use]
+#[cfg(test)]
 pub fn event_key(caller: &str, task: &str, seq: u64) -> String {
     format!("{caller}/{task}/{seq:020}")
 }
@@ -226,7 +323,7 @@ fn encode<T: Serialize>(v: &T) -> Result<Vec<u8>, Halt> {
 /// `principal`, `agent_id`, `state`, each after its length as eight big-endian bytes. The host
 /// frames `prev_hash`, the chain's scope (`<caller>/<task>`) and `seq` the same way ahead of them,
 /// so the digest covers the fields in order and no byte can cross a field boundary unseen.
-/// `request_id` is a join key nothing reads back, and is not kept.
+/// `request_id` is serialized correlation metadata outside this digest suffix.
 #[must_use]
 pub fn suffix(ev: &TaskEventRow) -> Vec<u8> {
     let mut out = Vec::new();
@@ -352,14 +449,14 @@ pub fn restore(rec: &mut dyn Records) -> Result<Restored, Halt> {
             active.push((key, held.next_seq));
         }
     }
-    for (scope, next_seq) in active {
+    for (chain_scope, next_seq) in active {
         // The chain's own scope is its records' key prefix. A record's key ends in its sequence; a
         // span keyed by the bare scope announces the chain's break. Another chain the prefix also
         // reaches (`t1` reaches `t10`) is named on its own task's read, if it is in flight.
-        let listed = rec.list(KIND_TASK_EVENT, &scope)?;
-        if let Some((_, words)) = listed.iter().find(|(key, _)| *key == scope) {
+        let listed = rec.list(KIND_TASK_EVENT, &chain_scope)?;
+        if let Some((_, words)) = listed.iter().find(|(key, _)| *key == chain_scope) {
             out.chain_breaks
-                .push((scope, String::from_utf8_lossy(words).into_owned()));
+                .push((chain_scope, String::from_utf8_lossy(words).into_owned()));
             continue;
         }
         // THE TAIL: the last sequence this chain's own records reach, held to the last one its
@@ -367,96 +464,144 @@ pub fn restore(rec: &mut dyn Records) -> Result<Restored, Halt> {
         let reached = listed
             .iter()
             .filter_map(|(key, _)| busbar_contract::services::chain_key_parts(key.as_bytes()))
-            .filter(|(chain, _)| *chain == scope.as_bytes())
+            .filter(|(chain, _)| *chain == chain_scope.as_bytes())
             .map(|(_, seq)| seq)
             .max()
             .unwrap_or(0);
         let committed = next_seq.saturating_sub(1);
         if reached < committed {
             let words = format!(
-                "the chain for scope `{scope}` ends at seq {reached}, but its task row committed \
+                "the chain for scope `{chain_scope}` ends at seq {reached}, but its task row committed \
                  events through seq {committed}: entries are missing from the chain's end (cut \
                  from it, or never written to it)"
             );
-            out.chain_breaks.push((scope, words));
+            out.chain_breaks.push((chain_scope, words));
         }
     }
     Ok(out)
 }
 
-/// Who writes, for which request, and when: what every change of a task is stamped with.
+/// Who writes, its correlation reference, and when: what each task change is stamped with.
 #[derive(Debug, Clone, Copy)]
 pub struct Stamp<'a> {
     /// The caller's reference: the key prefix.
     pub caller: &'a str,
-    /// The request the change belongs to (joins the event to its records; not chained).
+    /// The correlation reference recorded as `TaskEventRow.request_id`; current
+    /// task-hop callers supply their task id. This is not a JSON-RPC envelope id.
     pub request_id: &'a str,
     /// Now, in seconds: the event's stamp.
     pub now: u64,
 }
 
-/// Win `held`'s next sequence and write the change: `row` as the task, and the event `kind` sealed
-/// over it. The task as now held, or `None` when another writer won the sequence first.
+/// Compare the exact prior bytes and atomically publish the next task row and its event.
+/// `None` is a definitive conflict; no success is reported before the host acknowledges it.
 fn commit(
     rec: &mut dyn Records,
     at: &Stamp<'_>,
     held: &HeldTask,
+    observed: (Option<Vec<u8>>, ChainLife),
     row: TaskRow,
     kind: &str,
-    out: &mut Vec<Write>,
+    config: Option<(Option<Vec<u8>>, Vec<u8>)>,
 ) -> Result<Option<HeldTask>, Halt> {
-    let key = event_key(at.caller, &row.task_id, held.next_seq);
-    if !rec.claim(KIND_TASK_EVENT, &key, CLAIM_TTL_MS)? {
-        return Ok(None);
-    }
+    let (expected, chain) = observed;
     let ev = seal_event(held, &row, kind, at.request_id, at.now);
     let next = HeldTask {
-        next_seq: held.next_seq.saturating_add(1),
+        next_seq: held
+            .next_seq
+            .checked_add(1)
+            .ok_or_else(|| Halt::Failed("task event sequence exhausted".into()))?,
         row,
     };
-    out.push(Write {
+    let key = task_key(at.caller, &next.row.task_id);
+    let mut writes = vec![
+        Write {
+            kind: KIND_TASK,
+            key: key.clone(),
+            value: encode(&next)?,
+        },
+        Write {
+            kind: KIND_TASK_EVENT,
+            key: key.clone(),
+            value: suffix(&ev),
+        },
+    ];
+    let mut predicates = vec![Predicate {
         kind: KIND_TASK,
-        key: task_key(at.caller, &next.row.task_id),
-        value: encode(&next)?,
-    });
-    out.push(Write {
-        kind: KIND_TASK_EVENT,
-        key: task_key(at.caller, &next.row.task_id),
-        value: suffix(&ev),
-    });
-    Ok(Some(next))
+        key: key.clone(),
+        expected,
+    }];
+    if let Some((expected, value)) = config {
+        predicates.push(Predicate {
+            kind: KIND_PUSH_CONFIG,
+            key: key.clone(),
+            expected,
+        });
+        writes.push(Write {
+            kind: KIND_PUSH_CONFIG,
+            key,
+            value,
+        });
+    }
+    let applied = rec.publish(&predicates, &[chain], &writes)?;
+    Ok(applied.then_some(next))
 }
 
 /// The genesis commit of a task, answering it as held.
+#[cfg(test)]
 fn submit_held(
     rec: &mut dyn Records,
     at: &Stamp<'_>,
     genesis: &HeldTask,
     row: TaskRow,
-    out: &mut Vec<Write>,
+    _out: &mut Vec<Write>,
 ) -> Result<HeldTask, Halt> {
     let id = row.task_id.clone();
-    commit(rec, at, genesis, row, EV_SUBMITTED, out)?
+    let key = task_key(at.caller, &id);
+    let chain = observe(rec, &key)?;
+    if rec.get(KIND_TASK, &key)?.is_some() {
+        return Err(Halt::Failed(format!("task `{id}` already exists")));
+    }
+    commit(rec, at, genesis, (None, chain), row, EV_SUBMITTED, None)?
         .ok_or_else(|| Halt::Failed(format!("task `{id}` already exists")))
 }
 
-/// OPEN a relayed task: SUBMIT `row` for the caller, then record its DISPATCH to `agent_id` on the
-/// chain the submit just started (both before the hop). Both events are written in this one answer, so the dispatch is sealed over the genesis
-/// held here rather than read back. A dispatch that cannot be recorded leaves the submitted task.
+/// Open a relayed task with one atomic publication: the final row and the submitted/delegated
+/// events. The host frames both events in order. A rejected publication leaves no partial genesis.
 ///
 /// # Errors
-/// As [`submit`].
+/// [`Halt`]; a conflicting creation leaves all records unchanged.
+#[cfg(test)]
 pub fn open(
+    rec: &mut dyn Records,
+    at: &Stamp<'_>,
+    row: TaskRow,
+    agent_id: &str,
+    _out: &mut Vec<Write>,
+) -> Result<TaskRow, Halt> {
+    open_configured(rec, at, row, agent_id, None)
+}
+
+/// Open a task and its optional inline config in the same publication as both genesis events.
+pub(crate) fn open_configured(
     rec: &mut dyn Records,
     at: &Stamp<'_>,
     mut row: TaskRow,
     agent_id: &str,
-    out: &mut Vec<Write>,
+    config: Option<Vec<u8>>,
 ) -> Result<TaskRow, Halt> {
     if !is_caller(at.caller) {
         return Err(Halt::Failed("no caller to hold the task under".into()));
     }
     row.principal = at.caller.to_string();
+    let key = task_key(at.caller, &row.task_id);
+    let chain = observe(rec, &key)?;
+    if rec.get(KIND_TASK, &key)?.is_some() {
+        return Err(Halt::Failed(format!(
+            "task `{}` already exists",
+            row.task_id
+        )));
+    }
     let genesis = HeldTask {
         row: row.clone(),
         next_seq: 1,
@@ -465,14 +610,62 @@ pub fn open(
         now: row.created_at,
         ..*at
     };
-    let held = submit_held(rec, &stamped, &genesis, row, out)?;
-    let mut next = held.row.clone();
+    let submitted = seal_event(&genesis, &row, EV_SUBMITTED, at.request_id, stamped.now);
+    let held = HeldTask {
+        row: row.clone(),
+        next_seq: 2,
+    };
+    let mut next = row;
     next.agent_id = agent_id.to_string();
     next.updated_at = at.now;
-    match commit(rec, at, &held, next, EV_DELEGATED, out) {
-        Ok(Some(dispatched)) => Ok(dispatched.row),
-        Ok(None) | Err(Halt::Failed(_)) => Ok(held.row),
-        Err(Halt::Pending) => Err(Halt::Pending),
+    let delegated = seal_event(&held, &next, EV_DELEGATED, at.request_id, at.now);
+    let next = HeldTask {
+        row: next,
+        next_seq: 3,
+    };
+    let key = task_key(at.caller, &next.row.task_id);
+    let mut writes = vec![
+        Write {
+            kind: KIND_TASK,
+            key: key.clone(),
+            value: encode(&next)?,
+        },
+        Write {
+            kind: KIND_TASK_EVENT,
+            key: key.clone(),
+            value: suffix(&submitted),
+        },
+        Write {
+            kind: KIND_TASK_EVENT,
+            key: key.clone(),
+            value: suffix(&delegated),
+        },
+    ];
+    let mut predicates = vec![Predicate {
+        kind: KIND_TASK,
+        key: key.clone(),
+        expected: None,
+    }];
+    if let Some(value) = config {
+        let expected = rec.get(KIND_PUSH_CONFIG, &key)?;
+        predicates.push(Predicate {
+            kind: KIND_PUSH_CONFIG,
+            key: key.clone(),
+            expected,
+        });
+        writes.push(Write {
+            kind: KIND_PUSH_CONFIG,
+            key,
+            value,
+        });
+    }
+    if rec.publish(&predicates, &[chain], &writes)? {
+        Ok(next.row)
+    } else {
+        Err(Halt::Failed(format!(
+            "task `{}` already exists",
+            next.row.task_id
+        )))
     }
 }
 
@@ -483,26 +676,57 @@ pub type Planned = Result<Option<(TaskRow, &'static str)>, String>;
 /// A change's plan over the held row.
 pub type Plan<'p> = dyn FnMut(&TaskRow) -> Planned + 'p;
 
-/// CHANGE task `task` by `plan`, race-safe: read, plan, win the sequence, write; a lost sequence
-/// re-reads and plans again. `None` when the plan had nothing to do.
+/// Change task `task` by `plan`: read exact bytes, plan and atomically compare/publish.
+/// A definitive conflict rereads and plans again. `None` means the plan had nothing to do.
 ///
 /// # Errors
-/// [`Halt`]; `Failed` for no such task, a refused plan, or a sequence lost [`TRIES`] times.
+/// [`Halt`]; `Failed` for no such task, a refused plan, or [`TRIES`] definitive conflicts.
 pub fn change(
     rec: &mut dyn Records,
     at: &Stamp<'_>,
     task: &str,
     plan: &mut Plan<'_>,
-    out: &mut Vec<Write>,
+    _out: &mut Vec<Write>,
+) -> Result<Option<TaskRow>, Halt> {
+    change_configured(rec, at, task, plan, None)
+}
+
+/// Change a task and replace an optional inline config in one atomic publication.
+pub(crate) fn change_configured(
+    rec: &mut dyn Records,
+    at: &Stamp<'_>,
+    task: &str,
+    plan: &mut Plan<'_>,
+    config: Option<&[u8]>,
 ) -> Result<Option<TaskRow>, Halt> {
     for _ in 0..TRIES {
-        let Some(held) = get(rec, at.caller, task, at.now)? else {
+        if !is_caller(at.caller) {
+            return Err(Halt::Failed(format!("no such task `{task}`")));
+        }
+        let chain = observe(rec, &task_key(at.caller, task))?;
+        let raw = rec.get(KIND_TASK, &task_key(at.caller, task))?;
+        let Some(held) = raw
+            .as_deref()
+            .and_then(decode)
+            .filter(|h| !expired(&h.row, at.now))
+        else {
             return Err(Halt::Failed(format!("no such task `{task}`")));
         };
         let Some((row, kind)) = plan(&held.row).map_err(Halt::Failed)? else {
             return Ok(None);
         };
-        if commit(rec, at, &held, row.clone(), kind, out)?.is_some() {
+        if row.task_id != task || row.principal != held.row.principal {
+            return Err(Halt::Failed(
+                "a task change cannot change its identity".into(),
+            ));
+        }
+        let config = config
+            .map(|value| {
+                rec.get(KIND_PUSH_CONFIG, &task_key(at.caller, task))
+                    .map(|expected| (expected, value.to_vec()))
+            })
+            .transpose()?;
+        if commit(rec, at, &held, (raw, chain), row.clone(), kind, config)?.is_some() {
             return Ok(Some(row));
         }
     }
@@ -569,7 +793,8 @@ pub fn record_push_delivery(
 /// [`MAX_RETAINED`] or more terminal ones are held, the oldest go too. An active task is never
 /// touched, however long it has been idle. At
 /// most `budget` tasks are touched; the rest wait for the next sweep. Its one caller is a submit
-/// ([`crate::task_hop::open`]), never a read or a timer.
+/// ([`crate::task_hop::open`]) the [`SweepGate`] finds due, never a read or a timer. Answers how
+/// many tasks it retired.
 ///
 /// # Errors
 /// [`Halt`].
@@ -577,37 +802,114 @@ pub fn retention_sweep(
     rec: &mut dyn Records,
     now: u64,
     budget: usize,
-    out: &mut Vec<Write>,
-) -> Result<(), Halt> {
+    _out: &mut Vec<Write>,
+) -> Result<usize, Halt> {
     let rule = retention_of(KIND_TASK);
-    let mut held: Vec<(String, TaskRow)> = rec
+    let mut held: Vec<(String, HeldTask, Vec<u8>)> = rec
         .list(KIND_TASK, "")?
         .into_iter()
-        .filter_map(|(k, b)| Some((k.split_once('/')?.0.to_string(), decode(&b)?.row)))
-        .filter(|(_, row)| rule.reaches(terminal(&row.state)))
+        .filter_map(|(key, bytes)| {
+            let held = decode(&bytes)?;
+            let (caller, _) = key.split_once('/')?;
+            (is_caller(caller) && key == task_key(caller, &held.row.task_id))
+                .then_some((key, held, bytes))
+        })
+        .filter(|(_, held, _)| rule.reaches(terminal(&held.row.state)))
         .collect();
-    held.sort_by(|a, b| (a.1.updated_at, &a.1.task_id).cmp(&(b.1.updated_at, &b.1.task_id)));
+    held.sort_by(|a, b| {
+        (a.1.row.updated_at, &a.1.row.task_id).cmp(&(b.1.row.updated_at, &b.1.row.task_id))
+    });
     let mut touched = 0usize;
     let mut kept = held.len();
-    for (caller, row) in &held {
+    for (key, candidate, expected) in &held {
+        let row = &candidate.row;
         if touched < budget && (kept >= MAX_RETAINED || expired(row, now)) {
-            forget(caller, &row.task_id, out);
+            let chain = observe(rec, key)?;
+            // The listing selected a candidate only. Observe its life before this fresh read,
+            // then refuse to retire a replacement or a row updated since the listing.
+            let current = rec.get(KIND_TASK, key)?;
+            if current.as_ref() != Some(expected) || !forget(rec, key, expected, chain)? {
+                continue;
+            }
             kept -= 1;
             touched += 1;
         }
     }
-    Ok(())
+    Ok(touched)
 }
 
 /// Tombstone `caller`'s task `task`, its push config, and its events (the chain dropped whole).
-fn forget(caller: &str, task: &str, out: &mut Vec<Write>) {
-    for kind in [KIND_TASK_EVENT, KIND_TASK, KIND_PUSH_CONFIG] {
-        out.push(Write {
-            kind,
-            key: task_key(caller, task),
-            value: Vec::new(),
-        });
+fn forget(
+    rec: &mut dyn Records,
+    key: &str,
+    expected: &[u8],
+    chain: ChainLife,
+) -> Result<bool, Halt> {
+    let writes = [KIND_TASK_EVENT, KIND_TASK, KIND_PUSH_CONFIG].map(|kind| Write {
+        kind,
+        key: key.to_string(),
+        value: Vec::new(),
+    });
+    rec.publish(
+        &[Predicate {
+            kind: KIND_TASK,
+            key: key.to_string(),
+            expected: Some(expected.to_vec()),
+        }],
+        &[chain],
+        &writes,
+    )
+}
+
+/// Atomically replace or delete a config only while its task still has the exact observed row.
+/// `expected` is the raw config read by the caller when validating replacement semantics. The
+/// caller must read and validate again after a definitive conflict. Empty `value` means delete.
+pub(crate) fn write_config(
+    rec: &mut dyn Records,
+    at: &Stamp<'_>,
+    task: &str,
+    expected: Option<Vec<u8>>,
+    value: Vec<u8>,
+) -> Result<bool, Halt> {
+    if !is_caller(at.caller) {
+        return Err(Halt::Failed("no caller to hold the task under".into()));
     }
+    let key = task_key(at.caller, task);
+    let chain = observe(rec, &key)?;
+    let raw = rec.get(KIND_TASK, &key)?;
+    if raw
+        .as_deref()
+        .and_then(decode)
+        .filter(|held| !expired(&held.row, at.now))
+        .is_none()
+    {
+        return Err(Halt::Failed(format!("no such task `{task}`")));
+    }
+    rec.publish(
+        &[
+            Predicate {
+                kind: KIND_TASK,
+                key: key.clone(),
+                expected: raw,
+            },
+            Predicate {
+                kind: KIND_PUSH_CONFIG,
+                key: key.clone(),
+                expected,
+            },
+        ],
+        &[chain],
+        &[Write {
+            kind: KIND_PUSH_CONFIG,
+            key,
+            value,
+        }],
+    )
+}
+
+/// The existing bounded conflict retry policy for task and config writers.
+pub(crate) const fn attempts() -> std::ops::Range<usize> {
+    0..TRIES
 }
 
 #[cfg(test)]

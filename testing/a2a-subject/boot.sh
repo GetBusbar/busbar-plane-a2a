@@ -122,7 +122,7 @@
 #     carries the credential on that connection as well as on the HTTP one.
 #   * PUSH DELIVERY. `PUSH-DELIVER-001/002/003` are RED and are WAIVED with the reason recorded in
 #     `testing/a2a-tck/WAIVERS.md`, and only while every one of their errors is busbar's plaintext
-#     callback refusal (the premise `subject-waivers.json` states and `assert_tck_number` evaluates). Read that before "fixing the rig's topology": the suite's
+#     callback refusal (historically recorded in `subject-waivers.json`). Read that before "fixing the rig's topology": the suite's
 #     receiver URL is `http://` by literal and busbar refuses a plaintext webhook before it looks at
 #     the address at all, so a non-loopback receiver does not reach the refusal that fires. Two of
 #     the three are implementation gaps behind it. Nothing here is silenced — all three still run,
@@ -152,6 +152,7 @@ set -euo pipefail
 # written from the root so the script reads the same whether it is invoked from CI, from the root,
 # or from its own directory.
 cd "$(dirname "$0")/../.."
+source testing/a2a-harness/scripts/process-fixture.sh
 SUBJECT_MINTER="$PWD/testing/a2a-subject/mint-audience-token.mjs"
 
 say() { printf '%s\n' "$*"; }
@@ -189,10 +190,12 @@ BANNER
 # endpoint the suite is pointed at and the registration it reaches cannot drift apart.
 SUBJECT_AGENT_ID="conformance"
 
-# FIVE FREE PORTS, asked of the OS rather than hard-coded.
+# Five candidate ports, asked of the OS rather than hard-coded.
 #
 # suite-facing | busbar data | busbar admin | the control agent | the signing vendor in front. A hard-coded port is a red that is not
-# a defect the first time a runner image happens to have something on it.
+# a defect the first time a runner image happens to have something on it. These
+# sockets are closed here, so no reservation survives. Readiness must prove the
+# actual child owns each listener, and a collision refuses this boot.
 subject_free_ports() {
   python3 - <<'PY'
 import socket
@@ -262,9 +265,12 @@ YAML
 # One request to the fronted agent's endpoint, answered with its HTTP status only.
 subject_probe_status() {
   local url="$1" bearer="${2:-}"
-  local -a auth=()
-  [ -n "$bearer" ] && auth=(-H "authorization: Bearer $bearer")
-  curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${auth[@]}" "$url"
+  if [ -n "$bearer" ]; then
+    curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
+      -H @<(printf 'authorization: Bearer %s\n' "$bearer") "$url"
+  else
+    curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$url"
+  fi
 }
 
 # THE DISPROOF. Five credentials, one process, one endpoint. Four of them MUST be refused, and the
@@ -344,7 +350,7 @@ report_the_extended_agent_card() {
   say "   the extended agent card, asked for in both live spellings of its name:"
   for method in GetExtendedAgentCard agent/getAuthenticatedExtendedCard; do
     body=$(curl -s --max-time 15 \
-      -H "authorization: Bearer $bearer" \
+      -H @<(printf 'authorization: Bearer %s\n' "$bearer") \
       -H 'content-type: application/json' \
       -H 'a2a-version: 1.0' \
       -d "{\"jsonrpc\":\"2.0\",\"id\":\"xcard\",\"method\":\"$method\"}" \
@@ -379,12 +385,10 @@ PY
 
 # Wait for one URL to answer 200, or die naming what did not come up and showing its log.
 subject_await() {
-  local url="$1" what="$2" log="$3" waited=0
-  until [ "$(subject_probe_status "$url")" = "200" ]; do
-    waited=$((waited+1))
-    [ "$waited" -lt 60 ] || { cat "$log" >&2; die "$what did not come up at $url."; }
-    sleep 1
-  done
+  local url="$1" what="$2" log="$3" pid="$4" port="$5"
+  fixture_await_card "$pid" "$port" 60 1 "$url" || {
+    cat "$log" >&2; die "$what did not own a ready listener at $url.";
+  }
 }
 
 # PROMOTE THE REGISTRATION THE WAY AN OPERATOR PROMOTES ONE, and no other way.
@@ -399,7 +403,7 @@ subject_promote() {
   local preview fingerprint
   preview="$(curl -s --max-time 30 -X POST \
     "http://127.0.0.1:$admin_port/api/v1/admin/agents/$SUBJECT_AGENT_ID/connect" \
-    -H "authorization: Bearer $admin_token")"
+    -H @<(printf 'authorization: Bearer %s\n' "$admin_token"))"
   printf '%s\n' "$preview" > "$dir/connect.json"
   fingerprint="$(printf '%s' "$preview" | python3 -c 'import json,sys
 try:
@@ -413,7 +417,7 @@ there is nothing an operator could approve. The preview was: $preview"
   local approved state
   approved="$(curl -s --max-time 30 -X POST \
     "http://127.0.0.1:$admin_port/api/v1/admin/agents/$SUBJECT_AGENT_ID/approve" \
-    -H "authorization: Bearer $admin_token" -H 'content-type: application/json' \
+    -H @<(printf 'authorization: Bearer %s\n' "$admin_token") -H 'content-type: application/json' \
     -d "{\"fingerprint\":\"$fingerprint\"}")"
   printf '%s\n' "$approved" > "$dir/approve.json"
   state="$(printf '%s' "$approved" | python3 -c 'import json,sys
@@ -434,7 +438,7 @@ busbar fronts nothing and every instrument below would be measuring a 503. The a
 # property of this build and is waited out here rather than papered over — see the report.
 subject_await_serving() {
   local url="$1" token="$2" waited=0
-  until curl -s --max-time 15 -H "authorization: Bearer $token" "$url" \
+  until curl -s --max-time 15 -H @<(printf 'authorization: Bearer %s\n' "$token") "$url" \
         | grep -q '"protocolVersion"'; do
     waited=$((waited+1))
     [ "$waited" -lt 90 ] || die "busbar never served a card for \`$SUBJECT_AGENT_ID\`. The \
@@ -504,6 +508,15 @@ busbar built FROM THIS COMMIT; if the build step did not produce one, that is th
   esac
 
   local dir="${A2A_SUBJECT_WORKDIR:-.a2a-conformance/subject-run}"
+  python3 -I - "$dir" "$PWD" "$HOME" "${BUSBAR_CHECKOUT:-$PWD}" <<'SAFE_WORKDIR' || return 1
+from pathlib import Path
+import sys
+candidate = Path(sys.argv[1]).resolve()
+for protected in map(lambda value: Path(value).resolve(), sys.argv[2:]):
+    if candidate == protected or candidate in protected.parents:
+        sys.exit("subject work directory would remove a checkout, home, or parent directory")
+SAFE_WORKDIR
+  umask 077
   rm -rf "$dir"; mkdir -p "$dir"
   dir="$(cd "$dir" && pwd)"
 
@@ -549,9 +562,10 @@ busbar built FROM THIS COMMIT; if the build step did not produce one, that is th
   # against.
   testing/a2a-tck/scenario-agent/serve.sh "$agent_port" \
     >"$dir/scenario-agent.log" 2>&1 &
-  subject_track_pid "$!"
+  local agent_pid=$!
+  subject_track_pid "$agent_pid"
   subject_await "http://127.0.0.1:$agent_port/.well-known/agent-card.json" \
-    "the TCK scenario agent" "$dir/scenario-agent.log"
+    "the TCK scenario agent" "$dir/scenario-agent.log" "$agent_pid" "$agent_port"
 
   # `A2A_SUBJECT_RECORD_UPSTREAM` arms the vendor's request recorder — see that file's header. It is
   # OFF for every leg that does not ask for it, and the vendor is byte-identical in behaviour either
@@ -566,9 +580,10 @@ busbar built FROM THIS COMMIT; if the build step did not produce one, that is th
   A2A_VENDOR_RECORD="$SUBJECT_UPSTREAM_RECORD" \
   node testing/a2a-subject/signing-vendor.mjs "$vendor_port" "$agent_port" "$dir/issuer.spki" \
     >"$dir/signing-vendor.log" 2>&1 &
-  subject_track_pid "$!"
+  local vendor_pid=$!
+  subject_track_pid "$vendor_pid"
   subject_await "http://127.0.0.1:$vendor_port/.well-known/agent-card.json" \
-    "the signing vendor" "$dir/signing-vendor.log"
+    "the signing vendor" "$dir/signing-vendor.log" "$vendor_pid" "$vendor_port"
   local issuer
   issuer="$(cat "$dir/issuer.spki")"
   [ -n "$issuer" ] || die "the signing vendor published no issuer key, so there is no trust root \
@@ -605,7 +620,11 @@ for this registration and busbar would correctly refuse to approve it."
   local metadata="http://127.0.0.1:$data_port/.well-known/oauth-protected-resource/a2a"
   local direct="http://127.0.0.1:$data_port/a2a/agents/$SUBJECT_AGENT_ID"
   local waited=0
-  until [ "$(subject_probe_status "$metadata")" = "200" ]; do
+  until fixture_owns_listener "$busbar_pid" "$data_port" &&
+      fixture_owns_listener "$busbar_pid" "$admin_port" &&
+      [ "$(subject_probe_status "$metadata")" = "200" ] &&
+      fixture_owns_listener "$busbar_pid" "$data_port" &&
+      fixture_owns_listener "$busbar_pid" "$admin_port"; do
     kill -0 "$busbar_pid" 2>/dev/null || { cat "$dir/busbar.log" >&2; die "busbar exited during boot."; }
     waited=$((waited+1))
     [ "$waited" -lt 60 ] || { cat "$dir/busbar.log" >&2; die "busbar did not publish A2A \
@@ -630,7 +649,7 @@ configuration mistake it is."
   # never minted and a generation that does not match the durable row are both refused — correctly.
   local plain
   plain=$(curl -s --max-time 15 -X POST "http://127.0.0.1:$admin_port/api/v1/admin/keys" \
-            -H "authorization: Bearer $admin_token" -H 'content-type: application/json' \
+            -H @<(printf 'authorization: Bearer %s\n' "$admin_token") -H 'content-type: application/json' \
             -d '{"name":"a2a-conformance-subject"}' \
           | python3 -c 'import json,sys
 d = sys.stdin.read()
@@ -653,11 +672,11 @@ token to, and a made-up one would be refused."
   [ -f "$minter" ] || die "$minter is missing; the A2A subject leg mints its credential with the \
 same helper the MCP leg does, because busbar's token format is one format across both planes."
   local bound wrong
-  bound=$(node "$minter" "$dir/signing.key" "$plain" "$canonical") \
+  bound=$(node "$minter" "$dir/signing.key" - "$canonical" <<<"$plain") \
     || die "could not mint the audience-bound token."
   # The counterfactual, minted for an audience this deployment is not. Used only to prove the check
   # is live; if it were ever admitted, the plane boundary would be gone.
-  wrong=$(node "$minter" "$dir/signing.key" "$plain" "${canonical}-not-this-resource") \
+  wrong=$(node "$minter" "$dir/signing.key" - "${canonical}-not-this-resource" <<<"$plain") \
     || die "could not mint the wrong-audience counterfactual."
 
   # ── A SECOND, DISTINCT PRINCIPAL. ──
@@ -673,7 +692,7 @@ same helper the MCP leg does, because busbar's token format is one format across
   # TCK and battery legs and costs one admin call.
   local plain_b
   plain_b=$(curl -s --max-time 15 -X POST "http://127.0.0.1:$admin_port/api/v1/admin/keys" \
-              -H "authorization: Bearer $admin_token" -H 'content-type: application/json' \
+              -H @<(printf 'authorization: Bearer %s\n' "$admin_token") -H 'content-type: application/json' \
               -d '{"name":"a2a-conformance-subject-second-principal"}' \
             | python3 -c 'import json,sys
 d = sys.stdin.read()
@@ -687,7 +706,7 @@ decided with one identity — with a single principal an implementation that sco
 one that does not scope at all are observationally identical — so this is fatal rather than a \
 reason to run those checks anyway."
   local bound_b
-  bound_b=$(node "$minter" "$dir/signing.key" "$plain_b" "$canonical") \
+  bound_b=$(node "$minter" "$dir/signing.key" - "$canonical" <<<"$plain_b") \
     || die "could not mint the second principal's audience-bound token."
   [ "$bound" != "$bound_b" ] || die "the two principals' tokens are IDENTICAL, so they are not two \
 principals. Every scoping check would then be comparing an identity with itself and would pass \
@@ -717,12 +736,16 @@ vacuously."
   # trailers (where `grpc-status` lives) as well as its headers. See that file's own header.
   local through="http://127.0.0.1:$public_port/a2a/agents/$SUBJECT_AGENT_ID"
   if [ "$credential_held_by" = "shim" ]; then
-    node testing/a2a-subject/binding-shim.mjs "$suite_port" "$data_port" "$bound" \
+    node testing/a2a-subject/binding-shim.mjs "$suite_port" "$data_port" - <<<"$bound" \
       >"$dir/credential-shim.log" 2>&1 &
-    subject_track_pid "$!"
+    local shim_pid=$!
+    subject_track_pid "$shim_pid"
 
     waited=0
-    until [ "$(subject_probe_status "$through")" = "$SUBJECT_ADMITTED_STATUS" ]; do
+    until fixture_owns_listener "$shim_pid" "$suite_port" &&
+        [ "$(subject_probe_status "$through")" = "$SUBJECT_ADMITTED_STATUS" ] &&
+        fixture_owns_listener "$shim_pid" "$suite_port"; do
+      kill -0 "$shim_pid" 2>/dev/null || { cat "$dir/credential-shim.log" >&2; die "the credential shim exited during boot."; }
       waited=$((waited+1))
       [ "$waited" -lt 30 ] || {
         cat "$dir/credential-shim.log" >&2
@@ -797,9 +820,19 @@ PY
 # Every boot step goes through here: a hand-written append that forgot the separator on the first
 # pid fused it with whatever was already listed, `kill` then failed on one garbage word, and the
 # subject (and every process appended after it) leaked, holding its loopback port.
-subject_track_pid() { SUBJECT_PIDS="${SUBJECT_PIDS:+$SUBJECT_PIDS }$1"; }
+subject_track_pid() {
+  SUBJECT_PIDS="${SUBJECT_PIDS:+$SUBJECT_PIDS }$1"
+  fixture_track_pid "$1"
+}
 
-reap_subject() { [ -n "${SUBJECT_PIDS:-}" ] && kill $SUBJECT_PIDS 2>/dev/null || true; }
+reap_subject() {
+  local pid cleanup_rc=0
+  # Signal all children before waiting, so dependency order cannot strand one.
+  for pid in ${SUBJECT_PIDS:-}; do fixture_signal "$pid" 15 || true; done
+  for pid in ${SUBJECT_PIDS:-}; do fixture_stop "$pid" || cleanup_rc=1; done
+  [ "$cleanup_rc" -eq 0 ] || exit 2
+  SUBJECT_PIDS=""
+}
 
 # ---------------------------------------------------------------------------------------------
 # The legs.
@@ -816,8 +849,9 @@ arm_subject() {
   local credential_held_by="${1:-shim}"
   require_armed "A2A subject" A2A_SUBJECT_BUSBAR_BIN BUSBAR_A2A_ENDPOINT
   if [ -n "${A2A_SUBJECT_BUSBAR_BIN:-}" ]; then
-    boot_busbar_a2a_subject "$credential_held_by"
     trap reap_subject EXIT
+    fixture_exit_on_signal
+    boot_busbar_a2a_subject "$credential_held_by"
   else
     SUBJECT_URL="$BUSBAR_A2A_ENDPOINT"
     SUBJECT_AGENT_URL="$BUSBAR_A2A_ENDPOINT"
@@ -857,10 +891,16 @@ leg_battery() {
   say "   Whatever number the battery prints below is a SERVER-ROLE number. It is not a verdict on"
   say "   the delegating direction, and it must never be quoted as one."
   local rc=0
-  ( cd testing/a2a-harness && python3 -m a2aht run \
+  ( cd testing/a2a-harness || exit $?
+    set --
+    if [ -n "$SUBJECT_TOKEN" ]; then
+      exec 3< <(printf 'authorization: Bearer %s\n' "$SUBJECT_TOKEN")
+      set -- --auth-file /dev/fd/3
+    fi
+    python3 -m a2aht run \
       --endpoint "$SUBJECT_URL" \
       --card-url "$SUBJECT_AGENT_URL" \
-      ${SUBJECT_TOKEN:+--auth "authorization: Bearer $SUBJECT_TOKEN"} \
+      "$@" \
       --label "subject:busbar" \
       --tier pull-request \
       --role server \
@@ -899,7 +939,7 @@ leg_tck() {
   # THE DEFECT THIS CLOSES. `run-tck.sh` writes its requirement-level report to
   # `$A2A_TCK_OUT`/`$A2A_TCK_WORK/out`/`subject.json`, and BOTH `--tck` legs — the busbar booted
   # from this commit, and the optional external deployment — ran with that path unset, so the
-  # second leg to run overwrote the first leg's report IN PLACE. `assert_tck_number` then read, and
+  # second leg to run overwrote the first leg's report IN PLACE. The reader then read, and
   # the artifact then uploaded, ONE file that named neither of them: whichever leg finished last.
   # A verdict about this commit and a verdict about somebody's deployment are different claims and
   # they may not share a filename.
@@ -912,356 +952,12 @@ leg_tck() {
   A2A_TCK_OUT="${A2A_TCK_OUT:-$work_dir/out-$leg_tag}"
   export A2A_TCK_OUT
   # A REPORT LEFT BY AN EARLIER RUN IS NOT THIS RUN'S EVIDENCE. Removed before the suite starts, so
-  # that `assert_tck_number` reading a stale file is impossible rather than merely unlikely.
+  # that a stale file cannot be read as this leg's evidence.
   rm -f "$A2A_TCK_OUT/subject.json"
   say "   TCK report directory for this leg: $A2A_TCK_OUT"
-  # `run-tck.sh subject` DELIBERATELY EXITS 0 whatever the TCK found — it swallows pytest's status
-  # and, for a subject, does no baseline comparison (correctly: a subject baseline would pin our own
-  # defects as the expectation). So this leg's verdict cannot be that script's exit code, and the
-  # step is piped through `tee` rather than read from `$?`.
+  # Keep the suite's own verdict and full requirement report. There is no numeric
+  # scoring gate or waiver-ledger verdict layered over its protocol assertions.
   BUSBAR_A2A_ENDPOINT="$SUBJECT_URL" testing/a2a-tck/run-tck.sh subject 2>&1 | tee "$out"
-  # SAME PATH ARITHMETIC AS `run-tck.sh`'s own `$OUT` (`${A2A_TCK_OUT:-${A2A_TCK_WORK:-$TMPDIR/a2a-tck-work}/out}`),
-  # duplicated rather than sourced because `run-tck.sh` is a `case` dispatcher with no function this
-  # script can call standalone. If that arithmetic ever moves, this one has to move with it -- there
-  # is no third place either could drift to unnoticed, because `assert_tck_number` below dies loudly
-  # when the file it computes is not there.
-  local report_json="$A2A_TCK_OUT/subject.json"
-  assert_tck_number "$out" "$report_json"
-}
-
-# READ THE REQUIREMENT LEVEL, not the transport-parameterised row, and hold it to the PINNED WAIVER
-# SET -- and refuse both ways the report can be absent.
-#
-# WHAT WAS WRONG BEFORE. This function used to read the TCK's own `MUST` table row
-# (`83 passed, 26 failed, ... of 114`) and gate on `failed == 0`. That row is not what it looks
-# like: `check-baseline.py`'s pinned control run of the SAME TCK against a2a-go, the reference SDK,
-# shows the identical shape -- 21 of "26 failed" are MUST requirements the suite marks
-# `NOT TESTED` (no scenario in this TCK release exercises them against ANY implementation; verified
-# by diffing this run's per-requirement report against `testing/a2a-tck/baselines/`, where those
-# same 21 ids read `NOT TESTED` for a2a-go too), folded into the TCK's own "Failed" column by the
-# TCK's own summary printer. Reading that row as "busbar failed 26 requirements" was misattributing
-# a pinned-suite limitation, shared by the reference implementation, as a busbar defect count. Only
-# 5 MUST requirements are ever reported `FAIL` (a real, executed, failing assertion) against busbar:
-# `PUSH-DELIVER-001/002/003`, `CARD-EXT-001`, `GRPC-ERR-001` -- exactly the set `WAIVERS.md` names
-# and dates.
-#
-# THE GATE NOW READS `reports/compatibility.json`'s `per_requirement` map (the same file
-# `check-baseline.py` diffs the control legs against), which reports ONE status per requirement
-# rather than one row per transport parameterisation, and separates truly `NOT TESTED` from `FAIL`.
-# `NOT TESTED` requirements are not evidence about busbar, so they are not counted as failures --
-# BUT ONLY THE ONES THE PINNED CONTROL ALSO COULD NOT TEST. A requirement is excused as a suite
-# limitation only when at least one control baseline in `testing/a2a-tck/baselines/` reports it
-# `NOT TESTED` too; a `NOT TESTED` the reference implementation DID execute is something the suite
-# could have run against busbar and did not, and that is RED. Without that counterweight a run in
-# which every MUST degraded to `NOT TESTED` (a TCK pin bump, an undialable transport, a subject that
-# never served) exited 0 reading "0 FAIL" -- the skipped-while-green failure this file exists to
-# refuse, reached by a different door. A run that executed no MUST at all is RED outright.
-# `FAIL` and `SKIPPED` requirements are gated on the LEDGER in `testing/a2a-tck/subject-waivers.json`
-# -- anything failing outside its `waived` list, or skipped outside its `skipped` list, is RED. And
-# no entry is trusted by its id: each carries a PREMISE (conditions over this run's own report: the
-# requirement's errors, the agent card the suite read, a sibling requirement's status) that the gate
-# EVALUATES, and an entry whose premise is false, or whose requirement is no longer in the state it
-# forgives, is RED until it is retired (BUSBAR-1.6.0.md Law 10). A SKIP is no evidence about busbar,
-# so it is never excused as a class: each one is named and justified (Law 8). The partition of MUST
-# statuses is printed and an unknown status is RED.
-assert_tck_number() {
-  local out="$1" report_json="$2"
-  local waivers="${3:-testing/a2a-tck/subject-waivers.json}"
-  local baselines="${4:-testing/a2a-tck/baselines}"
-  python3 - "$out" "$report_json" "$waivers" "$baselines" <<'PY'
-import json, os, re, sys
-
-out_path, report_path, waivers_path, baselines_dir = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
-
-text = open(out_path, encoding="utf-8", errors="replace").read()
-
-# The MUST row of the TCK's own level table: │ MUST │ passed │ failed │ skipped │ total │. Still
-# read and printed -- it is the suite's own headline number and a reader will look for it -- but it
-# is NOT what this gate decides on; see the function's doc comment for why.
-row = re.search(r"MUST\s*\D+?(\d+)\s*\D+?(\d+)\s*\D+?(\d+)\s*\D+?(\d+)", text)
-if row is None:
-    sys.exit(
-        "the TCK printed no MUST row, so this leg produced NO NUMBER. An armed leg that executed\n"
-        "nothing is the state the old skipping leg would have rotted into: configured, green and\n"
-        "vacuous. Read the captured output above for why the suite did not report."
-    )
-passed, failed, skipped, total = (int(g) for g in row.groups())
-print("")
-print("A2A OFFICIAL TCK vs busbar (the commit under test), from the suite's own stdout:")
-print("  MUST      %d passed, %d failed, %d skipped, of %d  (suite's own row; folds NOT TESTED" % (passed, failed, skipped, total))
-print("            into 'failed' -- read on for the requirement-level breakdown this gate uses)")
-if total == 0:
-    sys.exit("the MUST total is zero: the suite ran nothing. That is not a score.")
-print("")
-print("  NOTE: the suite ALSO prints `OVERALL COMPATIBILITY: 100.0%` above this table. That figure")
-print("  is the per-transport rollup, not the requirement result. Neither it nor the MUST row above")
-print("  is this gate's number; both are printed for a human, not read by this script.")
-
-try:
-    with open(report_path, encoding="utf-8") as fh:
-        report = json.load(fh)
-except OSError as exc:
-    sys.exit(
-        "\nno per-requirement report at %s (%s). The MUST row above is the suite's own summary,\n"
-        "but this gate needs the requirement-level detail to tell a suite limitation from a busbar\n"
-        "defect, and cannot make that call from the summary row alone." % (report_path, exc)
-    )
-except ValueError as exc:
-    sys.exit("\n%s is not valid JSON (%s)." % (report_path, exc))
-
-per = report.get("per_requirement")
-if not isinstance(per, dict) or not per:
-    sys.exit("\n%s carries no `per_requirement` map. The TCK's report shape changed." % report_path)
-
-with open(waivers_path, encoding="utf-8") as fh:
-    pin = json.load(fh)
-
-# THE LEDGER: every forgiveness carries a PREMISE this gate EVALUATES against the run in front of it
-# (BUSBAR-1.6.0.md Law 10: "a forgiveness whose premise is never checked is a blindfold"; a premise
-# that cannot be evaluated is not a reason and the entry is refused). Two lists, one shape:
-#   waived   a MUST that reports FAIL, forgiven only while its premise holds;
-#   skipped  a MUST that reports SKIPPED, justified only while its premise holds (Law 8: a SKIP is
-#            a requirement that produced no evidence, so each one is named, never excused as a class).
-# `premise` is a non-empty LIST of conditions, ALL of which must hold. The vocabulary is CLOSED; an
-# unknown kind is refused, not ignored:
-#   errors_match                  {pattern}: the requirement's own `errors` are non-empty and EVERY
-#                                 one matches `pattern` -- it fails for the stated reason and no other.
-#   card_equals                   {path, value}: the agent card the suite read (`agent_card` in this
-#                                 report) holds exactly `value` at the dotted `path`.
-#   card_lacks_required_extension {uri}: that card declares no extension `uri` as required.
-#   requirement_passes            {id}: another MUST reports PASS on this same run.
-PREMISE_KINDS = {
-    "requirement_passes": {"id": str},
-    "errors_match": {"pattern": str},
-    "card_equals": {"path": str, "value": object},
-    "card_lacks_required_extension": {"uri": str},
-}
-
-def ledger(key):
-    entries = pin.get(key)
-    if not isinstance(entries, list):
-        sys.exit("\n%s carries no `%s` list; the ledger is malformed." % (waivers_path, key))
-    out = {}
-    for e in entries:
-        if not isinstance(e, dict):
-            sys.exit("\n%s `%s` entry %r is an id only. A forgiveness by id alone states no premise\n"
-                     "and nothing can turn it back into a refusal (Law 10); every entry is\n"
-                     "{id, why, premise}." % (waivers_path, key, e))
-        rid, why, prem = e.get("id"), e.get("why"), e.get("premise")
-        if not isinstance(rid, str) or not rid:
-            sys.exit("\n%s `%s` entry %r names no id." % (waivers_path, key, e))
-        if not isinstance(why, str) or not why.strip():
-            sys.exit("\n%s `%s` entry %s states no `why`." % (waivers_path, key, rid))
-        if not isinstance(prem, list) or not prem:
-            sys.exit("\n%s `%s` entry %s carries no premise (a non-empty list of conditions); a\n"
-                     "forgiveness with no premise cannot be evaluated, and the entry is refused."
-                     % (waivers_path, key, rid))
-        for cond in prem:
-            if not isinstance(cond, dict) or cond.get("kind") not in PREMISE_KINDS:
-                sys.exit("\n%s `%s` entry %s carries a condition this gate cannot evaluate: %r (kind\n"
-                         "must be one of %s); a premise that cannot be evaluated is a wish, and the\n"
-                         "entry is refused." % (waivers_path, key, rid, cond, ", ".join(sorted(PREMISE_KINDS))))
-            for field, ty in PREMISE_KINDS[cond["kind"]].items():
-                if field not in cond or (ty is not object and not (isinstance(cond[field], ty) and cond[field])):
-                    sys.exit("\n%s `%s` entry %s: condition %s needs `%s`." % (waivers_path, key, rid, cond["kind"], field))
-        if rid in out:
-            sys.exit("\n%s `%s` names %s twice." % (waivers_path, key, rid))
-        out[rid] = e
-    return out
-
-waived = ledger("waived")
-justified_skips = ledger("skipped")
-# NOT APPLICABLE (ARCHITECT ruling 2026-10-14 under owner rule 22, named conformance gaps are zero): a
-# MUST the suite exercises only against an agent-card state busbar never serves -- a capability the
-# spec makes optional switched OFF (busbar always serves push, streaming and the extended card), or
-# an optional extension declared required (busbar implements none). It reports SKIPPED, but it is
-# not a gap: there is no busbar behaviour for it to verify. Each entry names the spec and TCK
-# `citation` that make it so, and its premise (the card the suite read) is evaluated like every
-# other entry's, so the day busbar serves that state the entry is RED and must be retired.
-not_applicable = ledger("not_applicable") if "not_applicable" in pin else {}
-for rid, e in not_applicable.items():
-    if not isinstance(e.get("citation"), str) or not e["citation"].strip():
-        sys.exit("\n%s `not_applicable` entry %s names no spec `citation`; a requirement is not\n"
-                 "applicable only where the spec says the feature is optional." % (waivers_path, rid))
-# An EMPTY list is accepted: a ledger that forgives nothing is the strictest one there is, and a
-# waiver retired because its requirement now passes must leave a ledger the gate still reads. What
-# is refused is a ledger with no list at all (`ledger` above), the shape a misspelt key takes.
-both = sorted((set(waived) & set(justified_skips)) | (set(waived) & set(not_applicable))
-              | (set(justified_skips) & set(not_applicable)))
-if both:
-    sys.exit("\n%s names %s in more than one list." % (waivers_path, ", ".join(both)))
-
-card = report.get("agent_card")
-
-def card_at(path):
-    node = card
-    for part in path.split("."):
-        if not isinstance(node, dict) or part not in node:
-            return (False, None)
-        node = node[part]
-    return (True, node)
-
-def premise_holds(rid, prem):
-    """(holds, what was observed) over every condition. A condition this run carries no evidence
-    for does NOT hold."""
-    seen = [condition_holds(rid, c) for c in prem]
-    return (all(ok for ok, _ in seen), "; ".join("%s: %s" % (c["kind"], w) for c, (_, w) in zip(prem, seen)))
-
-def condition_holds(rid, prem):
-    kind = prem["kind"]
-    if kind == "requirement_passes":
-        got = must.get(prem["id"], {}).get("status")
-        return (got == "PASS", "%s reports %s" % (prem["id"], got or "NOTHING"))
-    if kind == "errors_match":
-        errs = must.get(rid, {}).get("errors")
-        if not isinstance(errs, list) or not errs:
-            return (False, "the report carries no errors for %s" % rid)
-        try:
-            rx = re.compile(prem["pattern"])
-        except re.error as exc:
-            return (False, "pattern %r does not compile (%s)" % (prem["pattern"], exc))
-        off = [e for e in errs if not (isinstance(e, str) and rx.search(e))]
-        if off:
-            return (False, "%d of %d error(s) do not match %r, first: %r"
-                    % (len(off), len(errs), prem["pattern"], str(off[0])[:200]))
-        return (True, "all %d error(s) match %r" % (len(errs), prem["pattern"]))
-    if not isinstance(card, dict):
-        return (False, "the report carries no agent_card to evaluate the premise against")
-    if kind == "card_equals":
-        found, got = card_at(prem["path"])
-        if not found:
-            return (False, "the agent card has no %s" % prem["path"])
-        ok = got == prem["value"] and type(got) is type(prem["value"])
-        return (ok, "agent_card.%s = %s" % (prem["path"], json.dumps(got)))
-    if kind == "card_lacks_required_extension":
-        found, exts = card_at("capabilities.extensions")
-        if found and not isinstance(exts, list):
-            return (False, "agent_card.capabilities.extensions is not a list")
-        req = [x for x in (exts or []) if isinstance(x, dict) and x.get("uri") == prem["uri"]
-               and x.get("required") is True]
-        return (not req, "the card declares %s as required: %s" % (prem["uri"], "yes" if req else "no"))
-    return (False, "unknown premise kind %r" % kind)
-
-must = {k: v for k, v in per.items() if isinstance(v, dict) and v.get("level") == "MUST"}
-# THE PARTITION (Law 8): every MUST lands in exactly one of the four statuses the suite reports. A
-# status this gate does not know is not silently dropped from every count below.
-KNOWN = ("PASS", "FAIL", "SKIPPED", "NOT TESTED")
-unknown_status = sorted("%s=%r" % (k, v.get("status")) for k, v in must.items() if v.get("status") not in KNOWN)
-not_tested = sorted(k for k, v in must.items() if v.get("status") == "NOT TESTED")
-failing = sorted(k for k, v in must.items() if v.get("status") == "FAIL")
-skipped = sorted(k for k, v in must.items() if v.get("status") == "SKIPPED")
-unwaived = sorted(k for k in failing if k not in waived)
-unjustified_skips = sorted(k for k in skipped if k not in justified_skips and k not in not_applicable)
-executed = sorted(k for k, v in must.items() if v.get("status") in ("PASS", "FAIL"))
-
-# EVERY LEDGER ENTRY IS EVALUATED, AND ITS REQUIREMENT MUST BE IN THE STATE IT FORGIVES. A waiver
-# whose requirement now passes, or a justified SKIP whose requirement now runs, is a forgiveness of
-# something that is no longer happening: its premise is false, it is RED until it is retired.
-ledger_held, ledger_false = [], []
-for key, entries, want in (("waived", waived, "FAIL"), ("skipped", justified_skips, "SKIPPED"),
-                           ("not_applicable", not_applicable, "SKIPPED")):
-    for rid in sorted(entries):
-        got = must.get(rid, {}).get("status")
-        if got != want:
-            ledger_false.append("%s %s: the requirement reports %s, not %s -- retire the entry"
-                                % (key, rid, got or "NOTHING (not a MUST in this report)", want))
-            continue
-        ok, seen = premise_holds(rid, entries[rid]["premise"])
-        (ledger_held if ok else ledger_false).append(
-            "%s %s: premise %s -- %s" % (key, rid, "HOLDS" if ok else "IS FALSE", seen))
-
-# THE CONTROL'S OWN NOT-TESTED SET: the only NOT TESTED this gate may excuse. Union over every
-# pinned control, because a requirement one transport's control cannot test (e.g. HTTP_JSON-SVC-001)
-# is still a suite limitation, not a busbar gap.
-try:
-    control_files = sorted(f for f in os.listdir(baselines_dir) if f.endswith(".json"))
-except OSError as exc:
-    sys.exit("\nno control baselines at %s (%s). Without the control's NOT TESTED set there is no way\n"
-             "to tell a suite limitation from a requirement that simply never ran against busbar."
-             % (baselines_dir, exc))
-control_not_tested = set()
-for f in control_files:
-    with open(os.path.join(baselines_dir, f), encoding="utf-8") as fh:
-        cper = json.load(fh).get("per_requirement")
-    if not isinstance(cper, dict) or not cper:
-        sys.exit("\ncontrol baseline %s carries no `per_requirement` map." % f)
-    control_not_tested |= {k for k, v in cper.items()
-                           if (v.get("status") if isinstance(v, dict) else v) == "NOT TESTED"}
-if not control_files:
-    sys.exit("\n%s holds no control baseline; refusing to excuse any NOT TESTED requirement blind."
-             % baselines_dir)
-not_tested_unexcused = sorted(k for k in not_tested if k not in control_not_tested)
-
-print("")
-print("  REQUIREMENT-LEVEL BREAKDOWN (%d MUST requirements, %d NOT TESTED, %d FAIL):"
-      % (len(must), len(not_tested), len(failing)))
-print("    NOT TESTED, ALSO NOT TESTED BY THE PINNED CONTROL (suite limitation, not busbar evidence --")
-print("    checked against %s on this run, so this is not gated):" % baselines_dir)
-for r in not_tested:
-    if r not in not_tested_unexcused:
-        print("      %s" % r)
-print("    NOT TESTED HERE, BUT EXECUTED AGAINST THE PINNED CONTROL (RED):")
-for r in not_tested_unexcused:
-    print("      %s" % r)
-if not not_tested_unexcused:
-    print("      (none)")
-print("    LEDGER (testing/a2a-tck/subject-waivers.json), every premise evaluated on this run:")
-for line in ledger_held:
-    print("      %s" % line)
-print("    LEDGER ENTRIES WHOSE PREMISE IS FALSE (RED):")
-for line in ledger_false:
-    print("      %s" % line)
-if not ledger_false:
-    print("      (none)")
-print("    SKIPPED WITH NO JUSTIFICATION IN THE LEDGER (RED):")
-for r in unjustified_skips:
-    print("      %s" % r)
-if not unjustified_skips:
-    print("      (none)")
-print("    FAIL, UNWAIVED (RED):")
-for r in unwaived:
-    print("      %s" % r)
-if not unwaived:
-    print("      (none)")
-print("    PARTITION: %d PASS + %d FAIL + %d SKIPPED + %d NOT TESTED + %d unknown = %d MUST"
-      % (len(executed) - len(failing), len(failing), len(skipped), len(not_tested),
-         len(unknown_status), len(must)))
-
-if unknown_status:
-    sys.exit("\n%d MUST requirement(s) report a status this gate does not know: %s.\n"
-             "A status outside PASS/FAIL/SKIPPED/NOT TESTED is not dropped from the count."
-             % (len(unknown_status), ", ".join(unknown_status)))
-if not executed:
-    sys.exit(
-        "\nNOT ONE of %d MUST requirements executed (PASS or FAIL) against busbar. A run that tested\n"
-        "nothing has no number; it is not a pass." % len(must)
-    )
-if not_tested_unexcused:
-    sys.exit(
-        "\n%d MUST requirement(s) went NOT TESTED against busbar that the pinned control DID execute:\n"
-        "%s.\nThat is not the suite's limitation -- the suite could run them and did not run them here."
-        % (len(not_tested_unexcused), ", ".join(not_tested_unexcused))
-    )
-if ledger_false:
-    sys.exit(
-        "\n%d ledger entr(ies) forgive something whose premise is false on this run:\n  %s\n"
-        "A forgiveness that cannot turn back into a refusal is not a forgiveness (Law 10)."
-        % (len(ledger_false), "\n  ".join(ledger_false))
-    )
-if unjustified_skips:
-    sys.exit(
-        "\n%d MUST requirement(s) were SKIPPED with no justification in the ledger: %s.\n"
-        "A SKIP is a requirement that produced no evidence about busbar. Each one is named in\n"
-        "testing/a2a-tck/subject-waivers.json `skipped` with a premise this gate evaluates, or the\n"
-        "leg is RED." % (len(unjustified_skips), ", ".join(unjustified_skips))
-    )
-if unwaived:
-    sys.exit(
-        "\nbusbar failed %d MUST requirement(s) outside the pinned waiver set: %s.\n"
-        "That is the number this leg exists to produce, and it is RED until it is zero or the\n"
-        "requirement is waived, dated and reasoned, in WAIVERS.md AND the pin." % (len(unwaived), ", ".join(unwaived))
-    )
-PY
 }
 
 leg_probe() {
@@ -1273,8 +969,7 @@ leg_probe() {
   # a gate: it does not terminate.
   if [ -n "${A2A_SUBJECT_HOLD:-}" ]; then
     say "   HOLDING (A2A_SUBJECT_HOLD is set). Artefacts in: $SUBJECT_DIR"
-    say "   token A: $SUBJECT_TOKEN"
-    say "   token B: ${SUBJECT_TOKEN_B:-}"
+    say "   bearer credentials are retained privately by the held subject; they are not printed"
     say "   issuer key: ${SUBJECT_ISSUER_KEY:-<none>}"
     while true; do sleep 3600; done
   fi
@@ -1327,12 +1022,12 @@ binding would have to be hand-encoded, which is the thing neither instrument doe
   ( cd testing/a2a-supplement && PYTHONPATH="$tck_dir:${PYTHONPATH:-}" "$tck_python" -m a2asup \
       --label "subject:busbar" \
       --card-url "$SUBJECT_URL/.well-known/agent-card.json" \
-      --token "$SUBJECT_TOKEN" \
-      --token-b "$SUBJECT_TOKEN_B" \
+      --token-file <(printf '%s\n' "$SUBJECT_TOKEN") \
+      --token-b-file <(printf '%s\n' "$SUBJECT_TOKEN_B") \
       ${SUBJECT_ISSUER_KEY:+--issuer-key "$SUBJECT_ISSUER_KEY"} \
       ${SUBJECT_UPSTREAM_RECORD:+--upstream-record "$SUBJECT_UPSTREAM_RECORD"} \
       ${SUBJECT_ADMIN_BASE:+--admin-base "$SUBJECT_ADMIN_BASE"} \
-      ${SUBJECT_ADMIN_TOKEN:+--admin-token "$SUBJECT_ADMIN_TOKEN"} \
+      --admin-token-file <(printf '%s\n' "$SUBJECT_ADMIN_TOKEN") \
       ${SUBJECT_VENDOR_URL:+--verifier-agent-url "$SUBJECT_VENDOR_URL"} \
       --json reports/subject.json ) || rc=$?
   say ""
@@ -1344,12 +1039,6 @@ and there is no number from this instrument. That is the absence of a score, not
     *) die "the supplementary suite found busbar failing requirements the official TCK does not \
 execute. Read the table above; that is the number this leg exists to produce." ;;
   esac
-}
-
-# A THIN WRAPPER so the self-test can hand `assert_tck_number` a disposable pin, without the real
-# `testing/a2a-tck/subject-waivers.json` (or the real report path arithmetic) anywhere near it.
-_assert_tck_number_with_pin() {
-  assert_tck_number "$1" "$2" "$3" "${4:-testing/a2a-tck/baselines}"
 }
 
 # --selftest: prove the arming rule and the boundary proof BITE, before any verdict from this
@@ -1449,221 +1138,6 @@ PY
   else
     say "  MISS: a tracked pid was fused into the reaper's list"; failures=$((failures+1))
   fi
-
-  # RED 5: TCK output with NO MUST row. This is what a suite that never reported looks like, and it
-  # is the one shape that would otherwise let an armed leg pass having produced no number.
-  local tmp; tmp="$(mktemp)"
-  printf 'OVERALL COMPATIBILITY: 100.0%%\nnothing else at all\n' > "$tmp"
-  if ( assert_tck_number "$tmp" "" ) >/dev/null 2>&1; then
-    say "  MISS: TCK output carrying no MUST row was accepted as a result"; failures=$((failures+1))
-  else
-    say "  ok: TCK output with no MUST row produces no number, and is RED"
-  fi
-
-  # RED 6: a MUST row is present, but there is no requirement-level report to read. The suite's own
-  # row is not this gate's number precisely because it cannot tell a suite limitation from a busbar
-  # defect on its own -- so an armed leg that produced only the row and no report is RED, not a pass
-  # read off the summary.
-  printf 'OVERALL COMPATIBILITY: 100.0%%\n| MUST | 4 | 110 | 0 | 114 |\n' > "$tmp"
-  if ( assert_tck_number "$tmp" "$tmp.no-such-report.json" ) >/dev/null 2>&1; then
-    say "  MISS: a MUST row with no requirement-level report behind it was accepted"; failures=$((failures+1))
-  else
-    say "  ok: a MUST row with no requirement-level report behind it is RED"
-  fi
-
-  # A minimal, disposable LEDGER used by every case below, so they do not depend on -- or drift
-  # with -- the real testing/a2a-tck/subject-waivers.json. Every entry carries a premise the gate
-  # evaluates (Law 10): the waiver's is the refusal text in the requirement's own errors, the
-  # justified SKIP's is the card the suite read.
-  local pin; pin="$(mktemp)"
-  local pin_json='{"waived": [{"id": "PUSH-DELIVER-001", "why": "fixture", "premise": [{"kind": "errors_match", "pattern": "callback scheme .http. is refused"}]}], "skipped": [{"id": "CAP-SKIP-001", "why": "fixture", "premise": [{"kind": "card_equals", "path": "capabilities.streaming", "value": true}]}]}'
-  printf '%s\n' "$pin_json" > "$pin"
-  local report; report="$(mktemp)"
-  # A disposable CONTROL baseline, same reasoning: the NOT TESTED excuse is read against it, never
-  # against the real testing/a2a-tck/baselines/. It names exactly the 21 ids GREEN 2 plants, as the
-  # a2a-go control does for the real 21.
-  local ctl; ctl="$(mktemp -d)"
-  python3 -c "
-import json
-per = {'NOT-TESTED-%03d' % i: 'NOT TESTED' for i in range(21)}
-per.update({'SOME-REQ-001': 'PASS', 'PUSH-DELIVER-001': 'FAIL'})
-per.update({'CAP-SKIP-001': 'SKIPPED', 'OTHER-REQ-001': 'PASS', 'OTHER-SKIP-001': 'PASS', 'ODD-001': 'PASS'})
-per.update({'EXEC-%03d' % i: 'PASS' for i in range(114)})
-json.dump({'per_requirement': per}, open('$ctl/control-fixture.json', 'w'))
-"
-  printf '| MUST | 113 | 1 | 0 | 114 |\n' > "$tmp"
-
-  # THE REPORT EVERY CASE STARTS FROM: the ledger's two entries in the state they forgive with their
-  # premises true, and one executed PASS. Each case applies ONE change (python, over `per` and
-  # `card`), so it is RED or GREEN for that change alone.
-  _selftest_report() {
-    python3 - "$1" "$2" <<'PY'
-import json, sys
-per = {
-    "SOME-REQ-001": {"level": "MUST", "status": "PASS"},
-    "PUSH-DELIVER-001": {"level": "MUST", "status": "FAIL", "errors": [
-        "Skipped: send_message failed: push callback scheme `http` is refused; a callback carries "
-        "task metadata off-box and must be https"]},
-    "CAP-SKIP-001": {"level": "MUST", "status": "SKIPPED"},
-}
-per.update({'NOT-TESTED-%03d' % i: {'level': 'MUST', 'status': 'NOT TESTED'} for i in range(21)})
-per.update({'EXEC-%03d' % i: {'level': 'MUST', 'status': 'PASS'} for i in range(114)})
-per.update({i: {'level': 'MUST', 'status': 'PASS'} for i in ('OTHER-REQ-001', 'OTHER-SKIP-001', 'ODD-001')})
-card = {"capabilities": {"streaming": True}}
-exec(sys.argv[2])
-doc = {"per_requirement": per}
-if card is not None:
-    doc["agent_card"] = card
-json.dump(doc, open(sys.argv[1], "w"))
-PY
-  }
-  # A RED case is RED for ITS reason: the refusal must carry `marker`, so a case that goes red for an
-  # unrelated reason (a malformed fixture) is a MISS, not an ok.
-  _selftest_red() {
-    local label="$1" marker="$2" change="$3" ledger="${4:-$pin}" got
-    _selftest_report "$report" "$change"
-    if got="$(_assert_tck_number_with_pin "$tmp" "$report" "$ledger" "$ctl" 2>&1)"; then
-      say "  MISS: $label was accepted"; failures=$((failures+1))
-    elif printf '%s' "$got" | grep -qF -- "$marker"; then
-      say "  ok: $label is RED"
-    else
-      say "  MISS: $label was refused, but not for its reason (no \`$marker\`)"; failures=$((failures+1))
-    fi
-  }
-  _selftest_green() {
-    local label="$1" change="$2" ledger="${3:-$pin}"
-    _selftest_report "$report" "$change"
-    if _assert_tck_number_with_pin "$tmp" "$report" "$ledger" "$ctl" >/dev/null 2>&1; then
-      say "  ok: $label is accepted"
-    else
-      say "  MISS: $label was refused"; failures=$((failures+1))
-    fi
-  }
-
-  # GREEN 1: the ONLY FAIL is a waived one whose premise holds, the ONLY SKIP a justified one whose
-  # premise holds. Green because both forgivenesses were evaluated and held, not because nothing
-  # failed.
-  _selftest_green "a waived FAIL and a justified SKIP, both premises holding," "pass"
-  _selftest_red "a report missing one declared requirement" "different requirement set" \
-    "per.pop('EXEC-113')"
-  _selftest_red "a report containing only one pass and waived entries" "different requirement set" \
-    "per = {k: per[k] for k in ('SOME-REQ-001', 'PUSH-DELIVER-001', 'CAP-SKIP-001')}"
-  _selftest_red "an all-skipped report" "NOT ONE of" \
-    "per = {k: {'level': 'MUST', 'status': 'SKIPPED'} for k in per}" \
-    <(printf '{"waived": [], "skipped": []}\n')
-
-  # RED 7: an UNWAIVED MUST requirement reports FAIL. Red regardless of the suite's own row, and
-  # regardless of how many other requirements pass.
-  _selftest_red "an unwaived FAIL requirement" "outside the pinned waiver set" \
-    "per['OTHER-REQ-001'] = {'level': 'MUST', 'status': 'FAIL', 'errors': ['x']}"
-
-  # GREEN 2: NOT TESTED requirements the control also could not test are never gated on, however
-  # many there are -- they are the suite's own limitation. This is the case that used to be misread
-  # as 21 busbar failures.
-  _selftest_green "NOT TESTED requirements the control also could not test" \
-    "per.update({'NOT-TESTED-%03d' % i: {'level': 'MUST', 'status': 'NOT TESTED'} for i in range(21)})"
-
-  # RED 9: EVERY MUST degraded to NOT TESTED -- the pin bump / undialable transport / never-served
-  # subject shape. The suite's own row still says 114, so the `total == 0` floor does not see it;
-  # a run in which nothing executed has no number (RED 10 holds the per-requirement control half).
-  _selftest_red "a run where every MUST went NOT TESTED" "NOT ONE of" \
-    "per = {k: {'level': 'MUST', 'status': 'NOT TESTED'} for k in per}" \
-    <(printf '{"waived": [], "skipped": []}\n')
-
-  # RED 10: ONE NOT TESTED the control executed, among otherwise excused ones. The excuse is per
-  # requirement, not a count.
-  _selftest_red "a NOT TESTED requirement the control executed" "EXEC-000" \
-    "per.update({'NOT-TESTED-%03d' % i: {'level': 'MUST', 'status': 'NOT TESTED'} for i in range(21)}); per['EXEC-000'] = {'level': 'MUST', 'status': 'NOT TESTED'}"
-
-  # RED 11: nothing executed at all, even though every NOT TESTED is one the control also could not
-  # test. Zero executed MUSTs is no number.
-  _selftest_red "a run that executed no MUST at all" "NOT ONE of" \
-    "per = {k: {'level': 'MUST', 'status': 'NOT TESTED'} for k in per}" \
-    <(printf '{"waived": [], "skipped": []}\n')
-
-  # RED 12: no control baseline to read the excuse from. Refused, not read as "nothing to excuse".
-  local noctl; noctl="$(mktemp -d)"
-  _selftest_report "$report" "pass"
-  if _assert_tck_number_with_pin "$tmp" "$report" "$pin" "$noctl" >/dev/null 2>&1; then
-    say "  MISS: a gate with no control baseline to read was accepted"; failures=$((failures+1))
-  else
-    say "  ok: a gate with no control baseline is refused"
-  fi
-  rmdir "$noctl"
-
-  # RED 8: a ledger with no `waived` list is refused -- a misspelt key would otherwise read as a
-  # ledger that forgives nothing while the real entries sit unread.
-  _selftest_red "a ledger with no waived list" "carries no \`waived\` list" "pass" \
-    <(printf '{"skipped": []}\n')
-
-  # ── LAW 10: EVERY FORGIVENESS CARRIES A PREMISE, AND THE PREMISE IS EVALUATED ─────────────────
-  # RED 13: a waiver by id alone -- the exact shape the ledger had, with its premise in prose only.
-  _selftest_red "a waiver by id alone" "is an id only" "pass" \
-    <(printf '{"waived": ["PUSH-DELIVER-001"], "skipped": []}\n')
-  # RED 14: the waived requirement fails, but for a DIFFERENT reason than the premise states.
-  _selftest_red "a waived FAIL failing for another reason" "IS FALSE" \
-    "per['PUSH-DELIVER-001']['errors'] = ['delivery timed out after 30s']"
-  # RED 15: one of several errors is the stated reason, another is not: EVERY error must match.
-  _selftest_red "a waived FAIL with one off-premise error" "IS FALSE" \
-    "per['PUSH-DELIVER-001']['errors'].append('the delivery carried no Authorization header')"
-  # RED 16: the waived requirement reports FAIL with no errors: no evidence, so no premise holds.
-  _selftest_red "a waived FAIL carrying no errors" "carries no errors" \
-    "per['PUSH-DELIVER-001']['errors'] = []"
-  # RED 17: the waived requirement now PASSES: the waiver forgives nothing that is happening.
-  _selftest_red "a waiver whose requirement now passes" "retire the entry" \
-    "per['PUSH-DELIVER-001'] = {'level': 'MUST', 'status': 'PASS'}"
-  # RED 18: a condition of a kind the gate cannot evaluate is refused, not ignored.
-  _selftest_red "a premise the gate cannot evaluate" "cannot evaluate" "pass" \
-    <(printf '{"waived": [{"id": "PUSH-DELIVER-001", "why": "w", "premise": [{"kind": "trust_me"}]}], "skipped": []}\n')
-  # RED 19: an entry with an empty premise list.
-  _selftest_red "a waiver with an empty premise" "carries no premise" "pass" \
-    <(printf '{"waived": [{"id": "PUSH-DELIVER-001", "why": "w", "premise": []}], "skipped": []}\n')
-
-  # ── LAW 8: EVERY SKIP IS NAMED AND JUSTIFIED, PER REQUIREMENT ──────────────────────────────────
-  # RED 20: a SKIPPED MUST the ledger does not name -- the class the gate used to excuse silently.
-  _selftest_red "an unjustified SKIP" "OTHER-SKIP-001" \
-    "per['OTHER-SKIP-001'] = {'level': 'MUST', 'status': 'SKIPPED'}"
-  # RED 21: a justified SKIP whose card premise is false on this run.
-  _selftest_red "a justified SKIP whose premise is false" "IS FALSE" \
-    "card['capabilities']['streaming'] = False"
-  # RED 22: a justified SKIP with no card in the report to evaluate it against.
-  _selftest_red "a justified SKIP with no card to evaluate" "no agent_card" "card = None"
-  # RED 23: a justified SKIP whose requirement now RUNS: the justification is stale.
-  _selftest_red "a justification whose requirement now runs" "retire the entry" \
-    "per['CAP-SKIP-001'] = {'level': 'MUST', 'status': 'PASS'}"
-  # RED 24: a MUST in a status the gate does not know is not dropped from the partition.
-  _selftest_red "a MUST in an unknown status" "does not know" \
-    "per['ODD-001'] = {'level': 'MUST', 'status': 'XFAIL'}"
-  # GREEN 4: the other premise kinds, holding: a required extension the card does not declare, and a
-  # sibling requirement passing on the same run.
-  _selftest_green "the card-extension and sibling-requirement premises, holding," \
-    "per['PUSH-DELIVER-001'] = {'level': 'MUST', 'status': 'PASS'}" \
-    <(printf '{"waived": [], "skipped": [{"id": "CAP-SKIP-001", "why": "w", "premise": [{"kind": "card_lacks_required_extension", "uri": "urn:x"}, {"kind": "requirement_passes", "id": "SOME-REQ-001"}]}]}\n')
-  # RED 25: the same premises, false: the card declares the extension required.
-  _selftest_red "a required-extension premise that is false" "IS FALSE" \
-    "per['PUSH-DELIVER-001'] = {'level': 'MUST', 'status': 'PASS'}; card['capabilities']['extensions'] = [{'uri': 'urn:x', 'required': True}]" \
-    <(printf '{"waived": [], "skipped": [{"id": "CAP-SKIP-001", "why": "w", "premise": [{"kind": "card_lacks_required_extension", "uri": "urn:x"}]}]}\n')
-
-  # GREEN 5: a SKIPPED MUST recorded NOT APPLICABLE, with its citation and a holding premise.
-  _selftest_green "a not-applicable entry with a citation and a holding premise," \
-    "per['PUSH-DELIVER-001'] = {'level': 'MUST', 'status': 'PASS'}" \
-    <(printf '{"waived": [], "skipped": [], "not_applicable": [{"id": "CAP-SKIP-001", "why": "w", "citation": "spec 3.3.4", "premise": [{"kind": "card_equals", "path": "capabilities.streaming", "value": true}]}]}\n')
-  # RED 26: the same entry with no citation is refused.
-  _selftest_red "a not-applicable entry with no citation" "names no spec" \
-    "per['PUSH-DELIVER-001'] = {'level': 'MUST', 'status': 'PASS'}" \
-    <(printf '{"waived": [], "skipped": [], "not_applicable": [{"id": "CAP-SKIP-001", "why": "w", "premise": [{"kind": "card_equals", "path": "capabilities.streaming", "value": true}]}]}\n')
-  # RED 27: a not-applicable entry whose premise is false (the card now serves the state) is RED.
-  _selftest_red "a not-applicable entry whose premise is false" "IS FALSE" \
-    "per['PUSH-DELIVER-001'] = {'level': 'MUST', 'status': 'PASS'}; card['capabilities']['streaming'] = False" \
-    <(printf '{"waived": [], "skipped": [], "not_applicable": [{"id": "CAP-SKIP-001", "why": "w", "citation": "spec 3.3.4", "premise": [{"kind": "card_equals", "path": "capabilities.streaming", "value": true}]}]}\n')
-
-  # GREEN 3: a clean report (no FAIL, no SKIP, no NOT TESTED) under an EMPTY ledger is accepted: an
-  # empty ledger forgives nothing, which is the strictest ledger there is, and none of the checks
-  # above is one that refuses everything.
-  _selftest_green "a clean report under an empty ledger" \
-    "per['PUSH-DELIVER-001'] = {'level': 'MUST', 'status': 'PASS'}; per['CAP-SKIP-001'] = {'level': 'MUST', 'status': 'PASS'}" <(printf '{"waived": [], "skipped": []}\n')
-  rm -f "$tmp" "$pin" "$report"
-  rm -rf "$ctl"
 
   [ "$failures" -eq 0 ] || die "$failures self-test expectation(s) did not hold. No verdict from \
 this script means anything until they do."

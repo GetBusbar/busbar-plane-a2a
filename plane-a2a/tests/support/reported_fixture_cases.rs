@@ -5,7 +5,7 @@
 use super::*;
 use busbar_contract::abi::host::service::ServiceBufs;
 
-fn card_answer() -> Vec<u8> {
+pub(super) fn card_answer() -> Vec<u8> {
     let card: serde_json::Value = serde_json::from_slice(CARD).unwrap();
     serde_json::to_vec(&serde_json::json!({"jsonrpc":"2.0", "id":1, "result":card})).unwrap()
 }
@@ -152,4 +152,83 @@ fn records_host_pages_by_prefix_and_exclusive_cursor() {
     let (result, last) = list_page(b"pre-", b"pre-c", 2, &mut bytes, &mut spans);
     assert_eq!(result, Outcome::Ready);
     assert_eq!(last.items, 0);
+}
+
+#[test]
+fn records_host_reports_full_sizes_without_partial_writes_then_replays_the_page() {
+    let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    let old = std::mem::replace(
+        &mut *store(),
+        vec![
+            ("fixture".into(), "a".into(), b"value-a".to_vec()),
+            ("fixture".into(), "b".into(), b"value-b".to_vec()),
+        ],
+    );
+    struct Restore(Vec<(String, String, Vec<u8>)>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            *store() = std::mem::take(&mut self.0);
+        }
+    }
+    let _restore = Restore(old);
+    for (byte_cap, item_cap) in [(1, 2), (16, 1), (0, 0)] {
+        let mut bytes = vec![0xa5; byte_cap];
+        let mut spans = vec![ItemSpan::ZERO; item_cap];
+        let (result, short) = list_page(b"", b"", 2, &mut bytes, &mut spans);
+        assert_eq!(result, Outcome::Failed);
+        assert_eq!((short.needed_bytes, short.needed_items), (16, 2));
+        assert_eq!((short.len, short.items), (0, 0));
+        assert!(bytes.iter().all(|byte| *byte == 0xa5));
+        assert!(spans
+            .iter()
+            .all(|span| span.key.len == 0 && span.value.len == 0));
+        bytes.resize(short.needed_bytes as usize, 0);
+        spans.resize(short.needed_items as usize, ItemSpan::ZERO);
+        let (result, full) = list_page(b"", b"", 2, &mut bytes, &mut spans);
+        assert_eq!(result, Outcome::Ready);
+        assert_eq!(keys(&bytes, &spans, full.items), ["a", "b"]);
+        assert_eq!((full.len, full.needed_bytes, full.needed_items), (16, 0, 0));
+    }
+}
+
+#[test]
+fn a_restarted_door_restores_cards_across_multiple_full_record_pages() {
+    let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    let old = std::mem::take(&mut *store());
+    struct Restore(Vec<(String, String, Vec<u8>)>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            *store() = std::mem::take(&mut self.0);
+        }
+    }
+    let _restore = Restore(old);
+    // Each card writes at least one row; 65 registrations exceed the actual 64-row request.
+    let names: Vec<String> = (0..65).map(|n| format!("vendor-{n:03}")).collect();
+    let agents: serde_json::Map<String, serde_json::Value> = names.iter().map(|name| {
+        (name.clone(), serde_json::json!({"url":"https://vendor.example/agent", "pin":{"mechanism":"unpinned"}}))
+    }).collect();
+    let section = serde_json::to_vec(&agents).unwrap();
+    let before = open_with(&section);
+    for name in &names {
+        let (outcome, status, body) = before.connect(name);
+        assert_eq!((outcome, status), (Outcome::Ready, 200), "{name}: {body}");
+    }
+    assert!(
+        store().len() > 64,
+        "the warm must consume more than one page"
+    );
+    let after = open_with(&section);
+    assert_eq!(after.tick().0, Outcome::Ready);
+    for (index, name) in names.iter().enumerate() {
+        assert_eq!(
+            after.arrive(
+                1000 + index as u64,
+                ("POST", "/a2a/agents/{agent_id}"),
+                &format!("/a2a/agents/{name}"),
+                CARD_READ,
+            ),
+            (Outcome::Ready, 0),
+            "restored registration {name}"
+        );
+    }
 }

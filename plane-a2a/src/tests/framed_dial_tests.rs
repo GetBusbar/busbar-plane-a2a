@@ -23,7 +23,10 @@ fn outbound_sends_refuse_an_absent_or_null_message() {
         }});
         let bytes = request_message(rpc, &params).expect("a supplied message is carried");
         let request = pb::SendMessageRequest::decode(bytes.as_slice()).unwrap();
-        assert_eq!(request.message.unwrap().message_id, "caller-message");
+        assert_eq!(
+            request.message.as_ref().unwrap().message_id,
+            "caller-message"
+        );
     }
 }
 
@@ -72,7 +75,7 @@ fn the_params_are_written_as_the_rpcs_request_message() {
     });
     let bytes = request_message(Rpc::SendMessage, &params).expect("a send is written");
     let sent = pb::SendMessageRequest::decode(bytes.as_slice()).expect("it decodes");
-    let message = sent.message.expect("the message");
+    let message = sent.message.as_ref().expect("the message");
     assert_eq!(message.message_id, "m-1");
     assert_eq!(message.role, pb::Role::User as i32);
     assert_eq!(
@@ -99,7 +102,7 @@ fn the_params_are_written_as_the_rpcs_request_message() {
         ("b-1", "busbar-b-1", "https://busbar.example/a2a/push")
     );
     assert_eq!(
-        sent.authentication.map(|a| a.credentials).as_deref(),
+        sent.authentication.as_ref().map(|a| a.credentials.as_str()),
         Some("t-1.sig")
     );
     // A v0.3 document is not the request message's ProtoJSON: there is nothing to write.
@@ -111,15 +114,15 @@ fn the_params_are_written_as_the_rpcs_request_message() {
 /// delete's `Empty` is `null`; a message that is not the rpc's response is refused.
 #[test]
 fn an_answered_message_is_read_as_the_rpcs_result() {
-    let task = pb::Task {
-        id: "BACKEND-OWN-TASK-ID".into(),
-        context_id: "BACKEND-OWN-CONTEXT".into(),
-        status: Some(pb::TaskStatus {
-            state: pb::TaskState::Completed as i32,
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
+    let task = crate::proto::custody::initialized::<pb::Task>(|__custody_message| {
+        __custody_message.id = "BACKEND-OWN-TASK-ID".into();
+        __custody_message.context_id = "BACKEND-OWN-CONTEXT".into();
+        __custody_message.status = Some(crate::proto::custody::initialized::<pb::TaskStatus>(
+            |__custody_message| {
+                __custody_message.state = pb::TaskState::Completed as i32;
+            },
+        ));
+    });
     let answer = pb::SendMessageResponse {
         payload: Some(pb::send_message_response::Payload::Task(task.clone())),
     }
@@ -209,8 +212,8 @@ fn the_trailers_state_the_calls_status_and_its_error_info() {
     let stated = ended(&block(&[(DETAILS_FIELD, &padded)]), Some(14)).expect("stated");
     assert_eq!(stated.code, 14);
     assert_eq!(
-        stated.info.map(|i| i.reason),
-        Some("TASK_NOT_FOUND".to_string())
+        stated.info.as_ref().map(|i| i.reason.as_str()),
+        Some("TASK_NOT_FOUND")
     );
     assert_eq!(ended(&block(&[("x-other", "1")]), None), None);
 }
@@ -236,4 +239,20 @@ fn a_status_names_the_a2a_code_its_reason_or_its_row_binds() {
         }),
     };
     assert_eq!(reasoned.a2a_code(), Some(-32002));
+}
+
+#[test]
+fn grpc_message_length_ceiling_is_inclusive_and_enforced_before_waiting() {
+    let length = crate::relay::MAX_REPLY_BYTES;
+    let mut bytes = vec![0];
+    bytes.extend_from_slice(&u32::try_from(length).unwrap().to_be_bytes());
+    assert_eq!(take_message(&bytes), Ok(None));
+    bytes.resize(MESSAGE_PREFIX + length, 0);
+    assert_eq!(
+        take_message(&bytes),
+        Ok(Some((length, MESSAGE_PREFIX + length)))
+    );
+    let mut oversized = vec![0];
+    oversized.extend_from_slice(&u32::try_from(length + 1).unwrap().to_be_bytes());
+    assert!(take_message(&oversized).is_err());
 }

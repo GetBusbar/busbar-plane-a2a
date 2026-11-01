@@ -385,3 +385,63 @@ fn the_operator_query_precedes_the_operation_query_members() {
         "/root/tasks/t?code=K&api-version=1&historyLength=2"
     );
 }
+
+#[test]
+fn endpoint_selection_keeps_the_operator_target_and_uses_only_matching_interfaces() {
+    let card = json!({
+        "url":"https://public.example/rest", "preferredTransport":"HTTP+JSON",
+        "additionalInterfaces":[
+            {"url":"https://public.example/rpc", "transport":"JSONRPC"},
+            {"url":"https://private.example/pinned?key=K", "transport":"GRPC"},
+        ],
+    });
+    let selected = select(Some(&card), "https://private.example/pinned?key=K");
+    assert_eq!(selected.endpoint, "https://private.example/pinned?key=K");
+    assert_eq!(selected.word, BINDING_GRPC);
+    let alias = select(Some(&card), "https://operator-alias.example/pinned?key=K");
+    assert_eq!(
+        alias.endpoint,
+        "https://operator-alias.example/pinned?key=K"
+    );
+    assert_eq!(alias.word, BINDING_HTTP_JSON);
+    // Different query order or percent spelling does not become an endpoint match.
+    let card = json!({"url":"https://public.example/rest", "preferredTransport":"HTTP+JSON",
+        "additionalInterfaces":[{"url":"https://private.example/a%2Fb?x=1&y=2", "transport":"JSONRPC"}]});
+    for target in [
+        "https://private.example/a/b?x=1&y=2",
+        "https://private.example/a%2Fb?y=2&x=1",
+    ] {
+        assert_eq!(select(Some(&card), target).word, BINDING_HTTP_JSON);
+    }
+}
+
+#[test]
+fn rest_binding_refuses_nonobject_params_and_nonstring_path_identifiers() {
+    for params in [
+        serde_json::json!(null),
+        serde_json::json!([]),
+        serde_json::json!(1),
+    ] {
+        assert!(compose("https://agent.example", "SendMessage", &params).is_err());
+    }
+    for id in [
+        serde_json::json!(null),
+        serde_json::json!(1),
+        serde_json::json!({}),
+        serde_json::json!([]),
+    ] {
+        assert!(compose(
+            "https://agent.example",
+            "GetTask",
+            &serde_json::json!({"id":id})
+        )
+        .is_err());
+    }
+    let framed = compose(
+        "https://agent.example",
+        "GetTask",
+        &serde_json::json!({"id":"t", "historyLength":null}),
+    )
+    .unwrap();
+    assert_eq!(framed.target, "/tasks/t");
+}

@@ -18,8 +18,11 @@
 set -uo pipefail
 H2_HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 H2_REPO="$(cd "${H2_HERE}/../.." && pwd)"
-# shellcheck source=../../testing/fleet-fixtures/lib.sh
-source "${H2_REPO}/testing/fleet-fixtures/lib.sh"
+source "${H2_REPO}/testing/a2a-harness/scripts/process-fixture.sh" || return 1
+# The host owns fleet fixtures; the plane checkout owns its audience-token helper.
+: "${BUSBAR_CHECKOUT:?BUSBAR_CHECKOUT must name the pinned host checkout}"
+source "${BUSBAR_CHECKOUT}/testing/fleet-fixtures/lib.sh" || return 1
+umask 077
 
 # THE BILLING SWITCH (DECISION #42), and it is a PRESENCE, not a flag: `rate_card:` present ⇒ the
 # deployment is BILLED; `rate_card:` absent ⇒ it is not billed at all — a cost request reads 0, no
@@ -49,6 +52,7 @@ H2_BIN="${A2A_SUBJECT_BUSBAR_BIN:-${H2_REPO}/target/release/busbar}"
 [ -x "$H2_BIN" ] || [ "${BASH_SOURCE[0]}:${1:-}" = "$0:--selftest" ] || { echo "H2: no busbar binary at $H2_BIN (build with: cargo build --release -p busbar)" >&2; exit 2; }
 
 h2_free_ports() {
+  # Candidates only; h2_boot proves each child's socket ownership after bind.
   python3 - <<'PY'
 import socket
 socks = [socket.socket(socket.AF_INET, socket.SOCK_STREAM) for _ in range(3)]
@@ -68,6 +72,7 @@ PY
 # Sets: H2_DATA_PORT H2_ADMIN_PORT H2_AGENT_PORT H2_PLANE_URL H2_ADMIN_TOKEN H2_SIGNING_KEY
 #       H2_AGENT_PID H2_BUSBAR_PID H2_EGRESS_DIR H2_WORKDIR H2_CONTROL_FILE
 h2_boot() {
+  fixture_exit_on_signal
   local dir="$1" groups_yaml="$2"
   mkdir -p "$dir"
   dir="$(cd "$dir" && pwd)"
@@ -87,7 +92,8 @@ h2_boot() {
     >"$dir/agent.log" 2>&1 &
   H2_AGENT_PID=$!
   track_pid "$H2_AGENT_PID"
-  wait_for_http "http://127.0.0.1:${H2_AGENT_PORT}/.well-known/agent-card.json" 10 || true
+  fixture_track_pid "$H2_AGENT_PID"
+  fixture_await_card "$H2_AGENT_PID" "$H2_AGENT_PORT" 10 1 || { cat "$dir/agent.log" >&2; return 1; }
   local waited_key=0
   until [ -s "$issuer_key_file" ]; do
     waited_key=$((waited_key+1))
@@ -131,9 +137,14 @@ YAML
     nohup "$H2_BIN" >"$dir/busbar.log" 2>&1 &
   H2_BUSBAR_PID=$!
   track_pid "$H2_BUSBAR_PID"
+  fixture_track_pid "$H2_BUSBAR_PID"
 
   local waited=0
-  until [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 "http://127.0.0.1:${H2_DATA_PORT}/.well-known/agent-card.json")" != "000" ]; do
+  until fixture_owns_listener "$H2_BUSBAR_PID" "$H2_DATA_PORT" &&
+      fixture_owns_listener "$H2_BUSBAR_PID" "$H2_ADMIN_PORT" &&
+      [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 "http://127.0.0.1:${H2_DATA_PORT}/.well-known/agent-card.json")" != "000" ] &&
+      fixture_owns_listener "$H2_BUSBAR_PID" "$H2_DATA_PORT" &&
+      fixture_owns_listener "$H2_BUSBAR_PID" "$H2_ADMIN_PORT"; do
     kill -0 "$H2_BUSBAR_PID" 2>/dev/null || { cat "$dir/busbar.log" >&2; return 1; }
     waited=$((waited+1))
     [ "$waited" -lt 60 ] || { cat "$dir/busbar.log" >&2; return 1; }
@@ -150,7 +161,7 @@ YAML
 h2_approve_agent() {
   local preview fingerprint approved state
   preview="$(curl -s --max-time 30 -X POST "http://127.0.0.1:${H2_ADMIN_PORT}/api/v1/admin/agents/probe/connect" \
-    -H "authorization: Bearer $H2_ADMIN_TOKEN")"
+    -H @<(printf 'authorization: Bearer %s\n' "$H2_ADMIN_TOKEN"))"
   fingerprint="$(python3 -c 'import json,sys
 try:
     print(json.load(sys.stdin).get("fingerprint") or "")
@@ -158,8 +169,8 @@ except Exception:
     print("")' <<<"$preview")"
   [ -n "$fingerprint" ] || { echo "H2: connect reported no fingerprint for 'probe': $preview" >&2; return 1; }
   approved="$(curl -s --max-time 30 -X POST "http://127.0.0.1:${H2_ADMIN_PORT}/api/v1/admin/agents/probe/approve" \
-    -H "authorization: Bearer $H2_ADMIN_TOKEN" -H 'content-type: application/json' \
-    -d "{\"fingerprint\":\"$fingerprint\"}")"
+    -H @<(printf 'authorization: Bearer %s\n' "$H2_ADMIN_TOKEN") -H 'content-type: application/json' \
+    --data-binary "$(printf '%s' "$fingerprint" | python3 -c 'import json,sys; print(json.dumps({"fingerprint":sys.stdin.read()}))')")"
   state="$(python3 -c 'import json,sys
 try:
     print(json.load(sys.stdin).get("state") or "")
@@ -170,22 +181,25 @@ except Exception:
 }
 
 h2_stop() {
-  kill "$H2_BUSBAR_PID" 2>/dev/null || true
-  kill "$H2_AGENT_PID" 2>/dev/null || true
-  wait "$H2_BUSBAR_PID" 2>/dev/null || true
-  wait "$H2_AGENT_PID" 2>/dev/null || true
+  local cleanup_rc=0
+  [ -z "${H2_BUSBAR_PID:-}" ] || fixture_signal "$H2_BUSBAR_PID" 15 || true
+  [ -z "${H2_AGENT_PID:-}" ] || fixture_signal "$H2_AGENT_PID" 15 || true
+  fixture_stop "${H2_BUSBAR_PID:-}" || cleanup_rc=1
+  fixture_stop "${H2_AGENT_PID:-}" || cleanup_rc=1
+  [ "$cleanup_rc" -eq 0 ] || exit 2
+  H2_BUSBAR_PID=""; H2_AGENT_PID=""
 }
 
 h2_mint() {
   local group="$1" extra="${2:-}" body
-  if [ -n "$group" ]; then
-    body="{\"name\":\"h2-key\",\"group\":\"$group\"${extra:+,${extra}}}"
-  else
-    body="{\"name\":\"h2-key\"${extra:+,${extra}}}"
-  fi
+  body="$(printf '%s' "$extra" | python3 -c 'import json,sys
+body=json.loads("{"+sys.stdin.read()+"}")
+body["name"]="h2-key"
+if sys.argv[1]: body["group"]=sys.argv[1]
+print(json.dumps(body))' "$group")" || return 1
   local resp
   resp="$(curl -sS -m 10 -X POST "http://127.0.0.1:${H2_ADMIN_PORT}/api/v1/admin/keys" \
-            -H "Authorization: Bearer $H2_ADMIN_TOKEN" -H 'Content-Type: application/json' -d "$body")"
+            -H @<(printf 'authorization: Bearer %s\n' "$H2_ADMIN_TOKEN") -H 'Content-Type: application/json' -d "$body")"
   local kid tok
   kid="$(python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("id") or "")' <<<"$resp")"
   tok="$(python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("token") or "")' <<<"$resp")"
@@ -193,7 +207,7 @@ h2_mint() {
 }
 
 h2_bind() {
-  node "${H2_REPO}/scripts/mcp-subject/mint-audience-token.mjs" "$H2_SIGNING_KEY" "$1" "http://127.0.0.1:${H2_DATA_PORT}/a2a"
+  node "${H2_HERE}/mint-audience-token.mjs" "$H2_SIGNING_KEY" - "http://127.0.0.1:${H2_DATA_PORT}/a2a" <<<"$1"
 }
 
 # h2_call <bound-token> <text> [<header-dump-file>] -> prints "<status> <body>". With a third
@@ -202,15 +216,16 @@ h2_call() {
   local tok="$1" text="$2" hdr="${3:-/dev/null}" out status
   out="${H2_WORKDIR}/call.$$.$RANDOM"
   status="$(curl -sS -m 20 -D "$hdr" -o "$out" -w '%{http_code}' -X POST "$H2_PLANE_URL" \
-    -H "authorization: Bearer $tok" -H 'content-type: application/json' \
-    -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"message/send\",\"params\":{\"message\":{\"role\":\"user\",\"parts\":[{\"text\":\"$text\"}]}}}")"
+    -H @<(printf 'authorization: Bearer %s\n' "$tok") -H 'content-type: application/json' \
+    --data-binary "$(printf '%s' "$text" | python3 -c 'import json,sys
+print(json.dumps({"jsonrpc":"2.0","id":1,"method":"message/send","params":{"message":{"role":"user","parts":[{"text":sys.stdin.read()}]}}}))')")"
   printf '%s %s\n' "$status" "$(tr -d '\n' <"$out")"
   rm -f "$out"
 }
 
 h2_usage() {
   local kid="$1"
-  curl -sS -m 10 -H "Authorization: Bearer $H2_ADMIN_TOKEN" \
+  curl -sS -m 10 -H @<(printf 'authorization: Bearer %s\n' "$H2_ADMIN_TOKEN") \
     "http://127.0.0.1:${H2_ADMIN_PORT}/api/v1/admin/keys/${kid}/usage"
 }
 
@@ -237,7 +252,7 @@ h2_usage_field() {
 # assertion and not a restatement of the flat fee.
 h2_meter_row_field() {
   local model="$1" provider="$2" field="$3"
-  curl -sS -m 10 -H "Authorization: Bearer $H2_ADMIN_TOKEN" \
+  curl -sS -m 10 -H @<(printf 'authorization: Bearer %s\n' "$H2_ADMIN_TOKEN") \
     "http://127.0.0.1:${H2_ADMIN_PORT}/api/v1/admin/usage" \
     | python3 -c "import json,sys
 d=json.load(sys.stdin)
@@ -253,10 +268,11 @@ print(rows[0].get('$field') if rows else '-')"
 #
 # A PLANE'S OWN CLASSES ARE COLUMNS TOO: the row's `classes` object (new in 1.6.0, FLIP-A2A ruling --
 # 1.5.5's rows carried the token split alone and 1.5.5 served no plane with a class of its own) holds
-# each plane-declared class's `{count, cost}`, and its counts are summed with the token columns.
+# each plane-declared class's `{count, cost}`. With a third argument, read only that
+# class's count; otherwise sum all class and token quantities as before.
 h2_meter_row_quantity() {
-  local model="$1" provider="$2"
-  curl -sS -m 10 -H "Authorization: Bearer $H2_ADMIN_TOKEN" \
+  local model="$1" provider="$2" class="${3:-}"
+  curl -sS -m 10 -H @<(printf 'authorization: Bearer %s\n' "$H2_ADMIN_TOKEN") \
     "http://127.0.0.1:${H2_ADMIN_PORT}/api/v1/admin/usage" \
     | python3 -c "import json,sys
 d=json.load(sys.stdin)
@@ -265,8 +281,11 @@ if not rows:
     print('-')
 else:
     r=rows[0]
-    print(sum(int(r.get(k) or 0) for k in ('tokens_input','tokens_output','tokens_cache_read','tokens_cache_creation'))
-          + sum(int((c or {}).get('count') or 0) for c in (r.get('classes') or {}).values()))"
+    if '$class':
+        print(((r.get('classes') or {}).get('$class') or {}).get('count', '-'))
+    else:
+        print(sum(int(r.get(k) or 0) for k in ('tokens_input','tokens_output','tokens_cache_read','tokens_cache_creation'))
+              + sum(int((c or {}).get('count') or 0) for c in (r.get('classes') or {}).values()))"
 }
 
 # One scalar off `GET /api/v1/admin/usage`'s `total` block — the OTHER admin money read, and since
@@ -278,7 +297,7 @@ else:
 # ledger is a defect in one of them, not a threshold to tune.
 h2_admin_usage_total() {
   local field="$1"
-  curl -sS -m 10 -H "Authorization: Bearer $H2_ADMIN_TOKEN" \
+  curl -sS -m 10 -H @<(printf 'authorization: Bearer %s\n' "$H2_ADMIN_TOKEN") \
     "http://127.0.0.1:${H2_ADMIN_PORT}/api/v1/admin/usage" \
     | python3 -c "import json,sys
 d=json.load(sys.stdin)
@@ -415,7 +434,7 @@ json.dump({'config': doc, 'providers': {}}, sys.stdout)" >"$body"; then
     return
   fi
   curl -sS -m 30 -X POST "http://127.0.0.1:${H2_ADMIN_PORT}/api/v1/admin/config/apply" \
-    -H "Authorization: Bearer $H2_ADMIN_TOKEN" -H 'content-type: application/json' \
+    -H @<(printf 'authorization: Bearer %s\n' "$H2_ADMIN_TOKEN") -H 'content-type: application/json' \
     --data-binary "@${body}"
   rm -f "$body"
 }
@@ -471,7 +490,7 @@ h2_egress_post_count() {
 }
 
 h2_audit_max_seq() {
-  curl -sS -m 10 -H "Authorization: Bearer $H2_ADMIN_TOKEN" \
+  curl -sS -m 10 -H @<(printf 'authorization: Bearer %s\n' "$H2_ADMIN_TOKEN") \
     "http://127.0.0.1:${H2_ADMIN_PORT}/api/v1/admin/audit?limit=1" \
     | python3 -c 'import json,sys
 d=json.load(sys.stdin)
@@ -481,7 +500,7 @@ print(items[0]["seq"] if items else 0)'
 
 h2_audit_rows_since() {
   local since="$1" action="$2" resource="$3"
-  curl -sS -m 10 -H "Authorization: Bearer $H2_ADMIN_TOKEN" \
+  curl -sS -m 10 -H @<(printf 'authorization: Bearer %s\n' "$H2_ADMIN_TOKEN") \
     "http://127.0.0.1:${H2_ADMIN_PORT}/api/v1/admin/audit?limit=50" \
     | python3 -c "import json,sys
 d=json.load(sys.stdin)

@@ -106,6 +106,8 @@ def check_auth_server_002(target: Target) -> Result:
         )
 
     bindings = target.bindings()
+    if not bindings:
+        return Result(req.id, Verdict.FAIL, "no declared binding was exercised", evidence)
     admitted_anon: list[str] = []
     admitted_forged: list[str] = []
     for name, binding in bindings.items():
@@ -178,7 +180,14 @@ def check_auth_scope_001(target: Target) -> Result:
 
     bindings = target.bindings()
     unchecked: list[str] = []
+    if not bindings:
+        return Result(req.id, Verdict.FAIL, "no declared binding was exercised", evidence)
     for name, binding in bindings.items():
+        _, positive = _open_a_task(binding, target.token, "scope-positive")
+        evidence.append(f"{name} authenticated Send Message -> {positive!r}")
+        if not positive.ok:
+            unchecked.append(f"{name} (valid credential positive control failed)")
+            continue
         for op, params in UNAUTHENTICATED_PROBES:
             try:
                 anon = binding.call(op, dict(params), token=None)
@@ -201,7 +210,8 @@ def check_auth_scope_001(target: Target) -> Result:
         req.id,
         Verdict.PASS,
         f"all {len(UNAUTHENTICATED_PROBES)} operations, on all {len(bindings)} declared "
-        f"binding(s), applied an authorization check before answering.",
+        f"binding(s), refused anonymous probes while admitting an authenticated Send Message. "
+        "This demonstrates the identity boundary, not every resource permission decision.",
         evidence,
     )
 
@@ -236,12 +246,35 @@ def _task_ids_visible(binding, token: str) -> tuple[set[str], object]:
     return ids, reply
 
 
+def _each_binding(target: Target, check) -> Result:
+    """Keep every declared binding's evidence; one passing binding cannot mask another."""
+    bindings = target.bindings()
+    results = [check(target, binding, name) for name, binding in bindings.items()]
+    if not results:
+        return check(target, None, "no binding")
+    evidence = [f"{name}: {line}" for name, result in zip(bindings, results)
+                for line in [result.summary, *result.evidence]]
+    failed = next((result for result in results
+                   if result.verdict in (Verdict.FAIL, Verdict.ERROR)), None)
+    if failed:
+        return Result(failed.requirement, failed.verdict, failed.summary, evidence)
+    if all(result.verdict == Verdict.PASS for result in results):
+        return Result(results[0].requirement, Verdict.PASS,
+                      "the authorization probe passed on every declared binding", evidence)
+    return Result(results[0].requirement, Verdict.NOT_APPLICABLE,
+                  "not every declared binding supplied the required authorization fixture", evidence)
+
+
 def check_auth_scope_002(target: Target) -> Result:
+    return _each_binding(target, _check_auth_scope_002)
+
+
+def _check_auth_scope_002(target: Target, binding, name: str) -> Result:
     """SPEC 13.1: 'Implementations MUST scope results to the caller's authorized access boundaries
     ... List Tasks MUST only return tasks visible to the authenticated client'."""
     req = REQUIREMENTS["AUTH-SCOPE-002"]
     evidence: list[str] = []
-    if not (target.token and target.token_b):
+    if not (target.token and target.token_b) or target.token == target.token_b:
         return Result(
             req.id,
             Verdict.FAIL,
@@ -252,9 +285,8 @@ def check_auth_scope_002(target: Target) -> Result:
             "so a one-identity run would be a test that cannot fail.",
             evidence,
         )
-    bindings = target.bindings()
-    binding = bindings.get("jsonrpc") or next(iter(bindings.values()))
-    name = getattr(binding, "name", "?")
+    if binding is None:
+        return Result(req.id, Verdict.FAIL, "no declared binding was exercised", evidence)
 
     task_a, reply_a = _open_a_task(binding, target.token, "a")
     evidence.append(f"{name} principal A send_message -> {reply_a!r} task={task_a}")
@@ -284,7 +316,7 @@ def check_auth_scope_002(target: Target) -> Result:
     visible_to_a, reply_aa = _task_ids_visible(binding, target.token)
     evidence.append(f"{name} principal A sees task ids {short(sorted(visible_to_a))}")
 
-    if not reply_b.ok and reply_b.code in {-32004, "UNIMPLEMENTED", 400, 404}:
+    if not reply_b.ok and reply_b.code in {-32004, "UNIMPLEMENTED"}:
         return Result(
             req.id,
             Verdict.NOT_APPLICABLE,
@@ -343,11 +375,15 @@ def check_auth_scope_002(target: Target) -> Result:
 
 
 def check_auth_scope_003(target: Target) -> Result:
+    return _each_binding(target, _check_auth_scope_003)
+
+
+def _check_auth_scope_003(target: Target, binding, name: str) -> Result:
     """SPEC 3.3.2: 'Servers MUST NOT reveal the existence of resources the client is not authorized
     to access'."""
     req = REQUIREMENTS["AUTH-SCOPE-003"]
     evidence: list[str] = []
-    if not (target.token and target.token_b):
+    if not (target.token and target.token_b) or target.token == target.token_b:
         return Result(
             req.id,
             Verdict.FAIL,
@@ -356,9 +392,8 @@ def check_auth_scope_003(target: Target) -> Result:
             f"{'one credential' if target.token else 'no credential'}.",
             evidence,
         )
-    bindings = target.bindings()
-    binding = bindings.get("jsonrpc") or next(iter(bindings.values()))
-    name = getattr(binding, "name", "?")
+    if binding is None:
+        return Result(req.id, Verdict.FAIL, "no declared binding was exercised", evidence)
 
     task_a, reply_a = _open_a_task(binding, target.token, "b")
     evidence.append(f"{name} principal A send_message -> {reply_a!r} task={task_a}")
@@ -400,7 +435,7 @@ def check_auth_scope_003(target: Target) -> Result:
     evidence.append(f"B get_task(A's task {task_a}) -> {others!r}")
     evidence.append(f"B get_task(absent id)        -> {absent!r}")
 
-    if others.ok:
+    if others.ok or absent.ok:
         return Result(
             req.id,
             Verdict.FAIL,
@@ -419,7 +454,11 @@ def check_auth_scope_003(target: Target) -> Result:
             f"there'.",
             evidence,
         )
-    if others.message != absent.message:
+    # Echoing the caller-supplied identifier reveals no new information. Compare
+    # the remaining text exactly; do not erase arbitrary numbers or task data.
+    others_message = others.message.replace(task_a, "<requested task>")
+    absent_message = absent.message.replace(absent_id, "<requested task>")
+    if others_message != absent_message:
         return Result(
             req.id,
             Verdict.FAIL,
@@ -504,10 +543,8 @@ AUTH_REQUIRED_STATES = {
 }
 
 
-def _ask_for_authorization(target: Target) -> tuple[object, dict, str]:
+def _ask_for_authorization(target: Target, binding) -> tuple[object, dict, str]:
     """One Send Message that makes the upstream agent require authorization."""
-    bindings = target.bindings()
-    binding = bindings.get("jsonrpc") or next(iter(bindings.values()))
     reply = binding.call(
         "send_message",
         {
@@ -538,22 +575,21 @@ def _no_fixture(req, reply, name: str) -> Result:
 
 
 def check_auth_intask_001(target: Target) -> Result:
+    return _each_binding(target, _check_auth_intask_001)
+
+
+def _check_auth_intask_001(target: Target, binding, name: str) -> Result:
     """SPEC 7.6.1: 'the agent ... MUST use a Task to track the operation it is performing'."""
     req = REQUIREMENTS["AUTH-INTASK-001"]
-    reply, task, name = _ask_for_authorization(target)
+    if binding is None:
+        return _no_fixture(req, None, name)
+    reply, task, name = _ask_for_authorization(target, binding)
     evidence = [f"{name} send_message -> {reply!r}", f"task = {short(task, 700)}"]
-    if not reply.ok:
+    if not reply.ok or not task:
         return _no_fixture(req, reply, name)
-    if not task:
-        return Result(
-            req.id,
-            Verdict.FAIL,
-            "the agent answered a request that requires authorization with something that is not "
-            "a Task -- a bare Message, or a document with no `task` member. SPEC 7.6.1 makes a "
-            "Task mandatory for exactly this case, because a bare Message gives the client nothing "
-            "to address a credential or a rejection to.",
-            evidence,
-        )
+    state = str((task.get("status") or {}).get("state") or task.get("state") or "")
+    if state not in AUTH_REQUIRED_STATES:
+        return _no_fixture(req, reply, name)
     if not task.get("id"):
         return Result(
             req.id,
@@ -572,9 +608,15 @@ def check_auth_intask_001(target: Target) -> Result:
 
 
 def check_auth_intask_002(target: Target) -> Result:
+    return _each_binding(target, _check_auth_intask_002)
+
+
+def _check_auth_intask_002(target: Target, binding, name: str) -> Result:
     """SPEC 7.6.1: 'the agent ... MUST transition the TaskState to TASK_STATE_AUTH_REQUIRED'."""
     req = REQUIREMENTS["AUTH-INTASK-002"]
-    reply, task, name = _ask_for_authorization(target)
+    if binding is None:
+        return _no_fixture(req, None, name)
+    reply, task, name = _ask_for_authorization(target, binding)
     evidence = [f"{name} send_message -> {reply!r}", f"task = {short(task, 700)}"]
     if not reply.ok or not task:
         return _no_fixture(req, reply, name)
@@ -599,14 +641,23 @@ def check_auth_intask_002(target: Target) -> Result:
 
 
 def check_auth_intask_003(target: Target) -> Result:
+    return _each_binding(target, _check_auth_intask_003)
+
+
+def _check_auth_intask_003(target: Target, binding, name: str) -> Result:
     """SPEC 7.6.1: 'MUST include a TaskStatus message explaining the required authorization,
     unless the details ... have been negotiated out-of-band or via an extension'."""
     req = REQUIREMENTS["AUTH-INTASK-003"]
-    reply, task, name = _ask_for_authorization(target)
+    if binding is None:
+        return _no_fixture(req, None, name)
+    reply, task, name = _ask_for_authorization(target, binding)
     evidence = [f"{name} send_message -> {reply!r}", f"task = {short(task, 700)}"]
     if not reply.ok or not task:
         return _no_fixture(req, reply, name)
     status = task.get("status") or {}
+    state = str(status.get("state") or task.get("state") or "")
+    if state not in AUTH_REQUIRED_STATES:
+        return _no_fixture(req, reply, name)
     message = status.get("message") or {}
     parts = message.get("parts") or []
     text = " ".join(str(p.get("text", "")) for p in parts if isinstance(p, dict)).strip()

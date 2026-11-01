@@ -14,6 +14,7 @@ import json
 import threading
 import time
 import uuid
+from urllib.parse import urlsplit
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import spec
@@ -88,6 +89,7 @@ class Behaviour:
         self.emit_duplicate_task_ids = kw.get("emit_duplicate_task_ids", False)
         self.emit_response_to_nothing = kw.get("emit_response_to_nothing", False)
         self.never_resolve = kw.get("never_resolve", False)
+        self.input_required = kw.get("input_required", False)
         self.oversized_artifact_bytes = kw.get("oversized_artifact_bytes", 0)
         self.nesting_depth = kw.get("nesting_depth", 0)
         self.truncate_stream_after = kw.get("truncate_stream_after")
@@ -177,7 +179,7 @@ class FakePeer:
 
     def a2a_requests(self):
         return [r for r in self.requests
-                if not r["path"].endswith("agent-card.json")]
+                if not urlsplit(r["path"]).path.endswith("/.well-known/agent-card.json")]
 
 
 def _deep_merge(base, patch):
@@ -249,7 +251,7 @@ def _make_handler(peer):
             body = None
             peer.record("GET", self.path, self.headers, body)
             b = peer.behaviour
-            if self.path.endswith("/.well-known/agent-card.json"):
+            if urlsplit(self.path).path.endswith("/.well-known/agent-card.json"):
                 peer.card_fetches += 1
                 if b.card_delay_seconds:
                     time.sleep(b.card_delay_seconds)
@@ -323,10 +325,16 @@ def _make_handler(peer):
             message = (params or {}).get("message") or {}
             text = "".join(p.get("text", "") for p in message.get("parts") or [])
 
+            # A governance continuation is still the same interrupted task.
+            # Keep its identity and context when the caller supplies its taskId.
+            if b.input_required and message.get("taskId") in peer.tasks:
+                return peer.tasks[message["taskId"]]
+
             task_id = ("duplicate-task-id" if b.emit_duplicate_task_ids
                        else str(uuid.uuid4()))
             state = (b.emit_unknown_task_state or
-                     ("TASK_STATE_WORKING" if b.never_resolve
+                     ("TASK_STATE_INPUT_REQUIRED" if b.input_required else
+                      "TASK_STATE_WORKING" if b.never_resolve
                       else "TASK_STATE_COMPLETED"))
 
             part = {"text": b.prompt_injection_text or text or "ok"}

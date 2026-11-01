@@ -10,7 +10,7 @@
 //! its lines): gRPC is dialled over the door's own gRPC need, at the operator's origin, its request
 //! the rpc's message ([`crate::framed::request_message`]).
 
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::task_identity::TASK_ID_MEMBERS;
 
@@ -64,31 +64,103 @@ pub fn speakable(word: &str) -> Option<Binding> {
     }
 }
 
-/// THE BINDING A HELD CARD DECLARES, or [`BINDING_JSONRPC`] where none is held or it declares
-/// none: the first `supportedInterfaces` word the plane frames, else the card's first word (which
-/// the hop refuses by name, never sends as JSON-RPC).
+/// A transport choice for the operator's unchanged endpoint.
+pub struct Selected<'a> {
+    /// The configured endpoint, unchanged: advertised URLs are compared, never dialled.
+    pub endpoint: &'a str,
+    /// The card's binding word; an unsupported word remains explicit for refusal.
+    pub word: String,
+}
+
+/// Select HOW the configured endpoint speaks without changing WHERE the operator sends it.
+/// Matching advertised interfaces take precedence. If the configured endpoint is an operator
+/// alias/private route and none matches, retain the primary HOW: v0.3's preferred transport
+/// (JSONRPC when unstated), or v1.0's first speakable interface as before. Never choose a v0.3
+/// additional transport merely because a different endpoint offers it.
+#[must_use]
+pub fn select<'a>(card: Option<&Value>, configured_url: &'a str) -> Selected<'a> {
+    let word = match card {
+        Some(card) => match card.get("supportedInterfaces").and_then(Value::as_array) {
+            Some(interfaces) => {
+                let words: Vec<&str> = interfaces
+                    .iter()
+                    .filter_map(|i| i.get("protocolBinding").and_then(Value::as_str))
+                    .filter(|word| !word.trim().is_empty())
+                    .collect();
+                interfaces
+                    .iter()
+                    .find_map(|interface| {
+                        let word = interface.get("protocolBinding")?.as_str()?;
+                        (speakable(word).is_some()
+                            && endpoint_matches(configured_url, interface.get("url")?.as_str()?))
+                        .then_some(word)
+                    })
+                    .or_else(|| words.iter().copied().find(|word| speakable(word).is_some()))
+                    .or_else(|| words.first().copied())
+                    .unwrap_or(BINDING_JSONRPC)
+                    .to_string()
+            }
+            None => {
+                let preferred = match card.get("preferredTransport") {
+                    None | Some(Value::Null) => BINDING_JSONRPC,
+                    Some(value) => value.as_str().unwrap_or("INVALID"),
+                };
+                let primary_matches = card
+                    .get("url")
+                    .and_then(Value::as_str)
+                    .is_none_or(|url| endpoint_matches(configured_url, url));
+                if primary_matches && speakable(preferred).is_some() {
+                    preferred.to_string()
+                } else {
+                    card.get("additionalInterfaces")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .find_map(|interface| {
+                            let word = interface.get("transport")?.as_str()?;
+                            (speakable(word).is_some()
+                                && endpoint_matches(
+                                    configured_url,
+                                    interface.get("url")?.as_str()?,
+                                ))
+                            .then_some(word)
+                        })
+                        .unwrap_or(preferred)
+                        .to_string()
+                }
+            }
+        },
+        None => BINDING_JSONRPC.to_string(),
+    };
+    Selected {
+        endpoint: configured_url,
+        word,
+    }
+}
+
+/// Compare resolved URL references using the existing URL parser alone. Query order, path
+/// escaping and userinfo are not rewritten, and this result never supplies a dial target.
+fn endpoint_matches(configured_url: &str, advertised: &str) -> bool {
+    if advertised.is_empty() {
+        return false;
+    }
+    let Ok(configured) = url::Url::parse(configured_url) else {
+        return false;
+    };
+    configured
+        .join(advertised)
+        .is_ok_and(|resolved| resolved == configured)
+}
+
+/// The binding at the card's primary endpoint. Consumers with an operator endpoint use
+/// [`select`] so a matching additional interface is chosen coherently with that endpoint.
 #[must_use]
 pub fn binding_of(card: Option<&Value>) -> String {
-    let Some(interfaces) = card
-        .and_then(|c| c.get("supportedInterfaces"))
-        .and_then(Value::as_array)
-    else {
-        return BINDING_JSONRPC.to_string();
-    };
-    let words: Vec<&str> = interfaces
-        .iter()
-        .filter_map(|i| i.get("protocolBinding"))
-        .filter_map(Value::as_str)
-        .filter(|w| !w.trim().is_empty())
-        .collect();
-    let Some(first) = words.first() else {
-        return BINDING_JSONRPC.to_string();
-    };
-    words
-        .iter()
-        .find(|w| speakable(w).is_some())
-        .unwrap_or(first)
-        .to_string()
+    let endpoint = card
+        .and_then(|card| card.get("url"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    select(card, endpoint).word
 }
 
 /// One untrusted word made safe for a caller's error body: at most 48 characters of an
@@ -209,6 +281,11 @@ pub struct Framed {
 /// 11.3): the path joined onto the operator's, its `{member}`s taken from `params`, the query
 /// members on the query string, what is left as the body.
 ///
+/// This is the vendored v1.0 HTTP mapping, including when a legacy method name selects it.
+/// Legacy `tasks/get` and `tasks/resubscribe` metadata has no field in its `GetTaskRequest` or
+/// `SubscribeToTaskRequest`: it is refused explicitly, never dropped or encoded as an invented
+/// query member. Use JSON-RPC when that legacy metadata must reach the agent.
+///
 /// # Errors
 /// Why the request cannot be carried on this binding (never shown to the caller).
 pub fn compose(base: &str, method: &str, params: &Value) -> Result<Framed, String> {
@@ -216,9 +293,28 @@ pub fn compose(base: &str, method: &str, params: &Value) -> Result<Framed, Strin
         format!("`{method}` is not one of the eleven operations A2A's HTTP+JSON binding defines")
     })?;
     let base = url::Url::parse(base).map_err(|e| format!("the agent URL does not parse: {e}"))?;
-    let empty = Map::new();
-    let mut left = params.as_object().unwrap_or(&empty).clone();
+    let mut left = params
+        .as_object()
+        .ok_or_else(|| format!("`{method}` params must be an object"))?
+        .clone();
     let mut path = String::new();
+    // Every operation also has the proto's optional leading /{tenant} binding.
+    if let Some(tenant) = left.remove("tenant") {
+        let tenant = if tenant.is_null() {
+            String::new()
+        } else {
+            scalar(&tenant)
+        };
+        if tenant == "." || tenant == ".." {
+            return Err(format!(
+                "`{method}`'s `tenant` is a dot segment, which would re-point the request line"
+            ));
+        }
+        if !tenant.is_empty() {
+            path.push('/');
+            path.push_str(&percent(&tenant));
+        }
+    }
     let mut rest = op.path;
     while let Some(open) = rest.find('{') {
         path.push_str(&rest[..open]);
@@ -240,7 +336,7 @@ pub fn compose(base: &str, method: &str, params: &Value) -> Result<Framed, Strin
             .ok_or_else(|| format!("`{method}` names no `{name}` to address"))?;
         let value = value
             .as_str()
-            .map_or_else(|| value.to_string(), str::to_string);
+            .ok_or_else(|| format!("`{method}`'s `{name}` must be a string"))?;
         if value.is_empty() {
             return Err(format!("`{method}`'s `{name}` is empty"));
         }
@@ -252,17 +348,17 @@ pub fn compose(base: &str, method: &str, params: &Value) -> Result<Framed, Strin
                 "`{method}`'s `{name}` is a dot segment, which would re-point the request line"
             ));
         }
-        path.push_str(&percent(&value));
+        path.push_str(&percent(value));
         rest = &rest[close + 1..];
     }
     path.push_str(rest);
     let mut url = base.clone();
     url.set_path(&format!("{}{path}", base.path().trim_end_matches('/')));
     {
+        // Keep the operator's own query, as the JSON-RPC binding does.
         let mut query = url.query_pairs_mut();
-        query.clear();
         for name in op.query {
-            if let Some(value) = left.remove(*name) {
+            if let Some(value) = left.remove(*name).filter(|value| !value.is_null()) {
                 query.append_pair(name, &scalar(&value));
             }
         }

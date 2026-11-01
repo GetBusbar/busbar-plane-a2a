@@ -193,7 +193,7 @@ fn the_connect_view_is_a_preview_of_the_card_under_the_key_s_state() {
     let s = seen(&card("plans"));
     let fp = card::fingerprint(&card("plans")).unwrap();
     assert_eq!(
-        connect_view("planner", State::Pending, &s, None),
+        connect_view("planner", svc::DISTRUST_NOT_APPROVED, &s, None),
         format!(
             r#"{{"name":"planner","state":"pending","pin_mechanism":"jws_issuer_key","fingerprint":"{fp}","pin_changed":false,"added":["plan"],"changed":[],"removed":[],"observed_skills":1,"failure":null}}"#
         )
@@ -201,7 +201,7 @@ fn the_connect_view_is_a_preview_of_the_card_under_the_key_s_state() {
     let approved = skills_of(&card("plans"));
     let preview: Value = serde_json::from_str(&connect_view(
         "planner",
-        State::Approved,
+        svc::DISTRUST_NONE,
         &s,
         Some(&approved),
     ))
@@ -212,7 +212,7 @@ fn the_connect_view_is_a_preview_of_the_card_under_the_key_s_state() {
     );
     let approved: Value = serde_json::from_str(&registration_view(
         "planner",
-        State::Approved,
+        svc::DISTRUST_NONE,
         &s,
         Some(&approved),
     ))
@@ -220,14 +220,26 @@ fn the_connect_view_is_a_preview_of_the_card_under_the_key_s_state() {
     assert_eq!(approved["state"], "approved");
     assert_eq!(approved["fingerprint"], fp.as_str());
     let quarantined: Value =
-        serde_json::from_str(&connect_view("planner", State::Quarantined, &s, None)).unwrap();
+        serde_json::from_str(&connect_view("planner", svc::DISTRUST_CHANGED, &s, None)).unwrap();
     assert_eq!(
         quarantined["pin_changed"], true,
         "the kernel quarantined a moved card"
     );
+    let held: Value = serde_json::from_str(&connect_view(
+        "planner",
+        svc::DISTRUST_QUARANTINED,
+        &s,
+        None,
+    ))
+    .unwrap();
+    assert_eq!(held["state"], "quarantined");
+    assert_eq!(
+        held["pin_changed"], false,
+        "an operator's quarantine of an unchanged card is no moved pin (G1-7)"
+    );
     let failed: Value = serde_json::from_str(&connect_view(
         "planner",
-        State::Approved,
+        svc::DISTRUST_NONE,
         &Sighting::Failed("down".to_string()),
         None,
     ))
@@ -275,7 +287,7 @@ fn the_records_trust_answers_are_the_machines_answers_and_not_a_second_opinion()
     assert_eq!(
         lists(registration_view(
             "planner",
-            State::Approved,
+            svc::DISTRUST_NONE,
             &sighted,
             approved.as_ref()
         )),
@@ -286,7 +298,7 @@ fn the_records_trust_answers_are_the_machines_answers_and_not_a_second_opinion()
     assert_eq!(
         lists(connect_view(
             "planner",
-            State::Quarantined,
+            svc::DISTRUST_CHANGED,
             &moved,
             approved.as_ref()
         )),
@@ -305,7 +317,7 @@ fn connect_reports_what_moved_when_an_approved_card_has_changed() {
     let approved = skills_of(&original);
     let view: Value = serde_json::from_str(&connect_view(
         "planner",
-        State::Quarantined,
+        svc::DISTRUST_CHANGED,
         &seen(&changed),
         Some(&approved),
     ))
@@ -329,7 +341,7 @@ fn connect_never_reports_approved_even_when_the_card_matches_a_locked_pin() {
     let approved = skills_of(&raw);
     let view: Value = serde_json::from_str(&connect_view(
         "planner",
-        State::Approved,
+        svc::DISTRUST_NONE,
         &seen(&raw),
         Some(&approved),
     ))
@@ -370,7 +382,7 @@ fn the_drift_lists_are_the_sighted_skills_against_the_approved_ones() {
         .collect();
     let view: Value = serde_json::from_str(&connect_view(
         "planner",
-        State::Quarantined,
+        svc::DISTRUST_CHANGED,
         &seen(&offered),
         Some(&approved),
     ))
@@ -380,7 +392,7 @@ fn the_drift_lists_are_the_sighted_skills_against_the_approved_ones() {
     assert_eq!(view["removed"], json!(["index", "scout"]));
     let pending: Value = serde_json::from_str(&connect_view(
         "planner",
-        State::Pending,
+        svc::DISTRUST_NOT_APPROVED,
         &seen(&offered),
         Some(&approved),
     ))
@@ -401,8 +413,13 @@ fn an_unpinned_registration_presents_no_fingerprint_to_sight() {
         )
         .unwrap(),
     );
-    let view: Value =
-        serde_json::from_str(&connect_view("a", State::Pending, &unpinned, None)).unwrap();
+    let view: Value = serde_json::from_str(&connect_view(
+        "a",
+        svc::DISTRUST_NOT_APPROVED,
+        &unpinned,
+        None,
+    ))
+    .unwrap();
     assert_eq!(view["state"], "pending");
     assert_eq!(view["fingerprint"], Value::Null);
     assert_eq!(view["pin_mechanism"], "unpinned");
@@ -915,8 +932,43 @@ fn the_mechanism_is_part_of_the_identity_not_a_label_beside_it() {
 #[test]
 fn a_moved_cards_pin_changed_survives_a_failed_look() {
     let failed = Sighting::Failed("down".to_string());
-    let view: Value =
-        serde_json::from_str(&connect_view("planner", State::Quarantined, &failed, None)).unwrap();
+    let view: Value = serde_json::from_str(&connect_view(
+        "planner",
+        svc::DISTRUST_CHANGED,
+        &failed,
+        None,
+    ))
+    .unwrap();
     assert_eq!(view["state"], "error");
     assert_eq!(view["pin_changed"], true, "{view}");
+}
+
+#[test]
+fn approve_refuses_non_json_media_types_even_with_a_valid_body() {
+    for content_type in [
+        "text/plain",
+        "application/x-www-form-urlencoded",
+        "application/jsonx",
+        "text/json",
+    ] {
+        assert!(
+            approve_body(Some(content_type), br#"{"fingerprint":"sha256:a"}"#).is_err(),
+            "{content_type}"
+        );
+    }
+}
+
+#[test]
+fn card_read_accepts_exact_byte_ceiling_and_only_success_statuses() {
+    let url = "https://agent.example/.well-known/agent-card.json";
+    let mut bytes = b"{}".to_vec();
+    bytes.resize(MAX_CARD_BYTES, b' ');
+    for status in [200, 201, 299] {
+        assert_eq!(read_card(url, Ok((status, &bytes))).unwrap(), json!({}));
+    }
+    for status in [199, 300, 404, 500] {
+        assert!(read_card(url, Ok((status, &bytes))).is_err());
+    }
+    bytes.push(b' ');
+    assert!(read_card(url, Ok((200, &bytes))).is_err());
 }

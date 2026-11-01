@@ -120,29 +120,28 @@ def test_card_bait_and_switch(ctx):
     role=ROLE_CLIENT, tier=PRE_RELEASE,
 )
 def test_signature_downgrade(ctx):
-    signed_card = None
+    # Keep the origin alive across both observations. The first signature is deliberately
+    # invalid, so this records shape changes, not a previously authenticated trust decision.
     with FakePeer() as peer:
         signed_card = dict(peer.card())
-    signed_card["signatures"] = [{
-        "protected": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpPU0UiLCJraWQiOiJrLTEifQ",
-        "signature": "AAAA-this-signature-is-not-valid-and-that-is-the-point",
-    }]
-    with FakePeer(Behaviour(card_body_override=signed_card)) as peer:
+        signed_card["signatures"] = [{
+            "protected": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpPU0UiLCJraWQiOiJrLTEifQ",
+            "signature": "AAAA-this-signature-is-not-valid-and-that-is-the-point",
+        }]
+        peer.behaviour.card_body_override = signed_card
         run_signed = drive(ctx, peer, timeout=45.0)
-        ctx.observe("calls_against_badly_signed_card",
-                    len(peer.a2a_requests()))
+        signed_calls = len(peer.a2a_requests())
+        peer.behaviour.card_body_override = {k: v for k, v in signed_card.items() if k != "signatures"}
+        run_unsigned = drive(ctx, peer, timeout=45.0)
+        unsigned_calls = len(peer.a2a_requests()) - signed_calls
+    ctx.observe("calls_against_badly_signed_card", signed_calls)
+    ctx.observe("calls_against_unsigned_card", unsigned_calls)
     ctx.observe("drive_signed", _summary(run_signed))
-    ctx.note(
-        "The peer served a card carrying a signature that does not verify. "
-        "The target made %d A2A call(s) against it. SPEC 8.4.3 says clients "
-        "SHOULD verify at least one signature before trusting a card, which "
-        "is a SHOULD, so proceeding is conformant. Recorded, not failed."
-        % len(_last_peer_requests(run_signed))
-    )
-
-
-def _last_peer_requests(run):
-    return []
+    ctx.observe("drive_unsigned", _summary(run_unsigned))
+    ctx.note("The same live peer served an invalidly signed card, then an unsigned card: "
+             "%d and %d subsequent A2A calls respectively. This does not establish a "
+             "previously authenticated trust decision, and no conformance failure is inferred."
+             % (signed_calls, unsigned_calls))
 
 
 @a2a_test(
@@ -316,16 +315,8 @@ def _card_with_signature(base_card, sig):
     return card
 
 
-@a2a_test(
-    id="hostile.jws_self_check",
-    defect="Proves the HARNESS's own JWS verifier rejects alg 'none', "
-           "algorithm confusion and an unknown crit. Without this the "
-           "signature tests could be vacuously green and would prove nothing "
-           "about any subject.",
-    clause="Self-test. RFC 7515 sections 4.1.1, 4.1.11 and Appendix F.",
-    role=ROLE_CLIENT, tier=PULL_REQUEST,
-)
 def test_jws_self_check(ctx):
+    """Harness regression, invoked by protocol-regressions.py, not a target verdict."""
     from . import jcs
     payload = jcs.canonicalize({"name": "probe"})
 
@@ -342,10 +333,16 @@ def test_jws_self_check(ctx):
 
     crit = jcs.ADVERSARIAL_HEADERS["crit_unknown"]["header"]
     ctx.assert_must(
-        jcs.crit_is_understood(crit, understood=()) is False,
+        jcs.verify_jws(jcs.make_signature(crit, payload), payload)["verified"] is False,
         "the harness treated an unknown crit extension as understood",
         "RFC 7515 section 4.1.11: 'the JWS MUST be rejected' when crit names "
         "an extension the recipient does not understand.",
+    )
+    confusion = jcs.ADVERSARIAL_HEADERS["alg_confusion_hmac"]["header"]
+    ctx.assert_must(
+        jcs.verify_jws(jcs.make_signature(confusion, payload), payload)["verified"] is False,
+        "the harness did not reject an HMAC algorithm in an asymmetric signature",
+        "RFC 7515 requires the accepted algorithm to match the key.",
     )
     ctx.assert_must(
         jcs.crit_is_understood({"alg": "ES256"}, understood=()) is True,
@@ -375,14 +372,12 @@ def test_card_signature_attacks(ctx):
 
     outcomes = {}
     for name, spec_entry in sorted(jcs.ADVERSARIAL_HEADERS.items()):
-        with FakePeer() as probe:
-            base = probe.card()
-        payload = jcs.canonicalize(
-            {k: v for k, v in base.items() if k != "signatures"})
-        sig = jcs.make_signature(spec_entry["header"], payload)
-        card = _card_with_signature(base, sig)
-
-        with FakePeer(Behaviour(card_body_override=card)) as peer:
+        with FakePeer() as peer:
+            base = peer.card()
+            payload = jcs.canonicalize(
+                {k: v for k, v in base.items() if k != "signatures"})
+            sig = jcs.make_signature(spec_entry["header"], payload)
+            peer.behaviour.card_body_override = _card_with_signature(base, sig)
             run = drive(ctx, peer, timeout=45.0)
             outcomes[name] = {
                 "a2a_calls_after_seeing_card": len(peer.a2a_requests()),

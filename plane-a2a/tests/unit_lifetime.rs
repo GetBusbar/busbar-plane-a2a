@@ -193,7 +193,7 @@ fn store() -> MutexGuard<'static, Vec<(String, String, Vec<u8>)>> {
     STORE.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// `records.list`: every stored record of the kind asked, in key order, one page.
+/// `records.list`: kind/prefix matching records in key order, strictly after the cursor.
 /// While set, `records.list` answers PENDING the first time it is handed a handle and the rows
 /// when that handle is issued again (a store read on the host's pool, completed before the replay).
 static LIST_PENDS: AtomicBool = AtomicBool::new(false);
@@ -228,21 +228,49 @@ extern "C" fn records_list(_: HostCtx, input: *const c_void, out: *mut ServiceOu
             std::slice::from_raw_parts(s.ptr(), s.len()).to_vec()
         }
     };
-    let (kind, after) = (text(i.kind), text(i.after));
+    let (kind, prefix, after) = (text(i.kind), text(i.prefix), text(i.after));
     let mut rows: Vec<(String, Vec<u8>)> = store()
         .iter()
-        .filter(|(k, _, _)| k.as_bytes() == kind.as_slice())
+        .filter(|(k, key, _)| {
+            k.as_bytes() == kind.as_slice()
+                && key.as_bytes().starts_with(&prefix)
+                && (after.is_empty() || key.as_bytes() > after.as_slice())
+        })
         .map(|(_, key, value)| (key.clone(), value.clone()))
         .collect();
     rows.sort();
-    if !after.is_empty() {
-        rows.clear();
+    let limit = if i.limit == 0 {
+        busbar_contract::abi::host::service::MAX_SPANS as usize
+    } else {
+        i.limit as usize
+    };
+    rows.truncate(limit);
+    let needed: usize = rows
+        .iter()
+        .map(|(key, value)| key.len() + value.len())
+        .sum();
+    if needed > i.into.cap || rows.len() > i.into.spans_cap {
+        let result = answer(out, Outcome::Failed, 0, 0);
+        // SAFETY: the caller owns this live output; no payload or spans were written.
+        unsafe {
+            (*out).needed_bytes = needed as u64;
+            (*out).needed_items = rows.len() as u64;
+        }
+        return result;
     }
     // SAFETY: the SDK's buffers of the capacities it states.
     let (buf, spans) = unsafe {
         (
-            std::slice::from_raw_parts_mut(i.into.buf, i.into.cap),
-            std::slice::from_raw_parts_mut(i.into.spans, i.into.spans_cap),
+            if i.into.cap == 0 {
+                &mut []
+            } else {
+                std::slice::from_raw_parts_mut(i.into.buf, i.into.cap)
+            },
+            if i.into.spans_cap == 0 {
+                &mut []
+            } else {
+                std::slice::from_raw_parts_mut(i.into.spans, i.into.spans_cap)
+            },
         )
     };
     let mut at = 0_usize;
@@ -647,7 +675,7 @@ fn open() -> Door {
 }
 
 /// The door opened over `section`.
-fn open_with(section: &'static [u8]) -> Door {
+fn open_with(section: &[u8]) -> Door {
     let mut i: PlaneOpenIn = z();
     i.open = OpenIn {
         head: head::<PlaneOpenIn>(life::OPEN, Ticket::NONE),
@@ -1251,8 +1279,8 @@ fn a_refusal_after_a_finished_hop_still_reads_its_unit() {
     assert_eq!(attempt.outcome, Some(Outcome::Ready), "{attempt:?}");
     let sent = door.piece(unit, Given::caller(CARD_READ), 1 << 16);
     assert_eq!(sent.outcome, Some(Outcome::Ready), "{sent:?}");
-    let empty: &[u8] = br#"{"jsonrpc":"2.0","id":1}"#;
-    let answered = door.piece(unit, Given::far_end(200, empty), 1 << 16);
+    let reply = reported_fixture_cases::card_answer();
+    let answered = door.piece(unit, Given::far_end(200, &reply), 1 << 16);
     assert_eq!(answered.outcome, Some(Outcome::Ready), "{answered:?}");
     assert_ne!(
         answered.flags & EMIT_DONE,
@@ -1296,8 +1324,8 @@ fn a_cancel_after_the_agent_answered_is_partial() {
         "cut before the agent answered: aborted"
     );
     dialled(21);
-    let empty: &[u8] = br#"{"jsonrpc":"2.0","id":1}"#;
-    let answered = door.piece(21, Given::far_end(200, empty), 1 << 16);
+    let reply = reported_fixture_cases::card_answer();
+    let answered = door.piece(21, Given::far_end(200, &reply), 1 << 16);
     assert_eq!(answered.outcome, Some(Outcome::Ready), "{answered:?}");
     assert_eq!(
         door.cancel_disposition(21),

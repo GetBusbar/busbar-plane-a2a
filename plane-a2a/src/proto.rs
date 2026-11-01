@@ -16,12 +16,13 @@
 //! from a gRPC interface's URL, and refuses an answer with no payload. [`Normal`] is that
 //! round trip, applied in place to each message.
 //!
-//! One rule needs the host: a `SendMessageRequest` with no message gets a fresh user message with a
-//! new (v7) id from the model. [`Normal`] gives it the user message; its id is minted at the unit's
-//! first attempt from the host's clock and random bytes ([`crate::framed::message_id_v7`]), because
-//! a plane draws no time and no randomness of its own.
+//! A request must still carry the proto's required `message`. Unlike the SDK model's default,
+//! [`Normal`] refuses its absence rather than synthesising a user message the caller did not send.
 
 use crate::wkt::{value::Kind, Struct, Timestamp, Value};
+
+#[path = "proto_custody.rs"]
+pub(crate) mod custody;
 
 /// The `lf.a2a.v1` package.
 #[allow(
@@ -43,8 +44,7 @@ pub const SERVICE_NAME: &str = "lf.a2a.v1.A2AService";
 /// The interface binding whose URL the model writes without an `http://` scheme.
 use crate::binding::BINDING_GRPC as GRPC_BINDING;
 
-/// An answer the model refuses: it carries no payload (the SDK's `MissingPayload`, named by the
-/// model type it was for).
+/// A message missing required data (the SDK's `MissingPayload`, named by the model type it was for).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MissingPayload(pub &'static str);
 
@@ -60,7 +60,7 @@ pub trait Normal {
     ///
     /// # Errors
     ///
-    /// An answer the model refuses.
+    /// A request or answer missing required data.
     fn normal(&mut self) -> Result<(), MissingPayload>;
 }
 
@@ -193,10 +193,8 @@ identity!(
 impl Normal for pb::SendMessageRequest {
     fn normal(&mut self) -> Result<(), MissingPayload> {
         self.message
-            .get_or_insert_with(|| pb::Message {
-                role: pb::Role::User as i32,
-                ..pb::Message::default()
-            })
+            .as_mut()
+            .ok_or(MissingPayload("SendMessageRequest.message"))?
             .normal()?;
         metadata(&mut self.metadata);
         Ok(())
@@ -274,7 +272,9 @@ impl Normal for pb::AgentInterface {
     fn normal(&mut self) -> Result<(), MissingPayload> {
         if self.protocol_binding.eq_ignore_ascii_case(GRPC_BINDING) {
             if let Some(stripped) = self.url.strip_prefix("http://") {
-                self.url = stripped.to_string();
+                let replacement = stripped.to_string();
+                custody::Wipe::wipe(&mut self.url);
+                self.url = replacement;
             }
         }
         Ok(())
@@ -314,7 +314,19 @@ impl Normal for pb::AgentCard {
         self.capabilities
             .get_or_insert_with(pb::AgentCapabilities::default)
             .normal()?;
-        self.security_schemes.retain(|_, s| s.scheme.is_some());
+        // Retain owns only shared keys, so remove rejected rows explicitly to wipe both owners.
+        let removed: Vec<_> = self
+            .security_schemes
+            .iter()
+            .filter(|(_, scheme)| scheme.scheme.is_none())
+            .map(|(key, _)| custody::Guard::new(key.clone()))
+            .collect();
+        for key in removed {
+            if let Some((mut key, mut scheme)) = self.security_schemes.remove_entry(&*key) {
+                custody::Wipe::wipe(&mut key);
+                custody::Wipe::wipe(&mut scheme);
+            }
+        }
         for s in self.security_schemes.values_mut() {
             s.normal()?;
         }

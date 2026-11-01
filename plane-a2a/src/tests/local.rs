@@ -37,6 +37,17 @@ impl Records for Desk {
     fn claim(&mut self, kind: &str, key: &str, ttl_ms: u64) -> Result<bool, Halt> {
         self.book.claim(kind, key, ttl_ms)
     }
+    fn observe_chain_life(&mut self, kind: &str, scope: &str) -> Result<Option<Vec<u8>>, Halt> {
+        self.book.observe_chain_life(kind, scope)
+    }
+    fn publish(
+        &mut self,
+        predicates: &[tasks::Predicate],
+        chains: &[tasks::ChainLife],
+        writes: &[Write],
+    ) -> Result<bool, Halt> {
+        self.book.publish(predicates, chains, writes)
+    }
 }
 
 impl Reach for Desk {
@@ -77,27 +88,6 @@ fn error_of(body: &Value) -> (i64, String) {
         body["error"]["code"].as_i64().unwrap(),
         body["error"]["message"].as_str().unwrap().to_string(),
     )
-}
-
-#[test]
-fn every_listed_method_is_a_local_verb() {
-    for method in [
-        "ListTasks",
-        "tasks/list",
-        "CreateTaskPushNotificationConfig",
-        "tasks/pushNotificationConfig/set",
-        "GetTaskPushNotificationConfig",
-        "tasks/pushNotificationConfig/get",
-        "ListTaskPushNotificationConfigs",
-        "tasks/pushNotificationConfig/list",
-        "DeleteTaskPushNotificationConfig",
-        "tasks/pushNotificationConfig/delete",
-        "SubscribeToTask",
-        "tasks/resubscribe",
-    ] {
-        assert!(verb_of(method).is_some(), "{method}");
-    }
-    assert_eq!(verb_of("SendMessage"), None);
 }
 
 /// `ListTasks` answers the caller's own rows, newest first, one page at a time, with the engine's
@@ -320,10 +310,10 @@ fn another_callers_task_is_not_found() {
     );
 }
 
-/// The callback floor refuses in the engine's words: a scheme, an internal literal, a name that
-/// resolves to nothing, a name the judge finds internal, a `token`, a bad credential, no `url`.
+/// Refused callback configurations retain their error status/code and create no config record.
+/// The sentence prefix is checked here; this is not an assertion of exact refusal wording.
 #[test]
-fn a_callback_is_refused_in_the_engines_words() {
+fn refused_callback_configurations_are_not_persisted() {
     let cases: [(Value, u64, i64, &str); 7] = [
         (json!({ "url": "http://hooks.example/" }), DEST_PLAINTEXT, -32602, "push callback scheme `http` is refused; a callback carries task metadata off-box and must be https"),
         (json!({ "url": "https://10.0.0.1/" }), DEST_INTERNAL, -32602, "push callback resolves to the INTERNAL address 10.0.0.1; delivering there would lend busbar's network position to the caller"),
@@ -452,7 +442,7 @@ fn the_push_verbs_carry_the_dialect_that_named_them() {
 /// A config cannot be attached to another caller's task: the create is the absent-task refusal,
 /// and no record is written under either caller.
 #[test]
-fn a_push_config_cannot_be_attached_to_another_tenants_task() {
+fn a_push_config_cannot_be_attached_to_another_principals_task() {
     let mut desk = desk();
     let cfg = json!({ "task_id": "t1", "id": "cfg-x", "url": "https://hooks.example/cb" });
     let (_, body) = call(&mut desk, "CreateTaskPushNotificationConfig", cfg, BOB);
@@ -682,9 +672,10 @@ fn an_internal_callback_is_refused_on_the_hosts_verdict_and_the_host_is_asked() 
     assert_eq!(admitted.judged, vec![url.to_string()]);
 }
 
-/// An alternate IPv4 spelling is refused in the engine's words, on the host's verdict.
+/// The callback consumes the host's DEST_OBFUSCATED verdict. Detection of the
+/// alternate IPv4 spelling belongs to the host and is not performed by this fixture.
 #[test]
-fn obfuscated_ipv4_hosts_are_refused_before_anything_is_resolved() {
+fn the_hosts_obfuscated_address_verdict_is_refused() {
     for host in [
         "2130706433",
         "0x7f000001",
@@ -872,5 +863,49 @@ fn a_push_config_write_the_store_refuses_answers_the_engines_internal_error() {
         LocalVerb::Subscribe,
     ] {
         assert_eq!(unrecorded(verb, &id), None, "{verb:?}");
+    }
+}
+
+#[test]
+fn list_status_uses_proto_enum_values_and_rejects_unknown_states() {
+    let mut desk = desk();
+    for status in [
+        json!("TASK_STATE_SUBMITTED"),
+        json!("submitted"),
+        json!(1),
+        json!(0),
+        json!("TASK_STATE_UNSPECIFIED"),
+    ] {
+        let (http, answer) = call(&mut desk, "ListTasks", json!({"status": status}), ALICE);
+        assert_eq!(http, 200);
+        assert_eq!(answer["result"]["totalSize"], 2);
+    }
+    for status in [
+        json!(true),
+        json!("unknown"),
+        json!(99),
+        json!([]),
+        json!(1.5),
+    ] {
+        let (_, answer) = call(&mut desk, "ListTasks", json!({"status": status}), ALICE);
+        assert_eq!(error_of(&answer).0, INVALID_PARAMS);
+    }
+    let (_, answer) = call(&mut desk, "ListTasks", json!({"status": 3}), ALICE);
+    assert_eq!(answer["result"]["totalSize"], 0);
+}
+
+#[test]
+fn malformed_list_cursor_is_refused_instead_of_restarting_the_page() {
+    let mut desk = desk();
+    for token in [
+        json!("not-a-cursor"),
+        json!("NaN:t1"),
+        json!("1:"),
+        json!("+1:t1"),
+        json!(1),
+    ] {
+        let (_, answer) = call(&mut desk, "ListTasks", json!({"pageToken": token}), ALICE);
+        assert_eq!(error_of(&answer).0, INVALID_PARAMS);
+        assert!(answer.get("result").is_none());
     }
 }

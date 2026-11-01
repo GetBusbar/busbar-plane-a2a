@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (C) 2026 Busbar Inc and contributors
+
 //! The operation vocabulary: which method name is which priced operation.
 //!
 //! This protocol spells the same eleven operations two ways. The older wording is slash-separated

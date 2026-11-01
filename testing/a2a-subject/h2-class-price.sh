@@ -35,14 +35,10 @@
 #   (3) THE PRICE MUST BE THE PRODUCT. Given (1) and (2), the money surface must read
 #       count × rate + fee and not the fee alone.
 #
-# (3) is not independently checkable while (1) or (2) is red -- a product with an unsettable factor
-# and an unreported factor has no value to compare against -- so it is reported as BLOCKED BY the
-# ones that fell, never as passed. This leg does not choose numbers that make itself green.
-#
-# THE CONTROL, so that a red here is a finding and not a broken probe: the same read must show the
-# metering row EXISTS and carries the flat fee exactly. That row exists only because the rig's
-# config now carries `rate_card:` (`plane_host/govern.rs:226` gates `record_metering` on
-# `cost.pricing_enabled()`), so the control also witnesses the billing switch itself.
+# Boot applies a nonzero rate before the call. The row must show one request and
+# exactly its measured bytes times that rate plus the configured per-request fee.
+# This retained scenario is not called by testing/conformance/a2a.sh; its legacy
+# fixture and token-minter dependencies must exist before it can be run.
 set -uo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=h2-lib.sh
@@ -55,6 +51,8 @@ H2_GROUPS_YAML="groups:
   h2-oracle:
     limits:
       - { budget: 1000000, per: day }"
+H2_RATE_CARD_YAML='  rate_card:
+    agent:probe: { units: { bytes: 2 } }'
 
 h2_boot "$WORK" "$H2_GROUPS_YAML" || { echo "FAIL	boot failed, see $WORK/busbar.log" ; exit 1; }
 
@@ -74,23 +72,14 @@ sleep 2
 # ── THE CONTROL: billing is ON and the row is there ───────────────────────────────────────────────
 row_requests="$(h2_meter_row_field "agent:probe" "a2a" requests)"
 [ "$row_requests" = "1" ] || { failures=$((failures+1)); detail="${detail}metering row for (agent:probe, a2a) reports requests=${row_requests}(want 1 -- with no such row the rig is not reading a billing-ON node at all); "; }
-key_spend="$(h2_usage_field "$kid" spend_cents)"
-[ "$key_spend" -eq 1 ] || { failures=$((failures+1)); detail="${detail}the key's own spend reads ${key_spend}(want 1, the flat fee -- if this is wrong the rig is not reading money correctly and the reds below cannot be trusted); "; }
 
 # ── (1) THE CARD MUST BE ABLE TO NAME THE CLASS ───────────────────────────────────────────────────
-# Asked of the binary, not of a script's opinion of the grammar: `--validate` runs the exact
-# load → resolve → validate that boot runs.
-card_verdict="$(h2_validate_card '  rate_card:
-    agent:probe: { units: { bytes: 2 } }')"
-if [ "$card_verdict" != "ok" ]; then
-  failures=$((failures+1))
-  detail="${detail}(1) a rate card naming this plane's ONE declared class 'bytes' does not resolve: ${card_verdict}; "
-fi
+# The rate above was applied by h2_boot before the measured call. Validation alone
+# would not establish which card priced this row.
 
 # ── (2) THE PLANE MUST REPORT A COUNT ─────────────────────────────────────────────────────────────
-# Every quantity column the money surface exposes for this row, summed. The request COUNT is
-# deliberately excluded: a request is not a quantity, it is what #44's flat fee prices.
-quantity="$(h2_meter_row_quantity "agent:probe" "a2a")"
+# Read this class alone; unrelated quantities cannot stand in for response bytes.
+quantity="$(h2_meter_row_quantity "agent:probe" "a2a" bytes)"
 # Asked through h2_int_is so ANY read that is not a positive integer -- `-` (no row), 0, empty,
 # non-numeric -- is a failure. The old `[ "$quantity" -le 0 ] 2>/dev/null` errored silently on
 # every shape but `-` and 0 and let the leg pass (a2a twin of mcp item 499).
@@ -100,11 +89,17 @@ if ! h2_int_is "$quantity" -gt 0; then
 fi
 
 # ── (3) THE PRICE MUST BE THE PRODUCT ─────────────────────────────────────────────────────────────
-# Reported as blocked while either factor is unavailable. The flat fee is read anyway, so the leg
-# still says what the deployment DID charge.
+# UnitRate config is micro-units per class unit; the fee is one cent = 10000 micro-units.
 spend_micros="$(h2_meter_row_field "agent:probe" "a2a" spend_micros)"
+if h2_int_is "$quantity" -gt 0; then
+  expected_micros="$(python3 -c 'import sys; print(int(sys.argv[1]) * 2 + 10000)' "$quantity")"
+  if [ "$spend_micros" != "$expected_micros" ]; then
+    failures=$((failures+1))
+    detail="${detail}(3) spend_micros=${spend_micros}, want ${expected_micros} = ${quantity} bytes * 2 micro-units/byte + 10000 micro-units/request; "
+  fi
+fi
 if [ "$failures" -ne 0 ]; then
-  detail="${detail}(3) price = Σ count × rate is BLOCKED BY the above; the row charged spend_micros=${spend_micros}, which is the flat per-request fee (1 cent = 10000 micro-units) and nothing else; "
+  detail="${detail}measured spend_micros=${spend_micros}; "
 fi
 
 if [ "$failures" -eq 0 ]; then

@@ -3,9 +3,9 @@
 """`python3 -m a2asup` -- point the supplementary suite at one A2A subject.
 
 EXIT CODES, and they are three because two would hide the difference that matters:
-    0   every MUST this suite can decide was decided and passed
+    0   at least one MUST passed and no check failed (unresolved rows remain reported)
     1   the suite ran and the subject failed at least one requirement -- a NUMBER
-    3   the suite could not START (no card, no usable interface) -- the ABSENCE of a number
+    3   no MUST was demonstrated (no card, usable interface, or applicable evidence)
 A caller that treats 3 as "a low score" is reporting a verdict on a run that never happened.
 """
 
@@ -35,6 +35,10 @@ def main(argv: list[str] | None = None) -> int:
         help="the subject's Agent Card. Every endpoint driven is read out of it (SPEC 5.2).",
     )
     parser.add_argument("--token", help="credential for principal A")
+    parser.add_argument("--token-file", type=argparse.FileType("r"),
+                        help="read principal A's credential from a file or inherited descriptor")
+    parser.add_argument("--token-b-file", type=argparse.FileType("r"),
+                        help="read principal B's credential from a file or inherited descriptor")
     parser.add_argument(
         "--token-b",
         help=(
@@ -64,12 +68,22 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument("--admin-token", help="bearer for --admin-base")
+    parser.add_argument("--admin-token-file", type=argparse.FileType("r"),
+                        help="read the admin bearer without putting it in process arguments")
     parser.add_argument(
         "--verifier-agent-url",
-        help="an agent endpoint whose card the subject would fetch and verify, for CARD-SIGN-004",
+        help="an agent endpoint whose card the subject would fetch and verify, for CARD-SIGN-004; "
+             "also set A2ASUP_RIGHT_ISSUER_KEY to its known-good issuer public key",
     )
     parser.add_argument("--json", dest="json_out", help="write the machine-readable report here")
     args = parser.parse_args(argv)
+    for name in ("token", "token_b", "admin_token"):
+        source = getattr(args, name + "_file")
+        if source is not None:
+            if getattr(args, name) is not None:
+                parser.error("supply only one credential source for " + name)
+            with source:
+                setattr(args, name, source.read().strip())
 
     target = Target(
         label=args.label,

@@ -19,7 +19,7 @@
 //!   `TaskNotCancelableError` (`-32002`, [`TASK_NOT_CANCELABLE`]): busbar's own row answers it, as
 //!   a subscribe to a terminal task is answered, and nothing is relayed.
 //! * RESUMED: the caller's message names a `contextId` under which one of its tasks on this agent
-//!   is interrupted: the newest moves back to `working` (refused `409` when it cannot).
+//!   is interrupted: the newest moves back to `working` (refused `503` on storage failure).
 //! * FRESH: busbar mints the id from eight random bytes ([`task_identity::mint`]), the `contextId` is the
 //!   caller's or the id, and the task is submitted and dispatched to the agent before the hop
 //!   (refused `503` when it cannot be recorded). The submit carries the task store's RETENTION
@@ -34,11 +34,9 @@
 //! A push callback the request carries INLINE (its `configuration`, in any of the three spellings
 //! [`CALLBACK_CONFIG_POINTERS`] names) is judged before anything is opened, by the same floor the
 //! push-config verbs use ([`local::judge_callback`]), and a callback or a credential busbar cannot
-//! honour refuses the request `400`. One that passes is the task's
-//! `push_callback`, on the row it opens or resumes (in that change's own claimed write); on a task
-//! it addresses it is the task's push config, put as the push-config verbs put one, the later set
-//! winning. Its credential rides back to the door ([`Callback`]), which holds it in plane memory as
-//! the delivery does.
+//! honour refuses the request `400`. Every accepted inline callback uses the same durable
+//! `push_config` record as CRUD registration, including fresh and resumed tasks. The later set
+//! wins; deletion removes this sole authority. A queued delivery owns its captured credential.
 
 use std::collections::BTreeMap;
 
@@ -77,6 +75,15 @@ pub const TASK_NOT_CANCELABLE: &str =
     "this task has reached a terminal state, so it cannot be canceled";
 /// The words for an interrupted task that could not be moved back to `working`.
 pub const TASK_UNRESUMED: &str = "this task cannot be resumed";
+pub const TASK_NAMED_TWICE: &str = "a request must name only one task";
+
+/// Different aliases cannot choose different task owners before admission.
+pub fn conflicting_tasks(envelope: &Value) -> bool {
+    let named = task_identity::translatable(envelope);
+    named
+        .first()
+        .is_some_and(|first| named.iter().any(|id| id != first))
+}
 
 /// The host's reach opening a task needs beyond the records and the destination judge: the
 /// kernel's random bytes.
@@ -110,10 +117,11 @@ pub struct Request<'a> {
     pub addressed: Option<&'a str>,
     /// Now, in seconds.
     pub now: u64,
+    /// Whether the instance retention gate admits this fresh submit.
+    pub sweep: bool,
 }
 
-/// THE PUSH CALLBACK a request carried inline, as it passed the floor: the URL now on the task's
-/// row, and the credential the caller asked busbar to present there (none clears one held).
+/// The accepted inline URL and credential, staged into the task's durable push config.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Callback {
     /// The URL, as registered.
@@ -134,9 +142,11 @@ pub enum Opened {
         instead: Option<Vec<u8>>,
         /// The push callback the request carried inline, registered on the task.
         callback: Option<Callback>,
+        /// Completed retention work, for the instance gate.
+        swept: Option<usize>,
         /// The caller's answer if the store refuses the opening's record writes (the kernel ends
         /// the unit `durability_unavailable` and the door's `refusal` renders it). A fresh task: `503`, `-32603`
-        /// ([`TASK_UNRECORDED`]); a resumed one: `409`, `-32002` ([`TASK_UNRESUMED`]). `None` for an
+        /// ([`TASK_UNRECORDED`]); a resumed one: `503`, `-32603` ([`TASK_UNRESUMED`]). `None` for an
         /// addressed task, whose hop is sent whether or not its callback was recorded.
         unrecorded: Option<AgentRefusal>,
     },
@@ -157,16 +167,6 @@ fn refused(status: u32, rpc_id: &Value, code: i64, message: &str) -> Opened {
     ))
 }
 
-/// A read that failed reads as nothing (an error collapses to absent); a
-/// pending one pends.
-fn or_absent<T>(read: Result<T, Halt>, absent: T) -> Result<T, Halt> {
-    match read {
-        Err(Halt::Pending) => Err(Halt::Pending),
-        Err(Halt::Failed(_)) => Ok(absent),
-        Ok(v) => Ok(v),
-    }
-}
-
 /// The newest of the caller's tasks under `context_id` on `member` that is interrupted.
 fn resumable(rows: Vec<TaskRow>, context_id: &str, member: &str) -> Option<TaskRow> {
     let mut candidates: Vec<TaskRow> = rows
@@ -184,8 +184,8 @@ fn resumable(rows: Vec<TaskRow>, context_id: &str, member: &str) -> Option<TaskR
 /// The member holding the task a request to a failover pool is about, read off the caller's task records: the `agent_id` of the task
 /// the request names (in its `params` or its message) and the caller holds, else of the newest of the caller's interrupted tasks
 /// under the `contextId` it names held by ANY of the pool's `members` (it resumes AT that member).
-/// `None` = the request is a fresh submission, which the pool's walk places. A read that failed
-/// reads as nothing, as [`open`]'s lookups read it.
+/// `None` = the request is a fresh submission, which the pool's walk places. Failed reads
+/// propagate so an existing task cannot migrate to a different member during a store outage.
 ///
 /// # Errors
 /// [`Halt::Pending`] when a host call pends: the piece runs again from the top.
@@ -196,8 +196,11 @@ pub fn holder(
     now: u64,
     members: &[String],
 ) -> Result<Option<String>, Halt> {
+    if conflicting_tasks(envelope) {
+        return Err(Halt::Failed(TASK_NAMED_TWICE.into()));
+    }
     for named in task_identity::translatable(envelope) {
-        if let Some(held) = or_absent(tasks::get(reach, caller, named, now), None)? {
+        if let Some(held) = tasks::get(reach, caller, named, now)? {
             return Ok(Some(held.row.agent_id));
         }
     }
@@ -205,7 +208,7 @@ pub fn holder(
     if context.is_empty() {
         return Ok(None);
     }
-    let mut candidates: Vec<TaskRow> = or_absent(tasks::list(reach, caller, now), Vec::new())?
+    let mut candidates: Vec<TaskRow> = tasks::list(reach, caller, now)?
         .into_iter()
         .filter(|r| {
             r.context_id == context
@@ -229,6 +232,15 @@ pub fn open(
     backends: &dyn Fn(&str) -> Option<String>,
     out: &mut Vec<Write>,
 ) -> Result<Opened, Halt> {
+    if conflicting_tasks(req.envelope) {
+        return Ok(refused(
+            STATUS_BAD_REQUEST,
+            rpc_id,
+            CODE_INVALID_PARAMS,
+            TASK_NAMED_TWICE,
+        ));
+    }
+    let mut swept = None;
     if is_task_verb(req.envelope) && task_identity::named_tasks(req.envelope).is_empty() {
         return Ok(refused(
             STATUS_BAD_REQUEST,
@@ -259,7 +271,7 @@ pub fn open(
     .version();
     let mut addressed = None;
     for named in task_identity::translatable(req.envelope) {
-        if let Some(held) = or_absent(tasks::get(reach, req.caller, named, req.now), None)? {
+        if let Some(held) = tasks::get(reach, req.caller, named, req.now)? {
             addressed = Some(held.row);
             break;
         }
@@ -275,7 +287,7 @@ pub fn open(
     let context = task_identity::context_of(req.envelope);
     let resumed = match (&addressed, context.is_empty()) {
         (None, false) => resumable(
-            or_absent(tasks::list(reach, req.caller, req.now), Vec::new())?,
+            tasks::list(reach, req.caller, req.now)?,
             context,
             req.member,
         ),
@@ -297,26 +309,7 @@ pub fn open(
             // An addressed task's callback is a PUSH-CONFIG SET, replace semantics, last writer
             // wins: a put of the task's push_config record, never a write of its row, so no other
             // writer's move of the task is undone.
-            if let Some(callback) = callback.as_ref() {
-                let stored = local::PushConfig {
-                    id: inline_config(req.envelope)
-                        .and_then(|c| c.get("id"))
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_string(),
-                    url: callback.url.clone(),
-                    authentication: callback.auth.clone(),
-                    version: version.to_string(),
-                };
-                // A callback that cannot be registered leaves the task as it was: the hop goes on.
-                if let Ok(value) = crate::push::record_value(&stored) {
-                    out.push(Write {
-                        kind: KIND_PUSH_CONFIG,
-                        key: tasks::task_key(req.caller, &row.task_id),
-                        value,
-                    });
-                }
-            }
+            put_config(reach, req, callback.as_ref(), version, &row.task_id)?;
             let task = TaskHop {
                 task_id: row.task_id,
                 context_id: row.context_id,
@@ -334,20 +327,21 @@ pub fn open(
             };
             let mut plan = |held: &TaskRow| -> Planned {
                 plan_transition(TaskState::Working, at.now)(held).map(|(mut next, kind)| {
-                    if let Some(url) = url {
-                        next.push_callback = url.to_string();
-                        next.push_version = version.to_string();
+                    if url.is_some() {
+                        next.push_callback.clear();
+                        next.push_version.clear();
                     }
                     Some((next, kind))
                 })
             };
-            match tasks::change(reach, &at, &row.task_id, &mut plan, out) {
+            let config = config_value(req, callback.as_ref(), version)?;
+            match tasks::change_configured(reach, &at, &row.task_id, &mut plan, config.as_deref()) {
                 Err(Halt::Pending) => return Err(Halt::Pending),
                 Err(Halt::Failed(_)) => {
                     return Ok(refused(
-                        STATUS_CONFLICT,
+                        STATUS_UNAVAILABLE,
                         rpc_id,
-                        CODE_TASK_NOT_CANCELABLE,
+                        CODE_INTERNAL,
                         TASK_UNRESUMED,
                     ))
                 }
@@ -360,12 +354,7 @@ pub fn open(
                 skill: None,
                 references: Vec::new(),
             };
-            let unresumed = refusal(
-                STATUS_CONFLICT,
-                rpc_id,
-                CODE_TASK_NOT_CANCELABLE,
-                TASK_UNRESUMED,
-            );
+            let unresumed = refusal(STATUS_UNAVAILABLE, rpc_id, CODE_INTERNAL, TASK_UNRESUMED);
             (task, Some(unresumed))
         }
         (None, None) => {
@@ -382,6 +371,7 @@ pub fn open(
                 request_id: &task_id,
                 now: req.now,
             };
+            let config = config_value(req, callback.as_ref(), version)?;
             let opened = Task::submitted(
                 task_id.as_str(),
                 context_id.as_str(),
@@ -391,11 +381,9 @@ pub fn open(
             )
             .map_err(|e| Halt::Failed(e.to_string()))
             .and_then(|mut t| {
-                t.push_callback = url.map(str::to_string);
-                if url.is_some() {
-                    t.push_version = version.to_string();
-                }
-                tasks::open(reach, &at, t.to_row(), req.member, out)
+                // The inline config is written durably beside the task below.
+                t.push_callback = None;
+                tasks::open_configured(reach, &at, t.to_row(), req.member, config)
             });
             match opened {
                 Err(Halt::Pending) => return Err(Halt::Pending),
@@ -409,12 +397,20 @@ pub fn open(
                 }
                 Ok(_) => {}
             }
-            // THE SUBMIT'S RETENTION SWEEP, in the submit's own writes: a sweep that fails leaves
-            // nothing behind (it writes only once its read is whole) and fails no submit.
-            if let Err(Halt::Pending) =
-                tasks::retention_sweep(reach, req.now, tasks::SWEEP_BUDGET, out)
-            {
-                return Err(Halt::Pending);
+            // A sweep failure is reported but fails no submit. Retirements committed before a
+            // later failure remain committed; the next due sweep can finish the remaining work.
+            if req.sweep {
+                match tasks::retention_sweep(reach, req.now, tasks::SWEEP_BUDGET, out) {
+                    Err(Halt::Pending) => return Err(Halt::Pending),
+                    Err(Halt::Failed(_)) => busbar_contract::diag_warn!(
+                        crate::diagnostics::A2A_TASK_STATE_UNREAD,
+                        stage = "retention_sweep",
+                        agent = %req.member,
+                        task = %task_id,
+                        "a2a: the task retention sweep did not complete; the submission continues"
+                    ),
+                    Ok(touched) => swept = Some(touched),
+                }
             }
             let task = TaskHop {
                 task_id,
@@ -431,9 +427,61 @@ pub fn open(
     Ok(Opened::Hop {
         task: Box::new(TaskHop { references, ..task }),
         instead,
-        callback,
+        // The existing push_config record owns every accepted inline credential, including
+        // fresh and resumed tasks; no terminal/idle task retains a separate in-memory copy.
+        callback: None,
+        swept,
         unrecorded,
     })
+}
+
+fn put_config(
+    reach: &mut dyn Records,
+    req: &Request<'_>,
+    callback: Option<&Callback>,
+    version: &str,
+    task_id: &str,
+) -> Result<(), Halt> {
+    let Some(value) = config_value(req, callback, version)? else {
+        return Ok(());
+    };
+    let at = Stamp {
+        caller: req.caller,
+        request_id: task_id,
+        now: req.now,
+    };
+    for _ in tasks::attempts() {
+        let expected = reach.get(KIND_PUSH_CONFIG, &tasks::task_key(req.caller, task_id))?;
+        if tasks::write_config(reach, &at, task_id, expected, value.clone())? {
+            return Ok(());
+        }
+    }
+    Err(Halt::Failed(
+        "inline push config kept changing under this write".into(),
+    ))
+}
+
+fn config_value(
+    req: &Request<'_>,
+    callback: Option<&Callback>,
+    version: &str,
+) -> Result<Option<Vec<u8>>, Halt> {
+    let Some(callback) = callback else {
+        return Ok(None);
+    };
+    let stored = local::PushConfig {
+        id: inline_config(req.envelope)
+            .and_then(|c| c.get("id"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        url: callback.url.clone(),
+        authentication: callback.auth.clone(),
+        version: version.to_string(),
+    };
+    let value = crate::push::record_value(&stored)
+        .map_err(|_| Halt::Failed("push config could not be encoded".into()))?;
+    Ok(Some(value))
 }
 
 /// Whether `envelope` is ADDRESSED to a task, so that a task the caller does not hold refuses it:
@@ -462,7 +510,7 @@ fn is_cancel(envelope: &Value) -> bool {
         .is_some_and(|row| row.op == crate::ops::OP_TASK_CANCEL)
 }
 
-/// THE INLINE CONFIG OBJECT whose `url` is the callback: the first of the three spellings that
+/// THE INLINE CONFIG OBJECT whose `url` is the callback: the first supported spelling that
 /// carries a non-empty one, so the credential is read out of the same object as the URL.
 fn inline_config(envelope: &Value) -> Option<&Value> {
     CALLBACK_CONFIG_POINTERS.into_iter().find_map(|p| {
@@ -486,6 +534,9 @@ fn inline_callback(
     let Some(cfg) = inline_config(envelope) else {
         return Ok(Ok(None));
     };
+    if cfg.get("token").is_some_and(|token| !token.is_null()) {
+        return Ok(Err(local::TOKEN_UNCARRIED.to_string()));
+    }
     let auth = match local::delivery_auth(cfg) {
         Ok(auth) => auth,
         Err(message) => return Ok(Err(message)),
@@ -516,7 +567,7 @@ fn translated(
         let Some(backend) = backends(id).filter(|b| b != id) else {
             continue;
         };
-        if or_absent(tasks::get(reach, req.caller, id, req.now), None)?.is_some() {
+        if tasks::get(reach, req.caller, id, req.now)?.is_some() {
             owned.insert(id.to_string(), backend);
         }
     }
@@ -558,11 +609,11 @@ impl Latches {
     }
 }
 
-/// Emit the diagnostic at error the first time `latch` is tripped and at debug after that.
+/// Emit the diagnostic at warning the first time `latch` is tripped and at debug after that.
 macro_rules! latched {
     ($latches:expr, $kind:expr, $diag:expr, $($rest:tt)*) => {
         if $latches.first($kind) {
-            busbar_contract::diag_error!($diag, $($rest)*)
+            busbar_contract::diag_warn!($diag, $($rest)*)
         } else {
             busbar_contract::diag_debug!($diag, $($rest)*)
         }
@@ -625,7 +676,7 @@ impl WriteRefused {
 /// the writes `out` already holds. Answers the row as it moved (what a push notification about the
 /// move carries), or `None` when nothing moved.
 ///
-/// A write the store refuses is journaled through `latches` (error once per kind, debug after).
+/// A write the store refuses is journaled through `latches` (warning once per kind, debug after).
 ///
 /// # Errors
 /// [`Halt::Pending`] when a records call pends.
@@ -644,7 +695,10 @@ pub fn settle_on_answer(
         TaskSettled::Failed => (Some(TaskState::Failed), false),
         TaskSettled::Event {
             state, artifact, ..
-        } => (*state, *artifact),
+        } => (
+            state.filter(|state| *state != TaskState::Submitted),
+            *artifact,
+        ),
     };
     let at = Stamp {
         caller,
@@ -656,7 +710,13 @@ pub fn settle_on_answer(
         let mut step = Vec::new();
         let transitioned = {
             let mut staged = tasks::Staged::new(&mut *rec, out);
-            tasks::transition(&mut staged, &at, &task.task_id, to, &mut step)
+            let mut plan = |row: &TaskRow| -> Planned {
+                if TaskState::parse(&row.state).is_ok_and(|held| held == to) {
+                    return Ok(None);
+                }
+                plan_transition(to, now)(row).map(Some)
+            };
+            tasks::change(&mut staged, &at, &task.task_id, &mut plan, &mut step)
         };
         match transitioned {
             Err(Halt::Pending) => return Err(Halt::Pending),

@@ -25,6 +25,20 @@ def _task_of(result):
     return None
 
 
+def _assert_error(ctx, call, name):
+    expected_json, _grpc, expected_http = spec.ERROR_MAP[name]
+    ctx.assert_must(call.error is not None, "%s returned success" % name,
+                    "SPEC 5.4 defines the error mapping.")
+    if call.binding == "JSONRPC":
+        ctx.assert_must(call.error_code == expected_json,
+                        "expected %s (%s), got %r" % (name, expected_json, call.error_code),
+                        "SPEC 5.4 Error Code Mappings")
+    else:
+        ctx.assert_must(call.http is not None and call.http.status == expected_http,
+                        "expected %s (HTTP %s)" % (name, expected_http),
+                        "SPEC 5.4 Error Code Mappings")
+
+
 @a2a_test(
     id="core.send_message_returns_task_or_message",
     defect="SendMessage returns something that is neither a Task nor a "
@@ -163,7 +177,7 @@ def test_get_task(ctx):
         "SPEC 3.1.3: GetTask 'Retrieves the current state ... of a previously "
         "initiated task'.",
     )
-    fetched = got.result.get("task") if isinstance(got.result, dict) and "task" in got.result else got.result
+    fetched = got.result
     ctx.assert_must(
         isinstance(fetched, dict) and fetched.get("id") == task["id"],
         "GetTask returned a different task id (%r) than requested (%r)"
@@ -332,6 +346,8 @@ def test_context_task_mismatch(ctx):
     task = _task_of(first.result)
     if task is None:
         raise Inapplicable("agent answered with a Message; no task to mismatch")
+    if (task.get("status") or {}).get("state") in spec.TERMINAL_STATES:
+        raise Inapplicable("the fixture produced a terminal task; rejection would not establish context validation")
     wrong_context = "harness-wrong-context-%s" % uuid.uuid4()
     call = ctx.target.call("SendMessage", {
         "message": user_message("mismatched", task_id=task["id"],
@@ -418,7 +434,10 @@ def test_cancel(ctx):
         "returns its updated state', or reports TaskNotCancelableError.",
     )
     if call.error is None:
-        returned = call.result.get("task") if isinstance(call.result, dict) and "task" in call.result else call.result
+        returned = call.result
+        ok, problems = validate.validate_task(returned)
+        ctx.assert_must(ok, "CancelTask returned a malformed Task: %s" % problems,
+                        "PROTO CancelTask returns Task directly.")
         new_state = ((returned or {}).get("status") or {}).get("state")
         ctx.observe("state_after_cancel", new_state,
                     "SPEC 3.1.5: 'success is not guaranteed', so the state "
@@ -498,15 +517,15 @@ def test_timestamps(ctx):
     role=ROLE_SERVER, tier=PULL_REQUEST,
 )
 def test_history_length(ctx):
-    first = _send(ctx, "history check")
+    first = ctx.target.call("SendMessage", {"message": user_message(
+        "history check", message_id="tck-input-required-harness-%s" % uuid.uuid4())})
     task = _task_of(first.result)
     if task is None:
         raise Inapplicable("agent answered with a Message; no task history")
     got = ctx.target.call("GetTask", {"id": task["id"], "historyLength": 0})
-    if got.error is not None:
-        raise Inapplicable("GetTask with historyLength=0 errored: %s"
-                           % (got.error,))
-    fetched = got.result.get("task") if isinstance(got.result, dict) and "task" in got.result else got.result
+    ctx.assert_must(got.error is None, "GetTask with historyLength=0 errored: %s" % (got.error,),
+                    "PROTO GetTaskRequest permits history_length=0.")
+    fetched = got.result
     history = (fetched or {}).get("history")
     # SPEC 3.2.4 says the history field SHOULD be omitted, so an empty list is
     # a SHOULD-level deviation, not a MUST violation. Only a NON-EMPTY history
@@ -520,9 +539,32 @@ def test_history_length(ctx):
     ctx.observe("history_field_omitted_at_zero", "history" not in (fetched or {}),
                 "SPEC 3.2.4 says SHOULD omit, so present-but-empty is legal.")
 
+    # Establish an actual transcript longer than the requested limit. The
+    # scenario fixture keeps the first task open; ordinary agents may settle it.
+    if (task.get("status") or {}).get("state") not in spec.TERMINAL_STATES:
+        second = ctx.target.call("SendMessage", {"message": user_message(
+            "second history turn", message_id="tck-complete-task-harness-%s" % uuid.uuid4(),
+            task_id=task["id"], context_id=task.get("contextId"))})
+        ctx.assert_must(second.error is None,
+                        "continuing the history fixture failed: %s" % (second.error,),
+                        "SPEC 3.1.1 permits continuation of an open task.")
+    full = ctx.target.call("GetTask", {"id": task["id"]})
+    ctx.assert_must(full.error is None, "reading the full history failed: %s" % (full.error,),
+                    "SPEC 3.1.3 defines GetTask.")
+    full_history = (full.result or {}).get("history") or []
+    ctx.observe("unlimited_history_entries", len(full_history))
+    if len(full_history) <= 1:
+        raise Inapplicable("the fixture did not produce history longer than one; "
+                           "positive truncation was not measured")
+    zero = ctx.target.call("GetTask", {"id": task["id"], "historyLength": 0})
+    ctx.assert_must(zero.error is None and not (zero.result or {}).get("history"),
+                    "historyLength=0 did not omit the established long transcript",
+                    "SPEC 3.2.4: 0 returns no history.")
     got2 = ctx.target.call("GetTask", {"id": task["id"], "historyLength": 1})
+    ctx.assert_must(got2.error is None, "GetTask with historyLength=1 errored: %s" % (got2.error,),
+                    "PROTO GetTaskRequest permits a positive history_length.")
     if got2.error is None:
-        f2 = got2.result.get("task") if isinstance(got2.result, dict) and "task" in got2.result else got2.result
+        f2 = got2.result
         n = len((f2 or {}).get("history") or [])
         ctx.assert_must(
             n <= 1,
@@ -562,15 +604,7 @@ def test_version_negotiation(ctx):
         "supported by the interface, agents MUST return a "
         "VersionNotSupportedError.'",
     )
-    expected_json, _g, expected_http = spec.ERROR_MAP["VersionNotSupportedError"]
-    if call.binding == "JSONRPC":
-        ctx.observe("version_error_code", call.error_code,
-                    "SPEC 5.4 maps VersionNotSupportedError to -32009.")
-    else:
-        ctx.observe("version_error_http", call.http.status)
-    # The body shape is genuinely ambiguous. See
-    # AMBIGUITIES.VERSION_ERROR_BODY_SHAPE, so only the fact of the error and
-    # the status code family are asserted.
+    _assert_error(ctx, call, "VersionNotSupportedError")
 
 
 @a2a_test(
@@ -598,6 +632,10 @@ def test_absent_version_header(ctx):
             "handled case, not a server fault" % call.http.status,
             "SPEC 3.6.2: 'Agents MUST interpret empty value as 0.3 version.'",
         )
+    elif call.error is not None:
+        ctx.assert_must(call.error_code not in (None, -32603),
+                        "omitting A2A-Version produced a transport or internal error",
+                        "SPEC 3.6.2 requires a handled version negotiation outcome.")
 
 
 @a2a_test(
@@ -613,9 +651,11 @@ def test_streaming_capability(ctx):
     ctx.observe("capability_streaming", declared)
     res = ctx.target.stream("SendStreamingMessage", send_params("stream probe"),
                             stop_after=_is_terminal_frame)
+    payloads = [event for event in res.events
+                if isinstance(event, dict) and validate.stream_payload_kind(event)]
     if declared:
         ctx.assert_must(
-            res.events and res.status in (200, None),
+            payloads and not res.error and len(payloads) == len(res.events) and res.status == 200,
             "card declares capabilities.streaming = true but the streaming "
             "call produced no events (status %s, error %s)"
             % (res.status, res.error),
@@ -625,9 +665,22 @@ def test_streaming_capability(ctx):
         ctx.observe("stream_content_type", res.content_type,
                     "SPEC 9.1 / 11.1 specify text/event-stream for SSE.")
     else:
-        # SPEC 3.3.4 is explicit: undeclared streaming MUST error.
+        # A timeout, disconnected peer or arbitrary HTTP failure proves no
+        # capability outcome. Require the specified operation refusal itself.
+        errors = [event.get("error", event) for event in res.events
+                  if isinstance(event, dict)]
+        unsupported = len(errors) == 1 and isinstance(errors[0], dict) and (
+            errors[0].get("code") == spec.ERROR_MAP["UnsupportedOperationError"][0] or
+            (res.status == 400 and any(
+                isinstance(detail, dict) and
+                detail.get("@type", "").endswith("google.rpc.ErrorInfo") and
+                detail.get("domain") == spec.ERROR_INFO_DOMAIN and
+                detail.get("reason") == "UNSUPPORTED_OPERATION"
+                for detail in errors[0].get("details", []))))
         ctx.assert_must(
-            not res.events or res.status not in (200,),
+            not payloads and len(res.events) == 1 and unsupported and
+            res.status in (200, 400) and
+            (res.error is None or (res.error == "http-error" and res.status == 400)),
             "card does not declare capabilities.streaming but the streaming "
             "endpoint returned %d events with status %s"
             % (len(res.events), res.status),
@@ -827,14 +880,7 @@ def test_push_capability(ctx):
             "(Create, Get, List, Delete) MUST return "
             "PushNotificationNotSupportedError.'",
         )
-        expected_json, _g, expected_http = spec.ERROR_MAP[
-            "PushNotificationNotSupportedError"]
-        if call.binding == "JSONRPC":
-            ctx.observe("push_denied_code", call.error_code,
-                        "SPEC 5.4 maps this to -32003.")
-        else:
-            ctx.observe("push_denied_http", call.http.status,
-                        "SPEC 5.4 maps this to HTTP 400.")
+        _assert_error(ctx, call, "PushNotificationNotSupportedError")
     else:
         ctx.observe("push_config_create_error",
                     call.error_name or call.error_code or "ok")
@@ -869,7 +915,7 @@ def test_extended_card(ctx):
         ctx.observe("extended_card_error",
                     call.error_name or call.error_code or "ok")
         if call.error is None:
-            card = call.result.get("agentCard") if isinstance(call.result, dict) and "agentCard" in call.result else call.result
+            card = call.result
             ok, problems = validate.validate_agent_card(card)
             ctx.assert_must(
                 ok, "extended agent card is malformed: %s" % problems,
@@ -891,6 +937,9 @@ def test_list_tasks(ctx):
         # ListTasks requires authorisation scoping (SPEC 3.1.4, 13.1), so an
         # unauthenticated harness being refused is entirely correct.
         ctx.observe("list_tasks_error", call.error_name or call.error_code)
+        ctx.assert_must(call.http is not None and call.http.status in (401, 403),
+                        "ListTasks failed without an authentication/authorization refusal: %r" % call.error,
+                        "SPEC 3.1.4 defines ListTasks; an internal or missing-method error is not authorization scoping.")
         raise Inapplicable(
             "ListTasks refused this caller (%s). SPEC 3.1.4 requires "
             "authorization scoping, so refusing an unauthenticated harness is "

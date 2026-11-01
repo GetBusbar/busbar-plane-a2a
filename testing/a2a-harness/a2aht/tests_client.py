@@ -22,6 +22,7 @@ import json
 import shlex
 import subprocess
 import time
+import urllib.parse
 
 from .model import (a2a_test, ROLE_CLIENT, ROLE_SEAM, PULL_REQUEST,
                     PRE_RELEASE, NEEDS_FAKE_PEER, NEEDS_REAL_PEER,
@@ -51,27 +52,35 @@ def drive(ctx, peer, extra_env=None, timeout=60.0):
     full_env = dict(os.environ)
     full_env.update(env)
     started = time.time()
+    observed_before = len(peer.requests)
+
+    def observed(result):
+        if len(peer.requests) == observed_before:
+            from .model import NotConfigured
+            raise NotConfigured("the client drive produced no traffic to this fixture; "
+                                "its return code alone cannot establish client behavior")
+        return result
     try:
         proc = subprocess.run(
             shlex.split(command), capture_output=True, timeout=timeout,
             env=full_env, cwd=ctx.config.get("cwd"))
-        return {
+        return observed({
             "command": command,
             "returncode": proc.returncode,
             "stdout": proc.stdout.decode("utf-8", "replace")[-4000:],
             "stderr": proc.stderr.decode("utf-8", "replace")[-4000:],
             "timed_out": False,
             "elapsed": time.time() - started,
-        }
+        })
     except subprocess.TimeoutExpired as exc:
-        return {
+        return observed({
             "command": command,
             "returncode": None,
             "stdout": (exc.stdout or b"").decode("utf-8", "replace")[-4000:],
             "stderr": (exc.stderr or b"").decode("utf-8", "replace")[-4000:],
             "timed_out": True,
             "elapsed": time.time() - started,
-        }
+        })
 
 
 def _summary(run):
@@ -97,17 +106,10 @@ def test_client_fetches_card(ctx):
     with FakePeer() as peer:
         run = drive(ctx, peer)
         ctx.observe("drive", _summary(run))
-        ctx.assert_must(
-            peer.card_fetches > 0,
-            "the target made %d A2A request(s) but never fetched the agent "
-            "card at %s. Command was: %s"
-            % (len(peer.a2a_requests()), spec.WELL_KNOWN_CARD_PATH,
-               run["command"]),
-            "SPEC 3.3.4: 'Clients SHOULD validate capability support by "
-            "examining the Agent Card before attempting operations that "
-            "require optional capabilities.' SPEC 8.3.2 requires the client "
-            "parse supportedInterfaces to choose a transport at all.",
-        )
+        ctx.observe("fetched_card_before_operation", peer.card_fetches > 0,
+                    "SPEC 3.3.4 recommends capability validation (SHOULD). A caller may "
+                    "already have a card from another discovery source; a missing fetch "
+                    "on this connection alone is not a MUST violation.")
         ctx.observe("card_fetches", peer.card_fetches)
         ctx.observe("a2a_request_count", len(peer.a2a_requests()))
 
@@ -134,17 +136,21 @@ def test_client_version_header(ctx):
                 "The test cannot run without traffic; reported as a failure "
                 "rather than a skip so it is never a silent pass.",
             )
-        versions = peer.saw_header(spec.VERSION_HEADER)
+        versions = [r["headers"].get(spec.VERSION_HEADER.lower()) for r in requests
+                    if spec.VERSION_HEADER.lower() in r["headers"]]
         ctx.observe("version_headers_seen", sorted(set(versions)))
         # SPEC 3.6.1 also permits the version as a request parameter.
-        param_versions = [r["path"] for r in requests
-                          if "A2A-Version=" in r["path"]]
+        param_versions = [r["path"] for r in requests if "A2A-Version" in
+                          urllib.parse.parse_qs(urllib.parse.urlsplit(r["path"]).query,
+                                                keep_blank_values=True)]
+        missing = [r for r in requests if spec.VERSION_HEADER.lower() not in r["headers"]
+                   and r["path"] not in param_versions]
         ctx.observe("version_as_query_param", bool(param_versions))
         ctx.assert_must(
-            bool(versions) or bool(param_versions),
-            "the target sent %d A2A request(s) and none carried the "
+            bool(requests) and not missing,
+            "%d A2A request(s) did not carry the "
             "A2A-Version header or query parameter"
-            % len(requests),
+            % len(missing),
             "SPEC 3.6.1: 'Clients MUST send the A2A-Version header with each "
             "request'. SPEC 3.6.1 also allows it 'as a request parameter "
             "instead of a header'.",
@@ -210,6 +216,9 @@ def test_client_honours_binding(ctx):
                      if isinstance(r["body"], dict)
                      and r["body"].get("jsonrpc") == "2.0"]
         ctx.observe("used_jsonrpc_envelope_against_rest_card", bool(rpc_style))
+        ctx.assert_must(not rpc_style,
+                        "the client sent JSON-RPC to a card declaring only HTTP+JSON",
+                        "SPEC 8.3.2 requires selecting a declared transport and its URL.")
         if rpc_style:
             ctx.note(
                 "The peer's card declared only HTTP+JSON, but the target sent "
@@ -398,24 +407,6 @@ def test_seam_relay(ctx):
             raise Inapplicable(
                 "the drive command created no task on the downstream peer, so "
                 "there is no seam to inspect")
-        # The upstream caller here is the harness itself. If the target is
-        # also serving, its own task ids must not be the downstream ones.
-        try:
-            upstream = ctx.target.call("SendMessage",
-                                       {"message": {"messageId": "seam-probe",
-                                                    "role": "ROLE_USER",
-                                                    "parts": [{"text": "relay"}]}})
-        except Exception:
-            raise Inapplicable("target does not also serve, so there is no "
-                               "seam between roles to test")
-        upstream_task = (upstream.result or {}).get("task") or {}
-        ctx.assert_must(
-            upstream_task.get("id") not in downstream_task_ids,
-            "the target handed its caller a task id (%s) that was generated "
-            "by the downstream peer. Task ids are per-agent, so this "
-            "conflates two different agents' namespaces."
-            % upstream_task.get("id"),
-            "SPEC 3.4.2: 'Task IDs are server-generated when a new task is "
-            "created ... Agents MUST generate a unique taskId for each new "
-            "task they create.'",
-        )
+        raise Inapplicable(
+            "the generic drive exposes downstream traffic but no correlated upstream response; "
+            "an unrelated SendMessage cannot establish relay identifier isolation")

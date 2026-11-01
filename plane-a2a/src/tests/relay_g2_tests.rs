@@ -57,7 +57,7 @@ fn http_json_error_info_keeps_the_a2a_identity_and_the_carrier_breaker_reading()
                     vec![TaskSettled::Failed]
                 }
             );
-            let text = String::from_utf8(reply.body).unwrap();
+            let text = String::from_utf8(reply.body.clone()).unwrap();
             assert!(!text.contains("PRIVATE") && !text.contains("vendor.example"));
             assert_eq!(
                 relay.on_piece(far(None, b"late", true)),
@@ -114,7 +114,7 @@ fn an_unreadable_http_json_reply_is_a_journaled_transient_backend_failure() {
                 vec![]
             }
         );
-        let text = String::from_utf8(reply.body).unwrap();
+        let text = String::from_utf8(reply.body.clone()).unwrap();
         assert!(
             !text.contains("unframable")
                 && !text.contains("PRIVATE")

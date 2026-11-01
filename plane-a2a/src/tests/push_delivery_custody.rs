@@ -87,7 +87,6 @@ fn deleting_a_config_stops_its_pending_attempt_and_keeps_another_tasks_delivery(
     );
     forget_deleted(
         &deliveries,
-        ALICE,
         &[Write {
             kind: KIND_PUSH_CONFIG,
             key: task_key(ALICE, "t1"),
@@ -170,7 +169,6 @@ fn failed_configuration_read_retains_notification_intent_for_the_driver() {
     );
     forget_deleted(
         &deliveries,
-        ALICE,
         &[Write {
             kind: KIND_PUSH_CONFIG,
             key: task_key(ALICE, "t1"),

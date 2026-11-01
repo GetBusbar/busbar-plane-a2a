@@ -14,6 +14,12 @@ use super::*;
 #[path = "task_open_dispatch.rs"]
 mod task_open_dispatch;
 
+#[path = "task_sweep_gate.rs"]
+mod task_sweep_gate;
+
+#[path = "task_conditional_publication.rs"]
+mod task_conditional_publication;
+
 /// SUBMIT `row` for the caller: the task, and its chain's genesis event, stamped with the row's
 /// `created_at`. The row is the caller's (its `principal` is the caller's reference).
 ///
@@ -91,6 +97,9 @@ pub(crate) struct Book {
     claims: BTreeSet<(String, String)>,
     /// Another writer's change, applied the moment this one next claims, so this one loses.
     race: Option<Vec<Write>>,
+    /// Complete atomic publications acknowledged by this host.
+    pub(crate) publications: Vec<Vec<Write>>,
+    lives: BTreeMap<(String, String), Vec<u8>>,
 }
 
 /// One length-prefixed field: its length as eight big-endian bytes, then the bytes.
@@ -298,6 +307,49 @@ impl Records for Book {
         }
         Ok(self.claims.insert((kind.to_string(), key.to_string())))
     }
+
+    fn observe_chain_life(&mut self, kind: &str, scope: &str) -> Result<Option<Vec<u8>>, Halt> {
+        Ok(self
+            .lives
+            .get(&(kind.to_string(), scope.to_string()))
+            .cloned())
+    }
+
+    fn publish(
+        &mut self,
+        predicates: &[Predicate],
+        chains: &[ChainLife],
+        writes: &[Write],
+    ) -> Result<bool, Halt> {
+        if let Some(theirs) = self.race.take() {
+            self.apply(&theirs);
+        }
+        if predicates
+            .iter()
+            .any(|p| self.value(p.kind, &p.key) != p.expected.as_ref())
+            || chains.iter().any(|c| {
+                self.lives.get(&(c.kind.to_string(), c.scope.clone())) != c.expected.as_ref()
+            })
+        {
+            return Ok(false);
+        }
+        self.apply(writes);
+        for write in writes
+            .iter()
+            .filter(|w| w.kind == KIND_TASK_EVENT && w.value.is_empty())
+        {
+            let key = (write.kind.to_string(), write.key.clone());
+            let life = self
+                .lives
+                .get(&key)
+                .map(|bytes| u64::from_be_bytes(bytes.as_slice().try_into().unwrap()))
+                .unwrap_or(0);
+            self.lives
+                .insert(key, life.checked_add(1).unwrap().to_be_bytes().to_vec());
+        }
+        self.publications.push(writes.to_vec());
+        Ok(true)
+    }
 }
 
 /// Two callers' references.
@@ -490,16 +542,16 @@ fn a_change_chains_its_event_onto_the_tail() {
 fn a_change_that_loses_its_sequence_takes_the_next() {
     let mut book = Book::default();
     submitted(&mut book, ALICE, "t1", 100);
-    let mut theirs = Vec::new();
+    let mut rival = book.clone();
     dispatch(
-        &mut book.clone(),
+        &mut rival,
         &step(ALICE, 110),
         "t1",
         "planner",
-        &mut theirs,
+        &mut Vec::new(),
     )
     .unwrap();
-    book.race = Some(theirs);
+    book.race = rival.publications.pop();
     let mut out = Vec::new();
     transition(
         &mut book,
@@ -1108,7 +1160,17 @@ fn the_sweep_drops_an_expired_tasks_chain_whole() {
     moved_to(&mut book, "t1", TaskState::Completed, 100);
     let mut out = Vec::new();
     retention_sweep(&mut book, 101 + TERMINAL_TTL_SECS, 64, &mut out).unwrap();
-    let dropped: Vec<&Write> = out.iter().filter(|w| w.kind == KIND_TASK_EVENT).collect();
+    assert!(
+        out.is_empty(),
+        "an acknowledged transaction is never written again"
+    );
+    let dropped: Vec<&Write> = book
+        .publications
+        .last()
+        .unwrap()
+        .iter()
+        .filter(|w| w.kind == KIND_TASK_EVENT)
+        .collect();
     assert_eq!(dropped.len(), 1);
     assert_eq!(
         (dropped[0].key.as_str(), dropped[0].value.is_empty()),
@@ -1189,7 +1251,12 @@ fn the_chain_scope_is_the_callers_opaque_reference_and_the_task() {
         &mut out,
     )
     .unwrap();
-    let scopes: Vec<&str> = out
+    assert!(
+        out.is_empty(),
+        "an acknowledged transaction is never written again"
+    );
+    let committed = book.publications.last().unwrap();
+    let scopes: Vec<&str> = committed
         .iter()
         .filter(|w| w.kind == KIND_TASK_EVENT)
         .map(|w| w.key.as_str())
@@ -1200,7 +1267,7 @@ fn the_chain_scope_is_the_callers_opaque_reference_and_the_task() {
         [want.as_str(), want.as_str()],
         "submitted, delegated"
     );
-    for w in &out {
+    for w in committed {
         for leak in [PRINCIPAL, KEY_ID, "alice"] {
             assert!(!w.key.contains(leak), "{} key names {leak}", w.kind);
             assert!(

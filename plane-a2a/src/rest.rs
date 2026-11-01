@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use serde_json::{json, Map, Value};
 
 use crate::agent_arrival::AgentRefusal;
+use crate::request_json::RequestJson;
 use crate::statement::Route;
 
 /// THE JSON-RPC ID OF A COMPOSED ENVELOPE. A JSON-RPC id is a correlation handle for a channel
@@ -25,8 +26,8 @@ use crate::statement::Route;
 /// what it is, never seen by the caller (the answer is unwrapped before it leaves).
 pub const REST_RPC_ID: &str = "a2a-http-json";
 
-/// THE METHOD NAMES, in A2A v1.0's spelling: the HTTP+JSON binding was introduced with v1.0 and
-/// the specification's operation table names these, so a REST request composes a v1.0 envelope.
+/// THE METHOD NAMES, in A2A v1.0's spelling. Both supported revisions define HTTP+JSON;
+/// these routes use v1.0 operation names, so a REST request composes a v1.0 envelope.
 pub mod method {
     /// `POST /message:send`.
     pub const SEND_MESSAGE: &str = "SendMessage";
@@ -70,6 +71,14 @@ use crate::agent_arrival::CODE_METHOD_NOT_FOUND;
 pub struct Params(Map<String, Value>);
 
 impl Params {
+    fn insert(&mut self, name: &str, value: Value) {
+        if let Some(previous) = self.0.get_mut(name) {
+            drop(RequestJson::new(std::mem::replace(previous, value)));
+        } else {
+            self.0.insert(name.to_string(), value);
+        }
+    }
+
     /// No members.
     #[must_use]
     pub fn new() -> Self {
@@ -79,7 +88,7 @@ impl Params {
     /// Set `name` to a value the caller definitely supplied.
     #[must_use]
     pub fn set(mut self, name: &str, value: impl Into<Value>) -> Self {
-        self.0.insert(name.to_string(), value.into());
+        self.insert(name, value.into());
         self
     }
 
@@ -93,7 +102,7 @@ impl Params {
             } else {
                 Value::String(v.clone())
             };
-            self.0.insert(name.to_string(), value);
+            self.insert(name, value);
         }
         self
     }
@@ -104,7 +113,7 @@ impl Params {
     pub fn merge(mut self, body: &Value) -> Self {
         if let Some(obj) = body.as_object() {
             for (k, v) in obj {
-                self.0.insert(k.clone(), v.clone());
+                self.insert(k, v.clone());
             }
         }
         self
@@ -112,8 +121,14 @@ impl Params {
 
     /// The members as one JSON object.
     #[must_use]
-    pub fn into_value(self) -> Value {
-        Value::Object(self.0)
+    pub fn into_value(mut self) -> Value {
+        Value::Object(std::mem::take(&mut self.0))
+    }
+}
+
+impl Drop for Params {
+    fn drop(&mut self) {
+        drop(RequestJson::new(Value::Object(std::mem::take(&mut self.0))));
     }
 }
 
@@ -139,24 +154,24 @@ pub fn json_scalar(raw: &str) -> Value {
 }
 
 /// THE QUERY STRING AS A `name -> value` MAP, decoded as `application/x-www-form-urlencoded`
-/// ([`form_decode`]). A repeated key keeps the last value; a malformed pair yields its own bytes.
+/// ([`form_decode`]). A repeated key keeps the last value; invalid UTF-8 refuses the query.
 #[must_use]
-pub fn query_map(query: Option<&str>) -> HashMap<String, String> {
+pub fn query_map(query: Option<&str>) -> Option<HashMap<String, String>> {
     let mut map = HashMap::new();
     let Some(raw) = query else {
-        return map;
+        return Some(map);
     };
     for pair in raw.split('&').filter(|p| !p.is_empty()) {
         let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
-        map.insert(form_decode(k), form_decode(v));
+        map.insert(form_decode(k)?, form_decode(v)?);
     }
-    map
+    Some(map)
 }
 
 /// Decode ONE `application/x-www-form-urlencoded` component: `+` is a space, `%XX` the byte,
-/// anything else verbatim, then the bytes read as UTF-8 lossily.
+/// anything else verbatim; invalid UTF-8 is refused.
 #[must_use]
-pub fn form_decode(s: &str) -> String {
+pub fn form_decode(s: &str) -> Option<String> {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
@@ -182,7 +197,7 @@ pub fn form_decode(s: &str) -> String {
             }
         }
     }
-    String::from_utf8_lossy(&out).into_owned()
+    String::from_utf8(out).ok()
 }
 
 /// One hex digit's value.
@@ -219,7 +234,22 @@ pub fn json_body(body: &[u8]) -> Value {
     if body.is_empty() {
         return json!({});
     }
-    serde_json::from_slice(body).unwrap_or_else(|_| json!({}))
+    serde_json::from_slice::<RequestJson>(body)
+        .map(RequestJson::into_value)
+        .unwrap_or_else(|_| json!({}))
+}
+
+/// `body` less its `members`: the path names the task, so the body's spellings of it go.
+fn without(body: &Value, members: &[&str]) -> Value {
+    let mut body = RequestJson::new(body.clone());
+    if let Some(obj) = body.as_object_mut() {
+        for m in members {
+            if let Some(removed) = obj.remove(*m) {
+                drop(RequestJson::new(removed));
+            }
+        }
+    }
+    body.into_value()
 }
 
 /// The refusal for a `POST /tasks/…` that names no verb this binding defines: `404` +
@@ -238,25 +268,44 @@ pub fn not_a_verb(addressed: &str) -> AgentRefusal {
 }
 
 /// The path variables `target` binds against `route`'s pattern, by name, each decoded as the
-/// router decoded it. `None` when the path does not have the pattern's shape or a capture is not
-/// UTF-8.
-#[must_use]
-pub fn captures(route: &Route, target: &str) -> Option<Vec<(&'static str, String)>> {
+/// router decoded it. `Ok(None)` when the path does not have the pattern's shape.
+///
+/// # Errors
+///
+/// A matched path capture is not UTF-8.
+pub fn captures(
+    route: &Route,
+    target: &str,
+) -> Result<Option<Vec<(&'static str, String)>>, AgentRefusal> {
     let path = target.split(['?', '#']).next().unwrap_or(target);
     let want: Vec<&'static str> = route.target.split('/').collect();
     let got: Vec<&str> = path.split('/').collect();
     if want.len() != got.len() {
-        return None;
+        return Ok(None);
+    }
+    // Match every literal before decoding captures: an unrelated path is still unserved.
+    if want
+        .iter()
+        .zip(&got)
+        .any(|(&w, &g)| !(w.starts_with('{') && w.ends_with('}')) && w != g)
+    {
+        return Ok(None);
     }
     let mut out = Vec::new();
     for (&w, &g) in want.iter().zip(got.iter()) {
-        match w.strip_prefix('{').and_then(|w| w.strip_suffix('}')) {
-            Some(name) => out.push((name, path_decode(g)?)),
-            None if w == g => {}
-            None => return None,
+        if let Some(name) = w.strip_prefix('{').and_then(|w| w.strip_suffix('}')) {
+            let value = path_decode(g).ok_or_else(|| {
+                AgentRefusal::new(
+                    crate::agent_arrival::STATUS_BAD_REQUEST,
+                    None,
+                    crate::agent_arrival::CODE_INVALID_PARAMS,
+                    format!("the `{name}` path capture must decode as UTF-8"),
+                )
+            })?;
+            out.push((name, value));
         }
     }
-    Some(out)
+    Ok(Some(out))
 }
 
 /// The query string of `target`, if it has one.
@@ -271,10 +320,11 @@ fn query_of(target: &str) -> Option<&str> {
 ///
 /// # Errors
 ///
-/// [`not_a_verb`] for a `POST /tasks/{id}` naming no verb. `Ok(None)` for a route that is not one of
-/// the line's, or a target that does not fit it, which the door answers as unserved.
+/// [`not_a_verb`] for a `POST /tasks/{id}` naming no verb, or invalid params for a path capture
+/// that does not decode as UTF-8. `Ok(None)` for a route that is not one of the line's, or a target
+/// that does not fit it, which the door answers as unserved.
 pub fn compose(route: &Route, target: &str, body: &[u8]) -> Result<Option<Vec<u8>>, AgentRefusal> {
-    let Some(vars) = captures(route, target) else {
+    let Some(vars) = captures(route, target)? else {
         return Ok(None);
     };
     let var = |name: &str| {
@@ -299,7 +349,27 @@ pub fn compose_from(
     query: Option<&str>,
     body: &[u8],
 ) -> Result<Option<Vec<u8>>, AgentRefusal> {
-    let query = query_map(query);
+    let invalid = |message: &str| {
+        AgentRefusal::new(
+            crate::agent_arrival::STATUS_BAD_REQUEST,
+            None,
+            crate::agent_arrival::CODE_INVALID_PARAMS,
+            message,
+        )
+    };
+    let query = query_map(query).ok_or_else(|| invalid("the query must decode as UTF-8"))?;
+    for (name, value) in &query {
+        let valid = match name.as_str() {
+            "includeArtifacts" => matches!(value.as_str(), "true" | "false"),
+            "pageSize" | "historyLength" => value.parse::<i32>().is_ok(),
+            _ => true,
+        };
+        if !valid {
+            return Err(invalid(
+                "a query parameter does not have its declared protobuf type",
+            ));
+        }
+    }
     let rel = route
         .target
         .strip_prefix(crate::MOUNT_PATH)
@@ -347,20 +417,24 @@ pub fn compose_from(
         };
         // `:cancel` carries its request as the body (proto `CancelTask`, `body: "*"`: its
         // `metadata`); THE PATH WINS, so the id is set after the merge.
-        let posted = if name == method::CANCEL_TASK {
+        let posted = RequestJson::new(if name == method::CANCEL_TASK {
             json_body(body)
         } else {
             json!({})
-        };
+        });
+        // The path names the task alone: the body's other spellings of it are dropped.
+        let posted = RequestJson::new(without(&posted, &crate::task_identity::TASK_ID_MEMBERS));
         (
             name,
             Params::new().merge(&posted).set("id", id).into_value(),
         )
     } else if at("POST", crate::ROUTE_PUSH_CONFIGS) {
         // THE PATH WINS: merged first, `taskId` set after, so a posted member cannot re-point it.
-        let params = Params::new()
-            .merge(&json_body(body))
-            .set("taskId", var("id"));
+        // The path names the task alone: the body's other spelling of it is dropped (`id` here
+        // is the config's).
+        let posted = RequestJson::new(json_body(body));
+        let posted = RequestJson::new(without(&posted, &["task_id"]));
+        let params = Params::new().merge(&posted).set("taskId", var("id"));
         (method::CREATE_PUSH_CONFIG, params.into_value())
     } else if at("GET", crate::ROUTE_PUSH_CONFIGS) {
         let params = Params::new()
@@ -383,10 +457,12 @@ pub fn compose_from(
     } else {
         return Ok(None);
     };
+    let params = RequestJson::new(params);
+    let bytes = zeroize::Zeroizing::new(crate::relay::json_bytes(&params).unwrap_or_default());
     Ok(Some(busbar_contract::jsonrpc::request_bytes(
-        &serde_json::to_vec(&REST_RPC_ID).unwrap_or_default(),
+        &crate::relay::json_bytes(&REST_RPC_ID).unwrap_or_default(),
         name,
-        Some(&serde_json::to_vec(&params).unwrap_or_default()),
+        Some(bytes.as_slice()),
     )))
 }
 
@@ -396,10 +472,12 @@ pub fn compose_from(
 /// them, busbar's identity already spliced in by the relay); an `error` becomes the AIP-193
 /// document at `status` ([`crate::agent_arrival::aip193`]); anything else (not JSON, or neither
 /// member) passes untouched. Read off the answer's bytes: only an `error` is read into a value.
+/// An error without a string message gets a fixed explanation; an unreadable document is kept
+/// intact rather than turned into an empty error.
 #[must_use]
 pub fn reframe(status: u32, body: &[u8]) -> Vec<u8> {
-    use crate::answer_bytes::{is_json, member_span, readable, result_span};
-    if !is_json(&readable(body)) {
+    use crate::answer_bytes::{is_json, member_span, result_span, with_readable};
+    if !with_readable(body, is_json) {
         return body.to_vec();
     }
     if let Some(result) = result_span(body) {
@@ -408,8 +486,19 @@ pub fn reframe(status: u32, body: &[u8]) -> Vec<u8> {
     // A JSON value spelled from `n` is `null`.
     match member_span(body, "error").filter(|error| body[error.start] != b'n') {
         Some(error) => {
-            let error: Value = serde_json::from_slice(&readable(&body[error])).unwrap_or_default();
-            serde_json::to_vec(&crate::agent_arrival::aip193(status, &error)).unwrap_or_default()
+            let Ok(error) = crate::answer_bytes::read_json(&body[error]) else {
+                return body.to_vec();
+            };
+            let missing_message = error.get("message").and_then(Value::as_str).is_none();
+            let mut document = RequestJson::new(crate::agent_arrival::aip193(status, &error));
+            if missing_message {
+                document["error"]["message"] =
+                    "the agent returned an error without a readable message".into();
+            }
+            let mut bytes = crate::relay::RawBytes::default();
+            serde_json::to_writer(&mut bytes, &document)
+                .expect("JSON Value serialization succeeds");
+            bytes.into_vec()
         }
         None => body.to_vec(),
     }

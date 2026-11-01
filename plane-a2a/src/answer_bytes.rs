@@ -19,6 +19,10 @@ use std::ops::Range;
 
 use busbar_contract::spans::{resolve_pointer, Resolved};
 use serde_json::Value;
+use zeroize::Zeroize;
+
+use crate::relay::RawBytes;
+use crate::request_json::RequestJson;
 
 /// One member of a JSON object: its decoded key and its value's span.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,12 +31,14 @@ struct ObjectMember {
     value: Range<usize>,
 }
 
-// Observe the actual old initialized owner at retirement without changing its nonwiping drop.
-#[cfg(test)]
 impl Drop for ObjectMember {
     fn drop(&mut self) {
+        #[cfg(test)]
         crate::tests::raw_custody_probe::before_wipe(self.key.as_bytes());
+        self.key.as_mut_str().zeroize();
+        #[cfg(test)]
         crate::tests::raw_custody_probe::after_wipe(self.key.as_bytes());
+        self.key.zeroize();
     }
 }
 
@@ -115,9 +121,11 @@ fn last<'m>(members: &'m [ObjectMember], key: &str) -> Option<&'m ObjectMember> 
 /// then spelled `0` (the reading never decides on a number's value; the caller's bytes keep it).
 #[must_use]
 pub fn readable(b: &[u8]) -> Cow<'_, [u8]> {
-    let mut out: Option<Vec<u8>> = None;
+    // Built in ONE pass: the run since the last replacement, then `0` (a far end's answer is
+    // untrusted, so no per-number shift of the whole tail).
+    let mut out: Option<RawBytes> = None;
+    let mut copied = 0;
     let mut i = 0;
-    let mut shift = 0isize;
     while i < b.len() {
         match b[i] {
             b'"' => i = value_at(b, i).map_or(b.len(), |v| v.end),
@@ -128,17 +136,33 @@ pub fn readable(b: &[u8]) -> Cow<'_, [u8]> {
                     .and_then(|t| t.parse::<f64>().ok())
                     .is_some_and(f64::is_infinite);
                 if past {
-                    let o = out.get_or_insert_with(|| b.to_vec());
-                    let at = (i as isize + shift) as usize;
-                    o.splice(at..at + (end - i), *b"0");
-                    shift += 1 - (end - i) as isize;
+                    let o = out.get_or_insert_with(RawBytes::default);
+                    o.extend_from_slice(&b[copied..i]);
+                    o.extend_from_slice(b"0");
+                    copied = end;
                 }
                 i = end;
             }
             _ => i += 1,
         }
     }
-    out.map_or(Cow::Borrowed(b), Cow::Owned)
+    out.map_or(Cow::Borrowed(b), |mut o| {
+        o.extend_from_slice(&b[copied..]);
+        Cow::Owned(o.into_vec())
+    })
+}
+
+/// Read through a number-normalized copy, retiring any owned scratch before returning.
+pub(crate) fn with_readable<T>(bytes: &[u8], read: impl FnOnce(&[u8]) -> T) -> T {
+    match readable(bytes) {
+        Cow::Borrowed(bytes) => read(bytes),
+        Cow::Owned(bytes) => read(&RawBytes::from(bytes)),
+    }
+}
+
+/// Parse a reading copy directly into the DOM's wiping owner.
+pub(crate) fn read_json(bytes: &[u8]) -> Result<RequestJson, serde_json::Error> {
+    with_readable(bytes, |bytes| serde_json::from_slice::<RequestJson>(bytes))
 }
 
 /// The span of `result` in the JSON-RPC envelope `envelope` (its last `result` member).
@@ -210,11 +234,13 @@ impl<'de> serde::de::Visitor<'de> for Shape {
 #[must_use]
 pub fn envelope_reading(envelope: &[u8]) -> Option<(Value, Option<Range<usize>>)> {
     let members = object_members(envelope, &document(envelope)?)?;
-    let mut judged = serde_json::Map::new();
+    let mut judged = RequestJson::new(Value::Object(serde_json::Map::new()));
     for key in ["jsonrpc", "id"] {
         if let Some(m) = last(&members, key) {
-            let value = serde_json::from_slice(&readable(&envelope[m.value.clone()])).ok()?;
-            judged.insert(key.to_string(), value);
+            let value = read_json(&envelope[m.value.clone()]).ok()?;
+            judged
+                .as_object_mut()?
+                .insert(key.to_string(), value.into_value());
         }
     }
     if let Some(m) = last(&members, "error") {
@@ -224,26 +250,29 @@ pub fn envelope_reading(envelope: &[u8]) -> Option<(Value, Option<Range<usize>>)
         } else {
             Value::Bool(true)
         };
-        judged.insert("error".to_string(), error);
+        judged.as_object_mut()?.insert("error".to_string(), error);
     }
     let result = last(&members, "result").map(|m| m.value.clone());
     if result.is_some() {
-        judged.insert("result".to_string(), Value::Null);
+        judged
+            .as_object_mut()?
+            .insert("result".to_string(), Value::Null);
     }
-    Some((Value::Object(judged), result))
+    Some((judged.into_value(), result))
 }
 
 /// The caller's reply: `result` (the far end's bytes, spliced) under the caller's own `id`.
 #[must_use]
 pub fn result_reply(id: &Value, result: &[u8]) -> Vec<u8> {
-    let id = serde_json::to_vec(id).unwrap_or_else(|_| b"null".to_vec());
-    let mut out = Vec::with_capacity(result.len() + id.len() + 32);
+    let mut id_bytes = RawBytes::default();
+    serde_json::to_writer(&mut id_bytes, id).expect("JSON Value serialization succeeds");
+    let mut out = RawBytes::default();
     out.extend_from_slice(b"{\"jsonrpc\":\"2.0\",\"id\":");
-    out.extend_from_slice(&id);
+    out.extend_from_slice(&id_bytes);
     out.extend_from_slice(b",\"result\":");
     out.extend_from_slice(result);
-    out.push(b'}');
-    out
+    out.extend_from_slice(b"}");
+    out.into_vec()
 }
 
 /// An HTTP+JSON answer `body` re-framed as the JSON-RPC envelope answering `id`, its `result` the
@@ -256,20 +285,22 @@ pub fn rewrap(body: &[u8], id: &Value) -> Result<Vec<u8>, String> {
         return Ok(result_reply(id, b"null"));
     }
     let span = document(body).ok_or_else(|| "the answer is not JSON".to_string())?;
-    serde_json::from_slice::<serde::de::IgnoredAny>(&readable(&body[span.clone()]))
-        .map_err(|e| format!("the answer is not JSON: {e}"))?;
+    with_readable(&body[span.clone()], |bytes| {
+        serde_json::from_slice::<serde::de::IgnoredAny>(bytes)
+    })
+    .map_err(|e| format!("the answer is not JSON: {e}"))?;
     Ok(result_reply(id, &body[span]))
 }
 
 /// The edits to one object: values replaced, and members appended before its closing brace.
 #[derive(Default)]
 struct Edits {
-    replace: Vec<(Range<usize>, Vec<u8>)>,
+    replace: Vec<(Range<usize>, RawBytes)>,
 }
 
 impl Edits {
     fn set(&mut self, at: Range<usize>, bytes: Vec<u8>) {
-        self.replace.push((at, bytes));
+        self.replace.push((at, bytes.into()));
     }
 
     /// Set `key` of the object `obj` (its members `ms`) to `value`: every occurrence replaced, or
@@ -282,9 +313,10 @@ impl Edits {
         key: &str,
         value: Vec<u8>,
     ) {
+        let value = RawBytes::from(value);
         let mut found = false;
         for m in ms.iter().filter(|m| m.key == key) {
-            self.set(m.value.clone(), value.clone());
+            self.set(m.value.clone(), value.to_vec());
             found = true;
         }
         if !found {
@@ -300,19 +332,19 @@ impl Edits {
             .replace
             .iter()
             .any(|(r, _)| r.start == close && r.end == close);
-        let mut ins = Vec::new();
+        let mut ins = RawBytes::default();
         if !empty || earlier {
-            ins.push(b',');
+            ins.extend_from_slice(b",");
         }
-        ins.extend_from_slice(&serde_json::to_vec(key).unwrap_or_default());
-        ins.push(b':');
+        serde_json::to_writer(&mut ins, key).expect("JSON string serialization succeeds");
+        ins.extend_from_slice(b":");
         ins.extend_from_slice(value);
-        self.set(close..close, ins);
+        self.set(close..close, ins.into_vec());
     }
 
     fn apply(mut self, b: &[u8]) -> Vec<u8> {
         self.replace.sort_by_key(|(r, _)| r.start);
-        let mut out = Vec::with_capacity(b.len() + 64);
+        let mut out = RawBytes::default();
         let mut at = 0;
         for (r, bytes) in self.replace {
             out.extend_from_slice(&b[at..r.start]);
@@ -320,12 +352,14 @@ impl Edits {
             at = r.end;
         }
         out.extend_from_slice(&b[at..]);
-        out
+        out.into_vec()
     }
 }
 
 fn json_str(s: &str) -> Vec<u8> {
-    serde_json::to_vec(s).unwrap_or_default()
+    let mut out = RawBytes::default();
+    serde_json::to_writer(&mut out, s).expect("JSON string serialization succeeds");
+    out.into_vec()
 }
 
 /// The span of every item of the array spanning `span` (`b[span.start]` is `[`), in byte order.
@@ -369,7 +403,7 @@ fn translate_list(
 }
 
 /// The members a message names the tasks it refers to under (A2A `Message.reference_task_ids`,
-/// a2a.proto:276, in either spelling).
+/// `Message.reference_task_ids` in the vendored proto, in either JSON spelling).
 pub const REFERENCE_MEMBERS: [&str; 2] = ["referenceTaskIds", "reference_task_ids"];
 
 /// A message's identity: its `taskId` and `contextId`, where it names them, are busbar's, and every
@@ -479,12 +513,13 @@ pub fn rewrite_identity(
     }
     if let Some((key, name)) = skill {
         let entry = || {
-            let mut v = b"{".to_vec();
-            v.extend_from_slice(&json_str(key));
-            v.push(b':');
-            v.extend_from_slice(&json_str(name));
-            v.push(b'}');
-            v
+            let mut v = RawBytes::default();
+            v.extend_from_slice(b"{");
+            serde_json::to_writer(&mut v, key).expect("JSON string serialization succeeds");
+            v.extend_from_slice(b":");
+            serde_json::to_writer(&mut v, name).expect("JSON string serialization succeeds");
+            v.extend_from_slice(b"}");
+            v.into_vec()
         };
         match last(&ms, "metadata") {
             Some(meta) if b[meta.value.start] == b'{' => {
@@ -497,7 +532,10 @@ pub fn rewrite_identity(
                     e.set(m.value.clone(), entry());
                 }
             }
-            None => e.append(b, &payload, ms.is_empty(), "metadata", &entry()),
+            None => {
+                let value = RawBytes::from(entry());
+                e.append(b, &payload, ms.is_empty(), "metadata", &value);
+            }
         }
     }
     Some(e.apply(b))

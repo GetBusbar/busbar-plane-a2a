@@ -54,9 +54,25 @@ def _number(value):
         raise ValueError("RFC 8785 forbids NaN and Infinity")
     if value == 0:
         return "0"
-    if value == int(value) and abs(value) < 1e21:
-        return str(int(value))
-    return repr(value)
+    # Keep the shortest round-tripping significand, but use ECMAScript's decimal/exponent
+    # boundaries and exponent spelling. Converting integral floats to int exposes binary
+    # rounding digits (e.g. 1000000000000000100 becomes 1000000000000000128).
+    sign = "-" if value < 0 else ""
+    coefficient, _, exponent = repr(abs(value)).lower().partition("e")
+    whole, _, fraction = coefficient.partition(".")
+    raw = whole + fraction
+    leading = len(raw) - len(raw.lstrip("0"))
+    digits = raw.lstrip("0").rstrip("0")
+    point = len(whole) + int(exponent or "0") - leading
+    if 0 < point <= 21:
+        if point >= len(digits):
+            return sign + digits + "0" * (point - len(digits))
+        return sign + digits[:point] + "." + digits[point:]
+    if -6 < point <= 0:
+        return sign + "0." + "0" * -point + digits
+    power = point - 1
+    mantissa = digits[0] + ("." + digits[1:] if len(digits) > 1 else "")
+    return sign + mantissa + "e" + ("+" if power >= 0 else "") + str(power)
 
 
 def b64url_decode(text):
@@ -80,6 +96,9 @@ def verify_jws(signature_obj, canonical_payload, jwks=None, timeout=10.0):
         out["reason"] = "protected header is not base64url JSON: %s" % exc
         out["verified"] = False
         return out
+    if not isinstance(header, dict):
+        out.update(verified=False, reason="protected header is not a JSON object")
+        return out
     out["alg"] = header.get("alg")
     out["kid"] = header.get("kid")
 
@@ -87,6 +106,13 @@ def verify_jws(signature_obj, canonical_payload, jwks=None, timeout=10.0):
         out["verified"] = False
         out["reason"] = ("alg is 'none'. An unsigned JWS must never be "
                          "accepted; this is the classic JWS downgrade.")
+        return out
+
+    if header.get("alg") not in ("ES256", "ES384", "ES512", "RS256", "RS384", "RS512", "EdDSA"):
+        out.update(verified=False, reason="unsupported asymmetric signature algorithm")
+        return out
+    if not crit_is_understood(header):
+        out.update(verified=False, reason="unsupported critical protected-header extension")
         return out
 
     keys = list(jwks or [])
@@ -111,6 +137,13 @@ def verify_jws(signature_obj, canonical_payload, jwks=None, timeout=10.0):
     if key is None:
         out["reason"] = "no key in the key set matches kid %r" % header.get("kid")
         return out
+    algorithm = header["alg"]
+    required_type = "OKP" if algorithm == "EdDSA" else ("EC" if algorithm.startswith("ES") else "RSA")
+    required_curve = {"ES256": "P-256", "ES384": "P-384", "ES512": "P-521", "EdDSA": "Ed25519"}.get(algorithm)
+    if (key.get("kty") != required_type or key.get("alg", algorithm) != algorithm or
+            (required_curve is not None and key.get("crv") != required_curve)):
+        out.update(verified=False, reason="algorithm does not match the selected public key")
+        return out
 
     signing_input = (signature_obj["protected"].encode("ascii") + b"."
                      + b64url_encode(canonical_payload.encode("utf-8")).encode("ascii"))
@@ -133,12 +166,19 @@ def verify_jws(signature_obj, canonical_payload, jwks=None, timeout=10.0):
 
 def _verify(jwk, alg, signing_input, sig):
     from cryptography.hazmat.primitives import hashes
-    from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
+    from cryptography.hazmat.primitives.asymmetric import ec, ed25519, padding, rsa
     from cryptography.hazmat.primitives.asymmetric.utils import (
         encode_dss_signature)
     from cryptography.exceptions import InvalidSignature
 
     kty = jwk.get("kty")
+    if kty == "OKP" and alg == "EdDSA" and jwk.get("crv") == "Ed25519":
+        pub = ed25519.Ed25519PublicKey.from_public_bytes(b64url_decode(jwk["x"]))
+        try:
+            pub.verify(sig, signing_input)
+            return True
+        except InvalidSignature:
+            return False
     if kty == "EC":
         curve = {"P-256": ec.SECP256R1(), "P-384": ec.SECP384R1(),
                  "P-521": ec.SECP521R1()}[jwk["crv"]]

@@ -4,13 +4,16 @@
 use super::*;
 use busbar_contract::abi::host::service::{RecordsGetIn, SignIn, CLAIM_WON, FOUND};
 use busbar_contract::abi::mechanism::call::Span;
-use serde_json::json;
+use serde_json::{json, Value};
+#[path = "conditional_callback_host.rs"]
+mod conditional_host;
 
 #[derive(Default)]
 struct Script {
+    conditional: conditional_host::Host,
     sign_failed: bool,
     read_failed: bool,
-    claim_failed: bool,
+    publish_failed: bool,
     read_pending: bool,
     signs: usize,
     gets: usize,
@@ -19,6 +22,7 @@ struct Script {
     config_gets: usize,
     full_lists: usize,
     random: u8,
+    notifications: usize,
 }
 static SCRIPT: Mutex<Option<Script>> = Mutex::new(None);
 fn script<T>(f: impl FnOnce(&mut Script) -> T) -> T {
@@ -70,10 +74,7 @@ extern "C" fn get(_: HostCtx, input: *const c_void, out: *mut ServiceOut) -> Raw
     if failed {
         return answer(out, Outcome::Failed, 0, 0);
     }
-    let row = store()
-        .iter()
-        .find(|(kind, key, _)| *kind == text(i.kind) && *key == text(i.key))
-        .map(|(_, _, v)| v.clone());
+    let row = script(|s| s.conditional.get(i.head, &text(i.kind), &text(i.key)));
     let Some(row) = row else {
         return answer(out, Outcome::Ready, 0, 0);
     };
@@ -92,7 +93,7 @@ extern "C" fn get(_: HostCtx, input: *const c_void, out: *mut ServiceOut) -> Raw
 extern "C" fn claimed(_: HostCtx, _: *const c_void, out: *mut ServiceOut) -> RawOutcome {
     let failed = script(|s| {
         s.claims += 1;
-        s.claim_failed
+        s.publish_failed
     });
     answer(
         out,
@@ -145,10 +146,62 @@ extern "C" fn signed(_: HostCtx, input: *const c_void, out: *mut ServiceOut) -> 
 extern "C" fn listed(ctx: HostCtx, input: *const c_void, out: *mut ServiceOut) -> RawOutcome {
     // SAFETY: the SDK lends RecordsListIn during the call.
     let i = unsafe { input.cast::<RecordsListIn>().read() };
-    if text(i.kind) == "task" && i.prefix.len() == 0 {
-        script(|s| s.full_lists += 1);
+    let _ = ctx;
+    let (fresh, rows) = script(|s| {
+        let rows = s.conditional.list(
+            i.head,
+            &text(i.kind),
+            &text(i.prefix),
+            &text(i.after),
+            if i.limit == 0 {
+                usize::MAX
+            } else {
+                i.limit as usize
+            },
+        );
+        if rows.0 && text(i.kind) == "task" && i.prefix.len() == 0 {
+            s.full_lists += 1;
+        }
+        rows
+    });
+    let _ = fresh;
+    let needed: usize = rows.iter().map(|(k, v)| k.len() + v.len()).sum();
+    if needed > i.into.cap || rows.len() > i.into.spans_cap {
+        let result = answer(out, Outcome::Failed, 0, 0);
+        unsafe {
+            (*out).needed_bytes = needed as u64;
+            (*out).needed_items = rows.len() as u64;
+        }
+        return result;
     }
-    records_list(ctx, input, out)
+    let mut at = 0;
+    for (n, (key, value)) in rows.iter().enumerate() {
+        // SAFETY: the SDK's live buffers fit the checked complete page.
+        unsafe {
+            std::ptr::copy_nonoverlapping(key.as_ptr(), i.into.buf.add(at), key.len());
+            std::ptr::copy_nonoverlapping(
+                value.as_ptr(),
+                i.into.buf.add(at + key.len()),
+                value.len(),
+            );
+            i.into.spans.add(n).write(ItemSpan {
+                key: Span {
+                    offset: at as u32,
+                    len: key.len() as u32,
+                },
+                value: Span {
+                    offset: (at + key.len()) as u32,
+                    len: value.len() as u32,
+                },
+            });
+        }
+        at += key.len() + value.len();
+    }
+    let result = answer(out, Outcome::Ready, 0, at as u64);
+    unsafe {
+        (*out).items = rows.len() as u64;
+    }
+    result
 }
 extern "C" fn random_fill(_: HostCtx, input: *const c_void, out: *mut ServiceOut) -> RawOutcome {
     // SAFETY: the SDK lends RandomFillIn and its declared byte region.
@@ -159,7 +212,7 @@ extern "C" fn random_fill(_: HostCtx, input: *const c_void, out: *mut ServiceOut
     };
     let value = script(|s| {
         s.random = s.random.wrapping_add(1);
-        s.random
+        s.conditional.random(i.head, s.random)
     });
     assert!(i.into.cap >= i.len as usize);
     unsafe {
@@ -180,9 +233,71 @@ fn apply(records: &[RecordWrite], arena: &[u8]) {
         }
     }
 }
+extern "C" fn notification_request(
+    ctx: HostCtx,
+    input: *const c_void,
+    out: *mut ServiceOut,
+) -> RawOutcome {
+    // SAFETY: connector lends the request bytes and descriptor throughout this call.
+    let i = unsafe { input.cast::<RequestIn>().read() };
+    let piece = unsafe { i.piece.read() };
+    if piece.kind == busbar_contract::abi::host::conn::connector::REQUEST_HEAD {
+        let bytes = unsafe { std::slice::from_raw_parts(i.buf, i.len) };
+        let target = piece.target;
+        if &bytes[target.offset as usize..(target.offset + target.len) as usize] == b"/cb" {
+            script(|s| s.notifications += 1);
+        }
+    }
+    super::write_request(ctx, input, out)
+}
+
+extern "C" fn notification_judged(
+    _: HostCtx,
+    input: *const c_void,
+    out: *mut ServiceOut,
+) -> RawOutcome {
+    // SAFETY: the destination service lends its writable address and span regions.
+    let i = unsafe {
+        input
+            .cast::<busbar_contract::abi::host::service::DestJudgeIn>()
+            .read()
+    };
+    let address = b"93.184.216.34";
+    if i.into.cap < address.len() || i.into.spans_cap < 1 {
+        let result = answer(out, Outcome::Failed, 0, 0);
+        unsafe {
+            (*out).needed_bytes = address.len() as u64;
+            (*out).needed_items = 1;
+        }
+        return result;
+    }
+    unsafe {
+        std::ptr::copy_nonoverlapping(address.as_ptr(), i.into.buf, address.len());
+        i.into.spans.write(ItemSpan {
+            key: Span {
+                offset: 0,
+                len: address.len() as u32,
+            },
+            value: Span {
+                offset: busbar_contract::abi::mechanism::check::SPAN_ABSENT,
+                len: 0,
+            },
+        });
+    }
+    let result = answer(out, Outcome::Ready, DEST_ALLOWED, address.len() as u64);
+    unsafe {
+        (*out).items = 1;
+    }
+    result
+}
+
 fn open_scripted() -> (Reset, Door) {
     let reset = Reset(std::mem::take(&mut *store()));
     *SCRIPT.lock().unwrap_or_else(PoisonError::into_inner) = Some(Script::default());
+    (reset, open_scripted_instance())
+}
+
+fn open_scripted_instance() -> Door {
     let services = Box::leak(Box::new(HostSlots {
         records_list: Some(listed),
         random_fill: Some(random_fill),
@@ -190,10 +305,16 @@ fn open_scripted() -> (Reset, Door) {
         records_get: Some(get),
         records_claim: Some(claimed),
         sign: Some(signed),
+        dest_judge: Some(notification_judged),
         ..HOST_SLOTS
+    }));
+    let conns = Box::leak(Box::new(ConnectorSlots {
+        write_request: Some(notification_request),
+        ..CONN_SLOTS
     }));
     let tables = Box::leak(Box::new(HostTables {
         services,
+        conns,
         ..TABLES.0
     }));
     let mut input: PlaneOpenIn = z();
@@ -216,19 +337,19 @@ fn open_scripted() -> (Reset, Door) {
         )
     };
     assert_eq!(result.outcome(), Outcome::Ready);
-    (
-        reset,
-        Door {
-            instance: output.open.instance,
-        },
-    )
+    Door {
+        instance: output.open.instance,
+    }
 }
 fn seed() {
+    seed_task("t1");
+}
+fn seed_task(task_id: &str) {
     let caller = std::str::from_utf8(ALICE).unwrap();
-    let row = json!({"task_id":"t1","context_id":"c1","principal":caller,"direction":"inbound","state":"working","agent_id":"vendor","artifact_cursor":0,"push_callback":"","created_at":1_800_000_000u64,"updated_at":1_800_000_000u64,"next_seq":1});
+    let row = json!({"task_id":task_id,"context_id":"c1","principal":caller,"direction":"inbound","state":"working","agent_id":"vendor","artifact_cursor":0,"push_callback":"","created_at":1_800_000_000u64,"updated_at":1_800_000_000u64,"next_seq":1});
     store().push((
         "task".into(),
-        format!("{caller}/t1"),
+        format!("{caller}/{task_id}"),
         serde_json::to_vec(&row).unwrap(),
     ));
 }
@@ -288,6 +409,128 @@ struct Served {
     diags: Vec<String>,
     writes: usize,
 }
+
+fn copied_extensions(door: &Door, answer_head: &OutHead) -> Vec<u8> {
+    let ext = answer_head.extensions;
+    if ext.len == 0 {
+        return Vec::new();
+    }
+    // SAFETY: copied while the answer's lease is live, before invoking generic RELEASE.
+    let bytes = unsafe { std::slice::from_raw_parts(ext.ptr, ext.len) }.to_vec();
+    if answer_head.lease != 0 {
+        let input = busbar_contract::abi::mechanism::lifecycle::ReleaseIn {
+            head: head::<busbar_contract::abi::mechanism::lifecycle::ReleaseIn>(
+                life::RELEASE,
+                Ticket::NONE,
+            ),
+            lease: answer_head.lease,
+        };
+        let mut output = out_head::<OutHead>();
+        // SAFETY: existing generic RELEASE over the exact live lease returned by this instance.
+        let result = unsafe {
+            lifecycle().release.unwrap()(
+                door.instance,
+                std::ptr::from_ref(&input).cast(),
+                std::ptr::from_mut(&mut output).cast(),
+            )
+        };
+        assert_eq!(
+            result.outcome(),
+            Outcome::Ready,
+            "conditional intent lease is released by PlaneLife"
+        );
+    }
+    bytes
+}
+
+fn begin_conditional(ticket: Ticket, resuming: bool) -> Vec<u8> {
+    script(|s| {
+        let refused = s.publish_failed;
+        s.conditional.begin(ticket, resuming, refused)
+    })
+}
+
+fn next_conditional(
+    ticket: Ticket,
+    outcome: Outcome,
+    short: bool,
+    extensions: &[u8],
+) -> Option<Vec<u8>> {
+    script(|s| {
+        let refused = s.publish_failed;
+        s.conditional
+            .returned(ticket, outcome, short, extensions, refused)
+    })
+}
+
+struct Driven {
+    outcome: Outcome,
+    extensions: Vec<u8>,
+    short: bool,
+}
+
+/// Every normal driver crossing carries the host's sticky receipt until ACK consumption.
+fn sticky_settlement_driver(door: &Door, tick: bool) -> Driven {
+    let receipt = script(|s| s.conditional.retained_settlement()).unwrap_or_default();
+    settlement_driver(door, &receipt, tick)
+}
+
+/// The real driver ABI, including copying and releasing its leased acknowledgement.
+fn settlement_driver(door: &Door, receipt: &[u8], tick: bool) -> Driven {
+    let driver = ticket(1 << 29);
+    let mut extensions = begin_conditional(driver, false);
+    extensions.extend_from_slice(receipt);
+    if tick {
+        let mut input = TickIn {
+            head: head::<TickIn>(life::TICK, driver),
+            now_ns: 5_000_000_000,
+        };
+        input.head.extensions = octets(&extensions);
+        let mut output: TickOut = z();
+        output.head = out_head::<TickOut>();
+        let result = lifecycle().tick.unwrap()(
+            door.instance,
+            std::ptr::from_ref(&input).cast(),
+            std::ptr::from_mut(&mut output).cast(),
+        );
+        Driven {
+            outcome: result.outcome(),
+            extensions: copied_extensions(door, &output.head),
+            short: false,
+        }
+    } else {
+        let mut sessions = [0_u64; 4];
+        let mut input = PlaneDriveIn {
+            drive: DriveIn {
+                head: head::<PlaneDriveIn>(life::DRIVE, driver),
+                driver,
+            },
+            sessions_buf: sessions.as_mut_ptr(),
+            sessions_cap: sessions.len(),
+        };
+        input.drive.head.extensions = octets(&extensions);
+        let mut output: PlaneDriveOut = z();
+        output.head = out_head::<PlaneDriveOut>();
+        let result = lifecycle().drive.unwrap()(
+            door.instance,
+            std::ptr::from_ref(&input).cast(),
+            std::ptr::from_mut(&mut output).cast(),
+        );
+        Driven {
+            outcome: result.outcome(),
+            extensions: copied_extensions(door, &output.head),
+            short: output.sessions_needed as usize > sessions.len(),
+        }
+    }
+}
+
+fn consume_settlement(answer: &Driven) -> bool {
+    script(|s| {
+        s.conditional
+            .acknowledge(&answer.extensions, answer.outcome, answer.short)
+    })
+}
+
 fn serve(door: &Door, slot_id: u64, auth: &str, body: &[u8], cap: usize) -> Served {
     serve_flags(door, slot_id, auth, body, cap, 0)
 }
@@ -329,15 +572,55 @@ fn serve_flags(
     (input.fields_buf, input.fields_cap) = (out_fields.as_mut_ptr(), out_fields.len());
     (input.arena_buf, input.arena_cap) = (arena.as_mut_ptr(), arena.len());
     (input.records_buf, input.records_cap) = (records.as_mut_ptr(), records.len());
-    let mut output: ServeOut = z();
-    output.head = out_head::<ServeOut>();
+    let mut output: ServeOut;
+    let mut extensions = begin_conditional(
+        ticket(slot_id),
+        flags & busbar_contract::abi::mechanism::call::FLAG_RESUME != 0,
+    );
+    let mut crossings = 0;
     // SAFETY: exact SERVE structs and all declared buffers remain live throughout the call.
-    let result = unsafe {
-        ops().serve.unwrap()(
-            door.instance,
-            std::ptr::from_ref(&input).cast(),
-            std::ptr::from_mut(&mut output).cast(),
-        )
+    let result = loop {
+        crossings += 1;
+        assert!(crossings < 256, "conditional callback failed to settle");
+        input.head.extensions = octets(&extensions);
+        output = z();
+        output.head = out_head::<ServeOut>();
+        let result = unsafe {
+            ops().serve.unwrap()(
+                door.instance,
+                std::ptr::from_ref(&input).cast(),
+                std::ptr::from_mut(&mut output).cast(),
+            )
+        };
+        let ext = copied_extensions(door, &output.head);
+        if busbar_contract::abi::sdk::plane::conditional::read_request(&ext)
+            .unwrap()
+            .is_some()
+            || busbar_contract::abi::sdk::plane::conditional::read_observation(&ext)
+                .unwrap()
+                .is_some()
+        {
+            assert_eq!(
+                (
+                    output.status,
+                    output.reply_written,
+                    output.records_written,
+                    output.fields_written
+                ),
+                (0, 0, 0, 0)
+            );
+        }
+        if let Some(next) = next_conditional(
+            ticket(slot_id),
+            result.outcome(),
+            output.reply_needed > cap as u64,
+            &ext,
+        ) {
+            extensions = next;
+            input.head.flags |= busbar_contract::abi::mechanism::call::FLAG_RESUME;
+            continue;
+        }
+        break result;
     };
     let envelope = output.head.envelope;
     let diags = if envelope.diags_len == 0 {
@@ -361,9 +644,19 @@ fn serve_flags(
     }
 }
 fn piece(door: &Door, unit: u64, given: Given<'_>, reply_cap: usize) -> Answered {
+    piece_sized(door, unit, given, reply_cap, 16, 1 << 14)
+}
+fn piece_sized(
+    door: &Door,
+    unit: u64,
+    given: Given<'_>,
+    reply_cap: usize,
+    fields_cap: usize,
+    arena_cap: usize,
+) -> Answered {
     let mut reply = vec![0_u8; reply_cap];
-    let mut fields = vec![z::<OutField>(); 16];
-    let mut arena = vec![0_u8; 1 << 14];
+    let mut fields = vec![z::<OutField>(); fields_cap];
+    let mut arena = vec![0_u8; arena_cap];
     let mut records = [z::<RecordWrite>(); 16];
     let mut units = [z::<UnitCount>(); 8];
     let mut i: OnPieceIn = z();
@@ -382,18 +675,60 @@ fn piece(door: &Door, unit: u64, given: Given<'_>, reply_cap: usize) -> Answered
     (i.arena_buf, i.arena_cap) = (arena.as_mut_ptr(), arena.len());
     (i.records_buf, i.records_cap) = (records.as_mut_ptr(), records.len());
     (i.units_buf, i.units_cap) = (units.as_mut_ptr(), units.len());
-    let mut o: OnPieceOut = z();
-    o.head = out_head::<OnPieceOut>();
+    let mut o: OnPieceOut;
+    let mut extensions = begin_conditional(ticket(unit), false);
+    let mut crossings = 0;
     let f = ops().on_piece.expect("on_piece");
     // SAFETY: `f` is the door's own slot, called over an `in` and an `out` laid out as its ABI
     // states and live for the call.
     #[allow(unused_unsafe)]
-    let ret = unsafe {
-        f(
-            door.instance,
-            std::ptr::from_ref(&i).cast(),
-            std::ptr::from_mut(&mut o).cast(),
-        )
+    let ret = loop {
+        crossings += 1;
+        assert!(crossings < 256, "conditional piece failed to settle");
+        i.head.extensions = octets(&extensions);
+        o = z();
+        o.head = out_head::<OnPieceOut>();
+        let ret = unsafe {
+            f(
+                door.instance,
+                std::ptr::from_ref(&i).cast(),
+                std::ptr::from_mut(&mut o).cast(),
+            )
+        };
+        let ext = copied_extensions(door, &o.head);
+        if busbar_contract::abi::sdk::plane::conditional::read_request(&ext)
+            .unwrap()
+            .is_some()
+            || busbar_contract::abi::sdk::plane::conditional::read_observation(&ext)
+                .unwrap()
+                .is_some()
+        {
+            assert_eq!(
+                (
+                    o.emitted,
+                    o.records_written,
+                    o.units_written,
+                    o.flags,
+                    o.fields_written
+                ),
+                (0, 0, 0, 0, 0)
+            );
+        }
+        if let Some(next) = next_conditional(
+            ticket(unit),
+            ret.outcome(),
+            o.reply_needed > reply_cap as u64
+                || o.fields_needed as usize > fields.len()
+                || o.arena_needed as usize > arena.len()
+                || o.records_needed as usize > records.len()
+                || o.units_needed as usize > units.len(),
+            &ext,
+        ) {
+            extensions = next;
+            i.head.flags |= busbar_contract::abi::mechanism::call::FLAG_RESUME;
+            continue;
+        }
+        break ret;
     };
     if ret.outcome() == Outcome::Ready {
         apply(&records[..o.records_written as usize], &arena);
@@ -458,9 +793,9 @@ fn callback_signer_read_and_transition_faults_are_retryable_and_distinct_from_ba
     script(|s| s.read_failed = true);
     fault(&serve(&door, 602, &auth, WORKING, 4096));
     script(|s| s.read_failed = false);
-    script(|s| s.claim_failed = true);
+    script(|s| s.publish_failed = true);
     fault(&serve(&door, 603, &auth, COMPLETED, 4096));
-    script(|s| s.claim_failed = false);
+    script(|s| s.publish_failed = false);
     let unchanged = serve(&door, 604, &auth, WORKING, 4096);
     assert_eq!(unchanged.status, 202);
     assert_eq!(unchanged.writes, 0);
@@ -513,6 +848,14 @@ fn callback_pending_and_short_refusals_preserve_one_budget_charge_and_one_warnin
     assert!(!recalled.diags.iter().any(|d| d.contains("BUSBAR-7050")));
     script(|s| s.read_failed = false);
     assert_eq!(serve(&door, 760, &auth, WORKING, 4096).status, 429);
+    let short_limit = serve(&door, 761, &auth, WORKING, 0);
+    assert_eq!(short_limit.outcome, Outcome::Failed);
+    assert!(short_limit.needed > 0);
+    let recalled_limit = recall(&door, 761, &auth, WORKING, 4096);
+    assert_eq!(
+        (recalled_limit.outcome, recalled_limit.status),
+        (Outcome::Ready, 429)
+    );
 }
 
 #[test]
@@ -520,6 +863,7 @@ fn failed_config_read_keeps_the_accepted_move_and_retries_its_notification() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
     let (_reset, door) = open_scripted();
     let auth = registered(&door);
+    let before_applied = script(|s| s.conditional.applied);
     script(|s| s.config_failed = true);
     let accepted = serve(&door, 800, &auth, COMPLETED, 4096);
     assert_eq!(
@@ -527,7 +871,21 @@ fn failed_config_read_keeps_the_accepted_move_and_retries_its_notification() {
         (Outcome::Ready, 202),
         "{accepted:?}"
     );
-    assert!(accepted.writes > 0);
+    assert_eq!(
+        accepted.writes, 0,
+        "guarded mutations never ride ordinary output"
+    );
+    assert_eq!(script(|s| s.conditional.applied), before_applied + 1);
+    let row = store()
+        .iter()
+        .find(|(kind, _, _)| kind == "task")
+        .unwrap()
+        .2
+        .clone();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&row).unwrap()["state"],
+        "completed"
+    );
     assert!(accepted.diags.iter().any(|d| d.contains("BUSBAR-7050")));
     let before = script(|s| s.config_gets);
     script(|s| s.config_failed = false);
@@ -596,4 +954,516 @@ fn malformed_callback_short_recall_keeps_its_refusal_and_single_charge() {
         "{recalled:?}"
     );
     assert_eq!(serve(&door, 1060, &auth, WORKING, 4096).status, 429);
+}
+
+fn task_state() -> Value {
+    let rows = store();
+    serde_json::from_slice(
+        &rows
+            .iter()
+            .find(|(kind, key, _)| kind == "task" && key.ends_with("/t1"))
+            .unwrap()
+            .2,
+    )
+    .unwrap()
+}
+
+#[test]
+fn conditional_callback_waits_for_applied_and_replays_the_identical_candidate() {
+    let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    let (_reset, door) = open_scripted();
+    let auth = registered(&door);
+    let applied = script(|s| s.conditional.applied);
+    let emitted = script(|s| s.conditional.emitted.len());
+    script(|s| s.conditional.pause_commit = true);
+    let waiting = serve(&door, 1100, &auth, COMPLETED, 4096);
+    assert_eq!(
+        (waiting.outcome, waiting.status, waiting.writes),
+        (Outcome::Pending, 0, 0)
+    );
+    assert_eq!(task_state()["state"], "working");
+    let reads = script(|s| s.gets);
+    assert_eq!(
+        recall(&door, 1100, &auth, COMPLETED, 4096).outcome,
+        Outcome::Pending
+    );
+    assert_eq!(
+        script(|s| s.gets),
+        reads,
+        "a wake without the receipt cannot reread or replan"
+    );
+    assert_eq!(script(|s| s.conditional.applied), applied);
+    script(|s| {
+        assert_eq!(
+            s.conditional.emitted[emitted],
+            s.conditional.emitted[emitted + 1]
+        );
+    });
+    assert_eq!(
+        serve(&door, 1101, &auth, WORKING, 4096).status,
+        202,
+        "pending terminal publication has not ended the callback token"
+    );
+    script(|s| s.conditional.pause_commit = false);
+    let landed = recall(&door, 1100, &auth, COMPLETED, 4096);
+    assert_eq!(
+        (landed.outcome, landed.status, landed.writes),
+        (Outcome::Ready, 202, 0)
+    );
+    assert_eq!(script(|s| s.conditional.applied), applied + 1);
+    assert_eq!(task_state()["state"], "completed");
+    assert_eq!(
+        serve(&door, 1102, &auth, WORKING, 4096).status,
+        401,
+        "the acknowledged terminal move ends its token"
+    );
+    assert_eq!(
+        script(|s| s.claims),
+        0,
+        "publication does not leave a TTL claim behind"
+    );
+}
+
+#[test]
+fn conditional_conflict_observes_again_and_reads_a_fresh_row() {
+    let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    let (_reset, door) = open_scripted();
+    let auth = registered(&door);
+    let before = script(|s| s.conditional.requests.len());
+    let observed = script(|s| s.conditional.observations.len());
+    script(|s| s.conditional.conflict_once = true);
+    assert_eq!(serve(&door, 1110, &auth, COMPLETED, 4096).status, 202);
+    script(|s| {
+        let attempts = &s.conditional.requests[before..];
+        assert_eq!(attempts.len(), 2);
+        assert_ne!(
+            attempts[0].candidate.correlation,
+            attempts[1].candidate.correlation
+        );
+        assert_ne!(
+            attempts[0].candidate.predicates[0].expected,
+            attempts[1].candidate.predicates[0].expected,
+            "the real competing cursor change is reread"
+        );
+        assert_eq!(s.conditional.observations.len(), observed + 2);
+        let epoch = attempts[0].capability.epoch;
+        let reads: Vec<_> = s
+            .conditional
+            .reads
+            .iter()
+            .filter(|r| r.0 == epoch && r.2 == "task")
+            .collect();
+        assert!(
+            reads.len() >= 3,
+            "precheck plus two distinct post-observation GET handles: {reads:?}"
+        );
+        assert!(reads.windows(2).all(|r| r[0].1 < r[1].1));
+    });
+    assert_eq!(
+        task_state()["artifact_cursor"],
+        1,
+        "the retry preserves the competitor's mutation"
+    );
+    assert_eq!(task_state()["state"], "completed");
+}
+
+#[test]
+fn lost_applied_callback_receipt_never_reexecutes_the_transaction() {
+    let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    let (_reset, door) = open_scripted();
+    let auth = registered(&door);
+    let applied = script(|s| s.conditional.applied);
+    let emitted = script(|s| s.conditional.emitted.len());
+    script(|s| s.conditional.lose_applied_once = true);
+    assert_eq!(serve(&door, 1120, &auth, COMPLETED, 4096).status, 202);
+    script(|s| {
+        assert_eq!(s.conditional.applied, applied + 1);
+        assert_eq!(s.conditional.emitted.len(), emitted + 2);
+        assert_eq!(
+            s.conditional.emitted[emitted],
+            s.conditional.emitted[emitted + 1]
+        );
+    });
+}
+
+const SUBMIT: &[u8] = br#"{"jsonrpc":"2.0","id":1,"method":"SendMessage","params":{"message":{"messageId":"m","role":"user","parts":[{"kind":"text","text":"hello"}]}}}"#;
+fn arrive_submit(door: &Door, unit: u64) {
+    assert_eq!(
+        door.arrive(
+            unit,
+            ("POST", "/a2a/agents/{agent_id}"),
+            "/a2a/agents/vendor",
+            SUBMIT
+        )
+        .0,
+        Outcome::Ready
+    );
+}
+
+#[test]
+fn an_applied_task_open_keeps_its_identity_through_output_short_recall() {
+    let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    let (_reset, door) = open_scripted();
+    assert_eq!(door.connect("vendor").1, 200);
+    arrive_submit(&door, 1130);
+    assert_eq!(
+        piece(&door, 1130, Given::attempt(b"vendor"), 65536).outcome,
+        Some(Outcome::Ready)
+    );
+    let applied = script(|s| s.conditional.applied);
+    let rows = store().clone();
+    let short = piece(&door, 1130, Given::caller(SUBMIT), 0);
+    assert_eq!(short.outcome, Some(Outcome::Failed));
+    let recalled = piece(&door, 1130, Given::caller(SUBMIT), 65536);
+    assert_eq!(recalled.outcome, Some(Outcome::Ready));
+    assert!(!recalled.emitted.is_empty());
+    assert_eq!(*store(), rows, "SHORT writes no second task or chain event");
+    script(|s| {
+        assert_eq!(s.conditional.applied, applied);
+        assert_eq!(
+            s.conditional.events.len(),
+            2,
+            "submitted and delegated are one atomic opening"
+        );
+        assert_eq!(s.claims, 0);
+    });
+}
+
+#[test]
+fn cancel_starts_no_publication_and_does_not_replace_a_submitted_attempt() {
+    let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    let (_reset, door) = open_scripted();
+    assert_eq!(door.connect("vendor").1, 200);
+    arrive_submit(&door, 1140);
+    assert_eq!(door.cancel_unit(1140), Outcome::Ready);
+    assert_eq!(script(|s| s.conditional.applied), 0);
+    arrive_submit(&door, 1141);
+    script(|s| s.conditional.pause_commit = true);
+    let pending = piece(&door, 1141, Given::attempt(b"vendor"), 65536);
+    assert_eq!(pending.outcome, Some(Outcome::Pending));
+    assert!(pending.emitted.is_empty());
+    assert_eq!(pending.flags, 0);
+    assert_eq!(door.cancel_unit(1141), Outcome::Ready);
+    let original = script(|s| s.conditional.emitted.last().unwrap().clone());
+    script(|s| {
+        s.conditional.pause_commit = false;
+        // After submission the host owns this exact attempt, even after the plugin is cancelled.
+        s.conditional.begin(ticket(1141), true, false);
+        assert_eq!(s.conditional.requests.last(), Some(&original));
+        assert_eq!(s.conditional.applied, 1);
+    });
+    let cancelled = piece(&door, 1141, Given::attempt(b"vendor"), 65536);
+    assert_eq!(cancelled.outcome, Some(Outcome::Failed));
+    assert!(cancelled.emitted.is_empty());
+    assert_eq!(script(|s| s.conditional.applied), 1);
+    assert_eq!(script(|s| s.claims), 0);
+}
+
+#[test]
+fn canceled_raw_callback_settles_late_applied_once_across_lost_driver_ack() {
+    use busbar_contract::abi::sdk::plane::conditional as wire;
+    let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    let (_reset, door) = open_scripted();
+    let auth = registered(&door);
+    // Drain any registration notification before measuring this callback's own obligation.
+    assert_eq!(door.tick().0, Outcome::Ready);
+    assert_eq!(door.tick().0, Outcome::Ready);
+    let notifications = script(|s| s.notifications);
+    let applied = script(|s| s.conditional.applied);
+    script(|s| s.conditional.pause_commit = true);
+    assert_eq!(
+        serve(&door, 1200, &auth, COMPLETED, 4096).outcome,
+        Outcome::Pending
+    );
+    let original = script(|s| s.conditional.emitted.last().unwrap().clone());
+    assert_eq!(door.cancel_unit(1200), Outcome::Ready);
+    let reads = script(|s| s.gets);
+    let emitted = script(|s| s.conditional.emitted.len());
+    let receipt = script(|s| s.conditional.detach(ticket(1200)));
+    assert_eq!(
+        script(|s| s.conditional.requests.last().cloned()),
+        Some(original.clone())
+    );
+    assert_eq!(script(|s| s.conditional.applied), applied + 1);
+    assert_eq!(script(|s| s.notifications), notifications);
+    // No operation re-entry, including the same host ticket, may resume this canceled callback.
+    assert_eq!(
+        recall(&door, 1200, &auth, COMPLETED, 4096).outcome,
+        Outcome::Failed
+    );
+    assert_eq!(
+        script(|s| (s.gets, s.conditional.emitted.len())),
+        (reads, emitted)
+    );
+    let first = sticky_settlement_driver(&door, false);
+    assert_eq!(first.outcome, Outcome::Pending);
+    assert!(wire::read_settlement_ack(&first.extensions)
+        .unwrap()
+        .unwrap()
+        .matches(&original)
+        .unwrap());
+    // Drop the copied ACK before host consumption, exactly as a lost driver reply.
+    assert_eq!(
+        script(|s| s.conditional.retained_settlement()),
+        Some(receipt.clone())
+    );
+    assert_eq!(serve(&door, 1201, &auth, WORKING, 4096).status, 401);
+    let repeated = sticky_settlement_driver(&door, true);
+    assert_eq!(repeated.outcome, Outcome::Pending);
+    assert_eq!(first.extensions, repeated.extensions);
+    let repeated_drive = sticky_settlement_driver(&door, false);
+    assert_eq!(repeated_drive.outcome, Outcome::Pending);
+    assert_eq!(first.extensions, repeated_drive.extensions);
+    assert_eq!(
+        script(|s| s.notifications),
+        notifications,
+        "sticky receipt retries are ACK-only; delivery waits for host ACK consumption"
+    );
+    assert!(consume_settlement(&repeated_drive));
+    assert_eq!(script(|s| s.conditional.retained_settlement()), None);
+    assert_eq!(
+        sticky_settlement_driver(&door, false).outcome,
+        Outcome::Ready
+    );
+    assert_eq!(
+        sticky_settlement_driver(&door, true).outcome,
+        Outcome::Ready
+    );
+    assert_eq!(script(|s| s.notifications), notifications + 1);
+    assert_eq!(
+        sticky_settlement_driver(&door, true).outcome,
+        Outcome::Ready
+    );
+    assert_eq!(
+        script(|s| s.notifications),
+        notifications + 1,
+        "repeated receipt consumption queues exactly one notification"
+    );
+    // An adversarial replay after host custody ended no longer names a retained guest owner.
+    let stale = settlement_driver(&door, &receipt, false);
+    assert_eq!(stale.outcome, Outcome::Failed);
+    assert!(wire::read_settlement_ack(&stale.extensions)
+        .unwrap()
+        .is_none());
+    assert_eq!(script(|s| s.notifications), notifications + 1);
+    assert_eq!(
+        script(|s| (s.conditional.applied, s.conditional.acknowledgements)),
+        (applied + 1, 1)
+    );
+}
+
+#[test]
+fn detached_settlement_rejects_other_instance_changed_identity_and_reused_ticket() {
+    use busbar_contract::abi::sdk::plane::conditional as wire;
+    let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    let (_reset, door) = open_scripted();
+    let auth = registered(&door);
+    script(|s| s.conditional.pause_commit = true);
+    assert_eq!(
+        serve(&door, 1210, &auth, COMPLETED, 4096).outcome,
+        Outcome::Pending
+    );
+    assert_eq!(door.cancel_unit(1210), Outcome::Ready);
+    let receipt = script(|s| s.conditional.detach(ticket(1210)));
+    let original = script(|s| s.conditional.emitted.last().unwrap().clone());
+    let other = open_scripted_instance();
+    let foreign = settlement_driver(&other, &receipt, false);
+    assert_eq!(foreign.outcome, Outcome::Failed);
+    assert!(wire::read_settlement_ack(&foreign.extensions)
+        .unwrap()
+        .is_none());
+    assert!(!consume_settlement(&foreign));
+    for changed in 0..5 {
+        let mut request = original.clone();
+        match changed {
+            0 => request.capability.ticket.generation += 1,
+            1 => request.capability.epoch += 1,
+            2 => request.candidate.correlation += 1,
+            3 => request
+                .candidate
+                .mutations
+                .push(wire::RecordMutation::Delete {
+                    kind: 0,
+                    key: b"wrong-digest".to_vec(),
+                }),
+            _ => request.capability.ticket.slot += 1,
+        }
+        let wrong = wire::encode_settlement(
+            &request,
+            &wire::ConditionalResult {
+                correlation: request.candidate.correlation,
+                decision: Ok(busbar_contract::abi::sdk::store::conditional::Decision::Applied),
+            },
+        )
+        .unwrap();
+        let answer = settlement_driver(&door, &wrong, changed % 2 == 0);
+        assert_eq!(answer.outcome, Outcome::Failed);
+        assert!(wire::read_settlement_ack(&answer.extensions)
+            .unwrap()
+            .is_none());
+        assert!(!consume_settlement(&answer));
+        assert_eq!(
+            script(|s| s.conditional.retained_settlement()),
+            Some(receipt.clone())
+        );
+    }
+    let emitted = script(|s| s.conditional.emitted.len());
+    assert_eq!(
+        recall(&door, 1210, &auth, COMPLETED, 4096).outcome,
+        Outcome::Failed
+    );
+    assert_eq!(script(|s| s.conditional.emitted.len()), emitted);
+    let exact = settlement_driver(&door, &receipt, false);
+    assert_eq!(exact.outcome, Outcome::Pending);
+    assert!(consume_settlement(&exact));
+}
+
+#[test]
+fn actual_short_callback_then_cancel_retains_original_receipt_until_driver_ack() {
+    let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    let (_reset, door) = open_scripted();
+    registered(&door);
+    let applied = script(|s| s.conditional.applied);
+    let short = get_task_answer_sized(&door, 1220, 0, true);
+    assert_eq!(short.outcome, Some(Outcome::Failed));
+    assert!(short.emitted.is_empty());
+    assert!(short.fields_needed > 0);
+    assert_eq!(script(|s| s.conditional.applied), applied + 1);
+    assert_eq!(script(|s| s.conditional.acknowledgements), 0);
+    assert_eq!(door.cancel_unit(1220), Outcome::Ready);
+    let receipt = script(|s| s.conditional.detach(ticket(1220)));
+    let ack = settlement_driver(&door, &receipt, true);
+    assert_eq!(ack.outcome, Outcome::Pending);
+    assert_eq!(
+        script(|s| s.conditional.retained_settlement()),
+        Some(receipt)
+    );
+    assert!(consume_settlement(&ack));
+    assert_eq!(
+        script(|s| (s.conditional.applied, s.conditional.acknowledgements)),
+        (applied + 1, 1)
+    );
+}
+
+fn get_task_answer_sized(door: &Door, unit: u64, cap: usize, short: bool) -> Answered {
+    get_named_task_answer(door, unit, "t1", "completed", cap, short)
+}
+fn get_named_task_answer(
+    door: &Door,
+    unit: u64,
+    task_id: &str,
+    state: &str,
+    cap: usize,
+    short: bool,
+) -> Answered {
+    let request = serde_json::to_vec(
+        &json!({"jsonrpc":"2.0","id":1,"method":"GetTask","params":{"id":task_id}}),
+    )
+    .unwrap();
+    assert_eq!(
+        door.arrive(
+            unit,
+            ("POST", "/a2a/agents/{agent_id}"),
+            "/a2a/agents/vendor",
+            &request
+        ),
+        (Outcome::Ready, 0)
+    );
+    assert_eq!(
+        piece(door, unit, Given::attempt(b"vendor"), 65536).outcome,
+        Some(Outcome::Ready)
+    );
+    assert_eq!(
+        piece(door, unit, Given::caller(&request), 65536).outcome,
+        Some(Outcome::Ready)
+    );
+    let response = serde_json::to_vec(&json!({"jsonrpc":"2.0","id":1,"result":{"id":format!("backend-{task_id}"),"contextId":"c1","status":{"state":state}}})).unwrap();
+    piece_sized(
+        door,
+        unit,
+        Given::far_end(200, &response),
+        cap,
+        if short { 0 } else { 16 },
+        if short { 0 } else { 1 << 14 },
+    )
+}
+
+fn delivered_events() -> usize {
+    script(|s| {
+        s.conditional
+            .events
+            .iter()
+            .filter(|(_, content)| {
+                let event: Value = serde_json::from_slice(content).unwrap();
+                event["kind"] == "task.push_delivered"
+            })
+            .count()
+    })
+}
+
+#[test]
+fn canceled_owed_append_is_acknowledged_only_after_its_exact_late_applied() {
+    let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    let (_reset, door) = open_scripted();
+    let auth = registered(&door);
+    seed_task("t2");
+    assert_eq!(serve(&door, 1230, &auth, COMPLETED, 4096).status, 202);
+    assert_eq!(door.tick().0, Outcome::Ready);
+    assert_eq!(door.tick().0, Outcome::Ready);
+    assert!(
+        script(|s| s.notifications) > 0,
+        "an actual receiver exchange creates the owed delivery outcome"
+    );
+    let before = delivered_events();
+    script(|s| s.conditional.pause_owed_commit = true);
+    let pending = get_named_task_answer(&door, 1231, "t2", "working", 65536, false);
+    assert_eq!(pending.outcome, Some(Outcome::Pending));
+    assert_eq!(delivered_events(), before);
+    let original = script(|s| s.conditional.emitted.last().unwrap().clone());
+    assert_eq!(original.capability.ticket, ticket(1231));
+    assert!(
+        original.candidate.chains.iter().any(|chain| matches!(chain,
+        busbar_contract::abi::sdk::plane::conditional::ChainMutation::Append { scope, content, .. }
+        if scope == format!("{}/t1", std::str::from_utf8(ALICE).unwrap()).as_bytes()
+            && serde_json::from_slice::<Value>(content).unwrap()["kind"] == "task.push_delivered"))
+    );
+    assert!(
+        script(|s| !s.conditional.requests.contains(&original)),
+        "the actual owed append is copied but paused before the host decision"
+    );
+    assert_eq!(door.cancel_unit(1231), Outcome::Ready);
+    let receipt = script(|s| s.conditional.detach(ticket(1231)));
+    assert_eq!(
+        script(|s| s.conditional.retained_settlement()),
+        Some(receipt)
+    );
+    assert_eq!(delivered_events(), before + 1);
+    let ack = sticky_settlement_driver(&door, false);
+    assert_eq!(ack.outcome, Outcome::Pending);
+    let repeated = sticky_settlement_driver(&door, true);
+    assert_eq!(repeated.outcome, Outcome::Pending);
+    assert_eq!(ack.extensions, repeated.extensions);
+    assert!(consume_settlement(&repeated));
+    assert_eq!(
+        sticky_settlement_driver(&door, false).outcome,
+        Outcome::Ready
+    );
+    assert_eq!(
+        get_named_task_answer(&door, 1232, "t2", "working", 65536, false).outcome,
+        Some(Outcome::Ready)
+    );
+    assert_eq!(
+        delivered_events(),
+        before + 1,
+        "settlement consumes the exact owed receipt so a later real callback cannot file it again"
+    );
+    assert_eq!(
+        script(|s| s
+            .conditional
+            .requests
+            .iter()
+            .filter(|request| **request == original)
+            .count()),
+        1
+    );
 }

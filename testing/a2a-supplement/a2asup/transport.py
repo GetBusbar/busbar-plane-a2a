@@ -232,16 +232,18 @@ class GrpcBinding:
 
     name = "grpc"
 
-    def __init__(self, authority: str, timeout: float = 30.0) -> None:
+    def __init__(self, authority: str, timeout: float = 30.0, secure: bool = False) -> None:
         self.authority = authority
         self.timeout = timeout
+        self.secure = secure
         self._channel = None
 
     def _connect(self):
         if self._channel is None:
             import grpc  # noqa: PLC0415
 
-            self._channel = grpc.insecure_channel(self.authority)
+            self._channel = (grpc.secure_channel(self.authority, grpc.ssl_channel_credentials())
+                             if self.secure else grpc.insecure_channel(self.authority))
         return self._channel
 
     def close(self) -> None:

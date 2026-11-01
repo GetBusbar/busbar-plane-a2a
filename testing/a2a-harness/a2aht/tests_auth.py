@@ -53,7 +53,8 @@ def test_client_presents_credentials(ctx):
     with _auth_peer(require_auth=BEARER) as peer:
         run = drive(ctx, peer, extra_env={"A2A_TOKEN": BEARER}, timeout=45.0)
         ctx.observe("drive", _summary(run))
-        presented = [v for v in peer.saw_header("Authorization") if v]
+        presented = [request["headers"].get("authorization") for request in peer.a2a_requests()
+                     if request["headers"].get("authorization")]
         ctx.observe("authorization_headers_seen", len(presented))
         ctx.observe("card_declared_scheme", "httpAuthSecurityScheme/Bearer")
         ctx.observe("any_credential_presented", bool(presented))
@@ -75,7 +76,7 @@ def test_client_presents_credentials(ctx):
            "against the peer or a silently empty result.",
     clause="SPEC 3.3.2 Authentication Errors. The spec requires the SERVER to "
            "reject; the client's reaction is not specified, so the loop is "
-           "characterised and only a hang is failed.",
+           "characterised without inventing a retry limit.",
     role=ROLE_CLIENT, tier=PULL_REQUEST,
 )
 def test_client_handles_401(ctx):
@@ -84,21 +85,10 @@ def test_client_handles_401(ctx):
         ctx.observe("drive", _summary(run))
         attempts = len(peer.a2a_requests())
         ctx.observe("requests_against_a_401ing_peer", attempts)
-        ctx.assert_must(
-            not run["timed_out"],
-            "the target hung against a peer that answers 401 to everything "
-            "(%d request(s) made before the harness gave up)" % attempts,
-            "SPEC 3.3.2 makes 401 an expected, handled outcome. A client that "
-            "hangs on it cannot be operated.",
-        )
-        ctx.assert_must(
-            attempts < 50,
-            "the target made %d requests against a peer that always answers "
-            "401, which is a retry loop" % attempts,
-            "SPEC 3.3.2: authentication failure is terminal for the request. "
-            "Unbounded retry against a 401 is a denial of service against "
-            "the peer and against yourself.",
-        )
+        ctx.observe("authentication_failure_timed_out", run["timed_out"],
+                    "The specification does not set a client retry count or deadline for 401.")
+        if not attempts:
+            raise Inapplicable("the drive fetched the card but attempted no authenticated operation")
 
 
 @a2a_test(

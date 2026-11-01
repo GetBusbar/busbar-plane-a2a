@@ -167,7 +167,7 @@ def _run(req, base: str, token: str, agent_url: str) -> Result:
             },
         )
         evidence.append(f"PUT {good_name} -> {put_good.status_code} {short(put_good.text, 200)}")
-        if put_good.status_code >= 400:
+        if not 200 <= put_good.status_code < 300:
             return Result(
                 req.id,
                 Verdict.ERROR,
@@ -191,6 +191,10 @@ def _run(req, base: str, token: str, agent_url: str) -> Result:
             },
         )
         evidence.append(f"PUT {bad_name} -> {put_bad.status_code} {short(put_bad.text, 200)}")
+        if not 200 <= put_bad.status_code < 300:
+            return Result(req.id, Verdict.ERROR,
+                          "the negative-control registration failed, so its card verifier was not exercised",
+                          evidence)
         bad = _connect(base, token, bad_name)
         evidence.append(f"connect {bad_name} (UNTRUSTED key) -> {bad.status_code} {short(bad.text, 300)}")
     finally:

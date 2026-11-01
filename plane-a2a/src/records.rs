@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (C) 2026 Busbar Inc and contributors
+
 //! The plane's durable state: the HOST record kinds it keeps, by name.
 //!
 //! A plane performs no input and no output of its own. What it must remember across a restart is

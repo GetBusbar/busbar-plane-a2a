@@ -405,3 +405,23 @@ fn a_v03_cards_signing_payload_removes_only_its_signatures() {
         r#"{"capabilities":{"extensions":[]},"name":"A","skills":[],"url":"https://e.example/a2a"}"#
     );
 }
+
+#[test]
+fn a_wrongly_typed_skill_set_cannot_be_approved_as_empty() {
+    for skills in [
+        serde_json::json!("plan"),
+        serde_json::json!({"id":"plan"}),
+        serde_json::json!(1),
+    ] {
+        assert_eq!(
+            skill_digests(&serde_json::json!({"skills":skills})),
+            Err(CardError::InvalidSkills)
+        );
+    }
+    assert!(skill_digests(&serde_json::json!({"skills":[]}))
+        .unwrap()
+        .is_empty());
+    assert!(skill_digests(&serde_json::json!({"skills":null}))
+        .unwrap()
+        .is_empty());
+}

@@ -21,11 +21,11 @@ fn a_timestamp_is_written_as_rfc3339() {
         (ts(1_478_617_629, 1_000), "2016-11-08T15:07:09.000001Z"),
         (ts(1_478_617_629, 7), "2016-11-08T15:07:09.000000007Z"),
         (ts(951_782_400, 0), "2000-02-29T00:00:00Z"),
-        (ts(-62_167_219_200, 0), "0000-01-01T00:00:00Z"),
-        (ts(-62_167_219_201, 0), "-0001-12-31T23:59:59Z"),
-        (ts(253_402_300_800, 0), "+10000-01-01T00:00:00Z"),
-        // A leap second: the 59th second carrying a second's worth of nanoseconds.
-        (ts(1_483_228_799, 1_000_000_000), "2016-12-31T23:59:60Z"),
+        (ts(-62_135_596_800, 0), "0001-01-01T00:00:00Z"),
+        (
+            ts(253_402_300_799, 999_999_999),
+            "9999-12-31T23:59:59.999999999Z",
+        ),
     ];
     for (t, want) in cases {
         assert_eq!(
@@ -52,7 +52,11 @@ fn a_timestamp_is_read_from_rfc3339() {
             ts(1_478_617_629, 123_456_789),
         ),
         ("2016-11-08T10:07:09\u{2212}05:00", ts(1_478_617_629, 0)),
-        ("2016-12-31T23:59:60Z", ts(1_483_228_799, 1_000_000_000)),
+        ("0001-01-01T00:00:00Z", ts(-62_135_596_800, 0)),
+        (
+            "9999-12-31T23:59:59.999999999Z",
+            ts(253_402_300_799, 999_999_999),
+        ),
     ];
     for (s, want) in cases {
         assert_eq!(s.parse::<Timestamp>(), Ok(want), "{s}");
@@ -95,4 +99,27 @@ fn a_value_is_the_json_value_it_is() {
         kind: Some(value::Kind::Number(f64::NAN)),
     };
     assert!(serde_json::to_value(&nan).is_err());
+}
+
+#[test]
+fn protobuf_timestamp_refuses_calendar_and_offset_overflow() {
+    for value in [
+        ts(-62_135_596_801, 0),
+        ts(253_402_300_800, 0),
+        ts(1_483_228_799, 1_000_000_000),
+    ] {
+        assert!(serde_json::to_value(value).is_err(), "{value:?}");
+    }
+    for text in [
+        "0000-01-01T00:00:00Z",
+        "0001-01-01T00:00:00+00:01",
+        "9999-12-31T23:59:59-00:01",
+        "2016-12-31T23:59:60Z",
+    ] {
+        assert_eq!(
+            text.parse::<Timestamp>(),
+            Err(ParseError::OutOfRange),
+            "{text}"
+        );
+    }
 }

@@ -14,6 +14,7 @@
 #
 # usage: serve.sh <port> [--public-url URL]
 set -euo pipefail
+umask 077
 cd "$(dirname "$0")"
 
 PORT="${1:?usage: serve.sh <port> [--public-url URL]}"; shift || true
@@ -37,7 +38,7 @@ so there is no a2a-sdk pin -- refusing to serve" >&2
   exit 2
 fi
 
-WORK="${A2A_SCENARIO_AGENT_WORK:-${TMPDIR:-/tmp}/a2a-scenario-agent}"
+WORK="${A2A_SCENARIO_AGENT_WORK:-${XDG_CACHE_HOME:-$HOME/.cache}/busbar-a2a/scenario-agent}"
 VENV="$WORK/venv-$CONTROL_PY_VERSION"
 mkdir -p "$WORK" 2>/dev/null || {
   echo "could not create the scenario agent's work directory $WORK -- refusing to serve" >&2

@@ -18,8 +18,8 @@ Both are permissive and both permit the use made here, so the ambiguity does not
 but it does decide HOW it is used.
 
 **What we do about it.** Nothing from `a2a-tck` is copied into this repository. `run-tck.sh` fetches
-it at the pinned commit at run time, installs it into a throwaway virtualenv, and invokes it as a
-tool. The only artefacts kept here are `baselines/*.json`, which are **our own measurements of a
+it at the pinned commit at run time, installs hash-pinned dependencies into a reusable private
+virtualenv under the configured work directory, and invokes the checkout as a tool. The only artefacts kept here are `baselines/*.json`, which are **our own measurements of a
 third-party control** — a record of what we observed, not a copy of the suite. Nothing in them is
 upstream text.
 

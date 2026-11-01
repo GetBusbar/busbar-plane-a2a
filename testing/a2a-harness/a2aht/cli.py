@@ -31,6 +31,9 @@ def _target_args(p):
     p.add_argument("--card-url", help="explicit agent card URL, if the agent "
                                       "does not serve the well-known path")
     p.add_argument("--auth", help="an auth header, as 'Name: value'")
+    p.add_argument("--auth-file", type=argparse.FileType("r"),
+                   help="read an auth header from a private file or inherited descriptor")
+    p.add_argument("--jwks", help="operator-provided JWKS JSON file for card signature verification")
     p.add_argument("--insecure-tls", action="store_true",
                    help="do not verify TLS certificates")
     p.add_argument("--label", default=None,
@@ -49,21 +52,35 @@ def _target_args(p):
 
 
 def build_target(args):
+    auth = args.auth
+    if getattr(args, "auth_file", None) is not None:
+        if auth is not None:
+            raise ValueError("supply --auth or --auth-file, not both")
+        with args.auth_file:
+            auth = args.auth_file.read().strip()
     return Target(
         endpoint=args.endpoint, launch=args.launch, port=args.port,
-        host=args.host, card_url=args.card_url, auth_header=args.auth,
+        host=args.host, card_url=args.card_url, auth_header=auth,
         insecure=args.insecure_tls, cwd=args.cwd,
         label=args.label or args.endpoint or args.launch or "target",
     )
 
 
 def build_config(args):
-    return {
+    config = {
         "client_drive": getattr(args, "client_drive", None),
         "cwd": getattr(args, "cwd", None),
         "concurrency": getattr(args, "concurrency", 8),
         "allow_undriven_bindings": getattr(args, "allow_undriven_bindings", ""),
     }
+    if getattr(args, "jwks", None):
+        with open(args.jwks) as source:
+            document = json.load(source)
+        keys = document.get("keys") if isinstance(document, dict) else None
+        if not isinstance(keys, list) or not all(isinstance(key, dict) for key in keys):
+            raise ValueError("--jwks must contain a JSON object with a keys array")
+        config["jwks"] = keys
+    return config
 
 
 def cmd_run(args):

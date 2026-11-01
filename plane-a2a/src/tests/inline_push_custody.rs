@@ -99,7 +99,7 @@ fn resumed_inline_config_survives_a_fresh_delivery_book_and_delete_stops_future_
         value: Vec::new(),
     };
     d.book.apply(std::slice::from_ref(&deletion));
-    crate::push_door::forget_deleted(&deliveries, ALICE, std::slice::from_ref(&deletion));
+    crate::push_door::forget_deleted(&deliveries, std::slice::from_ref(&deletion));
     assert!(deliveries.next_due(0).is_none());
     assert!(!crate::push_door::queue_moved(&deliveries, &mut d.book, ALICE, &row).unwrap());
 }
@@ -191,6 +191,17 @@ impl Records for FailedResume {
         self.0.list(k, v)
     }
     fn claim(&mut self, _: &str, _: &str, _: u64) -> Result<bool, Halt> {
+        panic!("task resumption must not acquire a claim")
+    }
+    fn observe_chain_life(&mut self, kind: &str, scope: &str) -> Result<Option<Vec<u8>>, Halt> {
+        self.0.observe_chain_life(kind, scope)
+    }
+    fn publish(
+        &mut self,
+        _: &[tasks::Predicate],
+        _: &[tasks::ChainLife],
+        _: &[Write],
+    ) -> Result<bool, Halt> {
         Err(Halt::Failed("store unavailable".into()))
     }
 }
@@ -229,17 +240,15 @@ fn failed_resume_is_retryable_storage_failure() {
         member: MEMBER,
         addressed: None,
         now: 300,
+        sweep: true,
     };
     let mut writes = Vec::new();
-    let Opened::Refused(reply) = open(
-        &mut FailedResume(d),
-        &request,
-        &json!(7),
-        &|_| None,
-        &mut writes,
-    )
-    .unwrap() else {
-        panic!("failed claim must refuse resume");
+    let before = d.book.clone();
+    let mut failed = FailedResume(d);
+    let Opened::Refused(reply) =
+        open(&mut failed, &request, &json!(7), &|_| None, &mut writes).unwrap()
+    else {
+        panic!("failed publication must refuse resume");
     };
     assert_eq!(reply.status, 503);
     assert_eq!(
@@ -247,4 +256,28 @@ fn failed_resume_is_retryable_storage_failure() {
         -32603
     );
     assert!(writes.is_empty());
+    assert_eq!(
+        failed.0.book, before,
+        "failed resumption changes no task, event or config"
+    );
+}
+
+#[test]
+fn snake_case_inline_callback_keeps_url_and_credential_together() {
+    let mut desk = desk();
+    let request = send(json!({"message":{"messageId":"m"}, "configuration": {
+        "task_push_notification_config": {"push_notification_config": {
+            "url":"https://receiver.example/cb", "authentication": {
+                "schemes":["Bearer"], "credentials":"snake-secret"
+            }
+        }}
+    }}));
+    let Opened::Hop { task, .. } = opened(&mut desk, &request, ALICE) else {
+        panic!("accepted callback")
+    };
+    let cfg = local::held_config(&mut desk.book, ALICE, &task.task_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(cfg.url, "https://receiver.example/cb");
+    assert!(cfg.authentication.is_some());
 }

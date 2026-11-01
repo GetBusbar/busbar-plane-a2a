@@ -25,6 +25,7 @@
 //! the bytes the status carries as its details.
 
 use crate::proto::{pb, Normal};
+use crate::request_json::RequestJson;
 use prost::Message as _;
 use serde_json::Value;
 
@@ -63,6 +64,14 @@ pub struct CallStatus {
     code: Code,
     message: String,
     details: Vec<u8>,
+}
+
+impl Drop for CallStatus {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.message.zeroize();
+        self.details.zeroize();
+    }
 }
 
 impl CallStatus {
@@ -119,6 +128,7 @@ impl CallStatus {
 
 /// `google.rpc.ErrorInfo`: why an A2A error happened, in the protocol's own reason vocabulary.
 #[derive(Clone, PartialEq, prost::Message)]
+#[prost(prost_path = "crate::proto::custody::prost")]
 pub struct ErrorInfo {
     /// The reason token.
     #[prost(string, tag = "1")]
@@ -131,10 +141,26 @@ pub struct ErrorInfo {
     pub metadata: std::collections::BTreeMap<String, String>,
 }
 
+impl crate::proto::custody::Wipe for ErrorInfo {
+    fn wipe(&mut self) {
+        use crate::proto::custody::Wipe;
+        self.reason.wipe();
+        self.domain.wipe();
+        self.metadata.wipe();
+    }
+}
+
+impl Drop for ErrorInfo {
+    fn drop(&mut self) {
+        crate::proto::custody::Wipe::wipe(self);
+    }
+}
+
 /// The error model's envelope messages the details are written in.
 mod rpc {
     /// `google.rpc.Status`.
     #[derive(Clone, PartialEq, prost::Message)]
+    #[prost(prost_path = "crate::proto::custody::prost")]
     pub struct Status {
         #[prost(int32, tag = "1")]
         pub code: i32,
@@ -146,11 +172,40 @@ mod rpc {
 
     /// `google.protobuf.Any`.
     #[derive(Clone, PartialEq, prost::Message)]
+    #[prost(prost_path = "crate::proto::custody::prost")]
     pub struct Any {
         #[prost(string, tag = "1")]
         pub type_url: String,
         #[prost(bytes = "vec", tag = "2")]
         pub value: Vec<u8>,
+    }
+
+    impl crate::proto::custody::Wipe for Status {
+        fn wipe(&mut self) {
+            use crate::proto::custody::Wipe;
+            self.message.wipe();
+            self.details.wipe();
+        }
+    }
+
+    impl crate::proto::custody::Wipe for Any {
+        fn wipe(&mut self) {
+            use crate::proto::custody::Wipe;
+            self.type_url.wipe();
+            self.value.wipe();
+        }
+    }
+
+    impl Drop for Status {
+        fn drop(&mut self) {
+            crate::proto::custody::Wipe::wipe(self);
+        }
+    }
+
+    impl Drop for Any {
+        fn drop(&mut self) {
+            crate::proto::custody::Wipe::wipe(self);
+        }
     }
 }
 
@@ -259,7 +314,7 @@ pub fn unimplemented() -> CallStatus {
 ///
 /// The status the call is answered with instead.
 pub fn compose(rpc: Rpc, message: &[u8]) -> Result<Vec<u8>, CallStatus> {
-    let params = match rpc {
+    let params = RequestJson::new(match rpc {
         Rpc::SendMessage | Rpc::SendStreamingMessage => {
             to_params::<pb::SendMessageRequest>(message)?
         }
@@ -280,17 +335,18 @@ pub fn compose(rpc: Rpc, message: &[u8]) -> Result<Vec<u8>, CallStatus> {
         Rpc::DeleteTaskPushNotificationConfig => {
             to_params::<pb::DeleteTaskPushNotificationConfigRequest>(message)?
         }
-    };
+    });
+    let mut bytes = crate::relay::RawBytes::default();
+    serde_json::to_writer(&mut bytes, &params).expect("JSON Value serialization succeeds");
     Ok(busbar_contract::jsonrpc::request_bytes(
         COMPOSED_ID.to_string().as_bytes(),
         rpc.name(),
-        Some(&serde_json::to_vec(&params).unwrap_or_default()),
+        Some(bytes.as_slice()),
     ))
 }
 
-/// Whether `message` is a send whose request carries no message at all: the SDK's model gave it a
-/// fresh user message under a new (v7) id, which the unit mints at its first attempt
-/// ([`message_id_v7`]) from the host's clock and random bytes.
+/// Legacy marker for a send with no message. [`compose`] now refuses that request before the
+/// door creates a unit, so this marker cannot authorize synthesising a missing required message.
 #[must_use]
 pub fn mints_message_id(rpc: Rpc, message: &[u8]) -> bool {
     matches!(rpc, Rpc::SendMessage | Rpc::SendStreamingMessage)
@@ -318,20 +374,22 @@ pub fn message_id_v7(unix_ms: u64, random: &[u8; 10]) -> String {
     )
 }
 
-/// `envelope` with `id` as its message's `messageId` (the composed request already carries the
-/// fresh message's user role, [`crate::proto::Normal`]).
+/// Legacy splice helper: `envelope` with `id` as its message's `messageId`. The door validates
+/// the required message through [`compose`] before constructing the unit that can call this.
 #[must_use]
 pub fn with_message_id(envelope: &Value, id: &str) -> Value {
-    let mut envelope = envelope.clone();
+    let mut envelope = RequestJson::new(envelope.clone());
     if let Some(params) = envelope.get_mut("params").and_then(Value::as_object_mut) {
         let message = params
             .entry("message")
             .or_insert_with(|| serde_json::json!({}));
         if let Some(m) = message.as_object_mut() {
-            m.insert("messageId".into(), Value::String(id.to_string()));
+            if let Some(previous) = m.insert("messageId".into(), Value::String(id.to_string())) {
+                drop(RequestJson::new(previous));
+            }
         }
     }
-    envelope
+    envelope.into_value()
 }
 
 /// PROTOBUF IN, CANONICAL JSON OUT: `message` decoded as `M` (a parse error is `INTERNAL` with the
@@ -351,17 +409,14 @@ where
 }
 
 /// CANONICAL JSON IN, PROTOBUF OUT: the same mapping in the other direction.
-fn from_result<M>(result: Value) -> Result<Vec<u8>, CallStatus>
+fn from_result<M>(result: &Value) -> Result<Vec<u8>, CallStatus>
 where
     M: prost::Message + Normal + serde::de::DeserializeOwned,
 {
-    let mut m: M = serde_json::from_value(result).map_err(|e| {
-        CallStatus::internal(format!(
-            "the answer could not be rendered: ProtoJSON error: {e}"
-        ))
-    })?;
+    let mut m: M = serde::Deserialize::deserialize(result)
+        .map_err(|_| CallStatus::internal("the answer could not be rendered as ProtoJSON"))?;
     m.normal()
-        .map_err(|e| CallStatus::internal(format!("the answer could not be rendered: {e}")))?;
+        .map_err(|_| CallStatus::internal("the answer could not be rendered as ProtoJSON"))?;
     Ok(m.encode_to_vec())
 }
 
@@ -375,7 +430,7 @@ where
 ///
 /// The status the call ends with instead of a message.
 pub fn answer_message(rpc: Rpc, status: u32, body: &[u8]) -> Result<Vec<u8>, CallStatus> {
-    let Ok(envelope) = serde_json::from_slice::<Value>(body) else {
+    let Ok(envelope) = serde_json::from_slice::<RequestJson>(body) else {
         return Err(status_for_http(status));
     };
     if let Some(error) = envelope.get("error") {
@@ -383,7 +438,6 @@ pub fn answer_message(rpc: Rpc, status: u32, body: &[u8]) -> Result<Vec<u8>, Cal
     }
     let result = envelope
         .get("result")
-        .cloned()
         .ok_or_else(|| status_for_http(status))?;
     match rpc {
         Rpc::SendMessage => from_result::<pb::SendMessageResponse>(result),
@@ -398,7 +452,10 @@ pub fn answer_message(rpc: Rpc, status: u32, body: &[u8]) -> Result<Vec<u8>, Cal
         Rpc::ListTaskPushNotificationConfigs => {
             from_result::<pb::ListTaskPushNotificationConfigsResponse>(result)
         }
-        Rpc::GetExtendedAgentCard => from_result::<pb::AgentCard>(narrowed_to_the_proto(result)),
+        Rpc::GetExtendedAgentCard => {
+            let narrowed = RequestJson::new(narrowed_to_the_proto(result.clone()));
+            from_result::<pb::AgentCard>(&narrowed)
+        }
         // `google.protobuf.Empty`: the JSON-RPC answer carries `null`, and there is nothing in
         // either to transcode.
         Rpc::DeleteTaskPushNotificationConfig => Ok(Vec::new()),
@@ -411,12 +468,12 @@ pub fn answer_message(rpc: Rpc, status: u32, body: &[u8]) -> Result<Vec<u8>, Cal
 /// `error` member ends the stream with that error's status.
 #[must_use]
 pub fn event(frame: &str) -> Option<Result<Vec<u8>, CallStatus>> {
-    let data = crate::sse::sse_data(frame)?;
-    let envelope: Value = serde_json::from_str(&data).ok()?;
-    if let Some(error) = envelope.get("error") {
+    let data = zeroize::Zeroizing::new(crate::sse::sse_data(frame)?);
+    let envelope = serde_json::from_str::<RequestJson>(&data).ok()?;
+    if let Some(error) = envelope.get("error").filter(|error| !error.is_null()) {
         return Some(Err(status_for_error(error, STATUS_INTERNAL)));
     }
-    let result = envelope.get("result")?.clone();
+    let result = envelope.get("result")?;
     Some(from_result::<pb::StreamResponse>(result))
 }
 
@@ -449,14 +506,24 @@ pub struct FramedReply {
     pub details: Option<String>,
 }
 
+impl Drop for FramedReply {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.body.zeroize();
+        if let Some(details) = &mut self.details {
+            details.zeroize();
+        }
+    }
+}
+
 impl From<CallStatus> for FramedReply {
-    fn from(status: CallStatus) -> Self {
+    fn from(mut status: CallStatus) -> Self {
         use base64::Engine as _;
         let details = (!status.details.is_empty())
             .then(|| base64::engine::general_purpose::STANDARD_NO_PAD.encode(&status.details));
         FramedReply {
             code: status.code as u32,
-            body: status.message.into_bytes(),
+            body: std::mem::take(&mut status.message).into_bytes(),
             details,
         }
     }
@@ -487,11 +554,22 @@ pub fn framed_reply(rpc: Rpc, status: u32, body: &[u8]) -> FramedReply {
 /// the call ends with.
 #[must_use]
 pub fn refusal(envelope: &[u8], status: u32) -> FramedReply {
-    let error = serde_json::from_slice::<Value>(envelope)
-        .ok()
-        .and_then(|v| v.get("error").cloned());
+    let mut envelope = serde_json::from_slice::<RequestJson>(envelope).ok();
+    let error = envelope.as_mut().and_then(|value| value.get_mut("error"));
     match error {
-        Some(error) => status_for_error(&error, status).into(),
+        Some(error) => {
+            // Local limits and open breakers overload this code; select the existing HTTP
+            // fallback before constructing Status so the trailer and embedded code agree.
+            if matches!(status, 429 | 503)
+                && error.get("code").and_then(Value::as_i64)
+                    == Some(crate::agent_arrival::CODE_UNSUPPORTED_OPERATION)
+            {
+                if let Some(object) = error.as_object_mut() {
+                    object.remove("code");
+                }
+            }
+            status_for_error(error, status).into()
+        }
         None => status_for_http(status).into(),
     }
 }
@@ -503,22 +581,24 @@ pub fn refusal(envelope: &[u8], status: u32) -> FramedReply {
 /// space and each of `` "#%<>`?{}``, upper-case hex.
 #[must_use]
 pub fn status_block(reply: &FramedReply) -> Vec<u8> {
-    let mut out = format!("grpc-status: {}\r\n", reply.code).into_bytes();
+    use std::io::Write;
+    let mut out = crate::relay::RawBytes::default();
+    write!(&mut out, "grpc-status: {}\r\n", reply.code).expect("raw buffer write succeeds");
     if !reply.body.is_empty() {
         out.extend_from_slice(b"grpc-message: ");
         for &b in &reply.body {
             if (0x21..=0x7e).contains(&b) && !b"\"#%<>`?{}".contains(&b) {
-                out.push(b);
+                out.extend_from_slice(&[b]);
             } else {
-                out.extend_from_slice(format!("%{b:02X}").as_bytes());
+                write!(&mut out, "%{b:02X}").expect("raw buffer write succeeds");
             }
         }
         out.extend_from_slice(b"\r\n");
     }
     if let Some(details) = &reply.details {
-        out.extend_from_slice(format!("{DETAILS_FIELD}: {details}\r\n").as_bytes());
+        write!(&mut out, "{DETAILS_FIELD}: {details}\r\n").expect("raw buffer write succeeds");
     }
-    out
+    out.into_vec()
 }
 
 /// AN ANSWER IN EVENTS, as the messages it carries: every whole event-stream frame of `buf` that
@@ -532,13 +612,27 @@ pub fn event_messages(rpc: Rpc, buf: &[u8]) -> (Vec<Vec<u8>>, Option<CallStatus>
         return (Vec::new(), Some(status_for_http(200)));
     }
     let mut messages = Vec::new();
-    let mut rest = buf.to_vec();
-    while !rest.is_empty() {
-        let frame = take_frame(&mut rest).unwrap_or_else(|| {
-            let whole = std::mem::take(&mut rest);
-            String::from_utf8_lossy(&whole).into_owned()
-        });
-        match event(&frame) {
+    // A CURSOR over the borrowed piece: each frame is found from where the last one ended.
+    let mut from = 0;
+    while from < buf.len() {
+        let rest = &buf[from..];
+        let frame_bytes = match frame_end(rest) {
+            Some((at, len)) => {
+                from += at + len;
+                &rest[..at]
+            }
+            None => break,
+        };
+        let decoded = String::from_utf8_lossy(frame_bytes);
+        let owned = match decoded {
+            std::borrow::Cow::Owned(text) => Some(zeroize::Zeroizing::new(text)),
+            std::borrow::Cow::Borrowed(_) => None,
+        };
+        let frame = owned.as_ref().map_or_else(
+            || std::str::from_utf8(frame_bytes).expect("the borrowed UTF-8 reading succeeded"),
+            |text| text.as_str(),
+        );
+        match event(frame) {
             Some(Ok(message)) => messages.push(message),
             Some(Err(status)) => return (messages, Some(status)),
             None => {}
@@ -547,22 +641,17 @@ pub fn event_messages(rpc: Rpc, buf: &[u8]) -> (Vec<Vec<u8>>, Option<CallStatus>
     (messages, None)
 }
 
-/// The next complete event-stream frame in `buffered`, consumed from it: a frame ends at a blank
-/// line, in any of the three line-ending spellings the grammar allows.
-fn take_frame(buffered: &mut Vec<u8>) -> Option<String> {
+/// Where the first complete event-stream frame of `buf` ends: the offset of the blank line that
+/// ends it and that line ending's length, in any of the three spellings the grammar allows (the
+/// longest where two start at one offset). One forward scan.
+fn frame_end(buf: &[u8]) -> Option<(usize, usize)> {
     const TERMINATORS: [&[u8]; 3] = [b"\r\n\r\n", b"\n\n", b"\r\r"];
-    let (at, len) = TERMINATORS
-        .iter()
-        .filter_map(|t| {
-            buffered
-                .windows(t.len())
-                .position(|w| w == *t)
-                .map(|pos| (pos, t.len()))
-        })
-        .min_by_key(|(pos, len)| (*pos, std::cmp::Reverse(*len)))?;
-    let rest = buffered.split_off(at + len);
-    let frame = std::mem::replace(buffered, rest);
-    Some(String::from_utf8_lossy(&frame[..at]).into_owned())
+    (0..buf.len()).find_map(|at| {
+        TERMINATORS
+            .iter()
+            .find(|t| buf[at..].starts_with(t))
+            .map(|t| (at, t.len()))
+    })
 }
 
 /// The neutral status an event's error is read under (a stream's error reads at `500`).
@@ -642,8 +731,8 @@ fn error_info_of(error: &Value) -> Option<ErrorInfo> {
     })
 }
 
-/// The status an HTTP status means, as the gRPC specification's own HTTP-to-status table defines
-/// it: what an answer that is not a JSON-RPC answer ends the call with.
+/// The status for an HTTP answer that is not a JSON-RPC answer: the standard gRPC
+/// HTTP-to-status mapping with the explicit `413` → `ResourceExhausted` extension.
 #[must_use]
 pub fn status_for_http(status: u32) -> CallStatus {
     let code = match status {
@@ -665,16 +754,19 @@ pub fn status_for_http(status: u32) -> CallStatus {
 const UNMODELLED_CARD_MEMBERS: &[(&str, &str)] = &[("capabilities", "stateTransitionHistory")];
 
 /// Busbar's card, narrowed to what a protobuf `AgentCard` can carry, and not reshaped.
-fn narrowed_to_the_proto(mut card: Value) -> Value {
+fn narrowed_to_the_proto(card: Value) -> Value {
+    let mut card = RequestJson::new(card);
     let Some(root) = card.as_object_mut() else {
-        return card;
+        return card.into_value();
     };
     for (parent, member) in UNMODELLED_CARD_MEMBERS {
         if let Some(obj) = root.get_mut(*parent).and_then(Value::as_object_mut) {
-            obj.remove(*member);
+            if let Some(removed) = obj.remove(*member) {
+                drop(RequestJson::new(removed));
+            }
         }
     }
-    card
+    card.into_value()
 }
 
 // The outbound direction, busbar dialling an agent's gRPC binding.
@@ -747,7 +839,6 @@ impl Rpc {
 /// The params are not the request message's ProtoJSON, or the model refuses it (never shown to the
 /// caller).
 pub fn request_message(rpc: Rpc, params: &Value) -> Result<Vec<u8>, String> {
-    let params = params.clone();
     match rpc {
         Rpc::SendMessage | Rpc::SendStreamingMessage => encoded::<pb::SendMessageRequest>(params),
         Rpc::GetTask => encoded::<pb::GetTaskRequest>(params),
@@ -792,11 +883,11 @@ pub fn response_result(rpc: Rpc, message: &[u8]) -> Result<Value, String> {
     }
 }
 
-fn encoded<M>(params: Value) -> Result<Vec<u8>, String>
+fn encoded<M>(params: &Value) -> Result<Vec<u8>, String>
 where
     M: prost::Message + Normal + serde::de::DeserializeOwned,
 {
-    let mut m: M = serde_json::from_value(params)
+    let mut m: M = serde::Deserialize::deserialize(params)
         .map_err(|e| format!("the request could not be rendered as protobuf: {e}"))?;
     m.normal()
         .map_err(|e| format!("the request could not be rendered as protobuf: {e}"))?;
@@ -901,11 +992,15 @@ pub fn ended(block: &[u8], stated: Option<u32>) -> Option<Ended> {
                 .ok()?
                 .trim()
                 .trim_end_matches('=');
-            base64::engine::general_purpose::STANDARD_NO_PAD
-                .decode(text)
-                .ok()
-        })
-        .and_then(|bytes| rpc::Status::decode(bytes.as_slice()).ok());
+            // The entire output is initialized before decoding, including an error's partial
+            // output. Its owner wipes it even when base64 or the protobuf parser refuses it.
+            let mut bytes =
+                crate::relay::RawBytes::from(vec![0; base64::decoded_len_estimate(text.len())]);
+            let len = base64::engine::general_purpose::STANDARD_NO_PAD
+                .decode_slice(text, bytes.as_mut_slice())
+                .ok()?;
+            rpc::Status::decode(&bytes[..len]).ok()
+        });
     let info = details.and_then(|s| {
         s.details
             .iter()

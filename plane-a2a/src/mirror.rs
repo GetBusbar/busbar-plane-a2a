@@ -18,8 +18,9 @@ use serde_json::{json, Value};
 
 use crate::binding::Binding;
 use crate::local::LocalVerb;
+use crate::request_json::RequestJson;
 
-/// The v1.0 method names the mirrored verbs are issued under, whatever the caller spelled.
+/// Canonical internal method names; [`request`] renders them in the declared wire version.
 pub mod method {
     /// Create (or replace) a task's push config.
     pub const CREATE_PUSH_CONFIG: &str = "CreateTaskPushNotificationConfig";
@@ -99,13 +100,23 @@ pub fn request(
     params: &Value,
 ) -> Option<busbar_contract::abi::sdk::exchange::Request> {
     use crate::relay::{From, HopRelay, Piece, PieceAnswer};
-    let envelope = json!({
+    let translated = if binding == Binding::JsonRpc && version == "0.3" {
+        let (method, params) = v03_request(method, params)?;
+        Some((method, RequestJson::new(params)))
+    } else {
+        None
+    };
+    let (method, params) = translated
+        .as_ref()
+        .map_or((method, params), |(method, params)| (*method, &**params));
+    let envelope = RequestJson::new(json!({
         "jsonrpc": "2.0",
         "id": ORIGINATED_RPC_ID,
         "method": method,
         "params": params,
-    });
-    let body = serde_json::to_vec(&envelope).ok()?;
+    }));
+    let mut body = crate::relay::RawBytes::default();
+    serde_json::to_writer(&mut body, &envelope).ok()?;
     let mut relay = HopRelay::new(Value::String(ORIGINATED_RPC_ID.into()), version);
     relay.bind(binding, &envelope);
     let piece = |from| Piece {
@@ -120,7 +131,7 @@ pub fn request(
     let body = match relay.on_piece(piece(From::Caller)) {
         PieceAnswer::ToFarEnd(bytes) => bytes,
         PieceAnswer::ToFarEndLent => body.clone(),
-        _ => Vec::new(),
+        _ => return None,
     };
     Some(busbar_contract::abi::sdk::exchange::Request {
         method: attempt.verb.as_bytes().to_vec(),
@@ -130,9 +141,48 @@ pub fn request(
             .into_iter()
             .map(|(n, v)| (n.as_bytes().to_vec(), v.into_owned().into_bytes()))
             .collect(),
-        body,
+        body: body.into_vec(),
         timeout_ms: 0,
     })
+}
+
+/// The four mirrored v0.3 JSON-RPC operations, rendered from the canonical internal params.
+fn v03_request<'a>(method: &'a str, params: &Value) -> Option<(&'a str, Value)> {
+    let wire_method = match method {
+        method::CREATE_PUSH_CONFIG => "tasks/pushNotificationConfig/set",
+        method::GET_PUSH_CONFIG => "tasks/pushNotificationConfig/get",
+        method::LIST_PUSH_CONFIGS => "tasks/pushNotificationConfig/list",
+        method::DELETE_PUSH_CONFIG => "tasks/pushNotificationConfig/delete",
+        _ => return Some((method, params.clone())),
+    };
+    let task = params.get("taskId")?.as_str()?;
+    let params = match method {
+        method::CREATE_PUSH_CONFIG => {
+            let mut config = RequestJson::new(Value::Object(params.as_object()?.clone()));
+            drop(
+                config
+                    .as_object_mut()?
+                    .remove("taskId")
+                    .map(RequestJson::new),
+            );
+            if let Some(auth) = config
+                .get_mut("authentication")
+                .and_then(Value::as_object_mut)
+            {
+                if let Some(scheme) = auth.remove("scheme") {
+                    let scheme = RequestJson::new(scheme);
+                    drop(
+                        auth.insert("schemes".to_string(), json!([scheme]))
+                            .map(RequestJson::new),
+                    );
+                }
+            }
+            json!({"taskId": task, "pushNotificationConfig": config})
+        }
+        method::LIST_PUSH_CONFIGS => json!({"id": task}),
+        _ => json!({"id": task, "pushNotificationConfigId": params.get("id")?.as_str()?}),
+    };
+    Some((wire_method, params))
 }
 
 /// THE ANSWER TO ONE ORIGINATED REQUEST, as the readers below read it: its status and body as the
@@ -149,15 +199,18 @@ pub fn answered(
     if binding != Binding::Grpc {
         return Some((status, body));
     }
+    let body = crate::relay::RawBytes::from(body);
     let rpc = crate::framed::Rpc::of_method(method)?;
     let (len, _) = crate::framed::take_message(&body).ok()??;
     let message = &body[crate::framed::MESSAGE_PREFIX..crate::framed::MESSAGE_PREFIX + len];
-    let result = crate::framed::response_result(rpc, message).ok()?;
+    let result = RequestJson::new(crate::framed::response_result(rpc, message).ok()?);
+    let mut rendered = crate::relay::RawBytes::default();
+    serde_json::to_writer(&mut rendered, &result).ok()?;
     Some((
         200,
         busbar_contract::jsonrpc::result_bytes(
-            &serde_json::to_vec(&ORIGINATED_RPC_ID).unwrap_or_default(),
-            &serde_json::to_vec(&result).unwrap_or_default(),
+            &crate::relay::json_bytes(&ORIGINATED_RPC_ID).unwrap_or_default(),
+            &rendered,
         ),
     ))
 }
@@ -197,7 +250,16 @@ pub fn landed(
             );
             Err(Unleased)
         }
-        Err(_) => Ok(None),
+        Err(_) => {
+            tracing::warn!(
+                agent = %agent,
+                method,
+                phase = "transport",
+                failure_class = "connector",
+                "A2A originated request was not answered; the local result is unchanged"
+            );
+            Ok(None)
+        }
         Ok(reply) => Ok(answered(binding, method, reply.status, reply.body)),
     }
 }
@@ -214,15 +276,19 @@ pub fn drifted(binding: Binding, answered: Option<(u16, &[u8])>, config_id: &str
         return true;
     }
     let id = Value::String(ORIGINATED_RPC_ID.into());
-    let envelope = match binding {
-        Binding::HttpJson => crate::answer_bytes::rewrap(body, &id).ok(),
-        // A gRPC answer was transcoded to its JSON-RPC envelope as it arrived ([`answered`]).
-        Binding::JsonRpc | Binding::Grpc => Some(body.to_vec()),
-    };
-    let result = envelope
-        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
-        .and_then(|v| v.get("result").cloned());
-    !result.is_some_and(|r| holds_config(&r, config_id))
+    let envelope = crate::relay::RawBytes::from(
+        match binding {
+            Binding::HttpJson => crate::answer_bytes::rewrap(body, &id).ok(),
+            // A gRPC answer was transcoded to its JSON-RPC envelope as it arrived ([`answered`]).
+            Binding::JsonRpc | Binding::Grpc => Some(body.to_vec()),
+        }
+        .unwrap_or_default(),
+    );
+    let envelope = serde_json::from_slice::<RequestJson>(&envelope).ok();
+    !envelope
+        .as_ref()
+        .and_then(|v| v.get("result"))
+        .is_some_and(|r| holds_config(r, config_id))
 }
 
 /// Whether `found` holds the config `config_id`, compared whole on its `id` member: a config itself
@@ -286,7 +352,6 @@ impl std::fmt::Debug for Originated {
 
 /// ONE MIRROR: where it stands, the verb it mirrors, the agent's own id for the task, the create a
 /// re-arm issues, and the requests it originates.
-#[derive(Debug)]
 pub struct Flight {
     /// Where it stands.
     pub stage: Stage,
@@ -298,6 +363,23 @@ pub struct Flight {
     pub create: Value,
     /// The requests.
     pub hop: Originated,
+}
+
+impl std::fmt::Debug for Flight {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Flight")
+            .field("stage", &self.stage)
+            .field("method", &self.method)
+            .field("backend_task", &self.backend_task)
+            .field("hop", &self.hop)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for Flight {
+    fn drop(&mut self) {
+        drop(RequestJson::new(std::mem::take(&mut self.create)));
+    }
 }
 
 impl Flight {
@@ -351,7 +433,7 @@ pub const LIST_TASKS: &str = "ListTasks";
 /// WHAT A LISTING TAUGHT BUSBAR: for each entry of the agent's answer whose id is the agent's own
 /// id for a task in `ours` (agent id to busbar id), the state it reports, read STRICTLY (an entry
 /// whose state cannot be read taught nothing). An entry busbar cannot match is ignored in silence:
-/// that is what stops one tenant's list from moving another's row.
+/// that is what stops one caller's list from moving another caller's row.
 #[must_use]
 pub fn listed_states(
     binding: Binding,
@@ -365,22 +447,23 @@ pub fn listed_states(
         return Vec::new();
     }
     let id = Value::String(ORIGINATED_RPC_ID.into());
-    let envelope = match binding {
-        Binding::HttpJson => crate::answer_bytes::rewrap(body, &id).ok(),
-        // A gRPC answer was transcoded to its JSON-RPC envelope as it arrived ([`answered`]).
-        Binding::JsonRpc | Binding::Grpc => Some(body.to_vec()),
-    };
-    let Some(result) = envelope
-        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
-        .and_then(|v| v.get("result").cloned())
-    else {
+    let envelope = crate::relay::RawBytes::from(
+        match binding {
+            Binding::HttpJson => crate::answer_bytes::rewrap(body, &id).ok(),
+            // A gRPC answer was transcoded to its JSON-RPC envelope as it arrived ([`answered`]).
+            Binding::JsonRpc | Binding::Grpc => Some(body.to_vec()),
+        }
+        .unwrap_or_default(),
+    );
+    let envelope = serde_json::from_slice::<RequestJson>(&envelope).ok();
+    let Some(result) = envelope.as_ref().and_then(|v| v.get("result")) else {
         return Vec::new();
     };
     let listed = result
         .get("tasks")
         .and_then(Value::as_array)
         .or_else(|| result.as_array())
-        .cloned()
+        .map(Vec::as_slice)
         .unwrap_or_default();
     listed
         .iter()

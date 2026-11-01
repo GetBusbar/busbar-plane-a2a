@@ -31,10 +31,11 @@ fn default_digest_version() -> u8 {
 /// ([`crate::a2a::task::Task::from_row`]); this side is plain data with the enums flattened to
 /// their stable wire tokens, so a row written before a task state was added still reads.
 ///
-/// Carries no secret. `principal` is the caller reference the kernel lends on every piece (the
+/// The callback URL may contain a caller credential and is omitted from `Debug`.
+/// `principal` is the caller reference the kernel lends on every piece (the
 /// per-principal reference the task's records are keyed under, [`crate::tasks::task_key`]);
 /// `agent_id` is a busbar-local registration id.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TaskRow {
     /// Protocol task id — busbar's own, unique within its caller; the record's key is
     /// `<principal>/<task_id>`.
@@ -64,6 +65,24 @@ pub struct TaskRow {
     pub updated_at: u64,
 }
 
+impl std::fmt::Debug for TaskRow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TaskRow")
+            .field("task_id", &self.task_id)
+            .field("context_id", &self.context_id)
+            .field("principal", &self.principal)
+            .field("direction", &self.direction)
+            .field("state", &self.state)
+            .field("agent_id", &self.agent_id)
+            .field("artifact_cursor", &self.artifact_cursor)
+            .field("push_callback", &"[redacted]")
+            .field("push_version", &self.push_version)
+            .field("created_at", &self.created_at)
+            .field("updated_at", &self.updated_at)
+            .finish()
+    }
+}
+
 /// ONE PER-TASK PROVENANCE EVENT, as it crosses the store seam. Hash-chained WITHIN a task, and
 /// `prev_hash` is the preceding event's `hash` (empty for `seq` 1). Per-TASK rather than one global
 /// chain: tasks are concurrent and long-lived, and a per-task chain is independently verifiable and
@@ -86,8 +105,8 @@ pub struct TaskEventRow {
     pub agent_id: String,
     /// The task state AFTER this event.
     pub state: String,
-    /// The correlation id joining this event to the downstream L2 records it caused. Not chained into
-    /// the digest: it is a join key supplied by the request spine.
+    /// Correlation metadata supplied with the task change; current task-hop callers
+    /// use the task id. Serialized with the event but not chained into its digest.
     pub request_id: String,
     /// The preceding event's `hash` (empty for `seq` 1).
     pub prev_hash: String,

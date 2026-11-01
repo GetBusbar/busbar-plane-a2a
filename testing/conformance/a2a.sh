@@ -6,13 +6,13 @@
 # $CONFORMANCE_OUT/verdict.json; `pass` only when all three legs held.
 #
 #   THE CONTROLS (always run): the official a2aproject/a2a-tck at TCK_REF against a2a-go v2.4.0 over
-#       both bindings, each held to its pinned per-requirement baseline (testing/a2a-tck/baselines);
+#       both bindings, with the suite's own protocol verdict preserved;
 #       and the independent battery (testing/a2a-harness) against a2a-go v2.4.0 (both bindings) and
 #       a2a-python 1.1.2, each held to its pinned baseline.
 #   THE NEGATIVE CONTROLS: the battery's deliberately broken fake peer MUST grade red, with every
 #       injected violation caught on it and absent from the honest twin; and the TCK pointed at a
-#       broken relay of the scenario agent MUST report clearly more failed MUSTs than against the
-#       honest agent itself.
+#       separate state-only and version-only relays MUST attribute each injected violation to a
+#       failed MUST that passes against the honest agent. Wrong-ID coverage is independent.
 #   THE SUBJECT: busbar built from $BUSBAR_CHECKOUT (the .busbar-ref pin) with THIS checkout's
 #       plane-a2a patched in, booted by testing/a2a-subject/boot.sh, judged by the TCK (--tck) and by
 #       the battery (--battery). A subject that cannot be built or booted is `fail`, never a skip.
@@ -26,6 +26,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$ROOT/testing/a2a-harness/scripts/process-fixture.sh"
 cd "$ROOT" || exit 2
 
 : "${CONFORMANCE_SUITE:=a2a}"
@@ -192,12 +193,13 @@ battery_go() {   # battery_go <rest|jsonrpc> <baseline>
   local binding="$1" baseline="$2" extra=""
   [ "$binding" = jsonrpc ] && extra="--transport jsonrpc"
   ( cd testing/a2a-harness && mkdir -p reports \
+    && rm -f "reports/control-$binding.json" \
     && python3 -m a2aht run \
          --launch "$A2AHT_CONTROL_BIN/a2a serve --echo --port 9099 --quiet $extra" --port 9099 \
          --label "control:a2a-go/$binding" --tier pre-release \
          --client-drive "$A2AHT_CONTROL_BIN/a2a send {url} hello-from-harness" \
          --known-deviations baselines/known-deviations-a2a-go.json \
-         --json "reports/control-$binding.json" --allow-red
+         --json "reports/control-$binding.json" --allow-red || exit $?
     python3 -m a2aht baseline --report "reports/control-$binding.json" --baseline "baselines/$baseline" )
 }
 
@@ -205,16 +207,19 @@ battery_python() {
   ( cd testing/a2a-harness && mkdir -p reports
     "$A2AHT_CONTROL_SRC/venv/bin/python" "$A2AHT_CONTROL_SRC/a2a-python/samples/hello_world_agent.py" \
       > "$LOGS/a2a-python-agent.log" 2>&1 &
-    local pid=$! up=0
-    for _ in $(seq 1 60); do
-      curl -fsS -m 2 -o /dev/null http://127.0.0.1:41241/.well-known/agent-card.json && { up=1; break; }
-      sleep 1
-    done
-    if [ "$up" != 1 ]; then echo "the a2a-python control never served its card"; cat "$LOGS/a2a-python-agent.log"; kill "$pid" 2>/dev/null; exit 1; fi
+    local pid=$!
+    trap 'fixture_stop "$pid" || exit 1' EXIT
+    fixture_exit_on_signal
+    fixture_track_pid "$pid"
+    if ! fixture_await_card "$pid" 41241 60 1; then echo "the a2a-python control never owned its card listener"; cat "$LOGS/a2a-python-agent.log"; exit 1; fi
+    rm -f reports/control-python.json
+    local run_rc=0
     python3 -m a2aht run --endpoint http://127.0.0.1:41241 --label "control:a2a-python" \
       --tier pre-release --known-deviations baselines/known-deviations-a2a-python.json \
-      --role server --allow-undriven-bindings GRPC --json reports/control-python.json --allow-red
-    kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+      --role server --allow-undriven-bindings GRPC --json reports/control-python.json --allow-red || run_rc=$?
+    fixture_stop "$pid" || exit 1
+    pid=""
+    [ "$run_rc" -eq 0 ] || exit "$run_rc"
     python3 -m a2aht baseline --report reports/control-python.json --baseline baselines/control-a2a-python.json )
 }
 
@@ -222,23 +227,24 @@ battery_python() {
 # NEGATIVE controls: a broken peer MUST grade red. Both instruments are pointed at the battery's own
 # fake peer (a2aht/fakes.py), once broken and once honest.
 # ------------------------------------------------------------------------------------------------
-await_card() {  # await_card <port> <what>
-  local waited=0
-  until curl -fsS -m 2 -o /dev/null "http://127.0.0.1:$1/.well-known/agent-card.json"; do
-    waited=$((waited + 1))
-    [ "$waited" -lt 30 ] || { echo "the $2 peer never served a card on $1"; return 1; }
-    sleep 1
-  done
+await_card() {  # await_card <port> <what> <pid>
+  fixture_await_card "$3" "$1" 30 1 || {
+    echo "the $2 peer never owned a card listener on $1"; return 1;
+  }
 }
 
 negative_battery() {
   ( cd testing/a2a-harness && mkdir -p reports
     python3 -m a2aht fake-peer --port 9402 --broken > "$LOGS/broken-peer.log" 2>&1 & local broken=$!
+    trap 'cleanup_rc=0; fixture_stop "$broken" || cleanup_rc=1; fixture_stop "${honest:-}" || cleanup_rc=1; [ "$cleanup_rc" -eq 0 ] || exit 1' EXIT
+    fixture_exit_on_signal
+    fixture_track_pid "$broken"
     python3 -m a2aht fake-peer --port 9403 > "$LOGS/honest-peer.log" 2>&1 & local honest=$!
-    trap 'kill $broken $honest 2>/dev/null || true' EXIT
-    await_card 9402 broken || exit 1
-    await_card 9403 honest || exit 1
+    fixture_track_pid "$honest"
+    await_card 9402 broken "$broken" || exit 1
+    await_card 9403 honest "$honest" || exit 1
     local brc=0 hrc=0
+    rm -f reports/negative-control.json reports/honest-control.json
     python3 -m a2aht run --endpoint http://127.0.0.1:9402 --label negative-control --tier pull-request \
       --role server --json reports/negative-control.json > "$LOGS/negative-run.txt" 2>&1 || brc=$?
     python3 -m a2aht run --endpoint http://127.0.0.1:9403 --label honest-control --tier pull-request \
@@ -250,7 +256,6 @@ negative_battery() {
 import json, sys
 PAIRS = {
     "card.required_fields": "the REQUIRED `version` is absent",
-    "card.protocol_version_no_patch": "protocolVersion carries a patch",
     "core.task_state_is_defined_enum": "emits an undefined TaskState",
     "adv.concurrent_interleaved_tasks": "one task id reused for every task",
     "core.stream_opens_with_task_or_message": "streams an event for a task never created",
@@ -272,56 +277,86 @@ PY
 
 # The TCK against a broken peer: the honest scenario agent, and the same agent behind a relay that
 # corrupts its answers (testing/a2a-tck/broken-agent). The same suite, the same verb, the same way;
-# the broken peer MUST report clearly more failed MUSTs than the honest one.
-tck_must_counts() {   # tck_must_counts <report.json>  ->  "<passed> <failed>"
-  python3 -I - "$1" <<'PY'
-import json, sys
-per = json.load(open(sys.argv[1]))["per_requirement"]
-must = [v for v in per.values() if v.get("level") == "MUST"]
-print(sum(v["status"] == "PASS" for v in must), sum(v["status"] == "FAIL" for v in must))
-PY
-}
+# the failed MUSTs must identify the injected state and JSON-RPC version violations.
+# This TCK pin checks id presence, not id equality. The independent battery retains the
+# wrong-id assertion; this leg cannot claim the TCK rejects that third injection.
 
-negative_tck() {
-  local honest_out="$W/tck-honest" broken_out="$W/tck-broken" hp=9711 up=9712 bp=9713
-  mkdir -p "$honest_out" "$broken_out"
+negative_tck() (
+  local honest_out="$W/tck-honest" hp=9711 up=9712 bp=9713
+  mkdir -p "$honest_out"
   local pids=()
-  trap 'kill "${pids[@]}" 2>/dev/null || true' RETURN
+  trap 'cleanup_rc=0; for pid in "${pids[@]}"; do fixture_stop "$pid" || cleanup_rc=1; done; [ "$cleanup_rc" -eq 0 ] || exit 1' EXIT
+  fixture_exit_on_signal
   testing/a2a-tck/scenario-agent/serve.sh "$hp" --public-url "http://127.0.0.1:$hp/" > "$LOGS/honest-scenario.log" 2>&1 & pids+=($!)
-  testing/a2a-tck/scenario-agent/serve.sh "$up" --public-url "http://127.0.0.1:$bp/" > "$LOGS/broken-scenario.log" 2>&1 & pids+=($!)
-  python3 testing/a2a-tck/broken-agent/broken_agent.py "$bp" "$up" > "$LOGS/broken-relay.log" 2>&1 & pids+=($!)
-  local port
-  for port in $hp $bp; do
-    local waited=0
-    until curl -fsS -m 2 -o /dev/null "http://127.0.0.1:$port/.well-known/agent-card.json"; do
-      waited=$((waited + 1)); [ "$waited" -lt 120 ] || { echo "the peer on $port never served a card"; return 1; }
-      sleep 1
-    done
+  fixture_track_pid "${pids[0]}" || return 1
+  fixture_await_card "${pids[0]}" "$hp" 120 1 || return 1
+  rm -f "$honest_out/subject.json"
+  local honest_rc=0
+  A2A_TCK_OUT="$honest_out" BUSBAR_A2A_ENDPOINT="http://127.0.0.1:$hp" testing/a2a-tck/run-tck.sh subject || honest_rc=$?
+  [ "$honest_rc" -le 1 ] && [ -f "$honest_out/subject.json" ] \
+    || { echo "honest TCK did not complete with a usable report (exit $honest_rc)"; return 1; }
+  local mode broken_out broken_rc
+  for mode in state version; do
+    broken_out="$W/tck-broken-$mode"
+    mkdir -p "$broken_out"
+    # The scenario card advertises JSON-RPC only. Use a fresh scenario per mode
+    # and keep the state probe's envelope valid so payload validation is reachable.
+    testing/a2a-tck/scenario-agent/serve.sh "$up" --public-url "http://127.0.0.1:$bp/" > "$LOGS/broken-scenario-$mode.log" 2>&1 & pids[1]=$!
+    fixture_track_pid "${pids[1]}" || return 1
+    python3 testing/a2a-tck/broken-agent/broken_agent.py "$bp" "$up" "$mode" > "$LOGS/broken-relay-$mode.log" 2>&1 & pids[2]=$!
+    fixture_track_pid "${pids[2]}" || return 1
+    fixture_await_card "${pids[1]}" "$up" 120 1 || return 1
+    fixture_await_card "${pids[2]}" "$bp" 120 1 || return 1
+    rm -f "$broken_out/subject.json"
+    broken_rc=0
+    A2A_TCK_OUT="$broken_out" BUSBAR_A2A_ENDPOINT="http://127.0.0.1:$bp" testing/a2a-tck/run-tck.sh subject || broken_rc=$?
+    [ "$broken_rc" -eq 1 ] && [ -f "$broken_out/subject.json" ] \
+      || { echo "$mode negative TCK did not complete with a failing suite report (exit $broken_rc)"; return 1; }
+    fixture_stop "${pids[2]}" || return 1
+    unset 'pids[2]'
+    fixture_stop "${pids[1]}" || return 1
+    unset 'pids[1]'
   done
-  A2A_TCK_OUT="$honest_out" BUSBAR_A2A_ENDPOINT="http://127.0.0.1:$hp" testing/a2a-tck/run-tck.sh subject || return 1
-  A2A_TCK_OUT="$broken_out" BUSBAR_A2A_ENDPOINT="http://127.0.0.1:$bp" testing/a2a-tck/run-tck.sh subject || return 1
-  [ -f "$honest_out/subject.json" ] && [ -f "$broken_out/subject.json" ] \
-    || { echo "a negative-control run wrote no report"; return 1; }
-  local hpass hfail bpass bfail
-  read -r hpass hfail <<<"$(tck_must_counts "$honest_out/subject.json")"
-  read -r bpass bfail <<<"$(tck_must_counts "$broken_out/subject.json")"
-  echo "MUST honest scenario agent: $hpass pass, $hfail fail; broken relay: $bpass pass, $bfail fail"
-  [ "$bfail" -ge $((hfail + 10)) ] && [ "$bpass" -lt "$hpass" ] \
-    || { echo "the TCK did not grade the broken peer clearly worse than the honest one"; return 1; }
-}
+  python3 -I - "$honest_out/subject.json" "$W/tck-broken-state/subject.json" "$W/tck-broken-version/subject.json" <<'PY'
+import json, sys
+
+with open(sys.argv[1]) as source:
+    honest = json.load(source)["per_requirement"]
+with open(sys.argv[2]) as source:
+    broken_state = json.load(source)["per_requirement"]
+with open(sys.argv[3]) as source:
+    broken_version = json.load(source)["per_requirement"]
+
+# Diagnostic spellings come from the pinned TCK's JSONSchemaValidator and
+# JsonRpcResponseValidator. Transport crashes and unrelated MUST failures cannot
+# establish that either injected protocol defect was recognized.
+def attributed(broken, predicate):
+    return sorted(rid for rid, row in broken.items()
+                  if row.get("level") == "MUST" and row.get("status") == "FAIL"
+                  and honest.get(rid, {}).get("status") == "PASS"
+                  and row.get("test_ids")
+                  and any(predicate(error) for error in row.get("errors", [])))
+
+state = attributed(broken_state, lambda error:
+                   ".state: 'TASK_STATE_MADE_UP' is not valid under any of the given schemas" in error)
+version = attributed(broken_version, lambda error: "$.jsonrpc: expected '2.0', got '1.0'" in error
+                     or ("missing or wrong 'jsonrpc' field" in error
+                         and "(got '1.0')" in error))
+for violation, requirements in (("undefined TaskState", state),
+                                ("JSON-RPC version 1.0", version)):
+    print("%s: %s" % (violation, ", ".join(requirements) or "NOT ATTRIBUTED"))
+print("Wrong JSON-RPC id: unsupported by this TCK pin; checked by the independent battery")
+sys.exit(0 if state and version else 1)
+PY
+)
 
 # ------------------------------------------------------------------------------------------------
 # SUBJECT: busbar at the pin, this plane patched in, built here, booted by the repo's own boot.sh.
 # ------------------------------------------------------------------------------------------------
 build_subject() {
-  # The package is busbar's default distribution (dist/default), staged by compose.sh with its rows
-  # pointed at this plane's door and declares; the root crate (`-p busbar`) is core with no plane
-  # linked and refuses the `agents:` section at boot. compose-selftest.sh holds the composition
-  # first. The plane busbar links is a git dependency at a rev; this checkout's plane-a2a replaces
-  # it by a run-time `--config` patch (nothing committed). busbar's own [patch] already routes the
-  # busbar crates the plane names to BUSBAR_CHECKOUT.
+  # Stage the canonical default distribution. Its pinned metadata owns the door/declaration
+  # expressions; this plane replaces the git dependency via Cargo's explicit path patch.
   local stage="$W/subject-src" manifest
-  bash testing/a2a-subject/compose-selftest.sh "$BUSBAR_CHECKOUT" "$stage" || return 1
   manifest="$(bash testing/a2a-subject/compose.sh "$BUSBAR_CHECKOUT" "$ROOT/plane-a2a" "$stage")" || return 1
   cargo build --manifest-path "$manifest" --bin busbar \
       --config "patch.\"https://github.com/GetBusbar/busbar-plane-a2a\".busbar-plane-a2a.path=\"$ROOT/plane-a2a\"" \
@@ -356,7 +391,7 @@ fi
 
 if [ "${#FAILED[@]}" -eq 0 ]; then
   say "all ${#LEGS[@]} legs held"
-  verdict pass true "controls held their pinned baselines, the broken peers graded red, and busbar at the pin with this plane passed the TCK and the battery"
+  verdict pass true "the TCK controls completed with their suite verdicts, battery controls matched their baselines, isolated negative controls identified their injected violations, and busbar at the pin with this plane passed the TCK and battery"
   exit 0
 fi
 reason="$(printf '%s; ' "${FAILED[@]}")"

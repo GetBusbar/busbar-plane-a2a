@@ -12,7 +12,7 @@
 
 #![deny(unsafe_code)]
 
-/// The exported door: the macro's `#[no_mangle]` symbol is the one exemption.
+/// The exported door: the macro's `#[unsafe(no_mangle)]` symbol is the one exemption.
 #[allow(unsafe_code)]
 mod exported {
     busbar_contract::export_door!(busbar_plane_a2a::door);

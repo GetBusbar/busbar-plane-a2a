@@ -46,12 +46,11 @@ fn framed<M: prost::Message>(message: &M) -> Vec<u8> {
 }
 
 fn config() -> pb::TaskPushNotificationConfig {
-    pb::TaskPushNotificationConfig {
-        id: config_id(BACKEND_TASK),
-        task_id: BACKEND_TASK.into(),
-        url: OURS.into(),
-        ..Default::default()
-    }
+    crate::proto::custody::initialized::<pb::TaskPushNotificationConfig>(|__custody_message| {
+        __custody_message.id = config_id(BACKEND_TASK);
+        __custody_message.task_id = BACKEND_TASK.into();
+        __custody_message.url = OURS.into();
+    })
 }
 
 // ── gRPC ────────────────────────────────────────────────────────────────────────────────────────
@@ -72,7 +71,7 @@ fn grpc_client_issues_create_task_push_notification_config() {
     assert_eq!(req.id, config_id(BACKEND_TASK));
     assert_eq!(req.url, OURS);
     assert_eq!(
-        req.authentication.map(|a| a.credentials).as_deref(),
+        req.authentication.as_ref().map(|a| a.credentials.as_str()),
         Some("busbar-t.sig"),
         "the rpc must carry the capability busbar minted for THIS task"
     );
@@ -168,17 +167,18 @@ fn grpc_client_issues_list_tasks() {
     let r = request(Binding::Grpc, URL, "1.0", LIST_TASKS, &json!({})).expect("framed");
     assert_eq!(target(&r), "/lf.a2a.v1.A2AService/ListTasks");
     let _ = pb::ListTasksRequest::decode(r.body.as_slice()).expect("a ListTasksRequest");
-    let listing = framed(&pb::ListTasksResponse {
-        tasks: vec![pb::Task {
-            id: BACKEND_TASK.into(),
-            status: Some(pb::TaskStatus {
-                state: pb::TaskState::Completed as i32,
+    let listing = framed(
+        &crate::proto::custody::initialized::<pb::ListTasksResponse>(|__custody_message| {
+            __custody_message.tasks = vec![pb::Task {
+                id: BACKEND_TASK.into(),
+                status: Some(pb::TaskStatus {
+                    state: pb::TaskState::Completed as i32,
+                    ..Default::default()
+                }),
                 ..Default::default()
-            }),
-            ..Default::default()
-        }],
-        ..Default::default()
-    });
+            }];
+        }),
+    );
     let answer = answered(Binding::Grpc, LIST_TASKS, 0, listing);
     let ours =
         std::collections::BTreeMap::from([(BACKEND_TASK.to_string(), "busbar-t".to_string())]);

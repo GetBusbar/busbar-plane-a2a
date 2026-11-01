@@ -12,10 +12,10 @@ use super::*;
 #[test]
 fn only_the_first_local_verb_restores_and_none_sweeps() {
     let restored = Keyed::new();
-    assert!(claim_restore(&restored, 10), "the first restores");
-    assert!(!claim_restore(&restored, 10));
+    assert!(claim_restore(&restored, 10, TICKET), "the first restores");
+    assert!(!claim_restore(&restored, 10, TICKET));
     assert!(
-        !claim_restore(&restored, 11),
+        !claim_restore(&restored, 11, TICKET),
         "the next second restores nothing"
     );
 }
@@ -147,7 +147,7 @@ fn a_door_opened_with_no_services_reads_no_record() {
     assert!(matches!(via.claim("task", "k", 1), Err(Halt::Failed(w)) if w == "Unserved"));
 }
 
-/// The sizes book is bounded: at its cap it is cleared before the next entry.
+/// The sizes book stays bounded without evicting any active ticket's replay state.
 #[test]
 fn the_sizes_book_is_bounded() {
     let fake: &'static FakeHost = Box::leak(Box::new(FakeHost::new()));
@@ -164,19 +164,24 @@ fn the_sizes_book_is_bounded() {
             },
             1,
             1,
-        );
+        )
+        .unwrap();
     }
     assert_eq!(grown.len(), GROWN_MAX);
-    via.grow(
-        CompletionHandle {
-            ticket: TICKET,
-            seq: u32::MAX,
-            _reserved: 0,
-        },
-        1,
-        1,
-    );
-    assert_eq!(grown.len(), 1);
+    assert!(matches!(
+        via.grow(
+            CompletionHandle {
+                ticket: TICKET,
+                seq: u32::MAX,
+                _reserved: 0,
+            },
+            1,
+            1,
+        ),
+        Err(Halt::Failed(_))
+    ));
+    assert_eq!(grown.len(), GROWN_MAX);
+    assert!(grown.get(&grown_key(handle(TICKET, 0))).is_some());
 }
 
 #[path = "task_door_lifecycle_cases.rs"]

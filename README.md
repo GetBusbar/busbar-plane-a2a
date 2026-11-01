@@ -32,13 +32,15 @@ Off by default: a document with no `agents:` section states no route.
     references); required under `pin.mechanism: mtls`.
   - `agents.<name>.reverify_ttl`: the longest a card verification is reused (default `5s`).
   - `agents.<name>.recovery_backoff`: how long after a drift a clean answer is disbelieved.
-  - `agents.<name>.protocol_version`: accepted, read by nothing.
+  - `agents.<name>.protocol_version`: accepted but ignored; a successful section open warns once
+    with `BUSBAR-7051`, without logging the supplied values.
   - `agents.<name>.allow_private`: may the agent live on a private or loopback address (default
     `false`).
   - `agents.<name>.upstream_credentials`: the outbound credential mode (`passthrough` is refused).
   - `agents.<name>.upstream_credential`: the leased credential busbar presents on the hop (a
     secret-store handle and its lease policy).
-  - `agents.<name>.egress_scopes`: judged for shape, read by nothing.
+  - `agents.<name>.egress_scopes`: non-empty lists are refused because nothing enforces this
+    control in this build; omit it or use an empty list.
   - `agents.<name>.hooks`: hooks attached to this agent, added to `agents.hooks`.
   - `agents.hooks`, `agents.upstream_credentials`: the all-agents hooks and credential default.
 - `pools:` (the top-level failover pools whose members are `agents:` registrations): handed to the

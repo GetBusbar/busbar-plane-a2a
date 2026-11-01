@@ -162,7 +162,10 @@ def report(target: Target, results: list[Result], out_path: str | None) -> int:
             )
         print(f"  JSON: {out_path}")
 
-    return 1 if bad else 0
+    if bad:
+        return 1
+    # A run with no demonstrated MUST has produced no passing conformance evidence.
+    return 0 if must_counts.get(Verdict.PASS, 0) else 3
 
 
 def _wrap(text: str, width: int) -> list[str]:

@@ -266,8 +266,8 @@ fn legacy_request(delivery: &Delivery, auth: Option<(&str, &str)>) -> Request {
 }
 
 /// The whole head the delivery's exchange frames, sealed values included.
-fn framed(d: &Deliveries, x: &Delivery) -> Vec<u8> {
-    let (request, sealed) = d.request(x);
+fn framed(x: &Delivery) -> Vec<u8> {
+    let (request, sealed) = request(x);
     framed_head(&Exchange::request_sealed(request, sealed).expect("the request frames"))
 }
 
@@ -280,9 +280,8 @@ fn auth(scheme: &str, credentials: &str) -> DeliveryAuth {
 
 #[test]
 fn the_request_is_a_post_to_the_callbacks_path_with_the_credential_only_once_held() {
-    let d = Deliveries::default();
-    let x = delivery("t1");
-    let (bare, sealed) = d.request(&x);
+    let mut x = delivery("t1");
+    let (bare, sealed) = request(&x);
     assert_eq!(bare.method, b"POST");
     assert_eq!(bare.target, b"/cb/t1?k=v");
     assert_eq!(
@@ -291,17 +290,12 @@ fn the_request_is_a_post_to_the_callbacks_path_with_the_credential_only_once_hel
     );
     assert_eq!(bare.body, x.body);
     assert!(sealed.is_empty());
-    d.remember_auth("t1", Some(auth("Bearer", "s3cret")));
-    let (with, mut sealed) = d.request(&x);
+    x.auth = Some(auth("Bearer", "s3cret"));
+    let (with, mut sealed) = request(&x);
     assert_eq!(with.fields.len(), 1, "the credential is no plain field");
     assert_eq!(sealed.len(), 1);
     assert_eq!((sealed[0].0, &sealed[0].1[..]), (1, &b"authorization"[..]));
     assert_eq!(sealed_bytes(sealed.remove(0).2), b"Bearer s3cret");
-    d.remember_auth("t1", None);
-    assert!(
-        d.request(&x).1.is_empty(),
-        "a withdrawn credential is not sent"
-    );
 }
 
 /// THE WIRE IS THE ONE THE PLANE SENT BEFORE THE CHIP: for every shape of credential a caller
@@ -324,20 +318,19 @@ fn the_sealed_request_frames_the_bytes_the_plain_one_did() {
         "https://hook.example/a/b",
     ] {
         for shape in shapes {
-            let d = Deliveries::default();
             let x = Delivery {
                 url: url.to_string(),
+                auth: shape.map(|(s, c)| auth(s, c)),
                 ..delivery("t1")
             };
-            d.remember_auth("t1", shape.map(|(s, c)| auth(s, c)));
             let old = Exchange::request(legacy_request(&x, shape)).expect("frames");
             assert_eq!(
-                framed(&d, &x),
+                framed(&x),
                 framed_head(&old),
                 "{url} {:?}",
                 shape.map(|(s, _)| s)
             );
-            let (request, _) = d.request(&x);
+            let (request, _) = request(&x);
             let legacy = legacy_request(&x, shape);
             assert_eq!(request.body, legacy.body);
             assert_eq!(request.timeout_ms, legacy.timeout_ms);
@@ -352,17 +345,28 @@ fn the_sealed_credential_requires_the_secured_stream_its_https_callback_names() 
     assert!(a.authorization("https://hook.example/cb").secure_required());
 }
 
+/// Deleting the sole config withdraws both a pending delivery and queued retries.
 #[test]
-fn a_terminal_tasks_last_delivery_forgets_its_credential() {
+fn forgetting_a_task_withdraws_all_its_config_deliveries() {
     let d = Deliveries::default();
-    d.remember_auth("t1", Some(auth("Basic", "")));
-    let last = Delivery::of(&task("t1", TaskState::Completed)).expect("a callback");
-    assert!(last.terminal);
-    d.enqueue(last.clone(), 0);
-    assert_eq!(sealed_bytes(d.request(&last).1.remove(0).2), b"Basic");
-    let _ = d.due(0);
-    d.settle("t1", Attempted::Delivered, 0, 0);
-    assert!(d.request(&last).1.is_empty());
+    for body in [b"pending".as_slice(), b"waiting".as_slice()] {
+        d.enqueue(
+            Delivery {
+                body: body.to_vec(),
+                from_config: true,
+                ..delivery("t1")
+            },
+            0,
+        );
+    }
+    assert!(d.next_due(0).is_some());
+    d.forget_task("t1");
+    assert_eq!(d.depth("t1"), 0);
+    assert_eq!(
+        d.settle("t1", Attempted::Status(503), 0, 128),
+        DeliverySettled::Unknown
+    );
+    assert!(d.next_due(0).is_none());
 }
 
 #[test]
@@ -811,9 +815,8 @@ fn the_push_credential_reaches_the_authorization_field_and_no_debug_or_error_tex
 /// three-attempt rule. RED against an unbounded request.
 #[test]
 fn a_delivery_attempt_is_bounded_by_the_request_deadline() {
-    let d = Deliveries::default();
     assert_eq!(
-        d.request(&delivery("t1")).0.timeout_ms,
+        request(&delivery("t1")).0.timeout_ms,
         10_000,
         "the attempt's request is not bounded by the connector's default deadline"
     );
@@ -873,5 +876,112 @@ fn a_push_moves_its_task_only_to_a_new_state_it_reports() {
             &json!({ "task": { "status": { "state": "completed" } } })
         ),
         Some(TaskState::Completed)
+    );
+}
+
+#[test]
+fn owed_receipts_keep_equal_outcomes_distinct_until_exact_acknowledgement() {
+    let d = Deliveries::default();
+    let mine = delivery("t1");
+    d.owe(&mine, Attempted::Delivered);
+    d.owe(&mine, Attempted::Delivered);
+    let first = d.peek_owed(OWED_OWNER, "principal", None);
+    assert_eq!(first.len(), 1);
+    assert_eq!(
+        d.peek_owed(OWED_OWNER, "principal", None),
+        first,
+        "pending filing keeps ownership in the book"
+    );
+    d.acknowledge_owed(&first[0]);
+    let second = d.peek_owed(OWED_OWNER, "principal", None);
+    assert_eq!(second.len(), 1);
+    assert_eq!(first[0].outcome, second[0].outcome);
+    assert_ne!(first[0], second[0]);
+    d.acknowledge_owed(&first[0]);
+    assert_eq!(
+        d.peek_owed(OWED_OWNER, "principal", None),
+        second,
+        "a replayed old acknowledgement cannot consume its equal successor"
+    );
+    d.acknowledge_owed(&second[0]);
+    assert!(d.peek_owed(OWED_OWNER, "principal", None).is_empty());
+}
+
+#[test]
+fn dropped_owed_receipt_cannot_acknowledge_a_later_equal_entry() {
+    let d = Deliveries::default();
+    let mine = delivery("t1");
+    d.owe(&mine, Attempted::Delivered);
+    let first = d.peek_owed(OWED_OWNER, "principal", None).pop().unwrap();
+    d.release_owed(&first);
+    for _ in 0..MAX_OWED {
+        d.owe(&mine, Attempted::Delivered);
+    }
+    let next = d.peek_owed(OWED_OWNER, "principal", None);
+    assert_ne!(next[0], first);
+    d.acknowledge_owed(&first);
+    assert_eq!(d.peek_owed(OWED_OWNER, "principal", None), next);
+    assert_eq!(
+        d.unfiled(),
+        1,
+        "the existing bound retains its dropped-outcome accounting"
+    );
+}
+
+#[test]
+fn a_submitted_owed_owner_survives_queue_pressure_until_exact_ack() {
+    let d = Deliveries::default();
+    let mine = delivery("t1");
+    d.owe(&mine, Attempted::Delivered);
+    let first = d.peek_owed(OWED_OWNER, "principal", None).pop().unwrap();
+    for _ in 0..MAX_OWED {
+        d.owe(&mine, Attempted::Delivered);
+    }
+    assert_eq!(
+        d.peek_owed(OWED_OWNER, "principal", None),
+        vec![first.clone()]
+    );
+    d.acknowledge_owed(&first);
+    let next = d.peek_owed(OWED_OWNER, "principal", None);
+    assert_eq!(next.len(), 1);
+    assert_ne!(next[0], first);
+    d.acknowledge_owed(&first);
+    assert_eq!(d.peek_owed(OWED_OWNER, "principal", None), next);
+    assert_eq!(d.unfiled(), 1);
+}
+
+const OWED_OWNER: Ticket = Ticket {
+    slot: 4,
+    generation: 1,
+};
+
+#[test]
+fn an_owed_outcome_has_only_one_callback_owner_until_released_or_applied() {
+    let d = Deliveries::default();
+    d.owe(&delivery("t1"), Attempted::Delivered);
+    d.owe(&delivery("t1"), Attempted::Delivered);
+    let first = d.peek_owed(OWED_OWNER, "principal", None).pop().unwrap();
+    let other = Ticket {
+        slot: 5,
+        ..OWED_OWNER
+    };
+    assert!(
+        d.peek_owed(other, "principal", None).is_empty(),
+        "another callback cannot file this receipt or overtake its equal successor"
+    );
+    d.release_owed(&first);
+    let resumed = d.peek_owed(other, "principal", None).pop().unwrap();
+    assert_eq!(first.outcome, resumed.outcome);
+    d.acknowledge_owed(&first);
+    assert_eq!(
+        d.peek_owed(other, "principal", None),
+        vec![resumed.clone()],
+        "a cancelled earlier owner cannot acknowledge a new owner's filing"
+    );
+    d.acknowledge_owed(&resumed);
+    assert_eq!(
+        d.peek_owed(other, "principal", None).len(),
+        1,
+        "the distinct successor is now eligible"
     );
 }

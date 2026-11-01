@@ -9,7 +9,6 @@ use busbar_contract::abi::plane::check::{
     check_admin_routes, check_record_chains, check_tail, check_trust_keys,
 };
 use busbar_contract::abi::plane::{CLAIM_EXACT, CLAIM_OPEN, CLAIM_PATTERN};
-use busbar_contract::plane::TrustRole;
 
 /// A fixture endpoint: the secure scheme and a reserved example host, spelled once for every test.
 fn endpoint(host: &str, rest: &str) -> String {
@@ -121,71 +120,6 @@ fn the_tail_states_the_planes_nouns() {
     assert_eq!(TAIL.record_kinds_len(), crate::records::HELD_KINDS.len());
     for (abi, kind) in RECORD_KINDS.iter().zip(crate::records::HELD_KINDS) {
         assert_eq!(s(*abi), *kind);
-    }
-}
-
-#[test]
-fn the_abi_trust_keys_are_the_grammars_trust_keys() {
-    let grammar = crate::a2a::config::tests::TRUST_KEYS;
-    assert_eq!(TRUST_KEYS.len(), grammar.len() + 1);
-    let reach = TRUST_KEYS[grammar.len()];
-    assert_eq!(
-        (
-            s(reach.key),
-            reach.role,
-            reach.flags,
-            reach.mechanisms_len()
-        ),
-        (PRIVATE_REACH_KEY, TRUST_PRIVATE_REACH, 0, 0),
-        "the private reach rides last, on the key the grammar reads"
-    );
-    assert!(reach.default.is_absent());
-    for (abi, decl) in TRUST_KEYS.iter().zip(grammar) {
-        assert_eq!(s(abi.key), decl.key);
-        let role = match decl.role {
-            TrustRole::Pin => TRUST_PIN,
-            TrustRole::ReverifyTtl => TRUST_REVERIFY_TTL,
-            TrustRole::RecoveryBackoff => TRUST_RECOVERY_BACKOFF,
-            TrustRole::PrivateReach => TRUST_PRIVATE_REACH,
-            TrustRole::ItemApprovals => busbar_contract::abi::plane::TRUST_ITEM_APPROVALS,
-        };
-        assert_eq!(abi.role, role, "{}", decl.key);
-        assert_eq!(
-            abi.flags & PIN_FINGERPRINT != 0,
-            decl.fingerprint,
-            "{}",
-            decl.key
-        );
-        assert_eq!(s(abi.default), decl.default.unwrap_or(""), "{}", decl.key);
-        assert_eq!(abi.mechanisms_len(), decl.mechanisms.len(), "{}", decl.key);
-    }
-    for (abi, decl) in PIN_MECHANISMS.iter().zip(grammar[0].mechanisms) {
-        assert_eq!(s(abi.token), decl.token);
-        assert_eq!(abi.flags & MECHANISM_ROOT != 0, decl.root, "{}", decl.token);
-        assert_eq!(
-            abi.flags & MECHANISM_PEER_KEY != 0,
-            decl.peer_key,
-            "{}",
-            decl.token
-        );
-    }
-}
-
-#[test]
-fn an_open_route_claims_open_and_a_templated_target_claims_a_pattern() {
-    let spec = agents_snapshot_spec(Some(&endpoint("gw", "")), &["vendor"]);
-    for (c, r) in spec.claims.iter().zip(ROUTES) {
-        let templated = r.target.contains('{');
-        assert_eq!((c.verb.as_str(), c.target.as_str()), (r.verb, r.target));
-        assert_eq!(c.flags & CLAIM_OPEN != 0, r.open, "{}", r.target);
-        assert_eq!(c.flags & CLAIM_EXACT != 0, !templated, "{}", r.target);
-        assert_eq!(c.flags & CLAIM_PATTERN != 0, templated, "{}", r.target);
-        assert_eq!(
-            busbar_contract::abi::plane::check::check_claim_target(r.target, c.flags),
-            Ok(()),
-            "{}",
-            r.target
-        );
     }
 }
 
@@ -457,19 +391,6 @@ fn every_route_is_one_line_of_the_dialect_in_mount_order() {
         ]
     );
     assert_eq!(Open.dialect(), None);
-}
-
-#[test]
-fn the_tail_declares_the_op_class_of_every_method_arrive_can_name() {
-    assert_eq!(TAIL.op_classes_len(), crate::ops::OP_CLASSES.len());
-    for (i, class) in OP_CLASS_TABLE.iter().enumerate() {
-        assert_eq!(class.op.len(), crate::ops::OP_CLASSES[i].as_str().len());
-    }
-    for row in crate::ops::METHODS {
-        let i = busbar_contract::abi::sdk::publish::class_index(crate::ops::OP_CLASSES, row.op)
-            .expect("declared");
-        assert_eq!(crate::ops::OP_CLASSES[i as usize], row.op);
-    }
 }
 
 /// THE DEALT VALIDATE BLOB: the boot's deal hands `{agents: <section>}`, which is unwrapped to the

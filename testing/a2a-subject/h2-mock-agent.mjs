@@ -58,10 +58,7 @@ function jcs(v) {
   }
   if (typeof v === 'string') return JSON.stringify(v);
   if (Array.isArray(v)) return '[' + v.map(jcs).join(',') + ']';
-  const names = Object.keys(v).sort((a, b) => {
-    const ua = Buffer.from(a, 'utf16le'); const ub = Buffer.from(b, 'utf16le');
-    return ua.compare(ub);
-  });
+  const names = Object.keys(v).sort(); // UTF-16 code-unit order, not little-endian byte order.
   return '{' + names.map((n) => JSON.stringify(n) + ':' + jcs(v[n])).join(',') + '}';
 }
 
@@ -94,11 +91,17 @@ function captureEgress(method, url, headers, body) {
   const dir = process.env.A2A_MOCK_CAPTURE_DIR;
   if (!dir) return;
   try {
-    mkdirSync(dir, { recursive: true });
-    const record = { path: url, method, headers, body };
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const safeHeaders = { ...headers };
+    for (const name of Object.keys(safeHeaders)) {
+      if (['authorization', 'proxy-authorization', 'cookie', 'set-cookie'].includes(name.toLowerCase())) {
+        safeHeaders[name] = '[redacted]';
+      }
+    }
+    const record = { path: url, method, headers: safeHeaders, body };
     const name = `${process.hrtime.bigint()}-${process.pid}-${seq++}.json`;
     const tmp = join(dir, `.${name}.tmp`);
-    writeFileSync(tmp, JSON.stringify(record));
+    writeFileSync(tmp, JSON.stringify(record), { mode: 0o600, flag: 'wx' });
     renameSync(tmp, join(dir, name));
   } catch {
     // best-effort

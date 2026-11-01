@@ -21,6 +21,9 @@ mod relay_g2_tests;
 #[path = "relay_diagnostic_cases.rs"]
 mod relay_diagnostic_cases;
 
+#[path = "relay_cut_controls.rs"]
+mod relay_cut_controls;
+
 const URL: &str = "https://vendor.example/a2a/v1?tenant=t1";
 const ASK: &[u8] = br#"{"jsonrpc":"2.0","id":7,"method":"GetExtendedAgentCard"}"#;
 
@@ -604,7 +607,7 @@ fn a_translated_request_is_sent_once_per_attempt_in_place_of_the_callers_pieces(
     };
     assert_eq!(
         r.on_piece(first),
-        PieceAnswer::ToFarEnd(b"translated".to_vec())
+        PieceAnswer::ToFarEnd(b"translated".to_vec().into())
     );
     assert_eq!(r.on_piece(caller(b"part-2")), PieceAnswer::Nothing);
     assert!(matches!(
@@ -613,7 +616,7 @@ fn a_translated_request_is_sent_once_per_attempt_in_place_of_the_callers_pieces(
     ));
     assert_eq!(
         r.on_piece(caller(b"again")),
-        PieceAnswer::ToFarEnd(b"translated".to_vec())
+        PieceAnswer::ToFarEnd(b"translated".to_vec().into())
     );
 }
 
@@ -630,7 +633,7 @@ fn a_sensitive_replacement_survives_retry_without_reusing_the_callers_body() {
         ));
         assert_eq!(
             relay.on_piece(caller(original)),
-            PieceAnswer::ToFarEnd(replacement.to_vec()),
+            PieceAnswer::ToFarEnd(replacement.to_vec().into()),
             "each attempt sends the complete replacement"
         );
         assert_eq!(
@@ -715,7 +718,7 @@ fn an_http_json_attempt_is_the_operations_request_line_and_sends_no_body_for_a_r
 }
 
 #[test]
-fn an_http_json_answer_that_is_not_json_is_unframable_and_fails_the_task_it_opened() {
+fn an_http_json_answer_that_is_not_json_is_a_bad_reply_and_fails_the_task_it_opened() {
     let mut r = rest_relay(Some(task(false)));
     assert!(matches!(
         r.on_piece(kernel(Some(URL))),
@@ -741,7 +744,7 @@ fn an_http_json_answer_that_is_not_json_is_unframable_and_fails_the_task_it_open
     let reply = answered(&mut r, 200, b"<html>");
     assert_eq!(
         body(&reply)["error"]["message"],
-        "a2a.hop.unframable: `GetTask` could not be carried to this agent over its `HTTP+JSON` binding"
+        "a2a.hop.reply_not_json: this agent's backend replied with something that is not a JSON-RPC answer"
     );
 }
 
@@ -1145,6 +1148,7 @@ fn a_hop_refused_for_busbars_own_credential_answers_in_the_engines_words() {
     assert!(!failed, "a card read settles nothing");
     assert!(r.take_settled().is_empty());
 }
+
 /// Ported from busbar-a2a a2a/tests/rpcerror_tests.rs::push_notification_not_supported_and_extension_support_required_round_trip.
 /// The relay path looks the backend's code up and re-emits it: a backend `-32003`/`-32008` reaches
 /// the caller as itself (HTTP 400), not as the gateway fault `-32006` (502).
@@ -1357,8 +1361,8 @@ fn a_refused_hops_journal_line_names_the_backend_and_the_callers_answer_does_not
                     !refused.head && refused.last,
                     "the refusal ends the caller's stream"
                 );
-                let mut body = started.body;
-                body.extend(refused.body);
+                let mut body = started.body.clone();
+                body.extend(refused.body.clone());
                 RelayReply {
                     status: 0,
                     content_type: "",
@@ -1457,7 +1461,7 @@ fn a_relayed_result_is_the_far_ends_bytes_with_busbars_identity_spliced_in() {
     let reply = answered(&mut r, 200, far);
     assert_eq!(reply.status, 200);
     assert_eq!(
-        String::from_utf8(reply.body).unwrap(),
+        String::from_utf8(reply.body.clone()).unwrap(),
         r#"{"jsonrpc":"2.0","id":7,"result":{"status":{"state":"completed"},"id":"a2a-p-0102030405060708","n":123456789012345678901234567890,"big":1e400,"contextId":"ctx-1","kind":"task"}}"#
     );
     // No task: the result is relayed verbatim, in the far end's member order.
@@ -1468,7 +1472,7 @@ fn a_relayed_result_is_the_far_ends_bytes_with_busbars_identity_spliced_in() {
         br#"{"jsonrpc":"2.0","id":7,"result":{"z":1,"a":12345678901234567890123}}"#,
     );
     assert_eq!(
-        String::from_utf8(reply.body).unwrap(),
+        String::from_utf8(reply.body.clone()).unwrap(),
         r#"{"jsonrpc":"2.0","id":7,"result":{"z":1,"a":12345678901234567890123}}"#
     );
 }
@@ -1502,4 +1506,24 @@ fn a_task_hops_result_that_is_no_object_is_refused_not_invented() {
     };
     assert_eq!(reply.status, 502);
     assert_eq!(r.take_settled(), vec![TaskSettled::Failed]);
+}
+
+#[test]
+fn http_json_reply_ceiling_counts_only_the_backend_document() {
+    let id = json!("large-caller-correlation".repeat(64));
+    let request = json!({"jsonrpc":"2.0", "id":id, "method":"GetExtendedAgentCard"});
+    let mut relay = HopRelay::new(id.clone(), "1.0");
+    relay.bind(Binding::HttpJson, &request);
+    assert!(matches!(
+        relay.on_piece(kernel(Some(URL))),
+        PieceAnswer::Attempt(_)
+    ));
+    let _ = relay.on_piece(caller(&serde_json::to_vec(&request).unwrap()));
+    let mut wire = b"{}".to_vec();
+    wire.resize(MAX_REPLY_BYTES, b' ');
+    let reply = answered(&mut relay, 200, &wire);
+    assert_eq!(reply.status, 200);
+    let reply: Value = serde_json::from_slice(&reply.body).unwrap();
+    assert_eq!(reply["id"], id);
+    assert_eq!(reply["result"], json!({}));
 }

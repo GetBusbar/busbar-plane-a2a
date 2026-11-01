@@ -31,11 +31,13 @@
 # out-of-band issuer key, so it lives with the rest of the subject rig:
 #   testing/a2a-subject/boot.sh --supplement
 set -euo pipefail
+umask 077
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
+source "$ROOT/testing/a2a-harness/scripts/process-fixture.sh"
 CONTROL_GO_VERSION="v2.4.0"     # must match testing/a2a-tck/run-tck.sh and a2a-harness
-WORK="${A2A_TCK_WORK:-${TMPDIR:-/tmp}/a2a-tck-work}"
+WORK="${A2A_TCK_WORK:-${XDG_CACHE_HOME:-$HOME/.cache}/busbar-a2a/tck}"
 BIN_DIR="${A2AHT_CONTROL_BIN:-$WORK/bin}"
 OUT="${A2ASUP_OUT:-$WORK/supplement}"
 mkdir -p "$OUT" "$BIN_DIR"
@@ -65,50 +67,48 @@ serve_control () {           # serve_control <port> <transport>
   "$BIN_DIR/a2a" serve --echo --port "$1" --quiet --transport "$2" \
     > "$OUT/control-$2.log" 2>&1 &
   CONTROL_PID=$!
-  for _ in $(seq 1 50); do
-    curl -fsS -m 2 -o /dev/null "http://127.0.0.1:$1/.well-known/agent-card.json" && return 0
-    sleep 0.2
-  done
+  trap 'stop_control || exit 2' EXIT
+  fixture_exit_on_signal
+  fixture_track_pid "$CONTROL_PID"
+  fixture_await_card "$CONTROL_PID" "$1" 50 0.2 && return 0
   echo "control did not come up on port $1" >&2; cat "$OUT/control-$2.log" >&2
-  kill "$CONTROL_PID" 2>/dev/null || true; exit 2
+  stop_control; exit 2
 }
 
-stop_control () { [ -n "${CONTROL_PID:-}" ] && kill "$CONTROL_PID" 2>/dev/null || true; }
+stop_control () { fixture_stop "${CONTROL_PID:-}" || return 1; CONTROL_PID=""; }
 
 run_against () {             # run_against <label> <card-url> [extra args...]
   local label="$1" card="$2"; shift 2
-  # NOTE THE EXIT CODE IS SWALLOWED. A control leg's job is to REPORT what the checks say about a
-  # peer nobody here wrote; a non-zero from it is the expected and useful outcome, not a gate.
+  # Preserve the target verdict. Control callers explicitly report their measured failures.
   ( cd "$HERE" && PYTHONPATH="$TCK_DIR:${PYTHONPATH:-}" "$TCK_PY" -m a2asup \
       --label "$label" --card-url "$card" \
-      --json "$OUT/$label.json" "$@" ) || true
+      --json "$OUT/$label.json" "$@" )
 }
 
 case "${1:-}" in
   control-jsonrpc)
     prepare; install_control
     say "control: a2a-go ${CONTROL_GO_VERSION} / jsonrpc"
-    serve_control 9711 jsonrpc; trap stop_control EXIT
-    run_against control-a2a-go-jsonrpc "http://127.0.0.1:9711/.well-known/agent-card.json"
+    serve_control 9711 jsonrpc
+    run_against control-a2a-go-jsonrpc "http://127.0.0.1:9711/.well-known/agent-card.json" || [ "$?" -eq 1 ]
     stop_control; trap - EXIT ;;
 
   control-http-json)
     prepare; install_control
     say "control: a2a-go ${CONTROL_GO_VERSION} / http_json"
-    serve_control 9712 http_json; trap stop_control EXIT
-    run_against control-a2a-go-http-json "http://127.0.0.1:9712/.well-known/agent-card.json"
+    serve_control 9712 http_json
+    run_against control-a2a-go-http-json "http://127.0.0.1:9712/.well-known/agent-card.json" || [ "$?" -eq 1 ]
     stop_control; trap - EXIT ;;
 
   control-scenario)
     prepare
     say "control: TCK scenario agent (a2a-python), direct"
     "$ROOT/testing/a2a-tck/scenario-agent/serve.sh" 9713 > "$OUT/control-scenario.log" 2>&1 &
-    CONTROL_PID=$!; trap stop_control EXIT
-    for _ in $(seq 1 300); do
-      curl -fsS -m 2 -o /dev/null "http://127.0.0.1:9713/.well-known/agent-card.json" && break
-      sleep 0.5
-    done
-    run_against control-scenario-agent "http://127.0.0.1:9713/.well-known/agent-card.json"
+    CONTROL_PID=$!; trap 'stop_control || exit 2' EXIT
+    fixture_exit_on_signal
+    fixture_track_pid "$CONTROL_PID"
+    fixture_await_card "$CONTROL_PID" 9713 300 0.5 || { echo "scenario control did not become ready" >&2; exit 2; }
+    run_against control-scenario-agent "http://127.0.0.1:9713/.well-known/agent-card.json" || [ "$?" -eq 1 ]
     stop_control; trap - EXIT ;;
 
   target)

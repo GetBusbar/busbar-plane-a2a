@@ -228,7 +228,7 @@ fn snapshots_are_not_artifact_chunks_but_each_actual_update_is() {
         let got = crate::events::read_event(&frame, &json!(7), "owned", "ctx", None, &[]).unwrap();
         assert_eq!(got.artifact, artifact);
         assert_eq!(got.backend_task_id.as_deref(), Some("far"));
-        assert!(!String::from_utf8(got.sse).unwrap().contains("\"far\""));
+        assert!(!std::str::from_utf8(&got.sse).unwrap().contains("\"far\""));
     }
 }
 

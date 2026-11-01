@@ -29,3 +29,41 @@ fn client_identity_files_are_unique_for_repeated_names() {
     assert_eq!(std::fs::read(&first.1).unwrap(), cert);
     assert_eq!(std::fs::read(&first.2).unwrap(), key);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn accepted_socket_counter_observes_non_http_traffic_before_parsing() {
+    use tokio::io::AsyncWriteExt as _;
+    let agent = Agent::start(200, ANSWER).await;
+    assert_eq!(agent.accepted(), 0);
+    let mut socket = tokio::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, agent.port))
+        .await
+        .unwrap();
+    // A TLS-like record cannot be parsed as an HTTP GET by this plaintext fixture.
+    socket
+        .write_all(&[0x16, 0x03, 0x03, 0x00, 0x01, 0x00])
+        .await
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while agent.accepted() == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the listener observes the accepted socket");
+    assert_eq!(agent.accepted(), 1);
+    assert_eq!(agent.fetches(), 0, "no HTTP card fetch was decoded");
+    socket.shutdown().await.unwrap();
+}
+
+#[test]
+fn client_identity_files_are_removed_when_the_owner_is_dropped() {
+    rig::install_crypto_provider();
+    let files = client_identity_files("identity-drop-fixture", "planner");
+    let cert = files.1.clone();
+    let key = files.2.clone();
+    assert!(std::path::Path::new(&cert).exists());
+    assert!(std::path::Path::new(&key).exists());
+    drop(files);
+    assert!(!std::path::Path::new(&cert).exists());
+    assert!(!std::path::Path::new(&key).exists());
+}

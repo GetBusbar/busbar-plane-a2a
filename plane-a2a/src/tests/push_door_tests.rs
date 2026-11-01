@@ -78,8 +78,11 @@ fn the_rows_own_callback_is_the_destination_and_no_callback_queues_nothing() {
     let mut book = Book::default();
     let row = moved(&mut book, "https://inline.example/cb");
     let d = Deliveries::default();
-    assert!(queue(&d, &row, None));
-    assert_eq!(d.next_due(0).expect("due").url, "https://inline.example/cb");
+    assert!(
+        !queue(&d, &row, None),
+        "legacy URL without durable credential authority is refused"
+    );
+    assert!(d.next_due(0).is_none());
 
     let mut silent_book = Book::default();
     let silent = moved(&mut silent_book, "");
@@ -136,6 +139,7 @@ fn an_owed_outcome_is_filed_on_its_tasks_chain() {
             kind: EV_PUSH_DELIVERED,
         },
     ];
+    let before = book.publications.len();
     let mut out = Vec::new();
     file_owed(&mut book, ALICE, &owed, 300, &mut out).unwrap();
     book.apply(&out);
@@ -150,7 +154,17 @@ fn an_owed_outcome_is_filed_on_its_tasks_chain() {
     assert_eq!(ev("t1").request_id, "");
     assert_eq!(ev("t1").ts, 300);
     assert_eq!(ev("t2").kind, EV_PUSH_FAILED);
-    assert_eq!(out.len(), 4, "two chain changes: a row and an event each");
+    assert!(
+        out.is_empty(),
+        "guarded changes never escape as ordinary output"
+    );
+    assert_eq!(book.publications.len(), before + 2);
+    assert!(
+        book.publications[before..]
+            .iter()
+            .all(|writes| writes.len() == 2),
+        "each acknowledged mutation includes its row and event"
+    );
 }
 
 // ── one attempt, over a test's host (the engine's `pushdeliver_tests.rs`) ──────────────────────
@@ -274,6 +288,7 @@ fn tick_once(d: &Deliveries, host: &mut TestHost, now_ns: u64) -> (Attempted, De
     let mut flight = Flight {
         delivery,
         exchange: None,
+        config_read: None,
     };
     let Poll::Ready(end) = attempt(host, d, &mut flight) else {
         panic!("the test's host never pends");
@@ -380,7 +395,14 @@ fn a_name_that_resolves_to_nothing_at_delivery_time_is_refused() {
         let d = queued("https://hook.caller.test/notify");
         let mut host = TestHost::answering(vec![script], 200);
         let (end, _) = tick_once(&d, &mut host, 0);
-        assert_eq!(end, Attempted::Judged(DEST_UNRESOLVABLE));
+        assert_eq!(
+            end,
+            if script.is_some() {
+                Attempted::Judged(DEST_UNRESOLVABLE)
+            } else {
+                Attempted::Transport
+            }
+        );
         assert!(host.sent.is_empty());
     }
 }
@@ -395,6 +417,7 @@ fn a_private_address_is_refused_with_no_socket() {
     let mut flight = Flight {
         delivery,
         exchange: None,
+        config_read: None,
     };
     let _ = attempt(&mut host, &d, &mut flight);
     assert!(flight.exchange.is_none(), "no request was framed");
@@ -463,9 +486,9 @@ fn a_deleted_config_takes_its_credential_out_of_memory() {
         key: task_key(ALICE, "t1"),
         value: b"{}".to_vec(),
     };
-    forget_deleted(&d, ALICE, &[tombstone(BOB), written]);
+    forget_deleted(&d, &[tombstone(BOB), written]);
     assert!(presented(&d), "nothing of Alice's was deleted");
-    forget_deleted(&d, ALICE, &[tombstone(ALICE)]);
+    forget_deleted(&d, &[tombstone(ALICE)]);
     assert!(!presented(&d), "the deleted config's credential is gone");
 }
 
@@ -687,6 +710,9 @@ fn a_receiver_whose_addresses_changed_is_still_delivered() {
             url: callback.into(),
             body: Vec::new(),
             terminal: false,
+            auth: None,
+            from_config: false,
+            unresolved: None,
         },
         0,
     );
@@ -704,37 +730,15 @@ fn a_receiver_whose_addresses_changed_is_still_delivered() {
     );
 }
 
-/// A TASK THAT ENDS WITH NOTHING TO DELIVER DROPS ITS WEBHOOK CREDENTIAL: a terminal move that
-/// queues no notification leaves no credential in plane memory, since no delivery is left to
-/// present it. RED against a credential released only by a terminal delivery's settle.
+/// A terminal task without a durable config has no notification authority to retain.
 #[test]
-fn a_task_that_ends_with_nothing_to_deliver_drops_its_credential() {
+fn terminal_task_without_durable_config_queues_nothing() {
     let mut book = Book::default();
     let mut row = moved(&mut book, "");
     row.state = "completed".into();
-    let d = Deliveries::default();
-    d.remember_auth(
-        "t1",
-        Some(DeliveryAuth {
-            scheme: "Bearer".into(),
-            credentials: busbar_contract::abi::sdk::test_support::chip::cred("tok"),
-        }),
-    );
-    assert!(!queue(&d, &row, None), "nothing to deliver");
-    let probe = Delivery {
-        task_id: "t1".into(),
-        caller: ALICE.into(),
-        url: "https://hook.caller.test/notify".into(),
-        body: Vec::new(),
-        terminal: true,
-    };
-    assert!(
-        !d.request(&probe)
-            .1
-            .iter()
-            .any(|(_, n, _)| n == b"authorization"),
-        "the ended task's credential is still held"
-    );
+    let deliveries = Deliveries::default();
+    assert!(!queue(&deliveries, &row, None));
+    assert!(deliveries.next_due(0).is_none());
 }
 
 /// AN ENDED TASK SPENDS ITS CALLBACK TOKEN, whichever move ended it: the token busbar registered
@@ -817,6 +821,9 @@ fn a_silent_receiver_delays_another_tasks_delivery_by_one_deadline_at_most() {
                 url: url.into(),
                 body: Vec::new(),
                 terminal: false,
+                auth: None,
+                from_config: false,
+                unresolved: None,
             },
             0,
         );
@@ -897,6 +904,9 @@ fn a_held_attempt_asks_for_no_tick_before_its_deadline() {
             url: "https://other.caller.test/notify".into(),
             body: Vec::new(),
             terminal: false,
+            auth: None,
+            from_config: false,
+            unresolved: None,
         },
         start,
     );
@@ -912,3 +922,35 @@ fn a_held_attempt_asks_for_no_tick_before_its_deadline() {
 
 #[path = "push_delivery_custody.rs"]
 mod delivery_custody;
+
+#[path = "push_deferred_custody.rs"]
+mod deferred_custody;
+
+#[test]
+fn acknowledged_retention_config_deletes_clean_the_actual_other_caller_queue() {
+    let mut book = Book::default();
+    let mine = moved(&mut book, "");
+    let mut theirs = mine.clone();
+    theirs.task_id = "t2".into();
+    theirs.principal = BOB.into();
+    let d = Deliveries::default();
+    let cfg = config("https://receiver.example/cb", None);
+    assert!(queue(&d, &mine, Some(&cfg)));
+    assert!(queue(&d, &theirs, Some(&cfg)));
+    assert_eq!(d.depth("t1"), 1);
+    assert_eq!(d.depth("t2"), 1);
+    forget_deleted(
+        &d,
+        &[Write {
+            kind: KIND_PUSH_CONFIG,
+            key: task_key(BOB, "t2"),
+            value: Vec::new(),
+        }],
+    );
+    assert_eq!(d.depth("t1"), 1);
+    assert_eq!(
+        d.depth("t2"),
+        0,
+        "retention acknowledgement uses its actual stored caller/key"
+    );
+}

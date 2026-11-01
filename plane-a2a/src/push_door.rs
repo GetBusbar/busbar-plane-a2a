@@ -4,8 +4,8 @@
 //! Push delivery, driven by the door: the host's half of [`crate::push`].
 //!
 //! * A relayed task that MOVES queues its notification ([`queue`]): to the push_config host record
-//!   the caller registered for it, or else to the callback its row carries (an inline config). A
-//!   task with neither queues nothing.
+//!   the caller registered through CRUD or inline. A legacy row URL alone supplies no credential
+//!   authority, so a task with no durable config queues nothing.
 //! * The lifecycle `tick` ([`tick_deliveries`]) attempts ONE due notification per op: the kernel's random
 //!   byte for the retry's jitter, then the destination judge over the callback, its name resolved,
 //!   then one exchange over the plane's outbound `open-web` need
@@ -29,12 +29,14 @@ use busbar_contract::abi::mechanism::ticket::{CompletionHandle, Ticket};
 use busbar_contract::abi::sdk::conn::StaticHost;
 use busbar_contract::abi::sdk::exchange::{exchange, Exchange};
 use busbar_contract::abi::sdk::publish::Keyed;
-use busbar_contract::abi::sdk::{Instance, StaticServices};
+use busbar_contract::abi::sdk::{Instance, ServiceError, StaticServices};
 
 use crate::a2a::task::Task;
 use crate::local::{self, PushConfig};
 use crate::plane_door::A2aDoor;
-use crate::push::{Attempted, Deliveries, Delivery, DeliverySettled, Owed, Tokens};
+#[cfg(test)]
+use crate::push::Owed;
+use crate::push::{Attempted, Deliveries, Delivery, DeliverySettled, Tokens};
 use crate::records::KIND_PUSH_CONFIG;
 use crate::statement::NEED_OPEN_WEB;
 use crate::tasks::{self, Halt, Records, Stamp, Write};
@@ -45,25 +47,33 @@ use crate::TaskRow;
 const NO_JITTER: u8 = 128;
 
 /// QUEUE the notification `row`'s move owes: to `config` (the push_config record of the task) when
-/// the caller registered one, its credential held for the attempt; else to the row's own callback.
-/// Due at once: the next `tick` attempts it. (The book's times are the `tick`'s clock, which a
-/// piece does not read, so a first attempt is filed as due at its origin.) Answers whether one was
-/// queued.
-pub fn queue(deliveries: &Deliveries, row: &TaskRow, config: Option<&PushConfig>) -> bool {
-    let Ok(mut task) = Task::from_row(row) else {
-        return false;
-    };
-    if let Some(cfg) = config {
-        task.push_callback = Some(cfg.url.clone());
-        task.push_version.clone_from(&cfg.version);
-        deliveries.remember_auth(&task.task_id, cfg.authentication.clone());
-    }
-    let Some(delivery) = Delivery::of(&task) else {
-        // An ended task with nothing to deliver leaves no credential behind: no delivery is left
-        // to present it.
-        if task.state.is_terminal() {
-            deliveries.remember_auth(&task.task_id, None);
+/// the caller registered one, carrying that config's credential. A legacy row URL without a
+/// durable config is refused. The delivery takes its credential NOW, with
+/// its URL, so it never presents one registered later for another. Due at once: the next `tick`
+/// attempts it. (The book's times are the `tick`'s clock, which a piece does not read, so a first
+/// attempt is filed as due at its origin.) Answers whether one was queued.
+pub(crate) fn captured(row: &TaskRow, config: Option<&PushConfig>) -> Option<Delivery> {
+    let mut task = Task::from_row(row).ok()?;
+    let Some(cfg) = config else {
+        if task.push_callback.is_some() {
+            busbar_contract::diag_warn!(
+                crate::diagnostics::A2A_PUSH_CHECK_UNAVAILABLE,
+                "a2a: legacy callback has no durable config; notification refused"
+            );
         }
+        return None;
+    };
+    task.push_callback = Some(cfg.url.clone());
+    task.push_version.clone_from(&cfg.version);
+    let mut delivery = Delivery::of(&task)?;
+    delivery.auth = cfg.authentication.clone();
+    delivery.from_config = true;
+    Some(delivery)
+}
+
+/// Capture the notification's URL and credential together, then queue it once.
+pub fn queue(deliveries: &Deliveries, row: &TaskRow, config: Option<&PushConfig>) -> bool {
+    let Some(delivery) = captured(row, config) else {
         return false;
     };
     deliveries.enqueue(delivery, 0);
@@ -83,19 +93,98 @@ pub fn ended(tokens: &Tokens, row: &TaskRow) {
     }
 }
 
-/// Forget the webhook credential of every push config `writes` deletes for `caller` (the tombstone
-/// of its task's config record): a secret with no config left to present it for does not stay in
-/// plane memory.
-pub fn forget_deleted(deliveries: &Deliveries, caller: &str, writes: &[Write]) {
-    let prefix = tasks::task_key(caller, "");
+/// Forget what every push config `writes` deletes for `caller` (the tombstone of its task's config
+/// record) was queued for ([`Deliveries::forget_task`]): a notification and a secret with no config
+/// left to deliver them for do not stay in plane memory.
+pub fn forget_deleted(deliveries: &Deliveries, writes: &[Write]) {
     for w in writes
         .iter()
         .filter(|w| w.kind == KIND_PUSH_CONFIG && w.value.is_empty())
     {
-        if let Some(task_id) = w.key.strip_prefix(prefix.as_str()) {
-            deliveries.remember_auth(task_id, None);
+        deliveries.forget_config(&w.key);
+    }
+}
+
+/// Apply only metadata from exact Applied receipts, outside the Journal and Book guards.
+pub(crate) fn apply_publication(
+    plane: &A2aDoor,
+    journal: &crate::conditional_publication::Journal,
+) {
+    let effects = plane.deliveries.apply_publication(journal);
+    let owner = effects.owner;
+    for (row, _) in effects.notify {
+        ended(&plane.tokens, &row);
+    }
+    for (row, backend) in effects.backends {
+        plane.remember_backend(&row, backend);
+    }
+    for receipt in effects.owed {
+        plane.deliveries.acknowledge_owed(&receipt);
+    }
+    for receipt in effects.release_owed {
+        plane.deliveries.release_owed(&receipt);
+    }
+    journal.effects_finished(owner);
+}
+
+/// An outcome-only driver crossing never resumes a canceled callback or lends a new candidate.
+pub(crate) fn settle_publications<T: busbar_contract::abi::sdk::door::AbiOut>(
+    plane: &A2aDoor,
+    ticket: Ticket,
+    extensions: &[u8],
+    out: &mut busbar_contract::abi::sdk::Out<'_, T>,
+) -> Option<Outcome> {
+    use busbar_contract::abi::sdk::plane::conditional as wire;
+    // Absence confirms a prior ACK only on a fully negotiated, valid same-instance driver input.
+    let capability = match wire::read_capability(extensions) {
+        Ok(Some(capability)) if capability.ticket == ticket => capability,
+        Ok(None) => return None,
+        _ => return Some(Outcome::Failed),
+    };
+    let _ = capability;
+    let incoming = match wire::read_settlement(extensions) {
+        Ok(incoming) => incoming,
+        Err(_) => return Some(Outcome::Failed),
+    };
+    let journals = plane.deliveries.publications();
+    for journal in &journals {
+        if journal.ack_confirmed(incoming.as_ref()) {
+            plane.deliveries.release_publication(journal);
         }
     }
+    if let Some(settlement) = incoming {
+        for journal in journals {
+            match journal.settle(&settlement) {
+                Err(_) => return Some(Outcome::Failed),
+                Ok(false) => continue,
+                Ok(true) => {
+                    apply_publication(plane, &journal);
+                    if !journal.effects_complete() {
+                        return Some(Outcome::Pending);
+                    }
+                    if out
+                        .conditional_settlement_ack(&plane.publication_leases, &settlement)
+                        .is_err()
+                    {
+                        return Some(Outcome::Failed);
+                    }
+                    journal.offer_ack(&settlement);
+                    return Some(Outcome::Pending);
+                }
+            }
+        }
+        // A receipt without its original retained candidate cannot be inferred or replaced.
+        return Some(Outcome::Failed);
+    }
+    for journal in journals {
+        if journal.is_cancelled() {
+            apply_publication(plane, &journal);
+            if journal.cancelled_without_receipt() {
+                plane.deliveries.release_publication(&journal);
+            }
+        }
+    }
+    None
 }
 
 /// [`queue`] for a relayed piece of `caller`'s that moved `row`: the task's push_config record read
@@ -109,8 +198,38 @@ pub fn queue_moved(
     caller: &str,
     row: &TaskRow,
 ) -> Result<bool, Halt> {
-    let config = local::held_config(rec, caller, &row.task_id)?;
-    Ok(queue(deliveries, row, config.as_ref()))
+    match local::held_config(rec, caller, &row.task_id) {
+        Ok(config) => Ok(queue(deliveries, row, config.as_ref())),
+        Err(Halt::Pending) => Err(Halt::Pending),
+        Err(Halt::Failed(_)) => {
+            defer(deliveries, row);
+            Ok(true)
+        }
+    }
+}
+
+/// Preserve a move's notification intent when its config could not be read. The existing
+/// per-task queue and attempt policy own it; no upstream task work or fees are repeated.
+pub(crate) fn defer(deliveries: &Deliveries, row: &TaskRow) {
+    deliveries.enqueue(deferred(row), 0);
+    busbar_contract::diag_warn!(
+        crate::diagnostics::A2A_PUSH_CHECK_UNAVAILABLE,
+        "a2a: notification config unavailable; retained for delivery retry"
+    );
+    deliveries.wake();
+}
+
+pub(crate) fn deferred(row: &TaskRow) -> Delivery {
+    Delivery {
+        task_id: row.task_id.clone(),
+        caller: row.principal.clone(),
+        url: String::new(),
+        body: Vec::new(),
+        terminal: false,
+        auth: None,
+        from_config: true,
+        unresolved: Some(Box::new(row.clone())),
+    }
 }
 
 /// File `owed` on the chains it names, for `caller`, stamped `now_s`; the writes go to `out`. One
@@ -118,6 +237,7 @@ pub fn queue_moved(
 ///
 /// # Errors
 /// [`Halt::Pending`] when a records call pends: the piece runs again with the same `owed`.
+#[cfg(test)]
 pub fn file_owed(
     rec: &mut dyn Records,
     caller: &str,
@@ -139,10 +259,46 @@ pub fn file_owed(
     Ok(())
 }
 
+/// The callback's conditional filing keeps ownership in the delivery book until each exact
+/// outcome's event applied. A later pending outcome or cancellation cannot lose an earlier one.
+pub(crate) fn file_owed_committed(
+    via: &mut crate::task_door::Via<'_>,
+    journal: &crate::conditional_publication::Journal,
+    deliveries: &Deliveries,
+    caller: &str,
+    owed: &[crate::push::OwedReceipt],
+    now_s: u64,
+) -> Result<(), Halt> {
+    for receipt in owed.iter().filter(|r| r.outcome.caller == caller) {
+        via.effects(crate::conditional_publication::Draft {
+            owed: Some(receipt.clone()),
+            ..Default::default()
+        });
+        let o = &receipt.outcome;
+        let at = Stamp {
+            caller,
+            request_id: "",
+            now: now_s,
+        };
+        tasks::record_push_delivery(via, &at, &o.task_id, o.kind, &mut Vec::new())?;
+        match journal.owed_decision(receipt) {
+            Some(true) => {
+                deliveries.acknowledge_owed(receipt);
+                journal.owed_done(receipt);
+            }
+            Some(false) => deliveries.release_owed(receipt),
+            None => {}
+        }
+    }
+    Ok(())
+}
+
 /// One attempt in flight across its `tick` op's PENDING entries.
 struct Flight {
     delivery: Delivery,
     exchange: Option<Exchange>,
+    /// Replayed on every pending entry so all following service handles keep their sequence.
+    config_read: Option<Box<TaskRow>>,
 }
 
 /// The host calls one attempt makes, in their one order: the random byte (handle `0`), the judge
@@ -151,11 +307,13 @@ struct Calls<'h> {
     host: &'h StaticHost,
     services: StaticServices,
     ticket: Ticket,
+    grown: &'h crate::task_door::Grown,
+    base: u32,
 }
 
 impl Calls<'_> {
     const fn handle(&self, seq: u32) -> CompletionHandle {
-        crate::task_door::handle(self.ticket, seq)
+        crate::task_door::handle(self.ticket, self.base + seq)
     }
 
     /// The jitter byte, from the kernel's random bytes.
@@ -175,8 +333,11 @@ impl Calls<'_> {
 type Judgement = (u64, String);
 
 trait Line {
+    fn config(&mut self, _row: &TaskRow) -> Result<Option<PushConfig>, Halt> {
+        Err(Halt::Failed("config service unavailable".into()))
+    }
     /// The destination judge over `url`: its `DEST_*` verdict and the set a dial must land within;
-    /// `None` when nothing was checked.
+    /// `None` when the host could not answer it (nothing was checked).
     fn judge(&mut self, url: &str) -> Poll<Option<Judgement>>;
     /// One exchange of `ex` to `url`: the receiver's status; `None` when the connection or the
     /// exchange failed.
@@ -189,6 +350,13 @@ trait Line {
 }
 
 impl Line for Calls<'_> {
+    fn config(&mut self, row: &TaskRow) -> Result<Option<PushConfig>, Halt> {
+        let mut via =
+            crate::task_door::Via::new(self.host, Some(self.services), self.ticket, 0, self.grown);
+        let config = local::held_config(&mut via, &row.principal, &row.task_id);
+        self.base = via.issued();
+        config
+    }
     fn jitter(&mut self) -> u8 {
         Calls::jitter(self)
     }
@@ -197,15 +365,33 @@ impl Line for Calls<'_> {
         if let Some(stream) = stream {
             // The close names the stream itself, so it needs nothing the tick's cycle forgot; it
             // never pends on a table, and a close that fails leaves nothing more to do.
-            let _ = self.host.connector_from(self.ticket, 2).close(stream);
+            let _ = self
+                .host
+                .connector_from(self.ticket, self.base + 2)
+                .close(stream);
         }
     }
     fn judge(&mut self, url: &str) -> Poll<Option<Judgement>> {
-        crate::task_door::judge_open_web(&self.services, self.handle(1), url).map(Result::ok)
+        match crate::task_door::judge_open_web(&self.services, self.handle(1), url) {
+            // More addresses than the first call had room for: re-called ONCE, on the same
+            // handle, at the size the host named (the service's short-buffer rule).
+            Poll::Ready(Err(ServiceError::Short { bytes, items })) => {
+                let size = |n: u64| usize::try_from(n).unwrap_or(usize::MAX);
+                crate::task_door::judge_open_web_sized(
+                    &self.services,
+                    self.handle(1),
+                    url,
+                    size(bytes),
+                    size(items),
+                )
+                .map(Result::ok)
+            }
+            answered => answered.map(Result::ok),
+        }
     }
 
     fn send(&mut self, ex: &mut Exchange, url: &str) -> Poll<Option<u16>> {
-        let mut conn = self.host.connector_from(self.ticket, 2);
+        let mut conn = self.host.connector_from(self.ticket, self.base + 2);
         match exchange(&mut conn, ex, NEED_OPEN_WEB, Some(url)) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(Ok(reply)) => Poll::Ready(Some(reply.status)),
@@ -222,8 +408,10 @@ fn attempt(line: &mut dyn Line, deliveries: &Deliveries, flight: &mut Flight) ->
     let url = flight.delivery.url.clone();
     let (verdict, within) = match line.judge(&url) {
         Poll::Pending => return Poll::Pending,
-        // Nothing was checked, so nothing is allowed.
-        Poll::Ready(None) => return Poll::Ready(Attempted::Judged(DEST_UNRESOLVABLE)),
+        // Nothing was checked, so nothing is sent; the host's judge failing is no refusal of the
+        // destination, so the attempt ends as a transport error, retried under the three-attempt
+        // rule.
+        Poll::Ready(None) => return Poll::Ready(Attempted::Transport),
         Poll::Ready(Some(judged)) => judged,
     };
     if verdict != DEST_ALLOWED {
@@ -345,6 +533,8 @@ fn calls_of<'p>(
             host,
             services,
             ticket,
+            grown: &plane.grown,
+            base: 0,
         },
     ))
 }
@@ -367,6 +557,9 @@ fn tick_over(
             if let Some((flight, _)) = attempting.take() {
                 deliveries.holding(false);
                 line.abandon(flight.exchange.as_ref().and_then(Exchange::stream));
+                if !deliveries.current(&flight.delivery) {
+                    return Outcome::Ready;
+                }
                 let jitter = line.jitter();
                 deliveries.owe(&flight.delivery, Attempted::Transport);
                 let _ = deliveries.settle(
@@ -385,6 +578,7 @@ fn tick_over(
             deliveries,
             attempting,
             Flight {
+                config_read: delivery.unresolved.clone(),
                 delivery,
                 exchange: None,
             },
@@ -417,6 +611,59 @@ fn advance_attempt(
     started_ns: u64,
     now_ns: Option<u64>,
 ) -> Outcome {
+    if !deliveries.current(&flight.delivery) {
+        deliveries.holding(false);
+        line.abandon(flight.exchange.as_ref().and_then(Exchange::stream));
+        return Outcome::Ready;
+    }
+    if let Some(row) = flight.config_read.as_deref() {
+        match line.config(row) {
+            Err(Halt::Pending) => {
+                attempting.hold(flight, started_ns);
+                deliveries.holding(true);
+                return Outcome::Pending;
+            }
+            Err(Halt::Failed(_)) => {
+                let jitter = line.jitter();
+                deliveries.holding(false);
+                deliveries.owe(&flight.delivery, Attempted::Transport);
+                match now_ns {
+                    Some(now) => {
+                        deliveries.settle(
+                            &flight.delivery.task_id,
+                            Attempted::Transport,
+                            now,
+                            jitter,
+                        );
+                    }
+                    None => {
+                        deliveries.settle_ended(
+                            &flight.delivery.task_id,
+                            Attempted::Transport,
+                            jitter,
+                        );
+                        deliveries.wake();
+                    }
+                }
+                return Outcome::Ready;
+            }
+            Ok(config) if flight.delivery.unresolved.is_some() => {
+                let resolved = captured(row, config.as_ref());
+                if let Some(resolved) = resolved {
+                    if !deliveries.resolve(&flight.delivery, resolved.clone()) {
+                        deliveries.holding(false);
+                        return Outcome::Ready;
+                    }
+                    flight.delivery = resolved;
+                } else {
+                    deliveries.discard(&flight.delivery);
+                    deliveries.holding(false);
+                    return Outcome::Ready;
+                }
+            }
+            Ok(_) => {}
+        }
+    }
     let jitter = line.jitter();
     match attempt(line, deliveries, &mut flight) {
         Poll::Pending => {

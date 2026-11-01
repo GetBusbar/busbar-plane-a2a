@@ -28,8 +28,7 @@ path = "src/lib.rs"
 [dependencies]
 # THE CONTRACT. The one busbar crate a plugin manifest may name without argument.
 busbar-contract = { workspace = true }
-# The two wire parameter objects the canonicalizer and the frame rewriter read and write
-# derive their shapes; the dialect folded in here (#39) and brought its own serde need with it.
+# Serialization and deserialization of the plane's config, records and wire values.
 serde = { workspace = true }
 # The object notation the codec speaks. The adapter hands values across the seam and never invents
 # a second parser.
@@ -58,6 +57,9 @@ base64 = { workspace = true }
 prost-build = { workspace = true }
 pbjson-build = { workspace = true }
 protoc-bin-vendored = { workspace = true }
+# Inspect generated Rust as syntax before adding scoped ownership guards.
+syn = { workspace = true, features = ["visit-mut"] }
+proc-macro2 = { workspace = true }
 
 [dev-dependencies]
 # The TEST-ONLY seal (#65). `busbar_contract::plugin::TestKernelSeal` is the one blessed

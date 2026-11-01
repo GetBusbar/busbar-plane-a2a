@@ -58,12 +58,8 @@ EQUIV_OPS: list[tuple[str, dict]] = [
 # SPEC 5.4's canonical mapping for UnsupportedOperationError, per binding. An operation the agent
 # does not implement answers with THIS; anything else means the operation exists.
 #
-# NOTE WHAT IS NOT IN THE REST SET, because an earlier draft got it wrong in a way that inverted
-# the verdict: `404` is NOT here. SPEC 5.4 maps UnsupportedOperationError to `400 Bad Request` for
-# HTTP and TaskNotFoundError to `404`, so counting 404 as "not implemented" made every REST
-# operation that correctly reported an absent task look absent ITSELF -- and the check then
-# reported a divergence that was entirely its own. `405` and `501` are retained because an
-# unrouted verb and an explicit not-implemented are both unambiguous.
+# A REST 404 alone cannot distinguish a missing route from a missing task.
+# Resource errors count as operation evidence only with their defined ErrorInfo.
 NOT_IMPLEMENTED = {
     "jsonrpc": {-32004, -32601},
     "http_json": {400, 405, 501},
@@ -98,6 +94,7 @@ def check_bind_equiv_001(target: Target) -> Result:
 
     evidence: list[str] = []
     implemented: dict[str, set[str]] = {}
+    successful: set[str] = set()
     raised: list[str] = []
     for name, binding in bindings.items():
         found: set[str] = set()
@@ -127,6 +124,22 @@ def check_bind_equiv_001(target: Target) -> Result:
                 raised.append(f"{name}/{op}: {type(exc).__name__}: {exc}")
                 continue
             evidence.append(f"{name}/{op} -> {reply!r}")
+            if name == "http_json" and not reply.ok and reply.code == 404:
+                document = reply.raw if isinstance(reply.raw, dict) else {}
+                error = document.get("error", document)
+                details = error.get("details", []) if isinstance(error, dict) else []
+                if not any(isinstance(detail, dict) and
+                           detail.get("@type", "").endswith("google.rpc.ErrorInfo") and
+                           detail.get("domain") == "a2a-protocol.org" and
+                           detail.get("reason") == "TASK_NOT_FOUND"
+                           for detail in details):
+                    raised.append(f"{name}/{op}: HTTP 404 has no TaskNotFound ErrorInfo; "
+                                  "operation availability was not established")
+                    continue
+            if reply.ok:
+                successful.add(name)
+            elif reply.code not in NOT_IMPLEMENTED[name] | {TASK_NOT_FOUND[name]}:
+                raised.append(f"{name}/{op}: no successful operation or defined resource/unsupported answer: {reply!r}")
             if reply.ok or reply.code not in NOT_IMPLEMENTED[name]:
                 found.add(op)
         implemented[name] = found
@@ -141,6 +154,8 @@ def check_bind_equiv_001(target: Target) -> Result:
             evidence,
         )
     baseline_name = names[0]
+    if successful != set(names):
+        return Result(req.id, Verdict.FAIL, "at least one binding completed no successful operation", evidence)
     baseline = implemented[baseline_name]
     divergent = {n: s for n, s in implemented.items() if s != baseline}
     if divergent:
@@ -185,10 +200,12 @@ def _normalise_task(doc: object) -> object:
         "updateTime",
         "update_time",
         "lastUpdated",
-        "name",
     }
     if isinstance(doc, dict):
-        return {k: _normalise_task(v) for k, v in sorted(doc.items()) if k not in volatile}
+        containers = {"task", "message", "history", "artifacts", "status", "parts",
+                      "statusUpdate", "artifactUpdate"}
+        return {k: _normalise_task(v) if k in containers else v
+                for k, v in sorted(doc.items()) if k not in volatile}
     if isinstance(doc, list):
         return [_normalise_task(v) for v in doc]
     return doc
@@ -203,7 +220,9 @@ def _mask(doc: object, message_id: str) -> object:
     three distinct ids, and masking it is how the comparison stays about the agent.
     """
     if isinstance(doc, dict):
-        return {k: _mask(v, message_id) for k, v in doc.items()}
+        # Arbitrary user data is compared verbatim, including id/name/timestamp members.
+        return {k: v if k in {"data", "metadata", "extensions"} else _mask(v, message_id)
+                for k, v in doc.items()}
     if isinstance(doc, list):
         return [_mask(v, message_id) for v in doc]
     if isinstance(doc, str) and message_id in doc:
@@ -217,7 +236,7 @@ def _shape(doc: object, depth: int = 0) -> object:
     if isinstance(doc, dict):
         return {k: _shape(v, depth + 1) for k, v in sorted(doc.items())}
     if isinstance(doc, list):
-        return [_shape(doc[0], depth + 1)] if doc else []
+        return [_shape(item, depth + 1) for item in doc]
     return type(doc).__name__
 
 
@@ -264,7 +283,10 @@ def check_bind_equiv_002(target: Target) -> Result:
             )
         evidence.append(f"{name} send_message -> {short(reply.payload, 700)}")
         if not reply.ok:
-            evidence.append(f"{name} send_message error {reply!r}")
+            return Result(req.id, Verdict.FAIL,
+                          f"{name} did not complete Send Message: {reply!r}", evidence)
+        if not isinstance(reply.payload, dict) or not reply.payload:
+            return Result(req.id, Verdict.FAIL, f"{name} returned no operation result", evidence)
         normalised[name] = _normalise_task(_mask(reply.payload, sent_ids[name]))
         shapes[name] = _shape(reply.payload)
 
@@ -353,30 +375,25 @@ def check_bind_equiv_004(target: Target) -> Result:
         return _not_applicable(req.id, names)
 
     evidence: list[str] = []
-    # (a) The DECLARATION. SPEC 4.4 puts securitySchemes on the card, once, for the agent -- so a
-    # per-interface security declaration that differs between interfaces is a divergence on its
-    # face, before any request is made.
-    per_interface = {
-        f"{i.binding}@{i.version} {i.url}": sorted(i.__dict__.get("securitySchemes") or {})
-        for i in target.interfaces
-    }
-    evidence.append(f"per-interface security declarations = {short(per_interface)}")
-
-    # (b) The ENFORCEMENT, which is what makes (a) more than a documentation check. The same three
-    # credentials on every binding must be sorted the same way.
+    # SPEC 4.4 declares security once on AgentCard, shared by its interfaces.
+    # Interface has no securitySchemes member to compare. Probe enforcement on
+    # each binding and report the actual shared declaration as context.
+    evidence.append(f"AgentCard securitySchemes = {short(target.card.get('securitySchemes') or {})}")
+    evidence.append(f"AgentCard securityRequirements = {short(target.card.get('securityRequirements') or [])}")
     from a2asup.checks_auth import FORGED_BEARER, _admitted  # noqa: PLC0415
 
+    if not target.token:
+        return Result(req.id, Verdict.NOT_APPLICABLE,
+                      "no real credential was supplied for the positive authentication control", evidence)
     verdicts: dict[str, tuple[bool, bool, bool]] = {}
     for name, binding in bindings.items():
-        probe = {"message": {"role": "ROLE_USER", "parts": [{"text": "auth equivalence"}]}}
+        probe = {"message": {"role": "ROLE_USER", "parts": [{"text": "auth equivalence"}],
+                             "messageId": f"a2asup-auth-{uuid.uuid4().hex}"}}
         try:
             anon = _admitted(binding.call("send_message", dict(probe), token=None))
             forged = _admitted(binding.call("send_message", dict(probe), token=FORGED_BEARER))
-            good = (
-                _admitted(binding.call("send_message", dict(probe), token=target.token))
-                if target.token
-                else None
-            )
+            positive = binding.call("send_message", dict(probe), token=target.token)
+            good = positive.ok and isinstance(positive.payload, dict) and bool(positive.payload)
         except Exception as exc:  # noqa: BLE001
             return Result(
                 req.id,
@@ -391,6 +408,10 @@ def check_bind_equiv_004(target: Target) -> Result:
         )
 
     baseline = names[0]
+    if any(anon or forged or not good for anon, forged, good in verdicts.values()):
+        return Result(req.id, Verdict.FAIL,
+                      "every binding must refuse anonymous and forged credentials and admit the real credential",
+                      evidence)
     divergent = [n for n in names if verdicts[n] != verdicts[baseline]]
     if divergent:
         return Result(

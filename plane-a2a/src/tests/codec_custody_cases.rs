@@ -44,17 +44,19 @@ fn rest_replaced_params_wipe_before_the_replacement_is_retained() {
 
 #[test]
 fn framed_composed_json_wipes_its_initialized_credentials_after_serialization() {
-    let message = crate::proto::pb::TaskPushNotificationConfig {
-        task_id: "task".into(),
-        id: "config".into(),
-        url: "https://callback.example".into(),
-        authentication: Some(crate::proto::pb::AuthenticationInfo {
-            scheme: "Bearer".into(),
-            credentials: SECRET.into(),
-        }),
-        ..Default::default()
-    }
-    .encode_to_vec();
+    let message =
+        crate::proto::custody::initialized::<crate::proto::pb::TaskPushNotificationConfig>(
+            |__custody_message| {
+                __custody_message.task_id = "task".into();
+                __custody_message.id = "config".into();
+                __custody_message.url = "https://callback.example".into();
+                __custody_message.authentication = Some(crate::proto::pb::AuthenticationInfo {
+                    scheme: "Bearer".into(),
+                    credentials: SECRET.into(),
+                });
+            },
+        )
+        .encode_to_vec();
     assert_wiped(|| {
         let composed = crate::framed::compose(
             crate::framed::Rpc::CreateTaskPushNotificationConfig,
@@ -82,7 +84,7 @@ fn framed_answer_dom_wipes_credentials_after_transcoding() {
         .unwrap();
         let message =
             crate::proto::pb::TaskPushNotificationConfig::decode(bytes.as_slice()).unwrap();
-        assert_eq!(message.authentication.unwrap().credentials, SECRET);
+        assert_eq!(message.authentication.as_ref().unwrap().credentials, SECRET);
     });
 }
 
@@ -127,7 +129,7 @@ fn borrowing_protojson_params_preserves_aliases_errors_and_the_callers_owner() {
         let config =
             crate::proto::pb::TaskPushNotificationConfig::decode(bytes.as_slice()).unwrap();
         assert_eq!(config.task_id, "task");
-        assert_eq!(config.authentication.unwrap().credentials, SECRET);
+        assert_eq!(config.authentication.as_ref().unwrap().credentials, SECRET);
         assert_eq!(params, expected, "the existing borrowed owner is untouched");
         params["tenant"] = json!(false);
         assert!(crate::framed::request_message(

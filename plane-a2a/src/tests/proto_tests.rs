@@ -17,22 +17,19 @@ fn the_service_name_is_the_descriptors() {
 /// An enum value the model does not know is its unspecified one; a known one stands.
 #[test]
 fn an_unknown_enum_value_is_clamped() {
-    let mut m = pb::Message {
-        role: 99,
-        ..Default::default()
-    };
+    let mut m = crate::proto::custody::initialized::<pb::Message>(|__custody_message| {
+        __custody_message.role = 99;
+    });
     m.normal().unwrap();
     assert_eq!(m.role, pb::Role::Unspecified as i32);
-    let mut m = pb::Message {
-        role: pb::Role::Agent as i32,
-        ..Default::default()
-    };
+    let mut m = crate::proto::custody::initialized::<pb::Message>(|__custody_message| {
+        __custody_message.role = pb::Role::Agent as i32;
+    });
     m.normal().unwrap();
     assert_eq!(m.role, pb::Role::Agent as i32);
-    let mut s = pb::TaskStatus {
-        state: 77,
-        ..Default::default()
-    };
+    let mut s = crate::proto::custody::initialized::<pb::TaskStatus>(|__custody_message| {
+        __custody_message.state = 77;
+    });
     s.normal().unwrap();
     assert_eq!(s.state, pb::TaskState::Unspecified as i32);
 }
@@ -43,12 +40,11 @@ fn a_contentless_part_is_empty_text_and_a_non_finite_number_is_null() {
     let mut p = pb::Part::default();
     p.normal().unwrap();
     assert_eq!(p.content, Some(pb::part::Content::Text(String::new())));
-    let mut p = pb::Part {
-        content: Some(pb::part::Content::Data(Value {
+    let mut p = crate::proto::custody::initialized::<pb::Part>(|__custody_message| {
+        __custody_message.content = Some(pb::part::Content::Data(Value {
             kind: Some(Kind::Number(f64::NAN)),
-        })),
-        ..Default::default()
-    };
+        }));
+    });
     p.normal().unwrap();
     assert_eq!(
         p.content,
@@ -64,22 +60,20 @@ fn a_statusless_task_and_an_unrepresentable_timestamp() {
     let mut t = pb::Task::default();
     t.normal().unwrap();
     assert_eq!(t.status, Some(pb::TaskStatus::default()));
-    let mut s = pb::TaskStatus {
-        timestamp: Some(Timestamp {
+    let mut s = crate::proto::custody::initialized::<pb::TaskStatus>(|__custody_message| {
+        __custody_message.timestamp = Some(Timestamp {
             seconds: 0,
             nanos: -1,
-        }),
-        ..Default::default()
-    };
+        });
+    });
     s.normal().unwrap();
     assert_eq!(s.timestamp, None);
-    let mut s = pb::TaskStatus {
-        timestamp: Some(Timestamp {
+    let mut s = crate::proto::custody::initialized::<pb::TaskStatus>(|__custody_message| {
+        __custody_message.timestamp = Some(Timestamp {
             seconds: 1_700_000_000,
             nanos: 5,
-        }),
-        ..Default::default()
-    };
+        });
+    });
     s.normal().unwrap();
     assert!(s.timestamp.is_some());
 }
@@ -87,16 +81,14 @@ fn a_statusless_task_and_an_unrepresentable_timestamp() {
 /// A non-positive page size is none.
 #[test]
 fn a_non_positive_page_size_is_none() {
-    let mut r = pb::ListTasksRequest {
-        page_size: Some(0),
-        ..Default::default()
-    };
+    let mut r = crate::proto::custody::initialized::<pb::ListTasksRequest>(|__custody_message| {
+        __custody_message.page_size = Some(0);
+    });
     r.normal().unwrap();
     assert_eq!(r.page_size, None);
-    let mut r = pb::ListTasksRequest {
-        page_size: Some(5),
-        ..Default::default()
-    };
+    let mut r = crate::proto::custody::initialized::<pb::ListTasksRequest>(|__custody_message| {
+        __custody_message.page_size = Some(5);
+    });
     r.normal().unwrap();
     assert_eq!(r.page_size, Some(5));
 }
@@ -121,8 +113,8 @@ fn an_answer_with_no_payload_is_refused() {
 /// OAuth2 scheme with no flow gets the empty client-credentials one; no capabilities is empty ones.
 #[test]
 fn the_card_follows_the_models_rules() {
-    let mut card = pb::AgentCard {
-        supported_interfaces: vec![
+    let mut card = crate::proto::custody::initialized::<pb::AgentCard>(|__custody_message| {
+        __custody_message.supported_interfaces = vec![
             pb::AgentInterface {
                 url: "http://h:1".into(),
                 protocol_binding: "grpc".into(),
@@ -133,8 +125,8 @@ fn the_card_follows_the_models_rules() {
                 protocol_binding: "JSONRPC".into(),
                 ..Default::default()
             },
-        ],
-        security_schemes: [
+        ];
+        __custody_message.security_schemes = [
             ("none".to_string(), pb::SecurityScheme { scheme: None }),
             (
                 "oauth".to_string(),
@@ -146,9 +138,8 @@ fn the_card_follows_the_models_rules() {
             ),
         ]
         .into_iter()
-        .collect(),
-        ..Default::default()
-    };
+        .collect();
+    });
     card.normal().unwrap();
     assert_eq!(card.supported_interfaces[0].url, "h:1");
     assert_eq!(card.supported_interfaces[1].url, "http://h:2");

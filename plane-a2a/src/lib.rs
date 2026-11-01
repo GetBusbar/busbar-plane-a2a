@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (C) 2026 Busbar Inc and contributors
+
 //! The A2A plane: the agent-to-agent protocol, spelled two ways (v0.3 and v1.0) over three
 //! bindings (JSON-RPC, HTTP+JSON and gRPC), as one plugin door ([`door`]).
 //!
@@ -44,6 +47,7 @@ mod binding;
 mod card_trust;
 mod cards;
 mod claims;
+mod conditional_publication;
 mod diagnostics;
 mod events;
 mod framed;
@@ -59,6 +63,7 @@ mod push_serve;
 mod record;
 mod records;
 mod relay;
+mod request_json;
 mod rest;
 mod served_card;
 mod skill;
@@ -74,6 +79,9 @@ mod wkt;
 /// The door: this plugin's one public item.
 pub use plane_door::door;
 
+/// This plane's embedded declarations, shared by linked and dynamic metadata.
+pub const DECLARES: &str = include_str!("../declares.json");
+
 /// The task and task-event row structs at the crate root, where the task type names them.
 use record::{TaskEventRow, TaskRow};
 
@@ -82,11 +90,12 @@ use record::{TaskEventRow, TaskRow};
 // Definition 16-20: everything ONE protocol needs and no other protocol may name — its wire
 // dialects, its decode/encode face. Every name below is a fact about the A2A wire and about nothing
 // else: the registry key, the config section it owns, the mount, the gRPC service path the protocol
-// (not busbar) chose, the eight routes, the well-known card path, the protected-resource metadata
+// (not busbar) chose, the route suffixes, the well-known card path, the protected-resource metadata
 // path, the push suffix, the A2A error band with its `ErrorInfo.reason` tokens, and the local verb
 // method names in both dialect spellings.
 //
-// Each is spelled once, here, and every place the plane states or answers it reads this spelling.
+// These constants build the plane's published endpoints. Claim declarations in statement.rs and
+// the protected-resource metadata path also carry literal paths that must remain aligned.
 
 /// THE REGISTRY KEY A2A IS KNOWN BY, in the plane registry and in the plugin contract alike.
 ///
@@ -101,9 +110,8 @@ const CONFIG_SECTION: &str = "agents";
 /// this plane serves over HTTP is under it, and the host's plane dispatch matches on it at a segment
 /// boundary, so `/a2ax` is somebody else's path.
 ///
-/// One constant, read everywhere the mount is spelled: the plane's path claims, the agent
-/// endpoints its served cards publish and the protected-resource metadata path are all composed
-/// from it, so the claimed mount and the published one cannot be two strings.
+/// Used to compose published agent endpoints and callbacks. The claims in `statement.rs` and
+/// [`METADATA_PATH`] spell their paths separately and must be updated with a mount change.
 const MOUNT_PATH: &str = "/a2a";
 
 // ══ THE ROUTES THIS PLANE SERVES, SPELLED EXACTLY ONCE ══════════════════════════════════════════
@@ -189,7 +197,6 @@ const ERROR_INFO_DOMAIN: &str = "a2a-protocol.org";
 /// because the crate's only public item is the door.
 #[cfg(test)]
 mod tests {
-    pub(crate) mod raw_custody_probe;
     /// The crate's one `#[global_allocator]`, every allocation gate's count: busbar-test-kit's
     /// `alloc_counter` (a dev-dependency), so this crate holds no `unsafe`.
     #[global_allocator]
@@ -202,5 +209,6 @@ mod tests {
     mod conformance;
     mod door_facts;
     mod purity;
+    pub(crate) mod raw_custody_probe;
     pub(crate) mod request_custody_probe;
 }

@@ -9,26 +9,20 @@ Read alongside `testing/a2a-subject/boot.sh` (which produces the number) and `ru
 runs the suite). **Nothing here silences a test.** Every waived requirement still runs, still fails,
 and is still counted in the suite's own MUST row.
 
-**`testing/a2a-tck/subject-waivers.json` is the machine-checked half of this file** (2026-10-04,
-Laws 8 and 10). Its `waived` list holds the LOCKED `PUSH-DELIVER-001/002/003` trio, its `skipped`
-list is EMPTY, and the five SKIPPED MUSTs below sit in its `not_applicable` list (2026-10-14, see
-that section). NO entry is trusted by its id: each carries a premise that
-`testing/a2a-subject/boot.sh`'s `assert_tck_number` EVALUATES on every run — the trio only while every
-error the suite reports for it is busbar's plaintext-callback refusal, each of the five only while the
-agent card the suite read holds the capability fact the test skips on (and, for `CARD-EXT-002`,
-while `CARD-EXT-001` passes on the same run). A premise that is false, an entry whose requirement no
-longer fails (or no longer skips), and a SKIP the ledger does not name are all RED. That ledger is what the gate holds the subject leg to, at the REQUIREMENT level (not the suite's own MUST row, which folds `NOT TESTED` requirements — a suite
-limitation shared by the pinned third-party control, see `check-baseline.py` and
-`testing/a2a-tck/baselines/` — into "failed" and is printed for a human but not gated on).
-`CARD-EXT-001` and `GRPC-ERR-001` were both deliberately absent from that pin while they failed —
-they failed the subject leg's gate, named, on every run, exactly as this file said they should —
-and BOTH ARE NOW FIXED (2026-08-15; their entries below record what changed). The gate expects
-them green.
+`testing/a2a-tck/subject-waivers.json` preserves the historical requirement
+classifications and their premises. It is not an executable acceptance policy.
+The obsolete numeric scoring and waiver-ledger checks have been removed under
+KICKOFF; the suite's own protocol assertions and exit status remain in force.
+`PUSH-DELIVER-001/002/003` record the plaintext callback refusal, and the
+`not_applicable` entries record the optional-capability preconditions described
+below. These records do not turn a current FAIL or SKIP into a PASS.
+`CARD-EXT-001` and `GRPC-ERR-001` have historical fix records dated 2026-08-15
+below. A current result requires the current suite report.
 
-**WHERE THE CITED CODE LIVES.** busbar's A2A surface is the a2a plane, which is not in this tree: it
-is the plugin crate `busbar-plane-a2a`, pinned in `Cargo.toml` at `GetBusbar/busbar-plane-a2a` @ `d7cf79d32b442c8e68610adb82192db5f7d05911`. Every `plane-a2a/src/…` path
-below is in that repository at that rev. Records written before the plane moved out of this tree
-say which file the code lived in then, and where it lives at the pinned rev.
+**WHERE THE CITED CODE LIVES.** This repository is `busbar-plane-a2a`. The
+`plane-a2a/src/…` citations below refer to symbols in this repository, not to the
+core dependency pinned by `Cargo.toml`. Historical run dates and results remain
+historical evidence; current source citations do not establish a new TCK result.
 
 ---
 
@@ -101,11 +95,11 @@ Until then this is a property of the suite, not of busbar, and is recorded rathe
 The five now sit in `subject-waivers.json`'s `not_applicable` list, not `skipped`. Each entry carries
 the spec and pinned-TCK `citation` showing the test binds only an agent-card state busbar never
 serves. busbar's own card always declares push, streaming and the extended card
-(`plane-a2a/src/served_card.rs:204-208`, `self_card_document`), it serves an extended card whenever
+(`plane-a2a/src/served_card.rs::self_card_document`), it serves an extended card whenever
 the deployment fronts an agent — which the subject rig always does — and it implements no A2A
-extension. The premise
-of each entry is still evaluated on every run. The day busbar serves the state a test needs, that
-entry turns RED and must be retired.
+extension. Each historical premise describes the capability state behind the
+recorded skip. A current classification must be checked against the current card
+and suite report; no executable ledger evaluates or excuses it.
 
 **These 5 are not a busbar waiver either, and they are a different shape of impossibility than the 21
 above.** The 21 above have no test at all. These 5 have a real, executing test — each one appears in
@@ -131,8 +125,8 @@ one's skip message verbatim, quoted below rather than paraphrased.
 
 **WHY: BUSBAR'S SERVED CARD IS FIXED, AND THAT IS THE MECHANISM.** The agent card the TCK reads is
 busbar's OWN card — answered for the root well-known path `/.well-known/agent-card.json`
-(`plane-a2a/src/plane_door.rs:1126`, `CardAsk::Own`) — not the fronted backend's.
-`self_card_document` (`plane-a2a/src/served_card.rs:192`) hard-codes:
+(`plane-a2a/src/task_door.rs::card_piece`, `CardAsk::Own`) — not the fronted backend's.
+`self_card_document` (`plane-a2a/src/served_card.rs`) hard-codes:
 
 ```rust
 "capabilities": {
@@ -146,9 +140,9 @@ with no `extensions` member at all, unconditionally, for every deployment — be
 push-notification delivery and the extended card are gateway-level features busbar itself provides
 (push delivery in `plane-a2a/src/push.rs`, the SSE relay, and the extended card in
 `plane-a2a/src/task_door.rs::extended_card`), not properties of whichever agent happens to be behind
-it. `rewrite_card` (`plane-a2a/src/served_card.rs:232`), which serves the PER-AGENT address, is
+it. `rewrite_card` (`plane-a2a/src/served_card.rs`), which serves the PER-AGENT address, is
 different: it serves the fronted agent's OWN `capabilities` as the agent states them, extended card
-included, and claims none on the agent's behalf (`plane-a2a/src/served_card.rs:295-301`) — but the
+included, and claims none on the agent's behalf (`plane-a2a/src/served_card.rs::rewrite_card`) — but the
 TCK subject leg points `--sut-host` at the plane root (`BUSBAR_A2A_ENDPOINT="$SUBJECT_URL"` in
 `boot.sh::leg_tck`, since `run_tck.py` takes no per-agent path), so the card it reads is the root
 one, always fully capable.
@@ -197,7 +191,7 @@ this entry.
 growing a companion test that asserts the PRESENT-capability path (the suite has no such test today —
 the same "coverage-gap" shape as the 21 untested MUSTs above), or a re-pin that adds one. There is no
 change busbar can honestly make on its own to retire these four. For `CORE-CAP-004`: busbar building
-extensions support, at which point this becomes a real, gated pass/fail like any other MUST.
+extensions support, at which point this becomes an executed protocol assertion like any other MUST.
 
 ---
 
@@ -227,7 +221,7 @@ Three independent blockers stand in front of these requirements, in this order:
    builds its URL as `f"http://{webhook_host}:{self.port}/webhook"` — the scheme is a literal and
    the only knob the suite exposes is `--webhook-host`, which substitutes the HOST. busbar refuses a
    plaintext webhook, and the plane does not decide that. The plane holds no guard, no resolver and
-   no socket: the plane's `local::judge_callback` (`plane-a2a/src/local.rs:450`) asks the host's
+   no socket: the plane's `local::judge_callback` (`plane-a2a/src/local.rs`) asks the host's
    ONE destination judge (`reach.judge(url)`) and only WORDS the verdict, rendering `DEST_PLAINTEXT` / `DEST_SCHEME` as the text
    above. The decision is the connector's: `GuardJudge::named`
    (`crates/busbar-core-connector/src/process.rs`) refuses a non-https destination under the
@@ -246,12 +240,12 @@ Three independent blockers stand in front of these requirements, in this order:
    paths (the inline config on a submission and `CreateTaskPushNotificationConfig`), kept as a
    sealed field of the push-config host record, and presented on the delivery as `Authorization`
    only after the destination judge has passed. It is never a member of any answer
-   (`plane-a2a/src/local.rs:335-349`) and is held in plane memory only while a delivery is in
+   (`plane-a2a/src/local.rs::config_json`) and is held in plane memory only while a delivery is in
    flight (`plane-a2a/src/push.rs`, module header).
 3. ~~**The payload is a bare `Task`, and the requirement wants a `StreamResponse`.**~~ **BUILT —
    blocker removed.** The verdict that established it, from the TCK's own validator run over
    the notification body's exact document (then `pushdeliver::notification_body`, now
-   `plane-a2a/src/push.rs:99`):
+   `plane-a2a/src/push.rs::notification_body`):
 
    ```
    busbar body valid: False
@@ -311,9 +305,9 @@ the third, `capabilities.stateTransitionHistory`, was a member the 1.0 `AgentCap
 does not define: no ProtoJSON reader can parse it, so publishing it served nobody. busbar's card
 now carries only proto-defined capability members
 (`self_card_document`, then in `crates/busbar/src/a2a/serve.rs`, now
-`plane-a2a/src/served_card.rs:192`, pinned by
+`plane-a2a/src/served_card.rs::self_card_document`, pinned by
 `every_published_capability_is_one_the_normative_proto_defines` in
-`plane-a2a/src/tests/served_card_tests.rs:421`), and the behaviour the old member
+`plane-a2a/src/tests/served_card_tests.rs`), and the behaviour the old member
 claimed is unchanged — task history is served per request under `historyLength`, which needs no
 flag. Verified 2026-08-15: `CARD-EXT-001` PASS on all three transports
 (`run-tck.sh` subject leg), and the served card passes the suite's own strict `Agent Card` schema.
@@ -408,11 +402,11 @@ detail — TRANSCRIBED from the same ProtoJSON `ErrorInfo` the JSON-RPC binding 
 into the trailer), never re-derived beside the service (`error_info_of`, then in
 `crates/busbar/src/a2a/grpc.rs`, pinned by
 `an_a2a_refusal_carries_error_info_in_the_status_details_trailer` and its no-invented-reason
-control). Verified 2026-08-15: `GRPC-ERR-001` PASS (`run-tck.sh` subject leg). At the pinned plane
-rev the transcription is `error_info_of` (`plane-a2a/src/framed.rs:636`), the `google.rpc.Status`
+control). Verified 2026-08-15: `GRPC-ERR-001` PASS (`run-tck.sh` subject leg). In the current plane
+source the transcription is `error_info_of` (`plane-a2a/src/framed.rs`), the `google.rpc.Status`
 and `google.rpc.ErrorInfo` it rides in are `prost` messages the plane declares itself
-(`plane-a2a/src/framed.rs:137-161`), and the pin is
-`an_a2a_refusal_carries_error_info_in_the_status_details` (`plane-a2a/src/tests/framed_tests.rs:165`).
+(`plane-a2a/src/framed.rs::{rpc::Status,ErrorInfo}`), and the pin is
+`an_a2a_refusal_carries_error_info_in_the_status_details` (`plane-a2a/src/tests/framed_tests.rs`).
 
 ### The original record (historical)
 
@@ -499,7 +493,7 @@ sub-test flipped `GRPC-ERR-002` from PASS to FAIL. The HTTP status was already 4
 `the_error_table_carries_the_specifications_grpc_column` (grpc_tests) and
 `unsupported_operation_and_version_not_supported_are_unimplemented` (rpcerror_tests), each of which
 was RED (`left: FailedPrecondition, right: Unimplemented`) against the pre-fix source and is GREEN
-after. `GRPC-ERR-001`/`GRPC-ERR-003` are untouched and still pass. At the pinned plane rev the
-mapping is `grpc_code` (`plane-a2a/src/framed.rs:617-632`:
+after. `GRPC-ERR-001`/`GRPC-ERR-003` are untouched in that historical record. In the current source the
+mapping is `grpc_code` (`plane-a2a/src/framed.rs`:
 `-32003 | -32004 | -32009 | -32601 => Code::Unimplemented,`), pinned by `the_error_table_carries_the_specifications_grpc_column`
-(`plane-a2a/src/tests/framed_tests.rs:110`).
+(`plane-a2a/src/tests/framed_tests.rs`).

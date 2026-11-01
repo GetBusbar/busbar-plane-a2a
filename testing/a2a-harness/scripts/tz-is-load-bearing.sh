@@ -23,13 +23,15 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="${A2AHT_CONTROL_BIN:-$HOME/.a2aht/bin}"
-OUT="${A2AHT_OUT:-${TMPDIR:-/tmp}/a2aht-tz}"
+umask 077
+OUT="${A2AHT_OUT:-$(mktemp -d "${TMPDIR:-/tmp}/a2aht-tz.XXXXXX")}"
 PORT="${A2AHT_TZ_PORT:-9799}"
 TEST_ID="core.timestamps_are_utc_z"
 mkdir -p "$OUT"
 cd "$HERE"
 
 echo "=== TZ=UTC must BREAK the pinned control baseline, on ${TEST_ID} ==="
+rm -f "$OUT/utc.json"
 TZ=UTC python3 -m a2aht run \
   --launch "$BIN/a2a serve --echo --port $PORT --quiet" --port "$PORT" \
   --label "control:a2a-go/rest under TZ=UTC" --tier pre-release \

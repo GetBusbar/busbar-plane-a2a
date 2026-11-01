@@ -12,11 +12,15 @@ specification forbids:
   * the JSON-RPC envelope's `jsonrpc` member says "1.0";
   * a wrong id is echoed (the request id with a suffix).
 
-A suite that cannot tell this peer from the honest agent it relays cannot be trusted to judge
-anything, so `testing/conformance/a2a.sh` requires the TCK to report strictly more failed MUSTs
-against this peer than against the honest agent, run the same way.
+`testing/conformance/a2a.sh` requires failed MUST diagnostics to name the injected state and
+version violations on requirements that pass against the honest peer. This TCK pin checks
+only id presence, so wrong-id rejection is asserted by the independent harness rather than
+claimed as TCK coverage. An unrelated failure count cannot satisfy the negative leg.
 
-usage: broken_agent.py <listen-port> <upstream-port>
+The optional mode isolates a single violation so an invalid JSON-RPC envelope
+does not prevent the TCK from reaching TaskState schema validation.
+
+usage: broken_agent.py <listen-port> <upstream-port> [all|state|version|id]
 """
 import http.client
 import re
@@ -24,15 +28,22 @@ import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 LISTEN, UPSTREAM = int(sys.argv[1]), int(sys.argv[2])
+MODE = sys.argv[3] if len(sys.argv) > 3 else "all"
+if MODE not in {"all", "state", "version", "id"}:
+    raise SystemExit("unknown negative-control mode: " + MODE)
 STATE = re.compile(rb'TASK_STATE_(SUBMITTED|WORKING|COMPLETED|FAILED|CANCELED|CANCELLED|INPUT_REQUIRED|REJECTED|AUTH_REQUIRED)')
 VERSION = re.compile(rb'"jsonrpc"\s*:\s*"2\.0"')
 ID = re.compile(rb'"id"\s*:\s*(\d+)')
 
 
 def damage(chunk: bytes) -> bytes:
-    chunk = STATE.sub(b'TASK_STATE_MADE_UP', chunk)
-    chunk = VERSION.sub(b'"jsonrpc":"1.0"', chunk)
-    return ID.sub(lambda m: b'"id":' + m.group(1) + b'9', chunk)
+    if MODE in {"all", "state"}:
+        chunk = STATE.sub(b'TASK_STATE_MADE_UP', chunk)
+    if MODE in {"all", "version"}:
+        chunk = VERSION.sub(b'"jsonrpc":"1.0"', chunk)
+    if MODE in {"all", "id"}:
+        chunk = ID.sub(lambda m: b'"id":' + m.group(1) + b'9', chunk)
+    return chunk
 
 
 class Relay(BaseHTTPRequestHandler):
@@ -55,7 +66,7 @@ class Relay(BaseHTTPRequestHandler):
         self.send_header("connection", "close")
         self.end_headers()
         while True:
-            line = resp.fp.readline() if resp.getheader("content-type", "").startswith("text/event-stream") else resp.read(65536)
+            line = resp.readline() if resp.getheader("content-type", "").startswith("text/event-stream") else resp.read(65536)
             if not line:
                 break
             self.wfile.write(damage(line) if damaged else line)

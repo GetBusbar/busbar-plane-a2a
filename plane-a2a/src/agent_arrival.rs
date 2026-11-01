@@ -21,6 +21,8 @@
 //! 4. A NOTIFICATION is acknowledged and never answered.
 //! 5. A request names a method; [`crate::ops::relay_class`] classes it, a method the vocabulary
 //!    does not list included: that one is relayed verbatim, so it is never refused here.
+//!    Send requests must give the structural skill and output-mode fields their stated types;
+//!    malformed explicit constraints are `400` + `-32602`, not silently dropped before routing.
 //!
 //! Every refusal before the body is read carries the id `null` (JSON-RPC 2.0 section 5).
 
@@ -141,10 +143,10 @@ impl AgentRefusal {
         let mut head = head.splitn(3, ' ');
         let status = head.next()?.parse().ok()?;
         let code = head.next()?.parse().ok()?;
-        let id: Value = serde_json::from_str(head.next()?).ok()?;
+        let id: crate::request_json::RequestJson = serde_json::from_str(head.next()?).ok()?;
         Some(AgentRefusal::new(
             status,
-            (!id.is_null()).then_some(id),
+            (!id.is_null()).then(|| id.into_value()),
             code,
             message.to_string(),
         ))
@@ -182,17 +184,20 @@ impl AgentRefusal {
 }
 
 /// A JSON-RPC `error` object at `http_status` as the AIP-193 error document the HTTP+JSON line
-/// answers: the status name is the error code's when it has one,
-/// else the HTTP status's; `details` is the error's `data` array, only when there is one.
+/// answers: the status name is the error code's when it has one (the catch-all `-32004` only at
+/// 400 or 501), else the HTTP status's; `details` is the error's `data` array, only when there is one.
 #[must_use]
 pub fn aip193(http_status: u32, error: &Value) -> Value {
     let message = error
         .get("message")
         .and_then(Value::as_str)
         .unwrap_or_default();
+    // `-32004` is the catch-all of many kernel and plane refusals (a rate limit, a not-serving
+    // agent, a refused grant): answered at any status but 400 or 501, it takes that status's name.
     let status = error
         .get("code")
         .and_then(Value::as_i64)
+        .filter(|code| *code != CODE_UNSUPPORTED_OPERATION || matches!(http_status, 400 | 501))
         .and_then(status_name_of)
         .unwrap_or_else(|| status_name_of_http(http_status));
     let mut out = json!({
@@ -391,10 +396,40 @@ pub fn origin_refusal<'a>(field: impl Fn(&str) -> Option<&'a str>) -> Result<(),
     }
 }
 
+/// Read a head field without treating an unreadable value as an absent field.
+///
+/// # Errors
+/// The refusal for an unreadable media type, version or browser origin. No supplied bytes are
+/// copied into the refusal.
+pub(crate) fn read_head_field<'a>(
+    name: &str,
+    value: Option<&'a [u8]>,
+) -> Result<Option<&'a str>, AgentRefusal> {
+    value
+        .map(std::str::from_utf8)
+        .transpose()
+        .map_err(|_| match name {
+            H_ORIGIN => {
+                AgentRefusal::unnamed(STATUS_FORBIDDEN, CODE_UNSUPPORTED_OPERATION, ORIGIN_REFUSED)
+            }
+            H_CONTENT_TYPE => AgentRefusal::unnamed(
+                STATUS_UNSUPPORTED_MEDIA_TYPE,
+                CODE_CONTENT_TYPE_NOT_SUPPORTED,
+                "the request's content-type could not be read",
+            ),
+            _ => AgentRefusal::unnamed(
+                STATUS_BAD_REQUEST,
+                CODE_VERSION_NOT_SUPPORTED,
+                "the request's a2a-version could not be read",
+            ),
+        })
+}
+
 /// DECIDE ONE ARRIVAL on the JSON-RPC line, and hand back the body as the JSON it was read as
 /// (`None` when the head was refused before it, or it is not JSON): the door keeps that value as
 /// the unit's request, so the body is parsed once. `field` reads a request head field by its
-/// lower-case name (the first, as sent; one that is not UTF-8 reads as absent).
+/// lower-case name (the first, as sent). The door rejects unreadable head values before calling
+/// this string-based surface.
 pub fn decide_and_read<'a>(
     body: &[u8],
     field: impl Fn(&str) -> Option<&'a str> + Copy,
@@ -406,7 +441,7 @@ pub fn decide_and_read<'a>(
         Ok(v) => v,
         Err(refusal) => return (AgentDisposition::Refused(refusal), None),
     };
-    let Ok(value) = serde_json::from_slice::<Value>(body) else {
+    let Ok(value) = serde_json::from_slice::<crate::request_json::RequestJson>(body) else {
         let refusal = AgentRefusal::unnamed(STATUS_BAD_REQUEST, CODE_PARSE, NOT_JSON);
         return (AgentDisposition::Refused(refusal), None);
     };
@@ -422,6 +457,17 @@ pub fn decide_and_read<'a>(
         }
         Ok(busbar_contract::jsonrpc::Envelope::Request { id, method }) => {
             match ops::row_for(&method) {
+                Some(row) if row.op == ops::OP_MESSAGE_SEND || row.op == ops::OP_MESSAGE_STREAM => {
+                    match crate::skill::validate_fields(&value) {
+                        Ok(()) => AgentDisposition::Request { row, id, version },
+                        Err(message) => AgentDisposition::Refused(AgentRefusal::new(
+                            STATUS_BAD_REQUEST,
+                            (!id.is_null()).then_some(id),
+                            CODE_INVALID_PARAMS,
+                            message,
+                        )),
+                    }
+                }
                 Some(row) => AgentDisposition::Request { row, id, version },
                 None => AgentDisposition::Unlisted {
                     method,
@@ -431,7 +477,7 @@ pub fn decide_and_read<'a>(
             }
         }
     };
-    (disposition, Some(value))
+    (disposition, Some(value.into_value()))
 }
 
 /// THE RENDERED REFUSAL: a status (`0` keeps the kernel's), the body, and the one head field it
@@ -489,8 +535,7 @@ pub fn render_about_task(dialect: Dialect, refusal: &AgentRefusal, task_id: &str
     }
 }
 
-/// The words for a call its caller's governance refused (a spent budget, a request limit): `429`,
-/// `-32004`.
+/// The message for a call refused by the caller's budget; the caller chooses status and code.
 pub const BUDGET_SPENT: &str = "this key's budget is spent";
 
 /// A refusal the kernel made (a key not live, a scope not held, a budget spent, a gate's no), as
@@ -664,9 +709,8 @@ pub const CODE_INVALID_PARAMS: i64 = -32602;
 
 /// The unaddressed unit's refusal: `reachable` is
 /// the agents the caller's grant reaches, joined by
-/// [`busbar_contract::abi::plane::ROUTE_SCOPE_SEPARATOR`] (empty = none). None reach: the same
-/// answer a caller with no grant gets for a named agent, so this endpoint is no inventory oracle;
-/// several: the caller is told to address one, and which.
+/// [`busbar_contract::abi::plane::ROUTE_SCOPE_SEPARATOR`] (empty = none). With no reachable
+/// agent it returns the unaddressed request's refusal; with several it asks the caller to name one.
 #[must_use]
 pub fn scope_refusal(reachable: &str) -> AgentRefusal {
     let ids: Vec<&str> = reachable

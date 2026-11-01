@@ -317,25 +317,29 @@ pub fn host_of(url: &str) -> Option<String> {
 #[must_use]
 pub fn refused_name(url: &str, verdict: u64) -> Option<String> {
     let host = host_of(url).unwrap_or_default();
-    let why = match verdict {
-        svc::DEST_ALLOWED => return None,
-        svc::DEST_SCHEME | svc::DEST_PLAINTEXT => {
-            return scheme_refusal(url, false)
-                .or_else(|| Some(format!("agent card URL `{url}` has no host")))
-        }
-        svc::DEST_NO_HOST => return Some(format!("agent card URL `{url}` has no host")),
-        svc::DEST_METADATA => "a cloud-metadata name",
-        svc::DEST_INTERNAL => {
-            "a loopback name; set this registration's `allow_private: true` if that is \
+    let why =
+        match verdict {
+            svc::DEST_ALLOWED => return None,
+            svc::DEST_SCHEME | svc::DEST_PLAINTEXT => {
+                return scheme_refusal(url, false)
+                    .or_else(|| Some(format!("agent card URL `{url}` has no host")))
+            }
+            svc::DEST_NO_HOST => return Some(format!("agent card URL `{url}` has no host")),
+            svc::DEST_METADATA => "a cloud-metadata name",
+            svc::DEST_INTERNAL => {
+                "a loopback name; set this registration's `allow_private: true` if that is \
              deliberate"
-        }
-        svc::DEST_OBFUSCATED => {
-            "an alternate IPv4 encoding a resolver still expands to an internal address"
-        }
-        svc::DEST_NO_ADDRESSES => return Some(no_addresses(&host)),
-        svc::DEST_UNRESOLVABLE => return Some(unresolvable(&host, "")),
-        _ => return Some(no_addresses(&host)),
-    };
+            }
+            svc::DEST_OBFUSCATED => {
+                "an alternate IPv4 encoding a resolver still expands to an internal address"
+            }
+            svc::DEST_NO_ADDRESSES => return Some(no_addresses(&host)),
+            svc::DEST_UNRESOLVABLE => return Some(unresolvable(&host, "")),
+            _ => return Some(
+                "the destination judge refused the agent card fetch with an unrecognized verdict"
+                    .to_string(),
+            ),
+        };
     Some(format!(
         "SSRF guard refused the agent card fetch: host `{host}` is {why}"
     ))
@@ -400,7 +404,9 @@ pub fn refused_judgement(url: &str, verdict: u64, detail: Option<&str>) -> Strin
     };
     match address {
         Some(addr) => refused_address(url, &addr),
-        None => refused_name(url, verdict).unwrap_or_else(|| no_addresses(&host)),
+        None => refused_name(url, verdict).unwrap_or_else(|| {
+            "the destination judge supplied no refusal reason for the agent card fetch".to_string()
+        }),
     }
 }
 
@@ -449,16 +455,17 @@ pub fn read_card(url: &str, answer: Result<(u16, &[u8]), String>) -> Result<Valu
     }
     if body.len() > MAX_CARD_BYTES {
         return Err(format!(
-            "agent card at `{url}` is {} bytes, over the configured ceiling",
+            "agent card at `{url}` is {} bytes, over the fixed card limit",
             body.len()
         ));
     }
     let not_a_card = |err: String| format!("the document at `{url}` is not an agent card: {err}");
-    let document: Value = serde_json::from_slice(body).map_err(|e| not_a_card(e.to_string()))?;
+    let document: crate::request_json::RequestJson =
+        serde_json::from_slice(body).map_err(|e| not_a_card(e.to_string()))?;
     if !document.is_object() {
         return Err(not_a_card("the document is not a JSON object".to_string()));
     }
-    Ok(document)
+    Ok(document.into_value())
 }
 
 // ── THE VERIFICATION ─────────────────────────────────────────────────────────────────────────────
@@ -708,16 +715,18 @@ fn skill_drift(
     (added, changed, removed)
 }
 
-/// The view, `state` being the state the verb answers and `kernel` the kernel's own verdict: a key
-/// the kernel holds no approval for (`pending`) has approved nothing, whatever skills the plane
-/// last held for it.
+/// The view, `state` being the state the verb answers and `distrust` the kernel's own verdict (a
+/// `trust.serves` answer): a key the kernel holds no approval for (`pending`) has approved nothing,
+/// whatever skills the plane last held for it, and `pin_changed` is the kernel's own word that the
+/// card moved (`DISTRUST_CHANGED`), whatever the latest look did.
 fn agent_view(
     name: &str,
     state: State,
-    kernel: State,
+    distrust: u64,
     sighting: &Sighting,
     approved: Option<&BTreeMap<String, String>>,
 ) -> String {
+    let kernel = verdict_state(distrust);
     let state = if sighting.failure().is_some() {
         State::Error
     } else {
@@ -730,7 +739,7 @@ fn agent_view(
         state: state.word(),
         pin_mechanism: sighted_mechanism(sighting),
         fingerprint: sighting.seen().and_then(|o| o.pin.fingerprint()),
-        pin_changed: state == State::Quarantined,
+        pin_changed: distrust == svc::DISTRUST_CHANGED,
         added,
         changed,
         removed,
@@ -748,15 +757,15 @@ fn agent_view(
 #[must_use]
 pub fn connect_view(
     name: &str,
-    state: State,
+    distrust: u64,
     sighting: &Sighting,
     approved: Option<&BTreeMap<String, String>>,
 ) -> String {
-    let shown = match state {
+    let shown = match verdict_state(distrust) {
         State::Approved => State::Pending,
         other => other,
     };
-    agent_view(name, shown, state, sighting, approved)
+    agent_view(name, shown, distrust, sighting, approved)
 }
 
 /// `approve`'s answer: the registration as it now stands on the kernel's trust book (`state`), its
@@ -764,11 +773,11 @@ pub fn connect_view(
 #[must_use]
 pub fn registration_view(
     name: &str,
-    state: State,
+    distrust: u64,
     sighting: &Sighting,
     approved: Option<&BTreeMap<String, String>>,
 ) -> String {
-    agent_view(name, state, state, sighting, approved)
+    agent_view(name, verdict_state(distrust), distrust, sighting, approved)
 }
 
 /// DOES WHAT THE ENDPOINT SERVES NOW AGREE WITH WHAT THE OPERATOR SAYS THEY APPROVED? Every arm

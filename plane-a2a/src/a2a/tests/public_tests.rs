@@ -17,3 +17,19 @@ fn the_path_is_replaced_and_query_and_fragment_dropped() {
 fn a_base_that_is_not_a_url_reads_as_none() {
     assert_eq!(absolute("not a url", "/a2a"), None);
 }
+
+#[test]
+fn public_endpoint_requires_an_http_origin() {
+    for base in [
+        "mailto:operator@example.test",
+        "data:text/plain,hello",
+        "urn:example:test",
+        "ftp://example.test",
+    ] {
+        assert_eq!(super::absolute(base, "/a2a"), None, "{base}");
+    }
+    assert_eq!(
+        super::absolute("HTTPS://example.test", "/a2a").as_deref(),
+        Some("https://example.test/a2a")
+    );
+}

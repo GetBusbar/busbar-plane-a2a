@@ -717,3 +717,27 @@ fn p_item_refusal_reason_collapse_only_a_node_fault_is_internal_and_one_class_on
         kernel_refusal(500, words)
     );
 }
+
+#[test]
+fn near_miss_versions_and_media_types_are_refused_before_dispatch() {
+    for version in ["1.1", "0.2", "0.4", "3.0"] {
+        let answer = refused(decide_arrival(SEND, head(None, Some(version))));
+        assert_eq!(
+            (answer.status, answer.code),
+            (400, CODE_VERSION_NOT_SUPPORTED)
+        );
+    }
+    for content_type in [
+        "application/jsonl",
+        "application/x-ndjson",
+        "application/json-seq",
+        "text/json",
+        "application/vnd.x+jsonx",
+    ] {
+        let answer = refused(decide_arrival(SEND, head(Some(content_type), None)));
+        assert_eq!(
+            (answer.status, answer.code),
+            (415, CODE_CONTENT_TYPE_NOT_SUPPORTED)
+        );
+    }
+}

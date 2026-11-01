@@ -7,8 +7,8 @@
 //! diagnostic. Each keeps its stable `BUSBAR-NNNN` number and slug: codes are REGISTERED, never
 //! renumbered or collapsed.
 //!
-//! [`DIAGNOSTICS`] is every code the plane raises, and the plane's `declares.json` states exactly
-//! those entries (a test holds the two equal): the declares document rides the door's Statement, and
+//! [`DIAGNOSTICS`] holds the plane's catalogue. The `diagnostics` in `declares.json`
+//! rides the door's Statement, and
 //! the host installs a plane's codes from it, in a build that links the plane and in one that loads
 //! it dropped in alike. The codes the plane's predecessor registered and the plane no longer raises
 //! are held by its tests (`RESERVED`): never declared, and never reissued to another meaning.
@@ -16,7 +16,8 @@
 use busbar_contract::diagnostic::{Class, Diagnostic, Severity};
 
 /// A restored A2A task's per-task provenance chain failed verification at boot — tamper evidence.
-/// Lives in `a2a/mod.rs`, but the subject is the provenance chain's integrity, so it is a 2000 code.
+/// Raised by the restore path in `task_door.rs`; its subject is the provenance chain's integrity,
+/// so it is a 2000 code.
 pub const A2A_TASK_CHAIN_VERIFY_FAILED: Diagnostic = Diagnostic {
     code: 2030,
     class: Class::Audit,
@@ -78,12 +79,13 @@ pub const A2A_RELAYED_STREAM_REFUSED: Diagnostic = Diagnostic {
     slug: "a2a-relayed-stream-refused",
     title: "Relayed A2A stream ended in a refusal",
     severity: Severity::BenignRecurring,
-    summary: "A relayed streaming task ended in a refusal from the backend rather than a normal \
-              completion. The refusal is recorded against the task and the caller's poll will find \
-              it. Per-request and expected under normal backend policy, so surfaced at debug.",
+    summary: "A relayed streaming request ended in a refusal rather than a normal completion, \
+              including a refusal before a task context existed. The caller receives the refusal; \
+              an existing task records the outcome where applicable. Per-request and expected \
+              under normal backend policy, so surfaced at debug.",
     action:
         "None — self-heals. A stream that ends in a refusal reflects the backend's own decision; \
-             the recorded refusal is what the caller reads.",
+             the caller receives the refusal, with a task record when applicable.",
     since: "1.6.0",
     retired: false,
 };
@@ -105,20 +107,20 @@ pub const A2A_RELAYED_OUTCOME_UNRECORDED: Diagnostic = Diagnostic {
     retired: false,
 };
 
-/// A relayed task submission failed at the backend — a per-request backend refusal.
+/// A relayed request failed — submissions and taskless or addressed operations alike.
 pub const A2A_RELAYED_SUBMISSION_FAILED: Diagnostic = Diagnostic {
     code: 7021,
     class: Class::Plane,
     slug: "a2a-relayed-submission-failed",
-    title: "Relayed A2A task submission failed",
+    title: "Relayed A2A request failed",
     severity: Severity::BenignRecurring,
     summary:
-        "A relayed task submission was refused by the backend. The refusal is recorded against \
-              the task and returned to the caller; busbar did not accept work it could not place. \
-              Per-request and expected under normal backend policy or load, so surfaced at debug.",
-    action:
-        "None — self-heals. A submission the backend refuses reflects the backend's own decision \
-             or capacity; the caller reads the recorded refusal and may re-submit.",
+        "A relayed request failed before completion. This includes submissions, task reads and \
+              taskless operations. The caller receives the refusal; a task records the outcome \
+              where applicable. Per-request and expected under normal backend policy or load, \
+              so surfaced at debug.",
+    action: "None — self-heals. A refused request reflects the backend's decision, capacity or \
+             reachability; the caller reads the refusal and may retry the operation.",
     since: "1.6.0",
     retired: false,
 };
@@ -160,21 +162,21 @@ pub const A2A_TASK_ROWS_UNREADABLE: Diagnostic = Diagnostic {
     retired: false,
 };
 
-/// Durable A2A task state could not be read at boot; in-flight tasks start empty — a store outage.
+/// Durable task-state restore or retention failed; normal request handling continues.
 pub const A2A_TASK_STATE_UNREAD: Diagnostic = Diagnostic {
     code: 7025,
     class: Class::Plane,
     slug: "a2a-task-state-unread",
-    title: "Durable A2A task state could not be read on restore (nothing counted or chain-checked)",
+    title: "Durable A2A task state restore or retention could not complete",
     severity: Severity::Actionable,
-    summary: "When the plane restored its task records after its instance opened, the durable A2A \
-              task records could not be listed at all, so nothing was counted and no in-flight \
-              task's provenance chain was checked. Serving does not wait on the restore: each task \
-              is still read from its own record when a request names it, and a request the store \
-              cannot answer is refused. Typically a durable-store outage.",
+    summary: "A durable task-store operation failed during restore or a submission's retention \
+              sweep. A failed restore cannot count tasks or check their chains; a failed sweep \
+              leaves retirement incomplete and does not reject the submission. Requests still \
+              read their tasks individually and refuse if their own read fails. The stage field \
+              identifies retention failures. Typically a durable-store outage.",
     action:
-        "Investigate the durable task store outage. Once it answers, requests read their tasks \
-             again; restart to have the restore count the tasks and check their chains.",
+        "Investigate the durable task store outage. Submissions retry due retention work; after \
+             a failed restore, restart once the store answers to count tasks and check chains.",
     since: "1.6.0",
     retired: false,
 };
@@ -221,6 +223,151 @@ pub const A2A_SPLIT_RECORD_STRAY_PARTS: Diagnostic = Diagnostic {
     retired: false,
 };
 
+/// A far end named a task id longer than the plane holds: busbar's own id stands for the task.
+pub const A2A_BACKEND_TASK_ID_UNHELD: Diagnostic = Diagnostic {
+    code: 7040,
+    class: Class::Plane,
+    slug: "a2a-backend-task-id-unheld",
+    title: "A2A far-end task id longer than the plane holds was not recorded",
+    severity: Severity::Actionable,
+    summary: "An agent answered a task with its own task id, and that id is longer than the plane \
+             holds (1024 bytes): the far end's ids are untrusted input, and the map that translates \
+             them is bounded in bytes as it is in entries. The id is not recorded, so the task keeps \
+             busbar's own id and a later request naming the task reaches the agent under busbar's id, \
+             which the agent may not know. The `task` field carries busbar's task id and `bytes` the \
+             length the agent named.",
+    action: "Investigate the named agent: it issues task ids far longer than any A2A agent needs. \
+            Follow-up requests on the affected tasks may be answered 'task not found' by the agent \
+            until it issues ids of an ordinary length.",
+    since: "1.6.0",
+    retired: false,
+};
+
+/// A relayed hop's agent endpoint was refused by the relay's guard: the operator's reason.
+pub const A2A_RELAY_ENDPOINT_REFUSED: Diagnostic = Diagnostic {
+    code: 7041,
+    class: Class::Plane,
+    slug: "a2a-relay-endpoint-refused",
+    title: "A2A agent endpoint refused before the hop",
+    severity: Severity::Actionable,
+    summary: "Before a relayed request was sent, the agent's registered url was refused by the relay's \
+             guard: its scheme is plaintext on a registration without `allow_private`, or the host's \
+             destination judgement refused the host or an address it resolves to. The caller is \
+             answered the hop's fixed refusal words; this diagnostic carries the guard's own \
+             sentence, naming the url and why, which the caller is never shown. Emitted on each \
+             refused hop.",
+    action: "Correct the named agent's registration: use an https:// url, or set `allow_private: \
+            true` if the endpoint is a loopback or private one the operator means to reach; for a \
+            refused address, check the agent's DNS and the deployment's destination policy.",
+    since: "1.6.0",
+    retired: false,
+};
+
+/// An agent card sighting was not recorded on the kernel's trust book: the look failed closed.
+pub const A2A_TRUST_SIGHTING_UNRECORDED: Diagnostic = Diagnostic {
+    code: 7042,
+    class: Class::Plane,
+    slug: "a2a-trust-sighting-unrecorded",
+    title: "A2A agent card sighting not recorded on the kernel's trust book",
+    severity: Severity::Actionable,
+    summary: "The plane looked at an agent's card (on connect, approve, or the re-verification before \
+             a relayed call) and reported what it saw to the kernel's trust book, and the host failed \
+             that report. The kernel was never told the card's fingerprint, so its verdict still \
+             answers for the card it last saw: the look fails closed, no card is held from it, and \
+             the agent is not served on it (connect and approve report the failure). Emitted once per \
+             failed report; the `agent` field names the agent.",
+    action: "Check the host's trust service and its durable store: a trust book that cannot record \
+            sightings leaves every re-verified agent refused until it can. The agent is looked at \
+            again on its next call or verb.",
+    since: "1.6.0",
+    retired: false,
+};
+
+/// A stored card or approval record could not be read at the card warm: the agent is looked at afresh.
+pub const A2A_CARD_RECORD_UNREAD: Diagnostic = Diagnostic {
+    code: 7044,
+    class: Class::Plane,
+    slug: "a2a-card-record-unread",
+    title: "A2A stored card or approval record could not be read",
+    severity: Severity::Actionable,
+    summary: "When the plane warmed its agent cards after its instance opened, a stored card or \
+             card-approval record read back whole but is not the JSON the plane wrote (a card that is \
+             not a JSON document, an approval that is not a map of skill digests). The record is not \
+             used: the agent holds no card from it, so its calls are refused until it is looked at \
+             again, and its approved skills are not restored for the trust view. Emitted once per \
+             affected record on each warm; the `kind` and `agent` fields name it.",
+    action: "Run connect (and approve, if the agent was approved) for the named agent: that writes \
+            the record again. Check the durable record store for writes from outside busbar or a \
+            restore from an incompatible backup.",
+    since: "1.6.0",
+    retired: false,
+};
+
+/// A request-stage hook's rewrite yielded no params object: the request is relayed unmodified.
+pub const A2A_HOOK_REWRITE_NOT_APPLIED: Diagnostic = Diagnostic {
+    code: 7045,
+    class: Class::Plane,
+    slug: "a2a-hook-rewrite-not-applied",
+    title: "A2A request hook rewrite not applied (it yields no params object)",
+    severity: Severity::Actionable,
+    summary: "A request-stage hook attached to an A2A agent returned a rewrite whose messages yield no \
+             JSON object to replace the request's params with (for example a content of plain text \
+             such as '[REDACTED]'). As 1.5.5's rewrite contract has it, a rewrite that cannot be \
+             applied leaves the request unmodified: the request is relayed with its original params. \
+             The `stage` field names the hook stage.",
+    action: "Check the hook: an A2A rewrite replaces the request's `params` object, so the hook must \
+            return the rewritten params as a JSON object (an object content, or a JSON string that \
+            parses to one). A hook meant to redact must return the redacted params, not a \
+            placeholder string.",
+    since: "1.6.0",
+    retired: false,
+};
+
+/// A request-stage hook committed a rewrite busbar could not read back: the submission is refused.
+pub const A2A_HOOK_REWRITE_UNREADABLE: Diagnostic = Diagnostic {
+    code: 7046,
+    class: Class::Plane,
+    slug: "a2a-hook-rewrite-unreadable",
+    title: "A2A request hook rewrite could not be read back; submission refused",
+    severity: Severity::Actionable,
+    summary: "A request-stage hook attached to an A2A agent committed a rewrite whose bytes busbar \
+             could not read back (they are not JSON, or not the hook stage's messages list). The \
+             submission is refused with an internal error rather than relayed with the params the \
+             hook said it had replaced. The caller reads the fixed refusal; this diagnostic carries \
+             the reason. The `stage` field names the hook stage.",
+    action: "Check the hook's output against the hook stage's rewrite contract (a JSON object with a \
+            `messages` list). Submissions to the agent keep being refused while the hook commits \
+            unreadable rewrites.",
+    since: "1.6.0",
+    retired: false,
+};
+
+/// A2A push callback check or task transition could not complete.
+pub const A2A_PUSH_CHECK_UNAVAILABLE: Diagnostic = Diagnostic {
+    code: 7050,
+    class: Class::Plane,
+    slug: "a2a-push-check-unavailable",
+    title: "A2A push callback check or task transition could not complete",
+    severity: Severity::Actionable,
+    summary: "A push callback could not complete a required host verification, durable task transition, store, or signer operation. This is an internal availability fault, not a caller or token refusal. The diagnostic names the failed stage so an operator can distinguish the fault from a malformed or unauthorized callback. Emitted on each such failure.",
+    action: "Check the named host service and durable task store, including signer availability and the surrounding fault diagnostic; restore service before relying on callback delivery.",
+    since: "1.6.0",
+    retired: false,
+};
+
+/// A2A protocol_version settings are ignored by this build.
+pub const A2A_PROTOCOL_VERSION_IGNORED: Diagnostic = Diagnostic {
+    code: 7051,
+    class: Class::Plane,
+    slug: "a2a-protocol-version-ignored",
+    title: "A2A protocol_version settings are ignored by this build",
+    severity: Severity::Actionable,
+    summary: "A successfully opened agents section contains protocol_version settings. These strings are accepted for configuration compatibility but do not pin discovery or select a protocol version; the plane discovers and reads the agent card independently of them. Emitted once per successful section open, naming only registrations and never the supplied version values.",
+    action: "Remove the ignored protocol_version fields and use the agent card and supported protocol bindings to establish the peer protocol; do not rely on these fields as an enforced pin.",
+    since: "1.6.0",
+    retired: false,
+};
+
 /// A relayed SSE frame was not valid UTF-8 and was dropped. Frozen: `BUSBAR-7104`, the published
 /// catalog entry of the same number, byte for byte.
 pub const PLANE_SSE_FRAME_NOT_UTF8: Diagnostic = Diagnostic {
@@ -243,8 +390,8 @@ pub const PLANE_SSE_FRAME_NOT_UTF8: Diagnostic = Diagnostic {
 };
 
 /// THE CODES THE PLANE RAISES, ascending by code: every entry its source reports through
-/// `diag_*!`, and exactly the `diagnostics` its `declares.json` states (a test holds the three
-/// equal), from which the host installs them in either build. `BUSBAR-7104` came out of the host
+/// `diag_*!`; `declares.json` carries the catalogue the host installs in either build.
+/// `BUSBAR-7104` came out of the host
 /// registry with the relay's frame reader that emits it, under its frozen number.
 #[cfg(test)]
 pub const DIAGNOSTICS: &[&Diagnostic] = &[
@@ -259,6 +406,14 @@ pub const DIAGNOSTICS: &[&Diagnostic] = &[
     &A2A_TASK_STATE_UNREAD,
     &A2A_SPLIT_RECORD_UNREAD,
     &A2A_SPLIT_RECORD_STRAY_PARTS,
+    &A2A_BACKEND_TASK_ID_UNHELD,
+    &A2A_RELAY_ENDPOINT_REFUSED,
+    &A2A_TRUST_SIGHTING_UNRECORDED,
+    &A2A_CARD_RECORD_UNREAD,
+    &A2A_HOOK_REWRITE_NOT_APPLIED,
+    &A2A_HOOK_REWRITE_UNREADABLE,
+    &A2A_PUSH_CHECK_UNAVAILABLE,
+    &A2A_PROTOCOL_VERSION_IGNORED,
     &PLANE_SSE_FRAME_NOT_UTF8,
 ];
 

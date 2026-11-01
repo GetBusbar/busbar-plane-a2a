@@ -119,7 +119,7 @@ pub const SECTIONS: &[Section] = &[
     },
 ];
 
-/// THE PLANE'S OWN `agent_push:` SECTION (new in 1.6.0; absent = off): `{ca: <PEM>}`, the operator
+/// THE PLANE'S OWN `agent_push:` SECTION (new in 1.6.0; absent = public roots): `{ca: <PEM>}`, the operator
 /// CA a push delivery's connection trusts on top of the public roots (
 /// the connector's per-connection trust, reached through the push need's `trust_from`,
 /// [`PUSH_TRUST_FROM`]). The host reads the PEM; the plane judges only the section's shape
@@ -494,9 +494,9 @@ const fn open(verb: &'static str, target: &'static str) -> Route {
 /// the route every agent's trailing-separator claim ([`agent_slash_claims`]) is served as.
 pub const AGENT_ENDPOINT: Route = keyed("POST", "/a2a/agents/{agent_id}");
 
-/// Every route the plane serves, in mount order: the document binding's
-/// named operations, then the two discovery documents, the catalogue entry, the JSON-RPC
-/// endpoint in both spellings, the push callback and the framed binding's service.
+/// The plane's data routes, in declaration order: named operations and cards,
+/// discovery documents, agent addresses, JSON-RPC endpoints and the framed service.
+/// The public push callback is declared separately in [`ADMIN_VERBS`].
 pub const ROUTES: &[Route] = &[
     keyed("POST", "/a2a/message:send"),
     keyed("POST", "/a2a/message:stream"),
@@ -527,7 +527,7 @@ pub const ROUTES: &[Route] = &[
 ];
 
 /// Which line of the one A2A dialect a route is (JSON-RPC,
-/// REST and gRPC are its lines, each with its own refusal dialect), or an open document.
+/// REST and gRPC are its lines, each with its own refusal dialect), or a card document.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Line {
     /// The JSON-RPC endpoint, in both spellings, and one agent addressed by name.
@@ -536,12 +536,13 @@ pub enum Line {
     Target,
     /// The gRPC service.
     Framed,
-    /// A discovery document, the push callback, or one agent's card.
+    /// A discovery document or an agent card/address read. Credential requirements
+    /// remain the route's claim flags; this name does not imply an open claim.
     Open,
 }
 
 impl Line {
-    /// The [`DIALECTS`] index its refusals are rendered in; `None` for an open document, whose
+    /// The [`DIALECTS`] index its refusals are rendered in; `None` for a card document, whose
     /// refusals are its own slice's.
     #[must_use]
     pub const fn dialect(self) -> Option<u32> {

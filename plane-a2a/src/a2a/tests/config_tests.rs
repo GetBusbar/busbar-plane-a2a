@@ -7,57 +7,8 @@
 use super::*;
 use crate::statement::read_agents_section;
 use busbar_contract::config::UpstreamCreds;
-use busbar_contract::plane::{PinMechanismDecl, TrustKeyDecl, TrustRole};
 use busbar_contract::secret_ref::SecretRef;
 use serde_json::json;
-
-/// THE KERNEL-OWNED TRUST KEYS of one `agents:` entry, declared for the kernel to parse and judge:
-/// the `pin:` object (with its optional `fingerprint`) over this plane's four mechanisms, and the two
-/// cadence durations with their defaults. Declaration order is judgement order.
-pub(crate) const TRUST_KEYS: &[TrustKeyDecl] = &[
-    TrustKeyDecl {
-        key: "pin",
-        role: TrustRole::Pin,
-        fingerprint: true,
-        default: None,
-        mechanisms: &[
-            PinMechanismDecl {
-                token: "jws_issuer_key",
-                root: true,
-                peer_key: false,
-            },
-            PinMechanismDecl {
-                token: "cert_spki",
-                root: true,
-                peer_key: true,
-            },
-            PinMechanismDecl {
-                token: "mtls",
-                root: true,
-                peer_key: true,
-            },
-            PinMechanismDecl {
-                token: "unpinned",
-                root: false,
-                peer_key: false,
-            },
-        ],
-    },
-    TrustKeyDecl {
-        key: "reverify_ttl",
-        role: TrustRole::ReverifyTtl,
-        fingerprint: false,
-        default: Some(DEFAULT_REVERIFY_TTL),
-        mechanisms: &[],
-    },
-    TrustKeyDecl {
-        key: "recovery_backoff",
-        role: TrustRole::RecoveryBackoff,
-        fingerprint: false,
-        default: Some("15m"),
-        mechanisms: &[],
-    },
-];
 
 /// The reference config's sugar `{ word: value }` reads as, through the contract's own reading, so
 /// the expectation is whatever shape the pinned contract gives it (busbar step 2c reads sugar
@@ -99,55 +50,16 @@ const ALL: [PinMechanism; 4] = [
     PinMechanism::Unpinned,
 ];
 
-/// The mechanisms declared to the kernel are exactly the grammar's own, each with the root-ness it
-/// gives them, and the cadence defaults are the named ones.
-/// Ported from busbar-a2a a2a/tests/config_tests.rs::the_declared_trust_keys_match_the_grammar.
+/// A mechanism's serialized token reads back through the pin object.
 #[test]
-fn the_declared_trust_keys_match_the_grammar() {
-    let pin = &TRUST_KEYS[0];
-    assert_eq!(pin.key, "pin");
-    assert_eq!(pin.mechanisms.len(), ALL.len());
-    for m in ALL {
-        let declared = pin
-            .mechanisms
-            .iter()
-            .find(|d| d.token == m.token())
-            .unwrap_or_else(|| panic!("`{}` is declared", m.token()));
-        assert_eq!(declared.root, m != PinMechanism::Unpinned, "{}", m.token());
-    }
-    let ttl = TRUST_KEYS
-        .iter()
-        .find(|k| k.key == "reverify_ttl")
-        .expect("the reverify ttl is a declared trust key");
-    assert_eq!(ttl.default, Some(DEFAULT_REVERIFY_TTL));
-    let backoff = TRUST_KEYS
-        .iter()
-        .find(|k| k.key == "recovery_backoff")
-        .expect("the recovery backoff is a declared trust key");
-    assert_eq!(backoff.default, Some("15m"));
-}
-
-/// Each mechanism's SERIALIZED token is the token its declared `TRUST_KEYS` spells, and the pin
-/// object reads that token back, so a drift between the two would read a rooted pin as no pin.
-/// Ported from busbar-a2a a2a/tests/config_tests.rs::every_serialized_pin_token_is_the_declared_trust_key_token.
-#[test]
-fn every_serialized_pin_token_is_the_declared_trust_key_token() {
-    let declared: Vec<&str> = TRUST_KEYS[0].mechanisms.iter().map(|m| m.token).collect();
+fn serialized_pin_tokens_round_trip() {
     for m in ALL {
         let serialized = serde_json::to_value(m).expect("a mechanism serialises");
         let token = serialized.as_str().expect("a mechanism is a string");
-        assert!(declared.contains(&token), "`{token}` is not declared");
         assert_eq!(token, m.token());
         let pin: AgentPinCfg = serde_json::from_value(json!({"mechanism": token, "key": "K"}))
             .unwrap_or_else(|e| panic!("`{token}` must read back: {e}"));
         assert_eq!(pin.mechanism, m);
-        let declared_root = TRUST_KEYS[0]
-            .mechanisms
-            .iter()
-            .find(|d| d.token == token)
-            .expect("declared")
-            .root;
-        assert_eq!(declared_root, m != PinMechanism::Unpinned, "{token}");
     }
 }
 
@@ -276,7 +188,7 @@ fn a_registration_url_is_parsed_and_its_userinfo_never_repeated() {
         without_userinfo("https://alice:s3cret@a2a.vendor/p@th?q=@"),
         "https://***@a2a.vendor/p@th?q=@"
     );
-    assert_eq!(without_userinfo("not a url"), "not a url");
+    assert_eq!(without_userinfo("not a url"), "<malformed URL omitted>");
 }
 
 /// An agent may not be NAMED by a reserved word: every word in the one declaration is refused here.
@@ -486,7 +398,7 @@ fn the_admin_write_path_refuses_mutual_tls_without_a_client_identity_too() {
 
 /// The LEASE is a field rather than an adjective, so a lease that could never be presented is
 /// refused where the operator wrote it: a zero `lease_ttl_ms` is refused at parse, naming the key,
-/// and a positive one parses field for field beside the `egress_scopes` it was written with.
+/// and a positive one parses field for field.
 /// Ported from busbar-a2a a2a/tests/config_tests.rs::a_zero_lease_ttl_is_refused_at_parse.
 #[test]
 fn a_zero_lease_ttl_is_refused_at_parse() {
@@ -504,8 +416,7 @@ fn a_zero_lease_ttl_is_refused_at_parse() {
         "planner": {
             "url": "https://x/",
             "pin": {"mechanism": "unpinned"},
-            "upstream_credential": {"secret": {"env": "VENDOR_TOKEN"}, "lease_ttl_ms": 60000},
-            "egress_scopes": ["orchestrator"]
+            "upstream_credential": {"secret": {"env": "VENDOR_TOKEN"}, "lease_ttl_ms": 60000}
         }
     }))
     .expect("a positive TTL is legal");
@@ -513,7 +424,7 @@ fn a_zero_lease_ttl_is_refused_at_parse() {
     let cred = def.upstream_credential.as_ref().expect("the handle");
     assert_eq!(cred.lease_ttl_ms, 60_000);
     assert_eq!(cred.secret, sugar("env", "VENDOR_TOKEN"));
-    assert_eq!(def.egress_scopes, vec!["orchestrator".to_string()]);
+    assert!(def.egress_scopes.is_empty());
 }
 
 /// An empty egress scope grants nothing and READS as though it grants something, so a blank name
@@ -600,4 +511,16 @@ fn a_malformed_url_never_repeats_any_raw_credential_fragment() {
         without_userinfo("https://agent.example/path?q=@"),
         "https://agent.example/path?q=@"
     );
+}
+
+#[test]
+fn registration_url_scheme_is_case_insensitive() {
+    for url in [
+        "HTTPS://agent.example/a2a",
+        "hTtPs://agent.example/a2a",
+        "HTTP://agent.example/a2a",
+    ] {
+        let registration = def(url, PinMechanism::Unpinned);
+        assert!(validate_agent("agent", &registration).is_ok(), "{url}");
+    }
 }

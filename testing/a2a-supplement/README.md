@@ -131,10 +131,9 @@ They establish **nothing** for three families, and that is stated rather than gl
 
 For those, `selftest.py` supplies the missing evidence the only other way there is: it builds a
 subject that is deliberately wrong in exactly the way each requirement forbids, runs the real check
-against it, and **fails if the check passes**. Every mutation is paired with a positive control, so
-a check that simply fails everything cannot pass the selftest either. Run it the way
-`run-supplement.sh` runs the suite; a red there means a check is asleep and no verdict from the
-suite should be believed until it is fixed.
+against it, and **fails if the check passes**. Selected mutations have matching positive controls in `selftest.py` and `probe-regressions.py`;
+these files do not claim to cover every check. Run them with the prepared TCK interpreter.
+A failed regression means the affected conformance check needs repair before its verdict is used.
 
 ## What it found
 

@@ -1,14 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! ONE EVENT OFF A RELAYED EVENT STREAM, as busbar reads it (the served engine's `read_event`,
-//! `frame_sse`, its HTTP+JSON frame reader and its HTTP+JSON line's event re-framer, in their words
-//! and their bytes). Pure: the relay feeds it frames ([`crate::sse::SseReader`]) and the door writes
+//! One event off a relayed event stream. Pure: the relay feeds it frames
+//! ([`crate::sse::SseReader`]) and the door writes
 //! what it answers.
 //!
-//! * A frame that is not JSON, or that carries neither `result` nor a non-null `error`, passes
-//!   through UNCHANGED: an event stream carries comments and keep-alives, and busbar is
-//!   content-blind.
+//! * Frames without data carry comments and keep-alives and pass through unchanged. A data
+//!   payload must be a JSON-RPC response; malformed data refuses the hop.
 //! * A frame that IS a JSON-RPC response is CORRELATED to the caller's request id and answered
 //!   under it; one that names a different request is an error, and the hop is refused, as it is
 //!   for a `result` that is no object (no event about a task is a string or a number).
@@ -26,6 +24,8 @@ use serde_json::Value;
 
 use crate::a2a::task::TaskState;
 use crate::relay::HopRefusal;
+use crate::relay::RawBytes;
+use crate::request_json::RequestJson;
 use crate::sse::sse_data;
 use crate::task_identity;
 
@@ -50,22 +50,33 @@ pub struct Event {
     pub names_no_task: bool,
 }
 
+impl Drop for Event {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.sse.zeroize();
+    }
+}
+
 /// One JSON value as a complete event.
 fn json_event(value: &Value) -> Vec<u8> {
-    format!("data: {value}\n\n").into_bytes()
+    let mut out = RawBytes::default();
+    out.extend_from_slice(b"data: ");
+    serde_json::to_writer(&mut out, value).expect("JSON Value serialization succeeds");
+    out.extend_from_slice(b"\n\n");
+    out.into_vec()
 }
 
 /// `payload` as one complete event: each of its lines a `data:` line of its own, as the
 /// event-stream format joins them back (a far end's JSON may break its lines between tokens).
 fn data_event(payload: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(payload.len() + 8);
+    let mut out = RawBytes::default();
     for line in payload.split(|b| *b == b'\n') {
         out.extend_from_slice(b"data: ");
         out.extend_from_slice(line);
-        out.push(b'\n');
+        out.extend_from_slice(b"\n");
     }
-    out.push(b'\n');
-    out
+    out.extend_from_slice(b"\n");
+    out.into_vec()
 }
 
 /// READ ONE FAR-END EVENT `frame_text` and frame it for the caller of request `rpc_id`, under
@@ -96,19 +107,29 @@ pub fn read_event(
     let Some(data) = sse_data(frame_text) else {
         return verbatim();
     };
-    let Ok(mut envelope) =
-        serde_json::from_slice::<Value>(&crate::answer_bytes::readable(data.as_bytes()))
-    else {
-        return verbatim();
+    let data = zeroize::Zeroizing::new(data);
+    let readable = crate::answer_bytes::readable(data.as_bytes());
+    let readable = match readable {
+        Cow::Owned(bytes) => Some(RawBytes::from(bytes)),
+        Cow::Borrowed(_) => None,
     };
+    let Ok(envelope) =
+        serde_json::from_slice::<RequestJson>(readable.as_deref().unwrap_or(data.as_bytes()))
+    else {
+        return Err(HopRefusal::NotJson);
+    };
+    let mut envelope = envelope;
     let is_response = envelope.get("result").is_some()
         || envelope.get("error").filter(|e| !e.is_null()).is_some();
     if !is_response {
-        return verbatim();
+        return Err(HopRefusal::NotJson);
     }
     let reply = read_response(&envelope, rpc_id).map_err(|_| HopRefusal::Uncorrelated)?;
     if let Some(obj) = envelope.as_object_mut() {
-        obj.insert("id".to_string(), rpc_id.clone());
+        drop(
+            obj.insert("id".to_string(), rpc_id.clone())
+                .map(RequestJson::new),
+        );
     }
     let Reply::Result(_) = reply else {
         return Ok(Event {
@@ -126,9 +147,8 @@ pub fn read_event(
         return Err(HopRefusal::NotJson);
     }
     let payload = task_identity::payload_of(result);
-    let artifact = payload.get("artifact").is_some()
-        || payload.get("artifacts").is_some()
-        || result.get("artifactUpdate").is_some();
+    // An artifact UPDATE is a relayed chunk; a task snapshot's `artifacts` is not one.
+    let artifact = payload.get("artifact").is_some() || result.get("artifactUpdate").is_some();
     let state = task_identity::reported_task_state(result);
     let backend_task_id = task_identity::backend_task_id(result);
     let names_no_task = task_identity::names_no_task(result);
@@ -144,7 +164,11 @@ pub fn read_event(
         )
     });
     let sse = match spliced {
-        Some(bytes) => data_event(&crate::answer_bytes::result_reply(rpc_id, &bytes)),
+        Some(bytes) => {
+            let bytes = RawBytes::from(bytes);
+            let reply = RawBytes::from(crate::answer_bytes::result_reply(rpc_id, &bytes));
+            data_event(&reply)
+        }
         None => {
             if !task_identity::rewrite_identity(result, task_id, context_id, skill, references) {
                 return Err(HopRefusal::NotJson);
@@ -167,9 +191,13 @@ pub fn read_event(
 #[must_use]
 pub fn rewrap<'f>(frame_text: &'f str, rpc_id: &Value) -> Cow<'f, str> {
     sse_data(frame_text)
+        .map(zeroize::Zeroizing::new)
         .filter(|d| !d.trim().is_empty())
         .and_then(|d| crate::answer_bytes::rewrap(d.as_bytes(), rpc_id).ok())
-        .and_then(|envelope| String::from_utf8(data_event(&envelope)).ok())
+        .and_then(|envelope| {
+            let envelope = RawBytes::from(envelope);
+            String::from_utf8(data_event(&envelope)).ok()
+        })
         .map_or(Cow::Borrowed(frame_text), Cow::Owned)
 }
 
@@ -181,7 +209,7 @@ pub fn reframe_events(buf: &[u8]) -> Vec<u8> {
     let Ok(text) = std::str::from_utf8(buf) else {
         return buf.to_vec();
     };
-    let mut out = Vec::with_capacity(buf.len());
+    let mut out = RawBytes::default();
     let mut event: Vec<&str> = Vec::new();
     for line in text.split_inclusive('\n') {
         event.push(line);
@@ -191,7 +219,7 @@ pub fn reframe_events(buf: &[u8]) -> Vec<u8> {
         }
     }
     reframe_event(&event, &mut out);
-    out
+    out.into_vec()
 }
 
 /// The value of a `data` field line, or `None` for another line.
@@ -205,9 +233,9 @@ fn data_field(line: &str) -> Option<&str> {
 
 /// One event's `lines` (each with its terminator) onto `out`: its data lines replaced, where they
 /// join to a JSON-RPC `result`, by that result's own bytes, one `data:` line per line of it.
-fn reframe_event(lines: &[&str], out: &mut Vec<u8>) {
+fn reframe_event(lines: &[&str], out: &mut RawBytes) {
     let data: Vec<&str> = lines.iter().copied().filter_map(data_field).collect();
-    let joined = data.join("\n");
+    let joined = zeroize::Zeroizing::new(data.join("\n"));
     let result = if data.is_empty() {
         None
     } else {

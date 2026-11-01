@@ -44,7 +44,7 @@ fn an_event_leaves_under_busbars_identity() {
     assert!(doc["result"].get("id").is_none(), "no stray id: {doc}");
     assert_eq!(doc["result"]["contextId"], "ctx-mine");
     assert_eq!(doc["result"]["metadata"]["busbar/skill"], "plan");
-    let rendered = String::from_utf8(ev.sse).unwrap();
+    let rendered = std::str::from_utf8(&ev.sse).unwrap();
     assert!(!rendered.contains("BACKEND-OWN"), "{rendered}");
     assert_eq!(ev.state, Some(TaskState::Working));
     assert_eq!(ev.backend_task_id.as_deref(), Some("BACKEND-OWN-TASK-ID"));
@@ -193,7 +193,7 @@ fn an_event_keeps_the_far_ends_bytes_and_its_lines() {
     let frame = "data: {\"jsonrpc\":\"2.0\",\"id\":11,\"result\":{\"taskId\":\"far\",\ndata:  \"n\":123456789012345678901234567890,\"kind\":\"status-update\",\"big\":1e400}}\n\n";
     let ev = read_event(frame, &json!(11), "t", "c", None, &[]).unwrap();
     assert_eq!(
-        String::from_utf8(ev.sse).unwrap(),
+        std::str::from_utf8(&ev.sse).unwrap(),
         "data: {\"jsonrpc\":\"2.0\",\"id\":11,\"result\":{\"taskId\":\"t\",\ndata:  \"n\":123456789012345678901234567890,\"kind\":\"status-update\",\"big\":1e400,\"contextId\":\"c\"}}\n\n"
     );
     assert_eq!(ev.backend_task_id.as_deref(), Some("far"));

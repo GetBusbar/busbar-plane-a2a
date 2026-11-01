@@ -133,6 +133,7 @@ fn assemble(
     let (Ok(count), Ok(len)) = (count.parse::<usize>(), len.parse::<usize>()) else {
         return Err(UNREADABLE);
     };
+    // Heads carry the full SHA-256 digest; PART_DIGEST_HEX is only the shorter part-key prefix.
     let digest = hex.len() == 64 && hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
     if !digest || len <= MAX_RECORD_BYTES || count != len.div_ceil(MAX_RECORD_BYTES) {
         return Err(UNREADABLE);

@@ -7,7 +7,12 @@
 # eventually report green for all six.
 set -uo pipefail
 cd "$(dirname "$0")/.."
-BIN="${A2AHT_CONTROL_BIN:-/tmp/a2abin}"
+source scripts/process-fixture.sh
+BIN="${A2AHT_CONTROL_BIN:-$HOME/.a2aht/bin}"
+umask 077
+scratch="$(mktemp -d "${TMPDIR:-/tmp}/a2a-swap.XXXXXX")" || exit 2
+trap 'cleanup_rc=0; fixture_stop "${BP:-}" || cleanup_rc=1; fixture_stop "${BP2:-}" || cleanup_rc=1; rm -rf "$scratch"; [ "$cleanup_rc" -eq 0 ] || exit 2' EXIT
+fixture_exit_on_signal
 mkdir -p reports
 pass=0; fail=0
 check () { # name expected actual
@@ -26,14 +31,17 @@ grep -E "BASELINED=|BATTERY" reports/sp-1.txt | tail -2 | sed 's/^/       /'
 
 echo
 echo "=== 2. NEGATIVE CONTROL: a broken peer must be RED ==="
-python3 -m a2aht fake-peer --port 9402 --broken > /tmp/sp-broken.log 2>&1 &
-BP=$!; sleep 2
+python3 -m a2aht fake-peer --port 9402 --broken > "$scratch/broken.log" 2>&1 &
+BP=$!
+fixture_track_pid "$BP"
+fixture_await_card "$BP" 9402 30 1 || { echo "broken peer did not own its listener" >&2; exit 2; }
 python3 -m a2aht run --endpoint http://127.0.0.1:9402 \
   --label "negative-control" --tier pull-request --role server \
   --json reports/sp-negative.json > reports/sp-2.txt 2>&1
 check "negative control fails" 1 $?
 grep -E "FAIL=|BATTERY" reports/sp-2.txt | tail -1 | sed 's/^/       /'
-kill $BP 2>/dev/null
+fixture_stop "$BP" || exit 2
+BP=""
 
 echo
 echo "=== 3. SUBJECT UNREACHABLE: must refuse, not pass vacuously ==="
@@ -83,15 +91,18 @@ cat > reports/sp-partial-dev.json <<'JSON'
       "evidence": "missing REQUIRED field(s): version",
       "judgement": "Deliberately introduced by the broken peer." } ] }
 JSON
-python3 -m a2aht fake-peer --port 9404 --broken > /tmp/sp-broken2.log 2>&1 &
-BP2=$!; sleep 2
+python3 -m a2aht fake-peer --port 9404 --broken > "$scratch/broken2.log" 2>&1 &
+BP2=$!
+fixture_track_pid "$BP2"
+fixture_await_card "$BP2" 9404 30 1 || { echo "broken peer did not own its listener" >&2; exit 2; }
 python3 -m a2aht run --endpoint http://127.0.0.1:9404 \
   --label "broken peer + PARTIAL deviations" --tier pull-request --role server \
   --known-deviations reports/sp-partial-dev.json \
   --json reports/sp-partial.json > reports/sp-6.txt 2>&1
 check "unrecorded deviation still red" 1 $?
 grep -E "BASELINED=|BATTERY" reports/sp-6.txt | tail -1 | sed 's/^/       /'
-kill $BP2 2>/dev/null
+fixture_stop "$BP2" || exit 2
+BP2=""
 
 echo
 echo "================================================================"

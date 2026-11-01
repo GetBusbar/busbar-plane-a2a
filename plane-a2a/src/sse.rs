@@ -25,12 +25,20 @@ use std::ops::Range;
 #[derive(Debug, Clone, Default)]
 pub struct SseReader {
     buf: busbar_contract::protocol::SseFrames,
+    backend: String,
     /// The spans in the reassembler's buffer of the events the last [`Self::feed`] finished
     /// ([`Self::frames`]).
     frames: Vec<Range<usize>>,
 }
 
 impl SseReader {
+    /// Feed the relayed backend's bytes with its registered name for operator diagnostics.
+    pub fn feed_from(&mut self, backend: &str, chunk: &[u8]) {
+        self.backend.clear();
+        self.backend.push_str(backend);
+        self.feed(chunk);
+    }
+
     /// Feed a chunk: every COMPLETE event it finished is then [`Self::frames`].
     pub fn feed(&mut self, chunk: &[u8]) {
         self.frames.clear();
@@ -42,6 +50,7 @@ impl SseReader {
                 // backend, dropped (never lossily relayed) and surfaced.
                 Err(_) => busbar_contract::diag_warn!(
                     PLANE_SSE_FRAME_NOT_UTF8,
+                    agent = %self.backend,
                     bytes = frame.len(),
                     "dropping a non-UTF-8 SSE frame (the event-stream format requires UTF-8)"
                 ),
@@ -69,7 +78,7 @@ impl SseReader {
 /// lone CR each end a line) — `str::lines()` does not split on a bare CR, so a bare-CR frame
 /// yielded no data at all.
 pub fn sse_data(frame: &str) -> Option<String> {
-    let mut data = String::new();
+    let mut data = crate::relay::RawBytes::default();
     let mut any = false;
     for line in busbar_contract::protocol::sse_lines(frame) {
         // A `data:`-prefixed line carries the value after the colon; a BARE `data` line (no colon)
@@ -83,12 +92,15 @@ pub fn sse_data(frame: &str) -> Option<String> {
             continue;
         };
         if any {
-            data.push('\n');
+            data.extend_from_slice(b"\n");
         }
         any = true;
-        data.push_str(rest.strip_prefix(' ').unwrap_or(rest));
+        data.extend_from_slice(rest.strip_prefix(' ').unwrap_or(rest).as_bytes());
     }
-    any.then_some(data)
+    any.then(|| {
+        String::from_utf8(data.into_vec())
+            .expect("SSE data concatenates UTF-8 lines with UTF-8 separators")
+    })
 }
 
 #[cfg(test)]

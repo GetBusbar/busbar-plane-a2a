@@ -53,6 +53,9 @@ def main(argv=None):
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--client-drive", required=True,
                     help="command that makes the subject delegate to {url}")
+    ap.add_argument("--reverify-ttl-seconds", type=float,
+                    help="the target's configured card reuse TTL; the cadence drive must "
+                         "make repeated delegations in one invocation across this interval")
     ap.add_argument("--label", default="subject")
     ap.add_argument("--json")
     args = ap.parse_args(argv)
@@ -69,7 +72,8 @@ def main(argv=None):
     target.start()
     try:
         results = runner.run_battery(
-            target, {"client_drive": args.client_drive}, tests)
+            target, {"client_drive": args.client_drive,
+                     "reverify_ttl_seconds": args.reverify_ttl_seconds}, tests)
     finally:
         target.stop()
 

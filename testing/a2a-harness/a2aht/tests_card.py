@@ -50,7 +50,8 @@ def test_card_served(ctx):
 )
 def test_card_required_fields(ctx):
     card = ctx.target.card()
-    missing = [f for f in spec.AGENT_CARD_REQUIRED if f not in card]
+    missing = [f for f in spec.AGENT_CARD_REQUIRED
+               if f not in card or card[f] is None or card[f] == ""]
     ctx.assert_must(
         not missing,
         "agent card is missing REQUIRED field(s): %s" % ", ".join(missing),
@@ -177,14 +178,10 @@ def test_all_bindings_driven(ctx):
 def test_card_version_shape(ctx):
     for iface in ctx.target.interfaces():
         pv = str(iface.get("protocolVersion", ""))
-        ctx.assert_must(
-            pv.count(".") <= 1,
-            "interface declares protocolVersion %r, which carries a patch "
-            "component" % pv,
-            "SPEC 3.6: 'Patch version numbers SHOULD NOT be used in requests, "
-            "responses and Agent Cards, and MUST not be considered when "
-            "clients and servers negotiate protocol versions.'",
-        )
+        ctx.observe("protocol_version_has_patch", pv.count(".") > 1,
+                    "SPEC 3.6 recommends omitting patch components (SHOULD NOT); "
+                    "this is not a MUST failure. Version-negotiation checks exercise "
+                    "the separate MUST to ignore patch components.")
 
 
 @a2a_test(
@@ -373,17 +370,16 @@ def test_card_signature_verifies(ctx):
     ctx.observe("canonical_payload_sha256", _sha(canonical))
     results = []
     for sig in sigs:
-        results.append(verify_jws(sig, canonical))
+        results.append(verify_jws(sig, canonical, jwks=ctx.config.get("jwks")))
     ctx.observe("signature_verification", results)
     verifiable = [r for r in results if r.get("verified") is not None]
     if not verifiable:
-        ctx.note(
+        raise Inapplicable(
             "Signature present but not verifiable by this harness: no public "
             "key was reachable (no jku, and no --jwks given). This is "
             "reported, not passed. SPEC 8.4.3 step 2 requires the client to "
             "retrieve the key by kid/jku."
         )
-        return
     ctx.assert_must(
         any(r.get("verified") for r in verifiable),
         "no signature on the agent card verified against its RFC 8785 "
@@ -499,14 +495,35 @@ def test_validator_self_check(ctx):
     good = copy.deepcopy(ctx.target.card())
     ok, problems = validate_agent_card(good)
     ctx.observe("real_card_validation_problems", problems)
+    ctx.assert_must(ok, "the real card was rejected: %s" % problems,
+                    "The parser self-check requires a valid positive control.")
 
-    # Now mutate it and require that the validator notices.
+    # Independent proto fixtures: deriving the mutations from the validator's
+    # own field inventory would hide an omitted required field in that inventory.
+    good = {
+        "name": "validator control", "description": "A valid card", "version": "1.0",
+        "capabilities": {}, "defaultInputModes": ["text/plain"],
+        "defaultOutputModes": ["text/plain"],
+        "supportedInterfaces": [{"url": "https://agent.invalid/a2a",
+                                 "protocolBinding": "JSONRPC", "protocolVersion": "1.0"}],
+        "skills": [{"id": "echo", "name": "Echo", "description": "Echo text", "tags": ["echo"]}],
+    }
+    accepted, problems = validate_agent_card(good)
+    ctx.assert_must(accepted, "valid parser fixture rejected: %s" % problems,
+                    "PROTO AgentCard required members are populated.")
     caught = {}
-    for field in spec.AGENT_CARD_REQUIRED:
+    for field in ("name", "description", "supportedInterfaces", "version", "capabilities",
+                  "defaultInputModes", "defaultOutputModes", "skills"):
         broken = copy.deepcopy(good)
         broken.pop(field, None)
         ok2, probs = validate_agent_card(broken)
         caught[field] = not ok2
+    for array, fields in (("supportedInterfaces", ("url", "protocolBinding", "protocolVersion")),
+                          ("skills", ("id", "name", "description", "tags"))):
+        for field in fields:
+            broken = copy.deepcopy(good)
+            broken[array][0].pop(field)
+            caught["%s.%s" % (array, field)] = not validate_agent_card(broken)[0]
     ctx.assert_must(
         all(caught.values()),
         "the harness's own card validator failed to notice a missing "

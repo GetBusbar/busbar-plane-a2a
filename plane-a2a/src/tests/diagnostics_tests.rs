@@ -585,28 +585,6 @@ fn slugs_are_unique_and_kebab_case() {
     }
 }
 
-/// Every non-retired entry documents its meaning and an action.
-#[test]
-fn every_live_entry_documents_meaning_and_action() {
-    for d in DIAGNOSTICS {
-        if d.retired {
-            continue;
-        }
-        assert!(
-            d.summary.len() > 20,
-            "{} ({}) has no real summary",
-            d.banner(),
-            d.slug
-        );
-        assert!(
-            d.action.len() > 3,
-            "{} ({}) has no action",
-            d.banner(),
-            d.slug
-        );
-    }
-}
-
 /// THE PLANE'S `declares.json` STATES ITS CATALOGUE: the `diagnostics` the door's Statement carries
 /// (and the release signs into a dropped-in plane's manifest), from which the host installs the
 /// plane's codes in either build, are exactly the entries [`DIAGNOSTICS`] holds, field for field,

@@ -132,6 +132,7 @@ def sse_events(url, body=None, headers=None, method="POST",
     closed_cleanly = False
     error = None
     started = time.time()
+    resp = None
     try:
         resp = opener.open(req, timeout=timeout)
         status = resp.status
@@ -156,7 +157,12 @@ def sse_events(url, body=None, headers=None, method="POST",
             # different ones: a2a-go emits LF, a2a-python emits CRLF. A reader
             # that handles only LF silently sees zero events against half the
             # ecosystem, which looks exactly like a broken server.
-            buf = buf.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+            # Keep a trailing CR until the next byte decides whether it starts CRLF.
+            pending_cr = buf.endswith(b"\r")
+            complete = buf[:-1] if pending_cr else buf
+            buf = complete.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+            if pending_cr:
+                buf += b"\r"
             while b"\n\n" in buf:
                 frame, buf = buf.split(b"\n\n", 1)
                 payload = _sse_data(frame)
@@ -182,8 +188,13 @@ def sse_events(url, body=None, headers=None, method="POST",
             events.append(json.loads(exc.read().decode("utf-8")))
         except Exception:
             pass
+    except (TimeoutError, socket.timeout):
+        error = "timeout"
     except Exception as exc:
         error = "%s: %s" % (type(exc).__name__, exc)
+    finally:
+        if resp is not None:
+            resp.close()
     return _SseResult(events, closed_cleanly, error, status, ctype)
 
 
@@ -204,7 +215,8 @@ class _SseResult:
 
 def _sse_data(frame):
     lines = frame.decode("utf-8", "replace").splitlines()
-    data_lines = [ln[5:].lstrip() for ln in lines if ln.startswith("data:")]
+    data_lines = [ln[6:] if ln.startswith("data: ") else ln[5:]
+                  for ln in lines if ln.startswith("data:")]
     if not data_lines:
         return None
     raw = "\n".join(data_lines)
@@ -271,7 +283,8 @@ def raw_send(url, method, body_bytes, headers=None, declared_length=None,
             pass
 
 
-def raw_connect_and_stall(url, seconds, timeout=DEFAULT_TIMEOUT, insecure=False):
+def raw_connect_and_stall(url, seconds, timeout=DEFAULT_TIMEOUT, insecure=False,
+                          while_stalled=None):
     """Open a connection, send a partial request, then go silent.
 
     Returns the number of seconds until the peer closed on us, or None if it
@@ -284,6 +297,8 @@ def raw_connect_and_stall(url, seconds, timeout=DEFAULT_TIMEOUT, insecure=False)
                 % (path, host)).encode("ascii")
         sock.sendall(head)
         sock.sendall(b"{")
+        if while_stalled is not None:
+            while_stalled()
         sock.settimeout(seconds)
         started = time.time()
         try:

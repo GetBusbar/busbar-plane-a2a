@@ -103,18 +103,18 @@ fn an_unfit_request_is_refused_as_an_unsupported_operation() {
     assert_eq!(
         refused.envelope(),
         json!({ "jsonrpc": "2.0", "id": null, "error": {
-            "code": -32004, "message": "SkillNotDeclared(\"fly\")",
+            "code": -32004, "message": "this agent's card declares no skill `fly`",
             "data": [{ "@type": "type.googleapis.com/google.rpc.ErrorInfo",
                 "domain": "a2a-protocol.org", "reason": "UNSUPPORTED_OPERATION" }] } })
     );
     assert_eq!(refused.status, 400);
     assert_eq!(
         refusal(&Unfit::CapabilityNotDeclared("streaming")).message,
-        "CapabilityNotDeclared(\"streaming\")"
+        "this agent's card does not declare the `streaming` capability this request needs"
     );
     assert_eq!(
         refusal(&Unfit::Unreadable(Unreadable::NotAnObject)).message,
-        "Unreadable(NotAnObject)"
+        "this agent's held card cannot be read: it is not a JSON object"
     );
 }
 
@@ -175,7 +175,11 @@ fn the_shape_reads_every_spelling_of_a_stream_and_a_push_callback() {
 
 #[test]
 fn an_agent_with_no_held_card_is_refused_by_the_catalogue_s_name() {
-    assert_eq!(refusal(&Unfit::NoCachedCard).message, "NoCachedCard");
+    assert_eq!(
+        refusal(&Unfit::NoCachedCard).message,
+        "busbar holds no card for this agent yet, so the request cannot be judged against what \
+         the agent declares"
+    );
     assert_eq!(refusal(&Unfit::NoCachedCard).status, 400);
 }
 
@@ -298,4 +302,21 @@ fn a_held_card_with_null_members_reads_as_absent() {
     assert_eq!(parsed.skills.len(), 1);
     let shape = TaskShape::of(&send(json!({ "metadata": { "skill": "plan" } })));
     assert_eq!(fit(&card, &shape), Ok(Some("plan".into())));
+}
+
+#[test]
+fn proto_field_names_cannot_bypass_callback_or_output_mode_fit() {
+    let shape = TaskShape::of(&send(json!({"configuration": {
+        "task_push_notification_config": {"push_notification_config": {"url": "https://receiver.example/cb"}},
+        "accepted_output_modes": ["application/json"]
+    }})));
+    assert!(shape.requires_push_notifications);
+    assert_eq!(shape.output_modes, ["application/json"]);
+    assert_eq!(fit(&card(), &shape), Err(Unfit::ModesIncompatible));
+    let mut held = card();
+    held["capabilities"]["pushNotifications"] = json!(false);
+    assert_eq!(
+        fit(&held, &shape),
+        Err(Unfit::CapabilityNotDeclared("pushNotifications"))
+    );
 }

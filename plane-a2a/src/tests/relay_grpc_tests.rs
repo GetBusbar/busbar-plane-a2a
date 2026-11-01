@@ -32,15 +32,15 @@ fn framed<M: prost::Message>(message: &M) -> Vec<u8> {
 }
 
 fn task(state: pb::TaskState) -> pb::Task {
-    pb::Task {
-        id: BACKEND.into(),
-        context_id: "BACKEND-OWN-CONTEXT".into(),
-        status: Some(pb::TaskStatus {
-            state: state as i32,
-            ..Default::default()
-        }),
-        ..Default::default()
-    }
+    crate::proto::custody::initialized::<pb::Task>(|__custody_message| {
+        __custody_message.id = BACKEND.into();
+        __custody_message.context_id = "BACKEND-OWN-CONTEXT".into();
+        __custody_message.status = Some(crate::proto::custody::initialized::<pb::TaskStatus>(
+            |__custody_message| {
+                __custody_message.state = state as i32;
+            },
+        ));
+    })
 }
 
 fn send_answer(state: pb::TaskState) -> Vec<u8> {
@@ -88,7 +88,7 @@ fn dialled(
     // A request message whose every field is its default is zero bytes: nothing to send beside the
     // head (the grpc transport frames the empty message).
     let message = match r.on_piece(caller(&bytes)) {
-        PieceAnswer::ToFarEnd(message) => message,
+        PieceAnswer::ToFarEnd(message) => message.into_vec(),
         PieceAnswer::Nothing => Vec::new(),
         other => panic!("no message for the far end: {other:?}"),
     };
@@ -292,10 +292,11 @@ fn grpc_client_issues_get_extended_agent_card() {
     let (mut r, attempt, message) = dialled(&asked, None, false);
     assert_eq!(attempt.target, "/lf.a2a.v1.A2AService/GetExtendedAgentCard");
     let _ = pb::GetExtendedAgentCardRequest::decode(message.as_slice()).expect("the request");
-    let card = framed(&pb::AgentCard {
-        name: "planner-extended".into(),
-        ..Default::default()
-    });
+    let card = framed(&crate::proto::custody::initialized::<pb::AgentCard>(
+        |__custody_message| {
+            __custody_message.name = "planner-extended".into();
+        },
+    ));
     let reply = whole(answer(&mut r, &[card], Some(0)));
     assert_eq!(body(&reply)["result"]["name"], "planner-extended");
 }
@@ -349,7 +350,7 @@ fn a_grpc_agent_refusing_busbar_at_the_http_layer_reads_hard() {
     }
 }
 
-/// An answer with no message and no status to read is the engine's `Unframable`: refused by name.
+/// An answer with no message is an unreadable backend reply, not an unframable caller request.
 #[test]
 fn a_grpc_answer_with_no_message_is_refused_by_name() {
     let asked =
@@ -359,8 +360,7 @@ fn a_grpc_answer_with_no_message_is_refused_by_name() {
     assert_eq!(reply.status, 502);
     assert_eq!(
         body(&reply)["error"]["message"],
-        "a2a.hop.unframable: `GetExtendedAgentCard` could not be carried to this agent over its \
-         `GRPC` binding"
+        "a2a.hop.reply_not_json: this agent's backend replied with something that is not a JSON-RPC answer"
     );
 }
 
@@ -518,10 +518,11 @@ fn a_grpc_hop_bills_its_framed_request_and_answer_and_never_its_trailers() {
     );
     // An rpc whose request message is all defaults is zero bytes; the wire still carries its
     // prefix, as predev's `grpc_frame` wrote it.
-    let card = framed(&pb::AgentCard {
-        name: "planner-extended".into(),
-        ..Default::default()
-    });
+    let card = framed(&crate::proto::custody::initialized::<pb::AgentCard>(
+        |__custody_message| {
+            __custody_message.name = "planner-extended".into();
+        },
+    ));
     let asked =
         json!({ "jsonrpc": "2.0", "id": 7, "method": "GetExtendedAgentCard", "params": {} });
     let (moved, message) = billed(&asked, &card);
@@ -547,6 +548,39 @@ fn streaming() -> HopRelay {
     r
 }
 
+#[test]
+fn a_cut_grpc_stream_ends_with_an_error_even_after_complete_messages() {
+    for committed in [false, true] {
+        let mut relay = streaming();
+        let event = stream_event(pb::TaskState::Working);
+        let before = relay.moved();
+        let cut = if committed {
+            assert!(part(relay.on_piece(far(None, &event, false))).head);
+            let _ = relay.take_settled();
+            &[][..]
+        } else {
+            event.as_slice()
+        };
+        let end = part(relay.on_far_cut(cut, None));
+        assert!(end.last);
+        assert_eq!(end.head, !committed);
+        let error = std::str::from_utf8(&end.body)
+            .unwrap()
+            .split("\n\n")
+            .filter_map(crate::framed::event)
+            .find_map(Result::err)
+            .expect("a gRPC caller must receive a non-OK final status");
+        assert_eq!(error.code, crate::framed::Code::Internal);
+        assert_eq!(relay.take_settled().last(), Some(&TaskSettled::Failed));
+        assert_eq!(relay.take_reading(), Some(Reading::Transient));
+        assert_eq!(relay.moved(), before + event.len() as u64);
+        assert_eq!(
+            relay.on_far_fields(&[], Some(0), true),
+            PieceAnswer::Nothing
+        );
+    }
+}
+
 /// A STREAM WHOSE TRAILERS END IT WITH AN ERROR STATUS AFTER ITS EVENTS BEGAN (THE DESIGN section 2
 /// a2a: a gRPC binding reads `grpc-status` from the trailers): the far end's error goes to the
 /// caller as the last event, under the caller's id and its A2A code, and the task fails. RED: the
@@ -564,7 +598,7 @@ fn a_grpc_stream_ending_with_an_error_status_fails_its_task() {
     );
     let end = part(r.on_piece(far(None, &[], true)));
     assert!(end.last && !end.head);
-    let text = String::from_utf8(end.body).unwrap();
+    let text = String::from_utf8(end.body.clone()).unwrap();
     let error: serde_json::Value =
         serde_json::from_str(text.strip_prefix("data: ").unwrap().trim_end()).unwrap();
     assert_eq!(error["id"], 7);
@@ -619,4 +653,46 @@ fn an_unreadable_grpc_stream_message_refuses_the_hop() {
         Some(&TaskSettled::Failed),
         "the task fails"
     );
+}
+
+#[test]
+fn unary_grpc_refuses_missing_status_extra_messages_and_trailing_bytes() {
+    for messages in [
+        vec![
+            send_answer(pb::TaskState::Completed),
+            send_answer(pb::TaskState::Completed),
+        ],
+        vec![{
+            let mut bytes = send_answer(pb::TaskState::Completed);
+            bytes.push(0);
+            bytes
+        }],
+    ] {
+        let (mut hop, _, _) = dialled(&submission("SendMessage"), None, false);
+        let reply = whole(answer(&mut hop, &messages, Some(0)));
+        assert!(body(&reply).get("error").is_some());
+        assert!(body(&reply).get("result").is_none());
+    }
+    let (mut hop, _, _) = dialled(&submission("SendMessage"), None, false);
+    let reply = whole(answer(
+        &mut hop,
+        &[send_answer(pb::TaskState::Completed)],
+        None,
+    ));
+    assert_eq!(reply.status, 502);
+    assert!(body(&reply).get("error").is_some());
+    assert!(body(&reply).get("result").is_none());
+    assert_eq!(hop.take_reading(), Some(Reading::Transient));
+}
+
+#[test]
+fn grpc_stream_http_refusal_records_the_http_health_signal() {
+    let (mut relay, _, _) = dialled(&submission("SendStreamingMessage"), None, true);
+    let reply = whole(vec![relay.on_piece(far(
+        Some(401),
+        b"not a protobuf message",
+        true,
+    ))]);
+    assert_eq!(reply.status, 502);
+    assert_eq!(relay.take_reading(), Some(Reading::Hard));
 }
