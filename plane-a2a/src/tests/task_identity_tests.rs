@@ -179,8 +179,8 @@ fn a_refusal_about_a_task_carries_its_resource_info_after_the_error_info() {
 #[test]
 fn the_codes_a_far_end_may_answer_keep_section_5_4s_statuses() {
     assert_eq!(status_of_code(-32001), Some(404));
-    assert_eq!(status_of_code(-32002), Some(409));
-    assert_eq!(status_of_code(-32005), Some(415));
+    assert_eq!(status_of_code(-32002), Some(400));
+    assert_eq!(status_of_code(-32005), Some(400));
     assert_eq!(status_of_code(-32602), Some(400));
     assert_eq!(status_of_code(-32603), Some(500));
     assert_eq!(status_of_code(-32050), None);
@@ -252,11 +252,11 @@ fn the_codes_a_far_end_may_answer_keep_section_5_4s_status_table_row_for_row() {
     // changes a status has to change this table too.
     for (code, status) in [
         (-32001, 404),
-        (-32002, 409),
+        (-32002, 400),
         (-32003, 400),
         (-32004, 400),
-        (-32005, 415),
-        (-32006, 502),
+        (-32005, 400),
+        (-32006, 500),
         (-32007, 400),
         (-32008, 400),
         (-32009, 400),

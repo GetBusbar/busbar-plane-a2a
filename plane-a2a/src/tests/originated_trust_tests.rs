@@ -25,6 +25,7 @@ use super::*;
 thread_local! {
     /// The dials this thread's fake connector was asked for.
     static DIALS: Cell<usize> = const { Cell::new(0) };
+    static VERDICT: Cell<u64> = const { Cell::new(svc::DISTRUST_NONE) };
 }
 
 /// The agent's url judged: admitted, as the open web's guard admits a public name.
@@ -54,6 +55,23 @@ impl FakeService for Serving {
     fn serve(call: &mut ServiceCall<TrustServesIn>) -> Outcome {
         call.set_value(svc::DISTRUST_NONE);
         Outcome::Ready
+    }
+}
+
+struct Verdict;
+impl FakeService for Verdict {
+    type In = TrustServesIn;
+    fn serve(call: &mut ServiceCall<TrustServesIn>) -> Outcome {
+        call.set_value(VERDICT.with(Cell::get));
+        Outcome::Ready
+    }
+}
+
+struct Unavailable;
+impl FakeService for Unavailable {
+    type In = TrustServesIn;
+    fn serve(_: &mut ServiceCall<TrustServesIn>) -> Outcome {
+        Outcome::Failed
     }
 }
 
@@ -172,4 +190,68 @@ fn a_serving_agent_is_dialled_for_its_mirror_and_its_refresh() {
     let plane = door_over(serving_host());
     assert!(mirror_dials(&plane) >= 1, "the mirror dialled the agent");
     assert_eq!(list_dials(&plane), 1, "the refresh dialled the agent");
+}
+
+#[test]
+fn every_nonserving_trust_verdict_refuses_both_originated_requests() {
+    let fake = Box::leak(Box::new(
+        FakeHost::new()
+            .serve(host::DEST_JUDGE, Admitted)
+            .serve(host::TRUST_SERVES, Verdict)
+            .serve(conn::ESTABLISH, Dial),
+    ));
+    let plane = door_over(fake);
+    for verdict in [
+        svc::DISTRUST_UNKNOWN,
+        svc::DISTRUST_UNSIGHTED,
+        svc::DISTRUST_QUARANTINED,
+        svc::DISTRUST_NOT_APPROVED,
+        svc::DISTRUST_CHANGED,
+        svc::DISTRUST_UNKNOWN_ITEM,
+    ] {
+        VERDICT.with(|v| v.set(verdict));
+        assert_eq!(mirror_dials(&plane), 0, "mirror, distrust {verdict}");
+        assert_eq!(list_dials(&plane), 0, "refresh, distrust {verdict}");
+    }
+    VERDICT.with(|v| v.set(svc::DISTRUST_NONE));
+    assert!(
+        mirror_dials(&plane) >= 1,
+        "the same host serves the positive control"
+    );
+    assert_eq!(list_dials(&plane), 1);
+}
+
+#[test]
+fn failed_sightings_and_unavailable_trust_services_refuse_originated_requests() {
+    let plane = door_over(serving_host());
+    plane.trust.insert(
+        "planner".into(),
+        crate::card_trust::TrustStanding {
+            sighting: crate::card_trust::Sighting::Failed("the last card look failed".into()),
+            ..Default::default()
+        },
+    );
+    assert_eq!(mirror_dials(&plane), 0);
+    assert_eq!(list_dials(&plane), 0);
+
+    let failed = Box::leak(Box::new(
+        FakeHost::new()
+            .serve(host::DEST_JUDGE, Admitted)
+            .serve(host::TRUST_SERVES, Unavailable)
+            .serve(conn::ESTABLISH, Dial),
+    ));
+    let missing = Box::leak(Box::new(
+        FakeHost::new()
+            .serve(host::DEST_JUDGE, Admitted)
+            .serve(conn::ESTABLISH, Dial),
+    ));
+    for fake in [failed, missing] {
+        let plane = door_over(fake);
+        assert_eq!(mirror_dials(&plane), 0);
+        assert_eq!(list_dials(&plane), 0);
+    }
+    let mut plane = door_over(serving_host());
+    plane.services = None;
+    assert_eq!(mirror_dials(&plane), 0);
+    assert_eq!(list_dials(&plane), 0);
 }

@@ -909,3 +909,6 @@ fn a_held_attempt_asks_for_no_tick_before_its_deadline() {
     assert_eq!(drive_over(&mut host, &d, &attempting), Outcome::Ready);
     assert_eq!(next_tick_ns(&d, &attempting), start);
 }
+
+#[path = "push_delivery_custody.rs"]
+mod delivery_custody;

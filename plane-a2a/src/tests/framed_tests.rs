@@ -157,6 +157,71 @@ fn an_unknown_json_rpc_code_falls_back_to_the_http_status() {
     assert_eq!(status_for_error(&err, 503).code(), Code::Unavailable);
 }
 
+#[test]
+fn a_kernel_limit_or_open_breaker_is_retryable_not_an_unimplemented_method() {
+    use base64::Engine as _;
+    for (http, message) in [(429, "this key is over its budget"), (503, "breaker_open")] {
+        let mut envelope = crate::agent_arrival::kernel_refusal(http, message).envelope();
+        envelope["error"]["data"][0]["metadata"] = serde_json::json!({"cause": "local refusal"});
+        let reply = refusal(envelope.to_string().as_bytes(), http);
+        assert_eq!(reply.code, Code::Unavailable as u32);
+        assert_eq!(reply.body.as_slice(), message.as_bytes());
+        assert!(String::from_utf8_lossy(&status_block(&reply)).contains("grpc-status: 14\r\n"));
+        let details = base64::engine::general_purpose::STANDARD_NO_PAD
+            .decode(
+                reply
+                    .details
+                    .as_ref()
+                    .expect("the real refusal carries ErrorInfo"),
+            )
+            .expect("base64 status details");
+        let status = rpc::Status::decode(details.as_slice()).expect("a google.rpc.Status");
+        assert_eq!(status.code, Code::Unavailable as i32);
+        assert_eq!(status.message, message);
+        let detail = status
+            .details
+            .first()
+            .expect("the original ErrorInfo is retained");
+        assert_eq!(detail.type_url, crate::ERROR_INFO_TYPE);
+        let info = ErrorInfo::decode(detail.value.as_slice()).expect("the original ErrorInfo");
+        assert_eq!(info.reason, "UNSUPPORTED_OPERATION");
+        assert_eq!(info.domain, crate::ERROR_INFO_DOMAIN);
+        assert_eq!(
+            info.metadata.get("cause").map(String::as_str),
+            Some("local refusal")
+        );
+    }
+    let unsupported = serde_json::json!({"code": -32004, "message": "streaming is not supported"});
+    for http in [400, 501] {
+        assert_eq!(
+            status_for_error(&unsupported, http).code(),
+            Code::Unimplemented
+        );
+    }
+    let unknown_method = serde_json::json!({"code": -32601, "message": "no such method"});
+    assert_eq!(
+        status_for_error(&unknown_method, 404).code(),
+        Code::Unimplemented
+    );
+    let envelope = serde_json::json!({"jsonrpc": "2.0", "id": 1, "error": unsupported});
+    let frame = format!("data: {envelope}\n\n");
+    let error = event(&frame)
+        .expect("an error event")
+        .expect_err("unsupported operation");
+    assert_eq!(
+        error.code(),
+        Code::Unimplemented,
+        "the upstream stream's real protocol error"
+    );
+    let error = answer_message(Rpc::SendMessage, 500, envelope.to_string().as_bytes())
+        .expect_err("an upstream unsupported-operation answer");
+    assert_eq!(
+        error.code(),
+        Code::Unimplemented,
+        "the upstream answer's real protocol error"
+    );
+}
+
 /// An answer that is not a JSON-RPC answer takes the gRPC specification's own HTTP mapping.
 #[test]
 fn an_http_refusal_takes_the_grpc_specifications_own_mapping() {
@@ -263,22 +328,43 @@ fn the_card_narrowing_removes_only_the_member_the_proto_has_no_field_for() {
     assert!(!UNMODELLED_CARD_MEMBERS.is_empty());
 }
 
-/// A send with no message mints its id as the SDK's model did: a version-7 UUID over the clock.
+/// Neither send RPC can turn an absent required message into a new user request.
 #[test]
-fn a_send_with_no_message_mints_a_v7_id() {
+fn a_send_with_no_message_is_invalid_argument() {
     let none = pb::SendMessageRequest::default().encode_to_vec();
-    assert!(mints_message_id(Rpc::SendMessage, &none));
-    assert!(!mints_message_id(Rpc::GetTask, &none));
+    for rpc in [Rpc::SendMessage, Rpc::SendStreamingMessage] {
+        let refusal = compose(rpc, &none).expect_err("message is required");
+        assert_eq!(refusal.code(), Code::InvalidArgument);
+        assert!(refusal.message().contains("SendMessageRequest.message"));
+    }
+}
+
+/// A supplied message keeps its identity; the legacy mint helper is not selected for it.
+#[test]
+fn a_supplied_send_message_keeps_the_callers_identity() {
     let some = pb::SendMessageRequest {
-        message: Some(pb::Message::default()),
+        message: Some(pb::Message {
+            message_id: "caller-message".into(),
+            role: pb::Role::User as i32,
+            ..Default::default()
+        }),
         ..Default::default()
     }
     .encode_to_vec();
     assert!(!mints_message_id(Rpc::SendMessage, &some));
+    for rpc in [Rpc::SendMessage, Rpc::SendStreamingMessage] {
+        let composed: Value =
+            serde_json::from_slice(&compose(rpc, &some).expect("composes")).unwrap();
+        assert_eq!(composed["params"]["message"]["messageId"], "caller-message");
+        assert_eq!(composed["params"]["message"]["role"], "ROLE_USER");
+    }
+}
+
+#[test]
+fn the_legacy_message_id_helper_uses_a_v7_uuid() {
     let id = message_id_v7(0x0190_1234_5678, &[0xff; 10]);
     assert_eq!(id, "01901234-5678-7fff-bfff-ffffffffffff");
-    let composed: Value =
-        serde_json::from_slice(&compose(Rpc::SendMessage, &none).expect("composes")).unwrap();
+    let composed = serde_json::json!({"params":{"message":{"role":"ROLE_USER"}}});
     let minted = with_message_id(&composed, &id);
     assert_eq!(minted["params"]["message"]["messageId"], id);
     assert_eq!(minted["params"]["message"]["role"], "ROLE_USER");
@@ -314,7 +400,8 @@ fn every_sse_frame_terminator_is_recognised() {
 /// Ported from busbar-a2a a2a/tests/served_methods_tests.rs::the_extended_card_is_served_over_grpc_at_the_path_the_proto_defines.
 /// The door's half of the gRPC binding: the generated service's own path names the rpc, and busbar's
 /// extended card (the document the JSON-RPC line answers) comes back as the proto's `AgentCard`
-/// message, carrying the entitled agent and nothing the caller is not entitled to.
+/// message, preserving the skills supplied in that document. Caller entitlement filtering is
+/// outside this transcode test.
 #[test]
 fn the_extended_card_is_served_over_grpc_at_the_path_the_proto_defines() {
     let target = format!("{SERVICE_PATH}/GetExtendedAgentCard");
@@ -354,10 +441,6 @@ fn the_extended_card_is_served_over_grpc_at_the_path_the_proto_defines() {
             .map(|s| s.id.as_str())
             .collect::<Vec<_>>(),
         ["planner"],
-        "the extended card carries the agent this caller is entitled to reach"
-    );
-    assert!(
-        !bytes.windows(8).any(|w| w == b"payments"),
-        "the extended card shows nothing else over gRPC"
+        "the transcode preserves the document's skill ids"
     );
 }

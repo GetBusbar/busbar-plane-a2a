@@ -104,6 +104,65 @@ fn a_card_still_naming_its_backend_or_offering_nothing_servable_is_refused() {
 }
 
 #[test]
+fn backend_mentions_are_refused_in_member_names_mixed_case_and_nested_arrays() {
+    for (member, value, expected) in [
+        (
+            "description",
+            json!("ask Internal.Corp.Example directly"),
+            "$.description",
+        ),
+        (
+            "Internal.Corp.Example",
+            json!("private metadata"),
+            "$.Internal.Corp.Example (member NAME)",
+        ),
+        (
+            "x-vendor",
+            json!({"nested":[{"note":"ask INTERNAL.CORP.EXAMPLE directly"}]}),
+            "$.x-vendor.nested[0].note",
+        ),
+        (
+            "x-vendor",
+            json!({"nested":[{"Internal.Corp.Example":"metadata"}]}),
+            "$.x-vendor.nested[0].Internal.Corp.Example (member NAME)",
+        ),
+    ] {
+        let mut card = backend_card();
+        card[member] = value;
+        assert_eq!(
+            rewrite_card(
+                &card,
+                "https://internal.corp.example/a2a",
+                PUBLIC,
+                "planner"
+            ),
+            Err(ServeError::BackendLeak(vec![expected.to_string()])),
+        );
+    }
+}
+
+#[test]
+fn own_card_grpc_authority_keeps_an_explicit_nondefault_public_port() {
+    for (public, authority) in [
+        ("https://gw.example:8443", "gw.example:8443"),
+        ("http://gw.example:9100", "gw.example:9100"),
+    ] {
+        let card = self_card_document(public, Vec::new()).expect("a card");
+        for version in ["1.0", "0.3"] {
+            let interface = card["supportedInterfaces"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| {
+                    entry["protocolBinding"] == "GRPC" && entry["protocolVersion"] == version
+                })
+                .expect("the published gRPC interface");
+            assert_eq!(interface["url"], authority);
+        }
+    }
+}
+
+#[test]
 fn busbars_own_card_publishes_every_binding_at_every_version_newest_first() {
     let card = self_card_document(PUBLIC, Vec::new()).expect("a card");
     let interfaces = card["supportedInterfaces"].as_array().expect("interfaces");
@@ -793,4 +852,85 @@ fn a_v10_cards_duplicate_interfaces_are_published_once() {
         Some(1),
         "{served}"
     );
+}
+
+/// G1-4: A FRONTED v0.3 CARD ADVERTISES BUSBAR'S CREDENTIAL IN v0.3's OWN SPELLING (v0.3.0
+/// `types.ts`: an `HTTPAuthSecurityScheme` is `{type: "http", scheme, description?}`, and the
+/// requirement is `security: [{name: scopes}]`), never in v1.0's proto spelling, which a v0.3
+/// reader cannot read. Both v0.3 shapes: with and without `protocolVersion`.
+#[test]
+fn a_v03_cards_inbound_scheme_is_written_in_v03s_spelling() {
+    for card in [
+        json!({
+            "name": "Planner", "description": "plans", "protocolVersion": "0.3.0",
+            "url": "https://internal.corp.example/a2a", "preferredTransport": "JSONRPC",
+            "securitySchemes": { "vendor": { "type": "apiKey", "in": "header", "name": "k" } },
+            "security": [{ "vendor": [] }],
+            "capabilities": {}, "skills": [],
+        }),
+        json!({
+            "name": "Planner", "description": "plans",
+            "url": "https://internal.corp.example/a2a",
+            "capabilities": {}, "skills": [],
+        }),
+    ] {
+        let served = rewrite_card(
+            &card,
+            "https://internal.corp.example/a2a",
+            PUBLIC,
+            "planner",
+        )
+        .expect("served");
+        let scheme = &served["securitySchemes"][INBOUND_SCHEME_NAME];
+        assert_eq!(scheme["type"], "http", "{served}");
+        assert_eq!(scheme["scheme"], INBOUND_AUTH_SCHEME);
+        assert!(scheme["description"].is_string());
+        assert!(scheme.get("httpAuthSecurityScheme").is_none());
+        assert_eq!(served["securitySchemes"].as_object().map(Map::len), Some(1));
+        assert_eq!(served["security"], json!([{ INBOUND_SCHEME_NAME: [] }]));
+        assert!(served.get("securityRequirements").is_none(), "{served}");
+    }
+}
+
+/// G1-5: THE BACKEND AUTHORITY IS MATCHED AS A NAME, NOT AS A SUBSTRING: a word that merely
+/// contains the host (a one-label service name in prose, a longer domain, a longer address) is no
+/// mention of it; the host itself, a one-label host with its port or in a URL, still is.
+#[test]
+fn a_word_that_only_contains_the_backend_host_is_not_a_leak() {
+    let card = |backend: &str, description: &str| {
+        json!({
+            "name": "planner", "description": description,
+            "url": format!("{backend}/a2a"),
+        })
+    };
+    for (backend, description) in [
+        ("http://travel:8080", "Plans travel itineraries"),
+        ("http://travel:8080", "a travel-agent for trips"),
+        (
+            "https://example.com",
+            "see notexample.com or example.community",
+        ),
+        (
+            "http://10.0.0.1:8080",
+            "its sibling at 10.0.0.15 answers too",
+        ),
+    ] {
+        assert!(
+            rewrite_card(&card(backend, description), backend, PUBLIC, "planner").is_ok(),
+            "{backend}: {description}"
+        );
+    }
+    for (backend, description) in [
+        ("http://travel:8080", "see http://travel:8080/docs"),
+        ("http://travel:8080", "dial travel:8080 directly"),
+        ("http://travel:8080", "the docs are at http://travel/docs"),
+        ("https://example.com", "ask example.com directly."),
+        ("http://10.0.0.1:8080", "or 10.0.0.1"),
+    ] {
+        assert_eq!(
+            rewrite_card(&card(backend, description), backend, PUBLIC, "planner"),
+            Err(ServeError::BackendLeak(vec!["$.description".to_string()])),
+            "{backend}: {description}"
+        );
+    }
 }

@@ -279,3 +279,96 @@ fn http_json_client_issues_list_task_push_notification_configs() {
     );
     assert!(r.body.is_empty());
 }
+
+#[test]
+fn v03_jsonrpc_mirrors_use_the_declared_versions_methods_and_params() {
+    for (method, wire_method, expected) in [
+        (
+            method::CREATE_PUSH_CONFIG,
+            "tasks/pushNotificationConfig/set",
+            json!({
+                "taskId":BACKEND_TASK, "pushNotificationConfig":{
+                    "id":config_id(BACKEND_TASK), "url":OURS,
+                    "authentication":{"schemes":["Bearer"],"credentials":"busbar-t.sig"},
+                },
+            }),
+        ),
+        (
+            method::GET_PUSH_CONFIG,
+            "tasks/pushNotificationConfig/get",
+            json!({"id":BACKEND_TASK,"pushNotificationConfigId":config_id(BACKEND_TASK)}),
+        ),
+        (
+            method::LIST_PUSH_CONFIGS,
+            "tasks/pushNotificationConfig/list",
+            json!({"id":BACKEND_TASK}),
+        ),
+        (
+            method::DELETE_PUSH_CONFIG,
+            "tasks/pushNotificationConfig/delete",
+            json!({"id":BACKEND_TASK,"pushNotificationConfigId":config_id(BACKEND_TASK)}),
+        ),
+    ] {
+        let params = params_for(method, BACKEND_TASK, &create());
+        let request = request(
+            Binding::JsonRpc,
+            "https://agent.example/pinned?key=K",
+            "0.3",
+            method,
+            &params,
+        )
+        .expect("the mirror frames");
+        assert_eq!(request.method, b"POST");
+        assert_eq!(request.target, b"/pinned?key=K");
+        assert_eq!(
+            request
+                .fields
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case(b"a2a-version"))
+                .map(|(_, value)| value.as_slice()),
+            Some(&b"0.3"[..])
+        );
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+        assert_eq!(body["id"], ORIGINATED_RPC_ID);
+        assert_eq!(body["method"], wire_method);
+        assert_eq!(body["params"], expected);
+    }
+}
+
+#[test]
+fn an_originated_transport_failure_is_logged_without_the_connectors_secret_text() {
+    use busbar_contract::abi::sdk::conn::ConnFailure;
+    let capture = busbar_test_kit::warn_capture::WarnCapture::default();
+    tracing::subscriber::with_default(capture.clone(), || {
+        assert_eq!(
+            landed(
+                Binding::JsonRpc,
+                "planner",
+                method::CREATE_PUSH_CONFIG,
+                Err(ConnFailure::Failed(
+                    "https://user:TransportSecretCanary@agent.example/path?token=BodyCanary".into()
+                ))
+            ),
+            Ok(None)
+        );
+    });
+    let messages = capture.messages();
+    assert_eq!(messages.len(), 1, "{messages:?}");
+    let line = &messages[0];
+    for context in [
+        "planner",
+        method::CREATE_PUSH_CONFIG,
+        "transport",
+        "connector",
+    ] {
+        assert!(line.contains(context), "{line:?}");
+    }
+    for secret in [
+        "TransportSecretCanary",
+        "BodyCanary",
+        "agent.example",
+        "https://",
+    ] {
+        assert!(!line.contains(secret), "{line:?}");
+    }
+}

@@ -25,14 +25,34 @@ fn a_card_held_under_a_generation_is_read_under_it_only() {
 }
 
 #[test]
-fn a_newer_hold_replaces_the_card_and_retire_drops_its_generation() {
+fn a_newer_hold_preserves_live_cards_and_retire_drops_only_its_generation() {
     let cards = Cards::default();
     cards.hold("planner", 1, json!({ "v": 1 }));
     cards.hold("planner", 2, json!({ "v": 2 }));
-    assert_eq!(cards.at("planner", 1), None);
+    assert_eq!(cards.at("planner", 1).as_deref(), Some(&json!({ "v": 1 })));
     assert_eq!(cards.at("planner", 2).as_deref(), Some(&json!({ "v": 2 })));
     cards.retire(1);
     assert!(cards.at("planner", 2).is_some());
     cards.retire(2);
     assert_eq!(cards.at("planner", 2), None);
+}
+
+#[test]
+fn more_than_four_live_generations_keep_their_cards_until_each_retires() {
+    let cards = Cards::default();
+    for generation in 1..=9 {
+        cards.hold("planner", generation, json!({ "generation": generation }));
+    }
+    cards.hold("planner", 1, json!({ "generation": 1, "late": true }));
+    for generation in 1..=9 {
+        assert_eq!(
+            cards.at("planner", generation).unwrap()["generation"],
+            generation
+        );
+    }
+    cards.retire(5);
+    assert!(cards.at("planner", 5).is_none());
+    for generation in [1, 2, 3, 4, 6, 7, 8, 9] {
+        assert!(cards.at("planner", generation).is_some());
+    }
 }

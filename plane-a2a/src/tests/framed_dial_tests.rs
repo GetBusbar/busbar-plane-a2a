@@ -10,6 +10,23 @@ use super::*;
 use crate::proto::pb;
 use serde_json::json;
 
+#[test]
+fn outbound_sends_refuse_an_absent_or_null_message() {
+    for rpc in [Rpc::SendMessage, Rpc::SendStreamingMessage] {
+        for params in [json!({}), json!({"message": null})] {
+            assert!(request_message(rpc, &params).is_err());
+        }
+        let params = json!({"message": {
+            "messageId": "caller-message",
+            "role": "ROLE_USER",
+            "parts": [{"text": "the supplied message"}]
+        }});
+        let bytes = request_message(rpc, &params).expect("a supplied message is carried");
+        let request = pb::SendMessageRequest::decode(bytes.as_slice()).unwrap();
+        assert_eq!(request.message.unwrap().message_id, "caller-message");
+    }
+}
+
 /// Both A2A dialects name the same rpc; a method the service does not have names none.
 #[test]
 fn a_method_in_either_dialect_names_its_rpc() {
@@ -30,6 +47,11 @@ fn a_method_in_either_dialect_names_its_rpc() {
         Some(Rpc::GetExtendedAgentCard)
     );
     assert_eq!(Rpc::of_method("vendor/Thing"), None);
+    assert_eq!(
+        Rpc::of_target("/lf.a2a.v1.A2AService/GetTask"),
+        Some(Rpc::GetTask),
+    );
+    assert_eq!(Rpc::of_target("/a2a.v1.A2AService/GetTask"), None);
     assert_eq!(
         Rpc::GetTask.target(),
         "/lf.a2a.v1.A2AService/GetTask",

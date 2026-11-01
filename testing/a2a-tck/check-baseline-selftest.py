@@ -238,6 +238,11 @@ def main():
     #     Without this, re-recording during a broken run makes every run after it vacuous.
     tiny = {"REQ-000": "PASS"}
     case("implausible_baseline_is_refused", report(tiny), baseline(tiny), 2, "implausible")
+    case("baseline_discovery_floor_is_refused_independently",
+         report(GOOD), baseline(GOOD, floor_total=1, floor_executed=90), 2, "implausible")
+    case("report_only_refuses_too_few_requirements_with_enough_execution",
+         report({"REQ-%03d" % i: "PASS" for i in range(90)}), None, 2,
+         "measured next to nothing", mode=("--report-only",), pass_baseline=False)
 
     # --- RED: a baseline that discovered enough but EXECUTED almost nothing is equally refused.
     case("baseline_that_executed_nothing_is_refused",

@@ -189,6 +189,7 @@ const ERROR_INFO_DOMAIN: &str = "a2a-protocol.org";
 /// because the crate's only public item is the door.
 #[cfg(test)]
 mod tests {
+    pub(crate) mod raw_custody_probe;
     /// The crate's one `#[global_allocator]`, every allocation gate's count: busbar-test-kit's
     /// `alloc_counter` (a dev-dependency), so this crate holds no `unsafe`.
     #[global_allocator]
@@ -197,7 +198,9 @@ mod tests {
 
     mod alloc_gate;
     pub(crate) mod capture;
+    mod codec_custody_cases;
     mod conformance;
     mod door_facts;
     mod purity;
+    pub(crate) mod request_custody_probe;
 }

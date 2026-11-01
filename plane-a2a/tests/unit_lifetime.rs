@@ -28,6 +28,18 @@
 #[allow(dead_code)] // the both-ways script's line and need facts are read there, not here
 mod door_facts;
 
+#[path = "support/task_door_lifecycle_cases.rs"]
+mod task_door_lifecycle_cases;
+
+#[path = "support/unreadable_header_cases.rs"]
+mod unreadable_header_cases;
+
+#[path = "support/local_admission_cases.rs"]
+mod local_admission_cases;
+
+#[path = "support/raw_custody_cases.rs"]
+mod raw_custody_cases;
+
 use std::collections::HashMap;
 use std::os::raw::c_void;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -93,6 +105,9 @@ static MONO: AtomicU64 = AtomicU64::new(1_000_000_000);
 extern "C" fn clock_now(_: HostCtx, input: *const c_void, out: *mut ServiceOut) -> RawOutcome {
     // SAFETY: the SDK hands a `ClockNowIn` whose reading slot it owns.
     let i = unsafe { input.cast::<ClockNowIn>().read() };
+    if verification_custody_cases::clock_refuses(i.head.handle.ticket) {
+        return answer(out, Outcome::Failed, 0, 0);
+    }
     let mono = MONO.fetch_add(1_000_000_000, Ordering::SeqCst);
     // SAFETY: as above.
     unsafe {
@@ -129,6 +144,8 @@ extern "C" fn entitled(_: HostCtx, input: *const c_void, out: *mut ServiceOut) -
 }
 
 extern "C" fn serves(_: HostCtx, _: *const c_void, out: *mut ServiceOut) -> RawOutcome {
+    card_generation_custody_cases::refresh_during_admission();
+    verification_custody_cases::during_verdict();
     answer(out, Outcome::Ready, DISTRUST_NONE, 0)
 }
 
@@ -138,16 +155,30 @@ extern "C" fn verified(_: HostCtx, _: *const c_void, out: *mut ServiceOut) -> Ra
 }
 
 /// `trust.sight`: the kernel records the sighting.
-extern "C" fn sighted(_: HostCtx, _: *const c_void, out: *mut ServiceOut) -> RawOutcome {
+extern "C" fn sighted(_: HostCtx, input: *const c_void, out: *mut ServiceOut) -> RawOutcome {
+    handed(input);
+    if verification_custody_cases::pend_sighting(input) {
+        return answer(out, Outcome::Pending, 0, 0);
+    }
+    if card_generation_custody_cases::pend_sighting() {
+        return answer(out, Outcome::Pending, 0, 0);
+    }
+    if card_generation_custody_cases::fail_sighting() {
+        return answer(out, Outcome::Failed, 0, 0);
+    }
     answer(out, Outcome::Ready, TRUST_NEW, 0)
 }
 
 /// `trust.decide`: the operator's approval is the kernel's, and the key serves.
 extern "C" fn decided(_: HostCtx, _: *const c_void, out: *mut ServiceOut) -> RawOutcome {
+    card_generation_custody_cases::note_decision();
     answer(out, Outcome::Ready, TRUST_DECIDED_SERVING, 0)
 }
 
 extern "C" fn judged(_: HostCtx, input: *const c_void, out: *mut ServiceOut) -> RawOutcome {
+    if card_generation_custody_cases::pend_judgement() {
+        return answer(out, Outcome::Pending, 0, 0);
+    }
     if let Some(result) = relay_within_cases::scripted_judgement(input, out) {
         return result;
     }
@@ -433,7 +464,7 @@ static TABLES: Tables = Tables(HostTables {
     size: std::mem::size_of::<HostTables>() as u32,
     _reserved: 0,
     ctx: HostCtx::NONE,
-    wake: None,
+    wake: Some(verification_custody_cases::wake),
     conns: &CONN_SLOTS,
     io: std::ptr::null(),
     services: &HOST_SLOTS,
@@ -865,12 +896,24 @@ impl Door {
         fields: &[Field],
         body: &[u8],
     ) -> (Outcome, u32, String, u32) {
+        self.verb_audited_flags(route, target, fields, body, 0)
+    }
+
+    fn verb_audited_flags(
+        &self,
+        route: u32,
+        target: &str,
+        fields: &[Field],
+        body: &[u8],
+        flags: u32,
+    ) -> (Outcome, u32, String, u32) {
         let mut reply = vec![0_u8; 1 << 14];
         let mut out_fields = [z::<OutField>(); 8];
         let mut arena = vec![0_u8; 1 << 14];
         let mut records = [z::<RecordWrite>(); 64];
         let mut i: ServeIn = z();
         i.head = head::<ServeIn>(slot::SERVE, ticket(1 << 30));
+        i.head.flags = flags;
         i.route = route;
         i.target = str_of(target.as_bytes());
         (i.fields, i.fields_len) = (fields.as_ptr(), fields.len());
@@ -1052,6 +1095,12 @@ impl Door {
 
 #[path = "support/relay_within_cases.rs"]
 mod relay_within_cases;
+
+#[path = "support/card_generation_custody_cases.rs"]
+mod card_generation_custody_cases;
+
+#[path = "support/verification_custody_cases.rs"]
+mod verification_custody_cases;
 
 // ── (A2) a finished unit holds no place ─────────────────────────────────────────────────────────
 
@@ -1869,3 +1918,12 @@ fn a_malformed_or_unknown_approval_is_audited_rejected() {
         assert_eq!(audit, AUDIT_REJECTED, "{case} is audited rejected");
     }
 }
+
+#[path = "support/push_lifecycle_cases.rs"]
+mod push_lifecycle_cases;
+
+#[path = "support/reported_fixture_cases.rs"]
+mod reported_fixture_cases;
+
+#[path = "support/card_admission_audit_cases.rs"]
+mod card_admission_audit_cases;

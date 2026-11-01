@@ -75,7 +75,7 @@ fn a_send_posts_its_params_as_the_body_under_the_operators_path() {
     )
     .unwrap();
     assert_eq!(f.verb, "POST");
-    assert_eq!(f.target, "/a2a/v1/message:send");
+    assert_eq!(f.target, "/a2a/v1/message:send?tenant=t1");
     assert!(f.has_body);
     assert_eq!(f.body, br#"{"message":{"messageId":"m"}}"#);
 }
@@ -89,11 +89,11 @@ fn a_read_takes_its_id_into_the_path_and_its_options_onto_the_query() {
     )
     .unwrap();
     assert_eq!(f.verb, "GET");
-    assert_eq!(f.target, "/a2a/v1/tasks/t%2F1?historyLength=5");
+    assert_eq!(f.target, "/a2a/v1/tasks/t%2F1?tenant=t1&historyLength=5");
     assert!(!f.has_body);
     assert!(f.body.is_empty());
     let f = compose(BASE, "GetTask", &json!({ "task_id": "t1" })).unwrap();
-    assert_eq!(f.target, "/a2a/v1/tasks/t1");
+    assert_eq!(f.target, "/a2a/v1/tasks/t1?tenant=t1");
 }
 
 #[test]
@@ -105,7 +105,10 @@ fn a_push_config_route_keeps_the_config_id_apart_from_the_task() {
     )
     .unwrap();
     assert_eq!(f.verb, "DELETE");
-    assert_eq!(f.target, "/a2a/v1/tasks/t1/pushNotificationConfigs/c1");
+    assert_eq!(
+        f.target,
+        "/a2a/v1/tasks/t1/pushNotificationConfigs/c1?tenant=t1"
+    );
 }
 
 #[test]
@@ -114,6 +117,34 @@ fn what_the_binding_cannot_carry_is_refused_not_dropped() {
     assert!(compose(BASE, "GetTask", &json!({ "id": "t", "extra": 1 })).is_err());
     assert!(compose(BASE, "vendor/Thing", &json!({})).is_err());
     assert!(compose(BASE, "GetTask", &json!({ "id": "" })).is_err());
+}
+
+/// Legacy metadata has no field in the vendored v1.0 GET request messages. Do not invent a
+/// query encoding or silently discard it while accepting the legacy operation spelling.
+#[test]
+fn legacy_get_metadata_is_explicitly_unrepresentable_on_the_pinned_http_binding() {
+    for method in [
+        "tasks/get",
+        "GetTask",
+        "tasks/resubscribe",
+        "SubscribeToTask",
+    ] {
+        for metadata in [
+            json!({}),
+            json!({"private-marker": "must-not-leak"}),
+            Value::Null,
+        ] {
+            let error = compose(BASE, method, &json!({"id": "t1", "metadata": metadata}))
+                .expect_err("the pinned GET request has no metadata field");
+            assert!(error.contains("metadata"));
+            assert!(error.contains("GET"));
+            assert!(!error.contains("must-not-leak"));
+        }
+        let request = compose(BASE, method, &json!({"task_id": "t1"})).unwrap();
+        assert_eq!(request.verb, "GET");
+        assert!(request.body.is_empty());
+        assert!(request.target.ends_with("?tenant=t1"));
+    }
 }
 
 #[test]
@@ -274,4 +305,83 @@ fn a_dot_segment_id_is_refused_rather_than_composed() {
     }
     let f = compose(BASE, "GetTask", &json!({ "id": "...", "historyLength": 1 })).unwrap();
     assert!(f.target.contains("/tasks/..."), "{}", f.target);
+}
+
+#[test]
+fn a_v03_primary_binding_is_not_replaced_by_another_endpoints_binding() {
+    let card = json!({
+        "url": "https://agent.example/rest", "preferredTransport": "HTTP+JSON",
+        "additionalInterfaces": [{"url":"https://agent.example/rpc", "transport":"JSONRPC"}],
+    });
+    assert_eq!(binding_of(Some(&card)), BINDING_HTTP_JSON);
+    let framed = compose(
+        "https://operator.example/pinned?key=K",
+        "GetTask",
+        &json!({"id":"t"}),
+    )
+    .unwrap();
+    assert_eq!(framed.target, "/pinned/tasks/t?key=K");
+    let mut unsupported = card.clone();
+    unsupported["preferredTransport"] = json!("SOAP");
+    assert_eq!(
+        binding_of(Some(&unsupported)),
+        "SOAP",
+        "an additional JSONRPC endpoint cannot relabel an unsupported primary"
+    );
+}
+
+#[test]
+fn a_v03_matching_additional_interface_can_supply_the_primary_endpoints_binding() {
+    let card = json!({
+        "url":"https://agent.example/base/rpc", "preferredTransport":"SOAP",
+        "additionalInterfaces":[
+            {"url":"https://other.example/rpc", "transport":"JSONRPC"},
+            {"url":"rpc", "transport":"HTTP+JSON"},
+        ],
+    });
+    assert_eq!(binding_of(Some(&card)), BINDING_HTTP_JSON);
+    assert_eq!(
+        binding_of(Some(&json!({"url":"https://agent.example"}))),
+        BINDING_JSONRPC
+    );
+}
+
+#[test]
+fn named_tenants_are_path_segments_and_not_request_body_members() {
+    let read = compose(AGENT, "GetTask", &json!({"id":"t","tenant":"acme"})).unwrap();
+    assert_eq!(read.target, "/a2a/acme/tasks/t");
+    let send = compose(
+        AGENT,
+        "SendMessage",
+        &json!({"tenant":"acme/x","message":{}}),
+    )
+    .unwrap();
+    assert_eq!(send.target, "/a2a/acme%2Fx/message:send");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&send.body).unwrap(),
+        json!({"message":{}})
+    );
+    assert_eq!(
+        compose(AGENT, "GetTask", &json!({"id":"t","tenant":""}))
+            .unwrap()
+            .target,
+        "/a2a/tasks/t"
+    );
+    for tenant in [".", ".."] {
+        assert!(compose(AGENT, "GetTask", &json!({"id":"t","tenant":tenant})).is_err());
+    }
+}
+
+#[test]
+fn the_operator_query_precedes_the_operation_query_members() {
+    let framed = compose(
+        "https://agent.example/root?code=K&api-version=1",
+        "GetTask",
+        &json!({"id":"t","historyLength":2}),
+    )
+    .unwrap();
+    assert_eq!(
+        framed.target,
+        "/root/tasks/t?code=K&api-version=1&historyLength=2"
+    );
 }

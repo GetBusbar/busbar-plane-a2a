@@ -47,6 +47,80 @@ fn refused(d: AgentDisposition) -> AgentRefusal {
 const SEND: &[u8] = br#"{"jsonrpc":"2.0","id":7,"method":"SendMessage","params":{}}"#;
 
 #[test]
+fn malformed_skill_and_output_mode_fields_are_invalid_params_before_routing() {
+    for method in [
+        "message/send",
+        "SendMessage",
+        "message/stream",
+        "SendStreamingMessage",
+    ] {
+        for params in [
+            json!({"metadata": {"skill": 7}}),
+            json!({"metadata": {"skill": ["plan"]}}),
+            json!({"configuration": {"acceptedOutputModes": "text/plain"}}),
+            json!({"configuration": {"acceptedOutputModes": [1, null]}}),
+            json!({"configuration": {"acceptedOutputModes": ["text/plain", false]}}),
+            json!({"configuration": {"accepted_output_modes": ["text/plain", null]}}),
+        ] {
+            let envelope =
+                json!({"jsonrpc":"2.0", "id":"request-7", "method":method, "params":params});
+            let bytes = serde_json::to_vec(&envelope).unwrap();
+            let (disposition, read) = decide_and_read(&bytes, head(None, None));
+            let refusal = refused(disposition);
+            assert_eq!(
+                (refusal.status, refusal.code),
+                (400, CODE_INVALID_PARAMS),
+                "{envelope}"
+            );
+            assert_eq!(refusal.id, Some(json!("request-7")));
+            assert_eq!(read, Some(envelope.clone()));
+            assert!(
+                refusal.message.starts_with("params."),
+                "{}",
+                refusal.message
+            );
+            assert!(!refusal.message.contains("request-7"));
+        }
+    }
+}
+
+#[test]
+fn absent_null_and_well_typed_shape_fields_keep_the_existing_request_path() {
+    for params in [
+        json!({}),
+        json!({"metadata": {"skill": null}, "configuration": {"acceptedOutputModes": null}}),
+        json!({"metadata": {"skill": "plan"}, "configuration": {"acceptedOutputModes": []}}),
+        json!({"metadata": {"skill": "plan"}, "configuration": {"acceptedOutputModes": ["text/plain"]}}),
+        json!({"configuration": {"accepted_output_modes": ["application/json"]}}),
+    ] {
+        let envelope = json!({"jsonrpc":"2.0", "id":7, "method":"SendMessage", "params":params});
+        let bytes = serde_json::to_vec(&envelope).unwrap();
+        assert!(
+            matches!(
+                decide_arrival(&bytes, head(None, None)),
+                AgentDisposition::Request { .. }
+            ),
+            "{envelope}"
+        );
+    }
+}
+
+#[test]
+fn shape_validation_preserves_notifications_and_generic_namespace_requests() {
+    let params = json!({"metadata":{"skill":7},"configuration":{"acceptedOutputModes":[false]}});
+    let generic = json!({"jsonrpc":"2.0","id":"opaque","method":"vendor/Thing","params":params});
+    let (disposition, read) =
+        decide_and_read(&serde_json::to_vec(&generic).unwrap(), head(None, None));
+    assert!(matches!(disposition, AgentDisposition::Unlisted { .. }));
+    assert_eq!(read, Some(generic));
+    let notice = json!({"jsonrpc":"2.0","method":"SendMessage","params":params});
+    assert!(matches!(
+        decide_arrival(&serde_json::to_vec(&notice).unwrap(), head(None, None)),
+        AgentDisposition::Notice { .. }
+    ));
+}
+
+#[test]
 fn the_media_type_is_judged_before_the_body_and_the_version() {
     // A wrong media type over a body that is not JSON and an unspoken version: the header is the
     // thing to fix, so the header is what is said.
@@ -549,7 +623,7 @@ fn a_request_method_with_no_id_is_a_notification_and_gets_no_response_body() {
 
 /// A tripped agent rejects a fresh submission on each line with 503 and `-32004`, naming the agent
 /// and the seconds to wait, before any dial. The JSON-RPC line answers the error envelope, the
-/// HTTP+JSON line the AIP-193 document, and the gRPC line the status the framed refusal maps 503 to.
+/// HTTP+JSON line the AIP-193 document, and the gRPC line retryable UNAVAILABLE.
 /// PARTIAL PORT: predev also answered a `rejected` task with an id to poll; HEAD refuses before any
 /// task row exists, so that half is dropped. The `Retry-After` field is asserted in the root cell
 /// `a_tripped_agent_refuses_a_fresh_submission_with_503_and_retry_after`.
@@ -581,8 +655,11 @@ fn a_tripped_agent_rejects_fresh_submissions_on_every_binding() {
     let framed = render(Dialect::Framed, &refusal, true);
     assert_eq!(framed.status, 503);
     let reply = crate::framed::refusal(&framed.body, framed.status);
-    assert_eq!(reply.code, crate::framed::refusal(&rpc.body, 503).code);
+    assert_eq!(reply.code, crate::framed::Code::Unavailable as u32);
     assert!(String::from_utf8_lossy(&reply.body).contains("breaker_open"));
+    assert!(String::from_utf8_lossy(&reply.body).contains("Retry after 30s"));
+    let trailers = crate::framed::status_block(&reply);
+    assert!(String::from_utf8_lossy(&trailers).contains("grpc-status: 14\r\n"));
 }
 
 /// P-ITEM: REFUSAL-REASON COLLAPSE (spec DONE item 2, "All P-item behaviours match 1.5.5"; drive

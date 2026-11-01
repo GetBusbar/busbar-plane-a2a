@@ -123,39 +123,18 @@ fn the_two_vocabularies_agree_slot_for_slot() {
     }
 }
 
-/// Every method the codec's own local-verb table names is one this plane carries.
-///
-/// The table itself, iterated. This SCRAPED it out of the server half's source once — an
-/// `include_str!` over `../../busbar-a2a/src/a2a/local.rs`, then a hand-rolled scan for quoted
-/// pieces that look like a method name — which coupled this crate to a sibling its manifest does not
-/// name, so the plane could be neither built nor deleted on its own. The table is the codec's now,
-/// and the server half's `verb_of` is pinned against it in the crate that owns the match. A method
-/// the codec answers and this plane does not carry would arrive here as an unsupported operation.
+/// Accepted methods handled locally retain their declared class and caller correlation at arrival.
 #[test]
-fn every_local_verb_of_the_codec_is_carried() {
-    let mut seen = 0usize;
-    for method in [
-        "ListTasks",
-        "tasks/list",
-        "CreateTaskPushNotificationConfig",
-        "tasks/pushNotificationConfig/set",
-        "GetTaskPushNotificationConfig",
-        "tasks/pushNotificationConfig/get",
-        "ListTaskPushNotificationConfigs",
-        "tasks/pushNotificationConfig/list",
-        "DeleteTaskPushNotificationConfig",
-        "tasks/pushNotificationConfig/delete",
-        "SubscribeToTask",
-        "tasks/resubscribe",
-    ] {
-        assert!(
-            decode(&request("1", method)).is_ok(),
-            "the codec answers {method} and this plane does not carry it"
-        );
-        seen += 1;
+fn accepted_local_methods_keep_their_class_and_correlation() {
+    let local: Vec<_> = ops::METHODS
+        .iter()
+        .filter(|row| crate::local::verb_of(row.method).is_some())
+        .collect();
+    assert!(!local.is_empty(), "no accepted local method was exercised");
+    for expected in local {
+        let (actual, correlation) = decode(&request("1", expected.method))
+            .unwrap_or_else(|e| panic!("{} did not decode: {e}", expected.method));
+        assert_eq!(actual, *expected);
+        assert_eq!(correlation, 1, "{} lost its identifier", expected.method);
     }
-    assert!(
-        seen >= 11,
-        "only {seen} verbs were read out of the codec's table"
-    );
 }

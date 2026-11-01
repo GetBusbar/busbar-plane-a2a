@@ -36,6 +36,9 @@ use busbar_kernel::{
 #[allow(dead_code)]
 mod root_facts;
 
+mod piece_pending_observer;
+mod reported_observations;
+
 // THE ROOT, THROUGH ITS DOOR CELLS' RIG ALONE (`root::serve::door_rig`): the one surface these
 // cells may reach the composition root through, so a root refactor keeps this file compiling.
 use super::door_rig as rig;
@@ -78,7 +81,9 @@ fn linked_door() -> Option<DoorFn> {
 
 /// The agent door, which a cell's `Served` needs (see [`linked_door`]).
 fn door() -> DoorFn {
-    linked_door().expect("a linked plane door owns the agents section")
+    piece_pending_observer::select(
+        linked_door().expect("a linked plane door owns the agents section"),
+    )
 }
 
 /// THIS PLANE'S CAPABILITY-EQUALITY COLUMNS (`qa/capability-equality.json`): the cells its root leg
@@ -196,6 +201,7 @@ struct Served {
     /// The table the kernel's egress walk reached the far ends through, every open it made on it
     /// recorded ([`Riding`]).
     riding: Arc<Riding>,
+    observed_destinations: Arc<reported_observations::Destinations>,
 }
 
 /// THE CELL'S STORE, REFUSING ON CUE (predev's `RefuseOneTaskRow`, `local_tests.rs:1300-1356`):
@@ -771,7 +777,10 @@ fn served_core(
     };
     // The generation's engine host the hook stage reads per unit, set once the App is built.
     let live: Arc<std::sync::OnceLock<Arc<busbar_kernel::state::App>>> = Arc::default();
-    let judge = rig::destination_guard(&destinations).expect("the guard");
+    let observed_destinations = Arc::new(reported_observations::Destinations::new(
+        rig::destination_guard(&destinations).expect("the guard"),
+    ));
+    let judge: Arc<dyn busbar_kernel::host_services::DestJudge> = observed_destinations.clone();
     // The door's own requests (a card fetch, a mirrored push config) are made on a dispatcher
     // worker, off any runtime: their sockets register on the process's reactor, which the boot
     // path installs (`root::connector::boot`) and this cell installs the same way.
@@ -990,6 +999,7 @@ fn served_core(
         routes,
         refuse,
         riding,
+        observed_destinations,
     }
 }
 
@@ -1213,10 +1223,17 @@ async fn far_end_over(
                 } else {
                     "content-type: application/json\r\n"
                 };
+                let length = if fields
+                    .iter()
+                    .any(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                {
+                    String::new()
+                } else {
+                    format!("content-length: {}\r\n", answer.len())
+                };
                 let reply = format!(
-                    "HTTP/1.1 {status} X\r\n{json}{extra}content-length: {}\r\n\
-                     connection: close\r\n\r\n{answer}",
-                    answer.len()
+                    "HTTP/1.1 {status} X\r\n{json}{extra}{length}\
+                     connection: close\r\n\r\n{answer}"
                 );
                 let _ = socket.write_all(reply.as_bytes()).await;
                 let _ = socket.shutdown().await;
@@ -1372,7 +1389,7 @@ async fn a_relayed_agent_unit_is_audited_on_the_chain_and_posts_one_line_once() 
             "the row is chained to the one before it"
         );
     }
-    let ours = agent_counts(&s, "auditor");
+    let ours = caller_counts(&s);
     assert_eq!(ours.len(), 1, "one record for the unit: {ours:?}");
     assert_eq!(s.post.open_units(), 0, "the unit's facts closed at its end");
     assert_eq!(admitted(&s), 1, "one admitted request");
@@ -1700,8 +1717,8 @@ struct Counted {
 
 /// Every unit the caller ran, oldest first, as its one audit record carries it: the node keeps no
 /// money line (busbar's money design, the section on what a node keeps); a unit's counts are the
-/// governance ledger's, and its record names them. Each cell runs one agent, `_agent`.
-fn agent_counts(s: &Served, _agent: &str) -> Vec<Counted> {
+/// governance ledger's, and its record names them. These are caller totals across all agents.
+fn caller_counts(s: &Served) -> Vec<Counted> {
     let caller = busbar_kernel_audit::Subject::PrincipalId(s.key.id.clone());
     s.book
         .lock()
@@ -1745,7 +1762,7 @@ async fn an_agent_hop_ledgers_the_bodies_it_moved_and_its_fee_unit_once() {
     let heard = agent.heard.recv().await.expect("the far agent was dialled");
     let sent = heard.split_once("\r\n\r\n").map_or(0, |(_, b)| b.len());
     assert!(sent > 0, "the hop carried a body: {heard}");
-    let lines = agent_counts(&s, "planner");
+    let lines = caller_counts(&s);
     assert_eq!(lines.len(), 1, "one line for the unit: {lines:?}");
     assert_eq!(
         counted(&lines[0], surface("bytes_class")),
@@ -1781,7 +1798,7 @@ async fn an_agent_hop_refused_before_the_socket_counts_no_bytes_and_keeps_no_fee
         }
     }
     assert!(tripped, "the breaker opened within 32 failing calls");
-    let left = agent_counts(&s, "planner");
+    let left = caller_counts(&s);
     assert!(!left.is_empty(), "the hops that left were ledgered");
     let dialled: Vec<_> = left
         .iter()
@@ -1806,7 +1823,12 @@ async fn an_agent_hop_refused_before_the_socket_counts_no_bytes_and_keeps_no_fee
     )
     .await;
     assert!(body.contains("breaker_open"), "fast-failed: {body}");
-    let after = agent_counts(&s, "planner");
+    let after = caller_counts(&s);
+    assert_eq!(
+        after.len(),
+        before + 1,
+        "the refused unit has its own audit record: {after:?}"
+    );
     for c in after.iter().skip(before) {
         assert_eq!(
             counted(c, surface("bytes_class")),
@@ -2486,6 +2508,21 @@ impl Agent {
         fields: Vec<(&'static str, String)>,
         tls: Option<tokio_rustls::TlsAcceptor>,
     ) -> Self {
+        Self::start_replying(
+            Arc::new(move |request| FarReply {
+                fields: fields.clone(),
+                ..FarReply::of(status_of(request), answer_of(request))
+            }),
+            tls,
+        )
+        .await
+    }
+
+    /// One complete status/body decision per relayed request, excluding card fetches.
+    async fn start_replying(
+        reply_of: Arc<dyn Fn(&str) -> FarReply + Send + Sync>,
+        tls: Option<tokio_rustls::TlsAcceptor>,
+    ) -> Self {
         use std::sync::atomic::Ordering;
         let issuer = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
         let card = Arc::new(std::sync::Mutex::new(serde_json::Value::Null));
@@ -2539,10 +2576,7 @@ impl Agent {
                         ..FarReply::of(200, signed(&card, &key).to_string())
                     });
                 }
-                Some(FarReply {
-                    fields: fields.clone(),
-                    ..FarReply::of(status_of(request), answer_of(request))
-                })
+                Some(reply_of(request))
             }),
             tls,
         )
@@ -3147,9 +3181,10 @@ async fn a_card_fetch_redirected_at_cloud_metadata_is_refused_at_the_hop_that_na
     let instance = "serve-agent-door-card-redirect-metadata";
     let agent = Agent::start(200, ANSWER).await;
     let s = served(instance, &agent.entry("planner", "1h"), false, None);
-    for (mode, words) in [
+    for (mode, host, words) in [
         (
             3,
+            "169.254.169.254",
             "SSRF guard refused the agent card fetch: host `169.254.169.254` resolved to the \
              internal address 169.254.169.254; set this registration's `allow_private: true` \
              if reaching it is deliberate. A cloud-metadata address is refused whatever that \
@@ -3157,15 +3192,36 @@ async fn a_card_fetch_redirected_at_cloud_metadata_is_refused_at_the_hop_that_na
         ),
         (
             4,
+            "metadata.google.internal",
             "SSRF guard refused the agent card fetch: host `metadata.google.internal` is a \
              cloud-metadata name",
         ),
     ] {
         agent.redirect.store(mode, Ordering::SeqCst);
+        let before = s.observed_destinations.decisions().len();
         let (status, view) = admin(&s, "/agents/planner/connect", "").await;
         assert_eq!(status, StatusCode::OK, "{view}");
         assert_eq!(view["state"], "error", "mode {mode}: {view}");
         assert_eq!(view["failure"], words, "mode {mode}: {view}");
+        let decisions = s.observed_destinations.decisions();
+        let redirects: Vec<_> = decisions[before..]
+            .iter()
+            .filter(|(target, _)| target.contains(host))
+            .collect();
+        assert!(
+            !redirects.is_empty(),
+            "the redirect target reached the real guard: {decisions:?}"
+        );
+        assert!(
+            redirects.iter().all(|(_, admitted)| !admitted),
+            "the actual redirect destination was never admitted: {redirects:?}"
+        );
+        assert!(
+            decisions[before..]
+                .iter()
+                .any(|(target, admitted)| target.contains("127.0.0.1") && *admitted),
+            "the origin was admitted before its redirect was refused: {decisions:?}"
+        );
     }
     assert_eq!(agent.fetches(), 0, "the card was never obtained");
 }
@@ -3193,7 +3249,7 @@ async fn every_hop_of_a_legal_chain_is_followed_to_the_card() {
 /// THE CHECK ORDER, as 1.5.5's admission kept it: the caller's grant, then the agent's trust,
 /// then its card's fit. A request naming a skill the card does not declare is refused as
 /// not-serving (`403`, the kernel's trust refusal) while the agent is unapproved, and by the
-/// catalogue (`403`,
+/// catalogue (`400`,
 /// `SkillNotDeclared("fly")`) once it is approved — never dialled either way.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_request_the_card_does_not_fit_is_judged_after_the_trust_gate() {
@@ -3211,7 +3267,7 @@ async fn a_request_the_card_does_not_fit_is_judged_after_the_trust_gate() {
     );
     approve(&s, "planner").await;
     let (status, body) = answered(&s.router, send()).await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "then the card's fit: {body}");
+    assert_eq!(status, StatusCode::BAD_REQUEST, "then the card's fit: {body}");
     let doc: serde_json::Value = serde_json::from_str(&body).expect("an envelope");
     assert_eq!(doc["error"]["code"], -32004, "{body}");
     assert_eq!(
@@ -3296,9 +3352,8 @@ async fn an_unaddressed_unit_is_routed_to_the_one_granted_agent_that_serves() {
 }
 
 /// A CONFIG APPLY (ARCHITECT Q-DEL-A2A-APPLY) bumps the door's refresh generation and the door
-/// re-reads its section, but the operator's approval is the KERNEL'S trust book's (ARCHITECT
-/// FLIP-A2A: pinning is kernel state, an operator's decision is durable): a registration the
-/// apply keeps under the same pin keeps its approval, and the approved agent is still served.
+/// re-reads a new App's section. An unchanged registration keeps its approval while the
+/// configuration adds another registration; changing its URL or pin requires a fresh approval.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_config_apply_keeps_the_operators_approval() {
     let _one = PUBLISHING.lock().await;
@@ -3311,19 +3366,105 @@ async fn a_config_apply_keeps_the_operators_approval() {
     assert_eq!(status, StatusCode::OK, "approved, served: {body}");
     assert!(agent.relayed());
 
-    // The swap runs every registered plane declaration's `on_swap`; a legacy plane another
-    // test registered process-wide would read a runtime slot this composition never seeded, so
-    // the swap sees exactly this composition's planes (the door serves none of them).
-    {
+    let apply = |section: &str| {
+        let row = busbar_kernel::plane_driver::registry::plane_decl_for_config_section(surface(
+            "section",
+        ))
+        .expect("the registry holds the door's row");
+        let slot = busbar_kernel::plane_driver::door::DoorSlot {
+            section: busbar_kernel::plane_driver::door::DoorSection::new(
+                row.door,
+                surface("section"),
+                serde_yaml::from_str(section).expect("the applied section"),
+            ),
+            facing: busbar_contract::plane_calls::DoorFacing {
+                claims: Vec::new(),
+                admission: None,
+                listed: Vec::new(),
+            },
+            opened: true,
+        };
+        let mut next = busbar_kernel::test_support::TestApp::new()
+            .serve_tables(s.app.serve_tables.clone())
+            .keys_chain()
+            .admin_chain(vec![busbar_kernel::config::operator_provider().to_string()])
+            .governance(Arc::clone(&s.gov))
+            .cost(CostModel::flat(1));
+        next.install_plane_runtime(surface("plane_key"), Arc::new(slot));
+        let next = next.build();
+        assert!(
+            !Arc::ptr_eq(&s.app, &next),
+            "a distinct serving App is applied"
+        );
         let _registry = busbar_kernel::test_support::planes::TestRegistryIsolation::empty();
-        s.handle.swap(Arc::clone(&s.app));
-    }
+        s.handle.swap(next);
+    };
+    apply(&format!(
+        "{}\n{}",
+        agent.entry("planner", "1h"),
+        agent.entry("scout", "1h")
+    ));
     let (status, body) = answered(&s.router, send()).await;
     assert_eq!(
         status,
         StatusCode::OK,
         "the approval outlives the apply: {body}"
     );
+    assert!(
+        agent.relayed(),
+        "the retained registration still reaches its agent"
+    );
+
+    let mut replacement = Agent::start(200, ANSWER).await;
+    apply(&replacement.entry("planner", "1h"));
+    let (status, body) = answered(&s.router, send()).await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "the changed URL needs approval: {body}"
+    );
+    assert!(body.contains("is not serving"), "{body}");
+    assert!(
+        !agent.relayed() && !replacement.relayed(),
+        "neither URL was dispatched under stale approval"
+    );
+    approve(&s, "planner").await;
+    let (status, body) = answered(&s.router, send()).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the newly approved URL serves: {body}"
+    );
+    assert!(replacement.relayed());
+
+    let rotated = ed25519_dalek::SigningKey::from_bytes(&[9u8; 32]);
+    replacement.resign_with(rotated.clone());
+    let section = format!(
+        "planner: {{url: 'http://127.0.0.1:{}/planner', allow_private: true, reverify_ttl: '1h', \
+         pin: {{mechanism: jws_issuer_key, key: '{}'}}}}",
+        replacement.port,
+        key_info(&rotated),
+    );
+    apply(&section);
+    let (status, body) = answered(&s.router, send()).await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "the changed pin needs approval: {body}"
+    );
+    assert!(body.contains("is not serving"), "{body}");
+    assert!(
+        !replacement.relayed(),
+        "the new issuer cannot inherit the old approval"
+    );
+    approve(&s, "planner").await;
+    let (status, body) = answered(&s.router, send()).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the newly approved issuer serves: {body}"
+    );
+    assert!(replacement.relayed());
 }
 
 /// THE CARD FETCH'S GUARD WORDS, as 1.5.5 printed them (ARCHITECT Q-DEL-A2A-GUARD-WORDS): a
@@ -3536,6 +3677,7 @@ async fn the_agent_doors_trust_verbs_refuse_in_their_declared_taxonomy() {
 async fn an_abandoned_card_look_wakes_its_waiters_at_once() {
     use std::time::Duration;
     let _one = PUBLISHING.lock().await;
+    let callback = piece_pending_observer::Watching::install();
     let instance = "serve-agent-door-abandoned-look";
     let agent = Agent::start(200, ANSWER).await;
     let s = served(instance, &agent.entry("planner", "0s"), false, None);
@@ -3545,14 +3687,51 @@ async fn an_abandoned_card_look_wakes_its_waiters_at_once() {
         .store(30_000, std::sync::atomic::Ordering::SeqCst);
     let fetched = agent.fetches();
     let send = || rpc("planner", "message/send", SEND, Some(&s.token));
-    let abandoned = tokio::time::timeout(Duration::from_millis(400), answered(&s.router, send()));
-    let waiting = async {
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        tokio::time::timeout(Duration::from_secs(5), answered(&s.router, send())).await
-    };
-    let (gone, waited) = tokio::join!(abandoned, waiting);
-    assert!(gone.is_err(), "the first caller went away mid-look");
-    let (status, body) = waited.expect("the waiter proceeded without stalling on the look");
+    let mut abandoned = Box::pin(answered(&s.router, send()));
+    // The first look must have consumed the delayed response before a waiter is introduced.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::select! {
+            result = &mut abandoned => panic!("the delayed caller completed before cancellation: {result:?}"),
+            () = async {
+                while agent.card_delay_ms.load(std::sync::atomic::Ordering::SeqCst) != 0 {
+                    tokio::task::yield_now().await;
+                }
+            } => {}
+        }
+    }).await.expect("the first look reached the delayed card response");
+    assert_eq!(
+        agent.fetches(),
+        fetched + 1,
+        "the first caller owns the delayed look"
+    );
+    callback.arm_after_owner_held();
+
+    // An addressed extended-card request uses Hop::of (opening=false), with no pool,
+    // callback, task lookup/publication or record calls before verify_agent_on_call.
+    // Its actual ATTEMPT callback can only pend by joining the first caller's held flight.
+    let mut waiting = Box::pin(answered(
+        &s.router,
+        rpc("planner", "GetExtendedAgentCard", "{}", Some(&s.token)),
+    ));
+    tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::select! {
+            result = &mut waiting => panic!("the waiter completed before the held look was cancelled: {result:?}"),
+            () = async {
+                while !callback.waiter_pending() {
+                    tokio::task::yield_now().await;
+                }
+            } => {}
+        }
+    }).await.expect("the second door callback registered as a waiter on the held flight");
+    assert_eq!(
+        agent.fetches(),
+        fetched + 1,
+        "the second live unit did not start a competing look"
+    );
+    drop(abandoned);
+    let (status, body) = tokio::time::timeout(Duration::from_secs(5), waiting)
+        .await
+        .expect("the waiter proceeded without stalling on the cancelled look");
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(
         agent.fetches() - fetched,
@@ -5190,6 +5369,18 @@ async fn a_card_signed_by_another_key_than_the_pinned_one_is_refused_and_never_s
         agent.fingerprint().as_str(),
         "{preview}"
     );
+    approve(&s, "planner").await;
+    let (status, body) = answered(
+        &s.router,
+        rpc("planner", "message/send", SEND, Some(&s.token)),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the correctly pinned registration serves: {body}"
+    );
+    assert!(agent.relayed(), "the approved control reached the agent");
 
     let (status, preview) = admin(&s, "/agents/impostor/connect", "").await;
     assert_eq!(status, StatusCode::OK, "{preview}");
@@ -5199,6 +5390,25 @@ async fn a_card_signed_by_another_key_than_the_pinned_one_is_refused_and_never_s
             |f| f.contains("the agent card is signed, but not by the pinned issuer key")
         ),
         "{preview}"
+    );
+    assert_eq!(
+        preview["fingerprint"],
+        serde_json::Value::Null,
+        "a failed signature offers no fingerprint: {preview}"
+    );
+    let supplied = serde_json::json!({"fingerprint":agent.fingerprint()}).to_string();
+    let (status, refusal) = admin(&s, "/agents/impostor/approve", &supplied).await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "the real card's fingerprint cannot approve a wrongly pinned signature: {refusal}"
+    );
+    assert_eq!(refusal["error"]["code"], "invalid_request", "{refusal}");
+    let (status, refusal) = decide_key(&s, "impostor", "approve").await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "generic trust approval cannot approve an unauthenticated card: {refusal}"
     );
     let (status, body) = answered(
         &s.router,
@@ -6285,7 +6495,7 @@ async fn a_grpc_call_refused_before_any_message_closes_trailers_only_as_predev()
     let instance = "serve-agent-door-grpc-trailers-only";
     // The agent refuses the task in A2A's own words (`TaskNotFoundError`), which the caller's
     // answer carries as its status.
-    let agent = Agent::start(
+    let mut agent = Agent::start(
         200,
         r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32001,"message":"no task"}}"#,
     )
@@ -6344,6 +6554,10 @@ async fn a_grpc_call_refused_before_any_message_closes_trailers_only_as_predev()
         trailers.is_none(),
         "trailers-only, no trailer block: {trailers:?}"
     );
+    assert!(
+        !agent.relayed(),
+        "an unheld task is refused locally without probing the agent"
+    );
 }
 
 /// MONEY (this cell touches money: it reads the units' lines on the node's book). A RELAYED
@@ -6377,7 +6591,7 @@ async fn a_grpc_hop_ledgers_predevs_bytes_and_a_record_served_answer_none() {
         .heard
         .try_recv()
         .unwrap_or_else(|_| panic!("the agent was not dialled over gRPC: {body}"));
-    let lines = agent_counts(&s, "planner");
+    let lines = caller_counts(&s);
     assert_eq!(lines.len(), 1, "one line for the relayed unit: {lines:?}");
     assert_eq!(
         counted(&lines[0], surface("bytes_class")),
@@ -6401,7 +6615,7 @@ async fn a_grpc_hop_ledgers_predevs_bytes_and_a_record_served_answer_none() {
             String::from_utf8_lossy(&sent)
         );
     }
-    let lines = agent_counts(&s, "planner");
+    let lines = caller_counts(&s);
     assert_eq!(lines.len(), 2, "one more line, the list's: {lines:?}");
     assert_eq!(
         counted(&lines[1], surface("bytes_class")),
@@ -7837,17 +8051,16 @@ fn pooled(entries: &str, members: &[&str]) -> String {
 /// status `status_of` makes of its whole text, with [`TASK_ANSWER`] on a 2xx and `denied`
 /// otherwise; and the section registering them.
 async fn twins(status_of: Arc<dyn Fn(&str) -> u16 + Send + Sync>) -> (Agent, String) {
-    let reply_status = Arc::clone(&status_of);
-    let agent = Agent::start_core(
-        status_of,
+    let agent = Agent::start_replying(
         Arc::new(move |request: &str| {
-            if (200..300).contains(&reply_status(request)) {
+            let status = status_of(request);
+            let body = if (200..300).contains(&status) {
                 TASK_ANSWER.to_string()
             } else {
                 "denied".to_string()
-            }
+            };
+            FarReply::of(status, body)
         }),
-        Vec::new(),
         None,
     )
     .await;
@@ -8212,18 +8425,34 @@ async fn a_client_fault_answer_never_penalizes_the_agent() {
     let s = served(instance, &section, false, None);
     approve(&s, "planner-a").await;
     approve(&s, "planner-b").await;
-    for _ in 0..2 {
-        let _ = answered(
+    let mut log = Vec::new();
+    // Six outcomes cross the five-outcome trip used by the matching failing-agent controls.
+    for call in 1..=6 {
+        let (status, body) = answered(
             &s.router,
             rpc("planner-a", "message/send", SEND, Some(&s.token)),
         )
         .await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "the caller fault remains a 400 on call {call}: {body}"
+        );
+        hear(&mut agent, &mut log);
+        assert_eq!(
+            hits(&log, "planner-a"),
+            call,
+            "the primary is still dialled after each client fault: {log:?}"
+        );
+        assert_eq!(
+            hits(&log, "planner-b"),
+            0,
+            "no client fault triggers failover: {log:?}"
+        );
     }
-    let mut log = Vec::new();
-    hear(&mut agent, &mut log);
     assert_eq!(
         hits(&log, "planner-a"),
-        2,
+        6,
         "an unpenalized member keeps receiving its own traffic"
     );
     assert_eq!(hits(&log, "planner-b"), 0);
@@ -8299,7 +8528,7 @@ async fn a_hop_pinned_to_a_member_the_caller_may_not_reach_keeps_no_fee() {
     hear(&mut agent, &mut log);
     assert_eq!(log.len(), sent, "no member saw the refused hop");
     // Every hop the caller made, to either member: its one record each.
-    let fees: u64 = agent_counts(&s, "planner-a")
+    let fees: u64 = caller_counts(&s)
         .iter()
         .map(|c| u64::from(c.fee_count))
         .sum();
@@ -8695,12 +8924,12 @@ async fn an_unaddressed_local_verb_bills_what_predev_billed_on_the_agents_own_li
     let billed = |target: &'static str| {
         let s = &s;
         async move {
-            let before = (Billed::of(s), agent_counts(s, "planner").len());
+            let before = (Billed::of(s), caller_counts(s).len());
             let (status, body) =
                 answered(&s.router, rpc(target, "tasks/list", "{}", Some(&s.token))).await;
             assert_eq!(status, StatusCode::OK, "[{target}] answered: {body}");
             let after = Billed::of(s);
-            let lines = agent_counts(s, "planner");
+            let lines = caller_counts(s);
             assert_eq!(
                 lines.len(),
                 before.1 + 1,
@@ -8820,11 +9049,9 @@ async fn a_pinned_refusal_answers_the_pinned_members_own_wait() {
     let (mut agent, section) = twins(Arc::new(move |request: &str| {
         if to_member(request, "planner-a") {
             // F, S, F, S, F ...: the primary's cell trips on its fifth outcome, streak 1. The
-            // fixture reads this twice per request (its status, then `twins`' body), so a
-            // request is every second read: both reads of one request agree, and a failure is
-            // a 503 saying "denied", never a 503 carrying a task (a protocol answer the plane
-            // reads healthy, eec1f2820d).
-            if (calls.fetch_add(1, Ordering::SeqCst) / 2) % 2 == 0 {
+            // fixture makes one status/body decision per non-card request, so failures carry
+            // "denied" and successes carry a task without consulting the closure a second time.
+            if calls.fetch_add(1, Ordering::SeqCst) % 2 == 0 {
                 503
             } else {
                 200
@@ -8885,6 +9112,11 @@ async fn a_pinned_refusal_answers_the_pinned_members_own_wait() {
         }
     }
     assert!(tripped, "the primary's cell opened");
+    assert_eq!(
+        primary_calls.load(Ordering::SeqCst),
+        5,
+        "the primary supplied exactly F/S/F/S/F before opening"
+    );
     hear(&mut agent, &mut Vec::new());
 
     let response = {
@@ -9027,3 +9259,9 @@ mod diagnostics_page {
         committed_matches(COMMITTED_JSON, &render_json_for(&own_page()));
     }
 }
+
+mod reported_fixture_tests;
+
+mod reported_push_params_tests;
+
+mod relay_reported_cases;

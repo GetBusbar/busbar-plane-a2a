@@ -254,3 +254,47 @@ fn a_read_names_busbars_config_by_its_whole_id() {
         serde_json::json!({ "taskId": "t1", "pushNotificationConfig": { "id": "busbar-t1" } })
     ));
 }
+
+#[test]
+fn a_failed_v03_mirror_read_rearms_in_the_same_declared_dialect() {
+    let mut flight = Flight {
+        stage: Stage::Mirror,
+        method: method::GET_PUSH_CONFIG,
+        backend_task: "b-1".into(),
+        create: create_params("b-1", "https://gw.example/a2a/push", "t.ab"),
+        hop: hop(),
+    };
+    flight.hop.version = "0.3";
+    let issued = |flight: &Flight| {
+        let request = request(
+            flight.hop.binding,
+            &flight.hop.url,
+            flight.hop.version,
+            flight.issuing(),
+            &flight.params(),
+        )
+        .expect("framed");
+        serde_json::from_slice::<Value>(&request.body).unwrap()
+    };
+    assert_eq!(
+        issued(&flight)["method"],
+        "tasks/pushNotificationConfig/get"
+    );
+    let failed = json!({"jsonrpc":"2.0","id":ORIGINATED_RPC_ID,
+        "error":{"code":-32601,"message":"not found"}})
+    .to_string();
+    flight.advance(Some((200, failed.as_bytes())));
+    assert_eq!(flight.stage, Stage::Rearm);
+    let rearm = issued(&flight);
+    assert_eq!(rearm["method"], "tasks/pushNotificationConfig/set");
+    assert_eq!(
+        rearm["params"]["pushNotificationConfig"]["url"],
+        "https://gw.example/a2a/push"
+    );
+    flight.advance(None);
+    assert_eq!(
+        flight.stage,
+        Stage::Done,
+        "an unanswered rearm does not loop"
+    );
+}

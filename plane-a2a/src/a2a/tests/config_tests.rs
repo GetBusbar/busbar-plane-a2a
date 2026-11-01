@@ -182,6 +182,25 @@ fn the_designed_entry_parses_as_written() {
     assert_eq!(planner.hooks, vec!["dispatch-order".to_string()]);
 }
 
+#[test]
+fn registrations_require_explicit_pin_mechanisms_and_private_reach_is_opt_in() {
+    for registration in [
+        json!({"url":"https://a2a.vendor/planner"}),
+        json!({"url":"https://a2a.vendor/planner", "pin":{}}),
+        json!({"url":"https://a2a.vendor/planner", "pin":{"key":"K"}}),
+    ] {
+        assert!(parse(&json!({"planner":registration})).is_err());
+    }
+    let registration = json!({"url":"https://a2a.vendor/planner", "pin":{"mechanism":"unpinned"}});
+    let cfg =
+        parse(&json!({"planner":registration.clone()})).expect("explicit unpinned is supported");
+    assert!(!cfg.agents["planner"].allow_private);
+    let mut opted_in = registration;
+    opted_in["allow_private"] = json!(true);
+    let cfg = parse(&json!({"planner":opted_in})).expect("explicit private reach is supported");
+    assert!(cfg.agents["planner"].allow_private);
+}
+
 /// A typo'd key fails the parse rather than silently un-pinning an agent.
 /// Ported from busbar-a2a a2a/tests/config_tests.rs::an_unknown_key_is_refused_rather_than_ignored.
 #[test]
@@ -511,4 +530,74 @@ fn an_empty_egress_scope_is_refused() {
     }))
     .unwrap_err();
     assert!(err.contains("egress_scopes"), "got: {err}");
+}
+
+#[test]
+fn a_nonempty_inert_egress_policy_is_refused_by_the_shared_validator() {
+    let mut definition = def("https://agent.example/a2a", PinMechanism::Unpinned);
+    definition.egress_scopes = vec!["billing".into()];
+    let error = validate_agent("planner", &definition).unwrap_err();
+    assert!(
+        error.contains("egress_scopes") && error.contains("not enforced"),
+        "{error}"
+    );
+    assert!(parse(&json!({"planner": definition}))
+        .unwrap_err()
+        .contains("not enforced"));
+}
+
+#[test]
+fn malformed_http_urls_and_unsupported_schemes_have_different_refusals() {
+    for url in ["https://agent.example:99999/a2a", "http://[bad-ipv6]/"] {
+        let error = validate_agent("planner", &def(url, PinMechanism::Unpinned)).unwrap_err();
+        assert!(error.contains("malformed"), "{error}");
+        assert!(
+            !error.contains("must be an http:// or https:// endpoint"),
+            "{error}"
+        );
+    }
+    let error = validate_agent(
+        "planner",
+        &def("ftp://agent.example/a2a", PinMechanism::Unpinned),
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("must be an http:// or https:// endpoint"),
+        "{error}"
+    );
+}
+
+#[test]
+fn the_validator_refuses_names_that_the_real_agent_route_cannot_claim() {
+    let definition = def("https://agent.example/a2a", PinMechanism::Unpinned);
+    for name in ["a/b", "legal+eu", "..", "with space"] {
+        assert!(crate::statement::agent_slash_claims(&[name]).is_empty());
+        let error = validate_agent(name, &definition).unwrap_err();
+        assert!(error.contains("path segment"), "{error}");
+    }
+    assert_eq!(validate_agent("legal-eu_2.v~1", &definition), Ok(()));
+}
+
+#[test]
+fn a_malformed_url_never_repeats_any_raw_credential_fragment() {
+    for url in [
+        "https://USER_CANARY:prefix@SECRET_CANARY:99999#TAIL_CANARY@host/a2a",
+        "https://USER_CANARY:SECRET_CANARY#TAIL_CANARY@host/a2a",
+        "https://USER_CANARY:SECRET_CANARY?TAIL_CANARY@host/a2a",
+        "https://USER_CANARY:SECRET_CANARY/TAIL_CANARY@host/a2a",
+    ] {
+        let shown = without_userinfo(url);
+        let error = validate_agent("planner", &def(url, PinMechanism::Unpinned)).unwrap_err();
+        for canary in ["USER_CANARY", "SECRET_CANARY", "TAIL_CANARY"] {
+            assert!(
+                !shown.contains(canary),
+                "credential in displayed URL: {shown}"
+            );
+            assert!(!error.contains(canary), "credential in refusal: {error}");
+        }
+    }
+    assert_eq!(
+        without_userinfo("https://agent.example/path?q=@"),
+        "https://agent.example/path?q=@"
+    );
 }

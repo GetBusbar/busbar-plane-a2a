@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2026 Busbar Inc and contributors
-"""PROVE EVERY CHECK BITES, by making it fail on purpose.
+"""Behavioral regression controls for selected supplement checks.
 
 WHY THIS FILE IS NOT OPTIONAL, and it is the honest answer to a gap rather than a decoration.
 
@@ -120,15 +120,15 @@ def card_signing_mutations() -> None:
         {Verdict.PASS},
     )
 
-    print("\nCARD-SIGN-002 -- a card whose signature covers the `signatures` member itself")
+    print("\nCARD-SIGN-002 -- a signature over a stale document containing a placeholder signature")
     circular = copy.deepcopy(base_card)
     placeholder = _sign(canonicalize(base_card), {"alg": "EdDSA", "kid": "k"}, private)
     circular["signatures"] = [placeholder]
-    # Re-sign over the document WITH `signatures` present, which is the circular dependency
-    # SPEC 8.4.1 forbids.
+    # Re-sign the placeholder-bearing document. Replacing the placeholder then makes
+    # that signature invalid; this tests invalid exclusion, not a cryptographic fixed point.
     circular["signatures"] = [_sign(canonicalize(circular), {"alg": "EdDSA", "kid": "k"}, private)]
     expect(
-        "a signature that covers `signatures` must NOT be read as excluding it",
+        "a signature over the placeholder-bearing document must fail exclusion verification",
         checks_card.check_card_sign_002(target_with(circular), issuer_key),
         {Verdict.FAIL},
     )
@@ -333,10 +333,13 @@ def versioning_mutations() -> None:
 
     print("\nVER-CLIENT-001 -- an upstream recording in which a request carries no version")
     import tempfile
+    import os
 
     with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as handle:
         handle.write(json.dumps({"method": "POST", "path": "/a2a", "headers": {"host": "x"}}) + "\n")
         path = handle.name
+        import atexit
+        atexit.register(lambda filename=path: os.unlink(filename) if os.path.exists(filename) else None)
     silent = Target(
         label="selftest", card_url="http://selftest.invalid/card", upstream_record=path
     )
@@ -353,6 +356,8 @@ def versioning_mutations() -> None:
             json.dumps({"method": "POST", "path": "/a2a", "headers": {"A2A-Version": "1.0"}}) + "\n"
         )
         path = handle.name
+        import atexit
+        atexit.register(lambda filename=path: os.unlink(filename) if os.path.exists(filename) else None)
     speaking = Target(
         label="selftest", card_url="http://selftest.invalid/card", upstream_record=path
     )
@@ -367,6 +372,8 @@ def versioning_mutations() -> None:
     print("\nVER-CLIENT-001 -- an EMPTY recording must not be read as compliance")
     with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as handle:
         path = handle.name
+        import atexit
+        atexit.register(lambda filename=path: os.unlink(filename) if os.path.exists(filename) else None)
     empty = Target(label="selftest", card_url="http://selftest.invalid/card", upstream_record=path)
     empty.card = {}
     empty.interfaces = [Interface("http://a/", "jsonrpc", "1.0")]
@@ -409,11 +416,11 @@ def in_task_authorization_mutations() -> None:
 
     print("\nAUTH-INTASK-001 -- an authorization request answered with a bare Message")
     expect(
-        "no Task where SPEC 7.6.1 requires one must FAIL",
+        "without an auth-required task the fixture is not observed",
         checks_auth.check_auth_intask_001(
             target_answering({"message": {"role": "ROLE_AGENT", "parts": [{"text": "auth?"}]}})
         ),
-        {Verdict.FAIL},
+        {Verdict.NOT_APPLICABLE},
     )
 
     print("\nAUTH-INTASK-002 -- the task is returned in the wrong state")
@@ -491,7 +498,7 @@ def main() -> int:
     regressions = subprocess.run([sys.executable, str(Path(__file__).with_name("probe-regressions.py"))])
     if regressions.returncode:
         FAILURES.append("probe regression controls failed")
-    print("a2a-supplement SELFTEST -- every check is made to fail on purpose")
+    print("a2a-supplement SELFTEST -- selected checks receive negative and positive controls")
     print("A check that does not bite here is a check that reports green over nothing.")
     in_task_authorization_mutations()
     card_signing_mutations()

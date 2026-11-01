@@ -11,6 +11,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
 
+#[path = "task_open_dispatch.rs"]
+mod task_open_dispatch;
+
 /// SUBMIT `row` for the caller: the task, and its chain's genesis event, stamped with the row's
 /// `created_at`. The row is the caller's (its `principal` is the caller's reference).
 ///

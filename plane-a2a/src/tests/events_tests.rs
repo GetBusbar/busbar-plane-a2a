@@ -85,17 +85,31 @@ fn a_wrapped_event_reports_its_state_and_its_artifact() {
     assert_eq!(chunk.state, None, "an artifact reports no state");
 }
 
-/// A keep-alive, a comment and a frame that is not JSON pass byte for byte, read as nothing.
+/// Comments and keep-alives without data pass byte for byte, read as nothing.
 #[test]
-fn a_frame_that_is_not_a_response_passes_through_byte_for_byte() {
-    for passed in [
-        ": keep-alive\n\n",
-        "data: not json\n\n",
-        "data: {\"x\":1}\n\n",
-    ] {
+fn a_frame_without_data_passes_through_byte_for_byte() {
+    for passed in [": keep-alive\n\n", "retry: 1000\n\n", ": comment\r\n\r\n"] {
         let ev = read_event(passed, &json!(11), "t", "c", None, &[]).unwrap();
         assert_eq!(ev.sse, passed.as_bytes(), "{passed:?}");
         assert_eq!((ev.state, ev.artifact), (None, false));
+    }
+}
+
+#[test]
+fn malformed_or_nonresponse_event_data_refuses_the_hop() {
+    for refused in [
+        "data: not json\n\n",
+        "data: {\"x\":1}\n\n",
+        "data: {\"id\":\"backend-task\",\"contextId\":\"backend-context\"}\n\n",
+        "data: []\n\n",
+        "data: null\n\n",
+        "data:\n\n",
+    ] {
+        assert_eq!(
+            read_event(refused, &json!(11), "t", "c", None, &[]),
+            Err(HopRefusal::NotJson),
+            "{refused:?}"
+        );
     }
 }
 

@@ -14,6 +14,9 @@ use crate::tasks::{event_key, get};
 use crate::tests::capture::Capture;
 use crate::TaskEventRow;
 
+#[path = "task_retention_diagnostic_cases.rs"]
+mod task_retention_diagnostic_cases;
+
 /// The host records, the random bytes the kernel hands out, and the destination judge's verdict.
 struct Desk {
     book: Book,
@@ -1506,3 +1509,6 @@ fn a_read_or_an_addressed_turn_never_sweeps() {
         "an addressed turn retires nothing"
     );
 }
+
+#[path = "inline_push_custody.rs"]
+mod inline_push_custody;

@@ -414,6 +414,27 @@ pub enum Reading {
     Hard,
 }
 
+// Test-only retirement witness for the old API. No bytes are changed: the observer sees
+// the initialized owners immediately before their normal field destruction.
+#[cfg(test)]
+impl Drop for HopRelay {
+    fn drop(&mut self) {
+        // A retry witness can already have failed; do not panic again while unwinding it.
+        if std::thread::panicking() {
+            return;
+        }
+        use crate::tests::raw_custody_probe::{after_wipe, before_wipe};
+        before_wipe(&self.far);
+        after_wipe(&self.far);
+        if let Some(bytes) = &self.instead {
+            before_wipe(bytes);
+            after_wipe(bytes);
+        }
+        before_wipe(&self.grpc.pending);
+        after_wipe(&self.grpc.pending);
+    }
+}
+
 /// The status table: the reading of an answer at a status outside `2xx`, its body unread.
 /// `401`/`403` are `Auth`, hard; `429` (`RateLimit`), `408` (`Timeout`), `529`
 /// (`Overloaded`) and every `5xx` (`ServerError`) are transient; every other status, a true `4xx`
@@ -539,11 +560,11 @@ impl HopRelay {
     /// A hop answering the request `id`, declaring the `version` busbar's edge negotiated.
     #[must_use]
     pub fn new(id: Value, version: &'static str) -> Self {
-        HopRelay {
-            id,
-            version,
-            ..HopRelay::default()
-        }
+        // Field assignment permits the test-only retirement witness's Drop implementation.
+        let mut relay = HopRelay::default();
+        relay.id = id;
+        relay.version = version;
+        relay
     }
 
     /// Name the agent this hop is for and its registered backend `url`, for the operator's journal
@@ -879,6 +900,13 @@ impl HopRelay {
                 }
                 self.sent = 0;
                 self.status = None;
+                // Test-only witness: inspect only this live owner's initialized prefix,
+                // immediately before the old implementation retires it on retry.
+                #[cfg(test)]
+                {
+                    crate::tests::raw_custody_probe::before_wipe(&self.far);
+                    crate::tests::raw_custody_probe::after_wipe(&self.far);
+                }
                 self.far.clear();
                 self.received = 0;
                 self.instead_sent = false;

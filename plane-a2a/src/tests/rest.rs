@@ -208,14 +208,37 @@ fn a_task_post_naming_no_verb_is_the_engines_404() {
 }
 
 /// A PATH CAPTURE IS DECODED AS THE ROUTER DECODED IT: `%XX` is the byte and `+` stays a `+`; a
-/// capture whose bytes are not UTF-8 composes nothing.
+/// capture whose bytes are not UTF-8 is a bad request.
 #[test]
 fn path_captures_decode_as_the_router_did() {
     assert_eq!(path_decode("a%3Ab+c").as_deref(), Some("a:b+c"));
     assert_eq!(path_decode("%zz%4").as_deref(), Some("%zz%4"));
     assert_eq!(path_decode("%FF"), None);
     let task = route("GET", "/a2a/tasks/{id}");
-    assert_eq!(compose(task, "/a2a/tasks/%FF", b""), Ok(None));
+    for target in ["/a2a/tasks/%FF", "/a2a/tasks/%C3%28"] {
+        let refusal = compose(task, target, b"").expect_err("invalid UTF-8 capture");
+        assert_eq!(
+            (refusal.status, refusal.code, refusal.id),
+            (400, -32602, None)
+        );
+        assert_eq!(
+            refusal.message,
+            "the `id` path capture must decode as UTF-8"
+        );
+    }
+    // Literal mismatches still do not claim a route, even with an invalid later capture.
+    let config = route("GET", "/a2a/tasks/{id}/pushNotificationConfigs/{config_id}");
+    assert_eq!(compose(config, "/a2a/tasks/%FF/other/%FF", b""), Ok(None));
+    let refusal = compose(config, "/a2a/tasks/t/pushNotificationConfigs/%FF", b"")
+        .expect_err("invalid config id");
+    assert_eq!(
+        refusal.message,
+        "the `config_id` path capture must decode as UTF-8"
+    );
+    assert_eq!(
+        composed("GET", "/a2a/tasks/{id}", "/a2a/tasks/%E2%9C%93+a", b"")["params"]["id"],
+        "✓+a"
+    );
 }
 
 /// A QUERY COMPONENT IS DECODED AS `Query` DECODED IT: `+` is a space, `%XX` the byte, a repeated
@@ -245,6 +268,55 @@ fn an_answer_is_reframed_by_what_it_is() {
     let other = br#"{"status":"unavailable"}"#;
     assert_eq!(reframe(503, other), other.to_vec());
     assert_eq!(reframe(502, b"not json"), b"not json".to_vec());
+}
+
+#[test]
+fn an_agent_error_without_a_readable_message_keeps_its_code_and_details() {
+    for error in [
+        json!({"code": -32001, "data": [{"reason": "TASK_NOT_FOUND"}]}),
+        json!({"code": -32001, "message": 5, "data": [{"reason": "TASK_NOT_FOUND"}]}),
+    ] {
+        let body = serde_json::to_vec(&json!({"error": error})).unwrap();
+        let doc: Value = serde_json::from_slice(&reframe(404, &body)).unwrap();
+        assert_eq!(doc["error"]["code"], 404);
+        assert_eq!(doc["error"]["status"], "NOT_FOUND");
+        assert_eq!(
+            doc["error"]["details"],
+            json!([{"reason": "TASK_NOT_FOUND"}])
+        );
+        assert_eq!(
+            doc["error"]["message"],
+            "the agent returned an error without a readable message"
+        );
+    }
+    for body in [br#"{"error":5}"#.as_slice(), br#"{"error":[]}"#.as_slice()] {
+        let doc: Value = serde_json::from_slice(&reframe(502, body)).unwrap();
+        assert_eq!(doc["error"]["code"], 502);
+        assert!(!doc["error"]["message"].as_str().unwrap().is_empty());
+    }
+    for message in ["a supplied explanation", ""] {
+        let body =
+            serde_json::to_vec(&json!({"error":{"code": -32001, "message":message}})).unwrap();
+        let doc: Value = serde_json::from_slice(&reframe(404, &body)).unwrap();
+        assert_eq!(doc["error"]["message"], message);
+    }
+}
+
+#[test]
+fn an_unreadable_agent_error_is_preserved_without_fabricating_an_empty_error() {
+    let mut deep = br#"{"error":{"message":"agent explanation","data":"#.to_vec();
+    deep.extend(std::iter::repeat_n(b'[', 150));
+    deep.push(b'0');
+    deep.extend(std::iter::repeat_n(b']', 150));
+    deep.extend_from_slice(b"}}");
+    for body in [
+        deep,
+        br#"{"error":{"message":"\uD800"}}"#.to_vec(),
+        b"{\"error\":{\"message\":\"\xff\"}}".to_vec(),
+        br#"{"error":null}"#.to_vec(),
+    ] {
+        assert_eq!(reframe(502, &body), body);
+    }
 }
 
 /// THE RESULT IS THE ANSWER'S OWN BYTES (Law 5): member order, an integer past 64 bits and a

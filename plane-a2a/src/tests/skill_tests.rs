@@ -37,6 +37,39 @@ fn a_request_naming_no_skill_matches_none() {
 }
 
 #[test]
+fn output_mode_fit_compares_media_types_without_case_or_parameters() {
+    for (offered, requested) in [
+        ("text/plain", "Text/Plain"),
+        ("text/plain", "text/plain; charset=utf-8"),
+        ("Text/Plain; charset=utf-8", "text/plain"),
+        ("text/plain ; charset=utf-8", "TEXT/PLAIN; charset=us-ascii"),
+    ] {
+        let mut card = a_card(json!([]), json!({}));
+        card["defaultOutputModes"] = json!([offered]);
+        let shape = TaskShape::of(&send(
+            json!({"configuration":{"acceptedOutputModes":[requested]}}),
+        ));
+        assert_eq!(fit(&card, &shape), Ok(None), "{offered} / {requested}");
+    }
+    let mut card = card();
+    card["skills"][0]["outputModes"] = json!(["Application/JSON; charset=utf-8"]);
+    let shape = TaskShape::of(&send(
+        json!({"metadata":{"skill":"summarize"}, "configuration":{"acceptedOutputModes":["application/json"]}}),
+    ));
+    assert_eq!(fit(&card, &shape), Ok(Some("summarize".into())));
+    for requested in ["*/*", "text/*", "application/json"] {
+        let shape = TaskShape::of(&send(
+            json!({"configuration":{"acceptedOutputModes":[requested]}}),
+        ));
+        assert_eq!(
+            fit(&card, &shape),
+            Err(Unfit::ModesIncompatible),
+            "{requested}"
+        );
+    }
+}
+
+#[test]
 fn a_skills_own_modes_override_the_cards_defaults() {
     let wants_json = send(json!({ "metadata": { "skill": "summarize" },
         "configuration": { "acceptedOutputModes": ["application/json"] } }));
@@ -53,7 +86,7 @@ fn a_skills_own_modes_override_the_cards_defaults() {
 }
 
 #[test]
-fn an_unfit_request_is_refused_403_in_the_engines_exclusion_words() {
+fn an_unfit_request_is_refused_as_an_unsupported_operation() {
     let undeclared = TaskShape::of(&send(json!({ "metadata": { "skill": "fly" } })));
     let unfit = fit(&card(), &undeclared).unwrap_err();
     assert_eq!(unfit, Unfit::SkillNotDeclared("fly".into()));
@@ -74,7 +107,7 @@ fn an_unfit_request_is_refused_403_in_the_engines_exclusion_words() {
             "data": [{ "@type": "type.googleapis.com/google.rpc.ErrorInfo",
                 "domain": "a2a-protocol.org", "reason": "UNSUPPORTED_OPERATION" }] } })
     );
-    assert_eq!(refused.status, 403);
+    assert_eq!(refused.status, 400);
     assert_eq!(
         refusal(&Unfit::CapabilityNotDeclared("streaming")).message,
         "CapabilityNotDeclared(\"streaming\")"
@@ -83,6 +116,37 @@ fn an_unfit_request_is_refused_403_in_the_engines_exclusion_words() {
         refusal(&Unfit::Unreadable(Unreadable::NotAnObject)).message,
         "Unreadable(NotAnObject)"
     );
+}
+
+#[test]
+fn an_unsupported_stream_is_a_bad_request_on_the_rest_line() {
+    let request = json!({
+        "jsonrpc": "2.0", "id": 17, "method": "SendStreamingMessage", "params": {}
+    });
+    let shape = TaskShape::of(&request);
+    let mut held = card();
+    let excluded = fit(&held, &shape).expect_err("the held card offers no streaming");
+    assert_eq!(excluded, Unfit::CapabilityNotDeclared("streaming"));
+
+    let refusal = refusal(&excluded);
+    let rendered =
+        crate::agent_arrival::render(crate::agent_arrival::Dialect::RestJson, &refusal, true);
+    assert_eq!(rendered.status, 400);
+    let body: Value = serde_json::from_slice(&rendered.body).expect("REST error document");
+    assert_eq!(body["error"]["code"], 400);
+    assert_eq!(
+        body["error"]["details"][0],
+        json!({
+            "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+            "domain": "a2a-protocol.org",
+            "reason": "UNSUPPORTED_OPERATION"
+        })
+    );
+    assert_eq!(body["error"]["message"], refusal.message);
+    assert!(body.get("result").is_none());
+
+    held["capabilities"]["streaming"] = json!(true);
+    assert_eq!(fit(&held, &shape), Ok(None));
 }
 
 #[test]
@@ -112,7 +176,7 @@ fn the_shape_reads_every_spelling_of_a_stream_and_a_push_callback() {
 #[test]
 fn an_agent_with_no_held_card_is_refused_by_the_catalogue_s_name() {
     assert_eq!(refusal(&Unfit::NoCachedCard).message, "NoCachedCard");
-    assert_eq!(refusal(&Unfit::NoCachedCard).status, 403);
+    assert_eq!(refusal(&Unfit::NoCachedCard).status, 400);
 }
 
 // ── the engine's catalogue fitness cells (`busbar-a2a` `catalogue_tests.rs`), on the fit ─────────

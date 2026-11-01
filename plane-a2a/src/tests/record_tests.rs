@@ -27,24 +27,17 @@ fn task_rows_round_trip_through_the_store_seam_encoding() {
     };
     let body = serde_json::to_vec(&task).unwrap();
     assert_eq!(serde_json::from_slice::<TaskRow>(&body).unwrap(), task);
-    let json = String::from_utf8(body).unwrap();
-    for field in [
-        "task_id",
-        "context_id",
-        "principal",
-        "direction",
-        "state",
-        "agent_id",
-        "artifact_cursor",
-        "push_callback",
-        "created_at",
-        "updated_at",
-    ] {
-        assert!(
-            json.contains(field),
-            "`{field}` must be on the wire: {json}"
-        );
-    }
+    let persisted = serde_json::json!({
+        "task_id": "t-1", "context_id": "ctx-1", "principal": "key-1",
+        "direction": "outbound", "state": "auth-required", "agent_id": "planner",
+        "artifact_cursor": 7, "push_callback": "https://caller.example/cb",
+        "push_version": "0.3", "created_at": 10, "updated_at": 20,
+    });
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+        persisted
+    );
+    assert_eq!(serde_json::from_value::<TaskRow>(persisted).unwrap(), task);
 }
 
 #[test]
@@ -66,6 +59,20 @@ fn task_event_rows_round_trip_through_the_task_event_envelope() {
     let body = serde_json::to_vec(&event).unwrap();
     assert_eq!(
         serde_json::from_slice::<TaskEventRow>(&body).unwrap(),
+        event
+    );
+    let persisted = serde_json::json!({
+        "task_id": "t-1", "seq": 1, "ts": 10, "kind": "task.submitted",
+        "context_id": "ctx-1", "principal": "key-1", "agent_id": "",
+        "state": "submitted", "request_id": "req-1", "prev_hash": "",
+        "hash": "deadbeef", "digest_version": 2,
+    });
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+        persisted
+    );
+    assert_eq!(
+        serde_json::from_value::<TaskEventRow>(persisted).unwrap(),
         event
     );
 }

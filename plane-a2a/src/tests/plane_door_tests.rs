@@ -4,6 +4,9 @@
 //! The door's own glue over the relay: what a unit's line does to the caller's answer.
 
 use super::*;
+
+#[path = "task_door_listing_cases.rs"]
+mod task_door_listing_cases;
 use serde_json::{json, Value};
 
 fn reply(status: u32, doc: &Value) -> PieceAnswer {
@@ -48,6 +51,24 @@ fn the_document_line_and_a_partial_answer_are_left_alone() {
     let to_far = PieceAnswer::ToFarEnd(b"{}".to_vec());
     assert_eq!(for_line(to_far.clone(), true), to_far);
     assert_eq!(for_line(PieceAnswer::Nothing, true), PieceAnswer::Nothing);
+}
+
+#[test]
+fn an_outbox_keeps_sensitive_bytes_in_order_across_a_short_write_and_replacement() {
+    let first = br#"{"credential":"first-secret"}"#;
+    let second = br#"{"credential":"second-secret"}"#;
+    let mut outbox = Outbox::of(PieceAnswer::ToFarEnd(first.to_vec())).expect("first answer");
+    let cut = first.len() / 2;
+    let mut emitted = outbox.bytes[..cut].to_vec();
+    assert_eq!(&outbox.bytes[cut..], &first[cut..]);
+    emitted.extend_from_slice(&outbox.bytes[cut..]);
+    assert_eq!(emitted, first, "a short write preserves the exact suffix");
+    outbox = Outbox::of(PieceAnswer::ToFarEnd(second.to_vec())).expect("next answer");
+    assert_eq!(
+        outbox.bytes.as_slice(),
+        second,
+        "replacement keeps the new body"
+    );
 }
 
 /// On the HTTP+JSON line each event of an answer in events leaves as its bare result.
@@ -98,6 +119,25 @@ fn a_request_whose_answer_is_events_gets_an_events_hop() {
     };
     let hop = hop_of(&unlisted, false, &mut Some(envelope("vendor/stream"))).expect("relayed");
     assert!(!hop.subscribe);
+    assert!(
+        hop.opening && hop.streams(),
+        "the stream-named vendor method opens an event hop"
+    );
+
+    let unlisted = AgentDisposition::Unlisted {
+        method: "vendor/frob".into(),
+        id: json!(7),
+        version: "1.0",
+    };
+    let mut vendor_request = Some(envelope("vendor/frob"));
+    let hop =
+        hop_of(&unlisted, false, &mut vendor_request).expect("a vendor unary method is relayed");
+    assert!(hop.opening && !hop.subscribe && !hop.streams());
+    assert_eq!(hop.request, Some(envelope("vendor/frob")));
+    assert!(
+        vendor_request.is_none(),
+        "the unary hop owns the supplied request"
+    );
 
     let unary = hop_of(
         &request("message/send"),
@@ -728,77 +768,6 @@ fn the_unreadable_rewrite_refusal_is_a_conformant_a2a_internal_error() {
     assert_eq!(doc["error"]["status"], "INTERNAL", "{doc}");
 }
 
-/// THE APPLY SITE HAS NO LENIENT READER OF THE SAME BYTES, AND ITS `Err` ARM REFUSES (predev
-/// `hook_tap_tests::the_rewrite_apply_site_never_falls_back_to_the_caller_s_original_params`, over
-/// the door's `project`): a source scan, because the behavioural half covers the shapes somebody
-/// thought of and this covers the shape a future convenience would re-add. The committed bytes are
-/// read in one place, through `rewritten_params`, whose `Err` marks the unit and REFUSES it, and the
-/// `refusal` slot answers a marked unit predev's internal error. The COMPANION half runs the
-/// predicate on the defect itself, so a green scan is evidence of something.
-#[test]
-fn the_rewrite_apply_site_never_falls_back_to_the_caller_s_original_params() {
-    /// Does this code drop a failed read of the committed bytes and carry on with the originals?
-    fn has_lenient_reader(src: &str) -> bool {
-        src.lines().any(|l| {
-            let l = l.trim();
-            !l.starts_with("//")
-                && [
-                    "if let Ok(",
-                    "while let Ok(",
-                    ".ok()",
-                    ".flatten()",
-                    "unwrap_or_default()",
-                ]
-                .iter()
-                .any(|lenient| l.contains(lenient))
-        })
-    }
-
-    let src = include_str!("../plane_door.rs");
-    let site = src
-        .split_once("let rewrite = input.rewrite().bytes();")
-        .map(|(_, rest)| rest)
-        .expect("`project` reads the stage's rewrite");
-    let site = &site[..site
-        .find("let Some(projected) = projection(&envelope)")
-        .expect("and projects what it applied")];
-    assert!(
-        site.contains("rewritten_params(rewrite)"),
-        "the committed rewrite must be read through `rewritten_params`, whose `Err` refuses: {site}"
-    );
-    assert!(
-        !has_lenient_reader(site),
-        "`project` reads the committed rewrite through a conditional that drops the error: the \
-         hook committed a rewrite, busbar could not read it, and the ORIGINAL `params` went to the \
-         agent: {site}"
-    );
-    let arm = site
-        .split_once("Err(_) => {")
-        .map(|(_, rest)| rest)
-        .expect("the apply site has an `Err` arm");
-    assert!(
-        arm.contains("u.unreadable_rewrite = true;") && arm.contains("return Outcome::Refused;"),
-        "the `Err` arm must mark the unit and RETURN a refusal; a strict reader whose failure is \
-         stepped over relays the caller's original `params` as the lenient one did: {arm}"
-    );
-    let slot = src
-        .split_once("RefusalSlot, RefusalIn, RefusalOut")
-        .map(|(_, rest)| rest)
-        .expect("the refusal slot");
-    assert!(
-        slot.contains("u.filter(|u| u.unreadable_rewrite)?")
-            && slot.contains("Some(unreadable_rewrite(id))"),
-        "and `refusal` answers a marked unit predev's internal error"
-    );
-    assert!(
-        has_lenient_reader(
-            ".then(|| rewritten_params(rewrite))\n            .flatten()\n            .and_then(|p| p)"
-        ),
-        "the scan's predicate must match the defect it exists for, or a green scan is evidence of \
-         nothing"
-    );
-}
-
 /// A NOTIFICATION is the plane's own to acknowledge wherever it arrives, never relayed: `202` and
 /// no body at all, as the engine answered it (`jsonrpc::accepted`). Busbar's extended card is the
 /// plane's own on its own endpoint only; every other request goes on to an agent. RED before the
@@ -869,4 +838,122 @@ fn an_addressed_extended_card_read_is_relayed_as_a_task_less_hop() {
 #[test]
 fn the_statement_names_the_crates_version() {
     assert_eq!(VERSION, env!("CARGO_PKG_VERSION"));
+}
+
+/// G1-22: THE PARTS A KEY'S EARLIER VALUES RETIRED DO NOT ACCUMULATE: an agent whose over-ceiling
+/// card changes on every connect tombstones the parts of the value it replaces, not every part any
+/// value of the key ever had (a part an unwritten answer left behind is a stray the warm lists).
+#[test]
+fn the_tombstones_of_a_changing_split_record_stay_bounded() {
+    let plane = A2aDoor::default();
+    let size = 3 * busbar_contract::bounded::MAX_RECORD_BYTES;
+    let mut previous_parts = 0;
+    let mut last_tombstones = 0;
+    for i in 0..50_u32 {
+        let value: Vec<u8> = format!("{i:08}").bytes().cycle().take(size).collect();
+        let writes = kept_records(&plane, crate::records::KIND_CARD, "planner", &value);
+        let parts = writes
+            .iter()
+            .filter(|w| crate::split_record::is_part(&w.key) && !w.value.is_empty())
+            .count();
+        last_tombstones = writes.iter().filter(|w| w.value.is_empty()).count();
+        if i < 49 {
+            previous_parts = parts;
+        }
+    }
+    assert!(previous_parts > 1, "the value is split");
+    assert!(
+        last_tombstones <= previous_parts,
+        "{last_tombstones} tombstones for a key whose previous value had {previous_parts} parts"
+    );
+}
+
+/// G1-25: AN APPROVAL MADE BETWEEN A REFRESH AND ITS PUBLICATION IS KEPT: the trust reset the
+/// publication makes keeps every kept registration's approval as it stands then, not as it stood
+/// when the refresh was judged.
+#[test]
+fn an_approval_made_while_a_refresh_publishes_is_kept() {
+    let section =
+        br#"{"planner": {"url": "https://planner.example/a2a", "pin": {"mechanism": "unpinned"}}}"#;
+    let plane = A2aDoor::default();
+    let cfg = agents_section(section).expect("the section reads");
+    let spec = statement::agents_snapshot_spec(None, &["planner"]);
+    let _ = plane.generations.publish_with(1, &spec, cfg);
+    PlaneLife::published(&plane, 1);
+    PlaneLife::refresh(&plane, section, 2).expect("the apply is judged");
+    let approved: std::collections::BTreeMap<String, String> =
+        [("plan".to_string(), "sha256:x".to_string())].into();
+    plane.trust.insert(
+        "planner".to_string(),
+        crate::card_trust::TrustStanding {
+            approved: Some(approved.clone()),
+            ..Default::default()
+        },
+    );
+    PlaneLife::published(&plane, 2);
+    assert_eq!(
+        plane
+            .trust
+            .get(&"planner".to_string())
+            .and_then(|s| s.approved),
+        Some(approved)
+    );
+}
+
+/// The diagnostic lines `f` emits.
+fn diags_of<R>(f: impl FnOnce() -> R) -> (R, Vec<String>) {
+    let (sent, heard) = std::sync::mpsc::channel();
+    let r = tracing::subscriber::with_default(crate::tests::capture::Capture(sent), f);
+    (r, heard.try_iter().map(|(_, line)| line).collect())
+}
+
+/// G1-53 (lead ruling, 1.5.5's RewriteReply semantics): A REWRITE THAT YIELDS NO OBJECT LEAVES THE
+/// REQUEST UNMODIFIED, AND SAYS SO: one diagnostic line names the hook stage and why the rewrite
+/// was not applied; never silent.
+#[test]
+fn a_rewrite_that_yields_no_object_is_not_applied_and_says_so() {
+    let reply = br#"{"messages": [{"role": "user", "content": "[REDACTED]"}]}"#;
+    let (read, lines) = diags_of(|| rewritten_params(reply));
+    assert_eq!(read, Ok(None), "the request is left as it came");
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(
+        lines[0].contains("7045")
+            && lines[0].contains("request")
+            && lines[0].contains("not applied"),
+        "{lines:?}"
+    );
+}
+
+/// G1-54: A COMMITTED REWRITE BUSBAR CANNOT READ BACK IS REFUSED WITH ITS REASON NAMED: the caller
+/// reads the fixed internal error, and the operator reads what the hook returned.
+#[test]
+fn an_unreadable_rewrite_names_its_reason() {
+    let (read, lines) = diags_of(|| rewritten_params(b"not json"));
+    assert!(read.is_err());
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("7046") && l.contains("not JSON")),
+        "{lines:?}"
+    );
+    let (read, lines) = diags_of(|| rewritten_params(br#"{"tools": []}"#));
+    assert!(read.is_err());
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("7046") && l.contains("messages")),
+        "{lines:?}"
+    );
+}
+
+/// G1-2: THE FAR END'S TASK ID IS UNTRUSTED INPUT, BOUNDED IN BYTES as the map is in entries: an id
+/// longer than 1024 bytes is not held (the task keeps busbar's own id), so a far end
+/// answering half-megabyte ids cannot make the bounded map hold gigabytes.
+#[test]
+fn a_far_end_task_id_past_the_byte_bound_is_not_held() {
+    let map = BackendIds::default();
+    map.record(3, "amy/t1".to_string(), "x".repeat(400_000));
+    assert_eq!(map.get("amy/t1"), None);
+    map.record(3, "amy/t2".to_string(), "y".repeat(1024));
+    assert_eq!(map.get("amy/t2").map(|id| id.len()), Some(1024));
 }

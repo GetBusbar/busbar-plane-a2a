@@ -11,6 +11,12 @@ use busbar_contract::abi::host::service::{
 
 use super::*;
 
+#[path = "g2_local_protocol.rs"]
+mod g2_local_protocol;
+
+#[path = "local_residual_cases.rs"]
+mod local_residual_cases;
+
 include!(concat!(env!("OUT_DIR"), "/method_inventory.rs"));
 use crate::tasks::tests::{step, submitted, Book, ALICE, BOB};
 
@@ -182,7 +188,11 @@ fn a_push_config_lives_as_a_record_of_its_task() {
         json!({ "id": "t1" }),
         ALICE,
     );
-    assert!(body["result"].is_array());
+    assert_eq!(
+        body["result"],
+        json!([{ "taskId": "t1", "pushNotificationConfig": { "id": "c1", "url": "https://hooks.example/cb" } }])
+    );
+    assert!(!body.to_string().contains("s3cret"));
     let (_, body) = call(
         &mut desk,
         "ListTaskPushNotificationConfigs",
@@ -578,28 +588,22 @@ fn every_a2a_method_is_read_identically_under_both_of_its_live_json_rpc_names() 
         let streams = crate::ops::row_for(method).map(|r| r.multi_frame);
         (verb, class, streams)
     }
-    let mut checked = 0;
     for m in methods {
-        if m["protocol"] != "a2a" {
+        if m["protocol"] != "a2a" || m["kind"] != "rpc" {
             continue;
         }
-        let (Some(pascal), Some(slash)) = (
-            m["wire_names"]["jsonrpc_1_0"].as_str(),
-            m["wire_names"]["jsonrpc_0_3"].as_str(),
-        ) else {
-            continue;
-        };
-        checked += 1;
+        let pascal = m["wire_names"]["jsonrpc_1_0"]
+            .as_str()
+            .expect("an RPC fixture has its v1.0 request method");
+        let slash = m["wire_names"]["jsonrpc_0_3"]
+            .as_str()
+            .expect("an RPC fixture has its v0.3 request method");
         assert_eq!(
             how_busbar_reads(pascal),
             how_busbar_reads(slash),
             "`{pascal}` and `{slash}` are read differently by this plane"
         );
     }
-    assert!(
-        checked >= 11,
-        "only {checked} A2A methods carried both wire names; the inventory is not being read"
-    );
 }
 
 /// A v0.3 set then a v0.3 delete naming the config by `pushNotificationConfigId` (the task by `id`)

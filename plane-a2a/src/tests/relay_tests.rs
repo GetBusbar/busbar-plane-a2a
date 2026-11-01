@@ -6,8 +6,20 @@
 //! `receive::refuse_hop_early`).
 
 use super::*;
+
+#[path = "relay_raw_custody.rs"]
+mod raw_custody;
+
+#[path = "relay_failure_diagnostic_cases.rs"]
+mod relay_failure_diagnostic_cases;
 use crate::tests::capture::Capture;
 use serde_json::json;
+
+#[path = "relay_g2_tests.rs"]
+mod relay_g2_tests;
+
+#[path = "relay_diagnostic_cases.rs"]
+mod relay_diagnostic_cases;
 
 const URL: &str = "https://vendor.example/a2a/v1?tenant=t1";
 const ASK: &[u8] = br#"{"jsonrpc":"2.0","id":7,"method":"GetExtendedAgentCard"}"#;
@@ -550,7 +562,7 @@ fn a_failed_hop_about_a_held_task_fails_the_request_never_the_task() {
     let mut r = task_sent(true);
     let far = br#"{"jsonrpc":"2.0","id":7,"error":{"code":-32002,"message":"no"}}"#;
     let reply = answered(&mut r, 200, far);
-    assert_eq!(reply.status, 409);
+    assert_eq!(reply.status, 400);
     assert_eq!(
         body(&reply),
         about(
@@ -603,6 +615,65 @@ fn a_translated_request_is_sent_once_per_attempt_in_place_of_the_callers_pieces(
         r.on_piece(caller(b"again")),
         PieceAnswer::ToFarEnd(b"translated".to_vec())
     );
+}
+
+#[test]
+fn a_sensitive_replacement_survives_retry_without_reusing_the_callers_body() {
+    let mut relay = HopRelay::new(json!(7), "1.0");
+    let original = br#"{"credential":"caller-secret"}"#;
+    let replacement = br#"{"credential":"translated-secret"}"#;
+    relay.send_instead(replacement.to_vec());
+    for _ in 0..2 {
+        assert!(matches!(
+            relay.on_piece(kernel(Some(URL))),
+            PieceAnswer::Attempt(_)
+        ));
+        assert_eq!(
+            relay.on_piece(caller(original)),
+            PieceAnswer::ToFarEnd(replacement.to_vec()),
+            "each attempt sends the complete replacement"
+        );
+        assert_eq!(
+            relay.on_piece(caller(b"later caller piece")),
+            PieceAnswer::Nothing,
+            "later caller pieces cannot append to a replaced request"
+        );
+    }
+}
+
+#[test]
+fn a_partial_sensitive_answer_is_replaced_on_retry_and_a_refusal_does_not_echo_it() {
+    let mut relay = sent();
+    assert_eq!(
+        relay.on_piece(far(
+            Some(200),
+            br#"{"jsonrpc":"2.0","id":7,"result":"stale-secret"#,
+            false
+        )),
+        PieceAnswer::Nothing
+    );
+    assert!(matches!(
+        relay.on_piece(kernel(Some(URL))),
+        PieceAnswer::Attempt(_)
+    ));
+    assert_eq!(relay.on_piece(caller(ASK)), PieceAnswer::ToFarEndLent);
+    let fresh = br#"{"jsonrpc":"2.0","id":7,"result":"fresh-secret"}"#;
+    let (first, last) = fresh.split_at(fresh.len() / 2);
+    assert_eq!(
+        relay.on_piece(far(Some(200), first, false)),
+        PieceAnswer::Nothing
+    );
+    let PieceAnswer::ToCaller(reply) = relay.on_piece(far(None, last, true)) else {
+        panic!("the complete retry answers");
+    };
+    let answer: serde_json::Value = serde_json::from_slice(&reply.body).unwrap();
+    assert_eq!(answer["result"], "fresh-secret");
+    assert!(!String::from_utf8_lossy(&reply.body).contains("stale-secret"));
+
+    let mut refused = sent();
+    let reply = answered(&mut refused, 503, b"upstream-secret");
+    assert_eq!(reply.status, 502);
+    assert!(!String::from_utf8_lossy(&reply.body).contains("upstream-secret"));
 }
 
 // ── the outbound binding (ARCHITECT ruling B4) ───────────────────────────────────────────────────
@@ -915,6 +986,41 @@ fn an_uncorrelated_event_refuses_before_the_answer_and_ends_it_after() {
         PieceAnswer::Nothing,
         "nothing after the end"
     );
+}
+
+#[test]
+fn malformed_data_fails_the_stream_without_forwarding_backend_bytes() {
+    for data in [
+        b"data: PRIVATE not json\n\n".as_slice(),
+        b"data: {\"id\":\"PRIVATE-backend-id\"}\n\n",
+    ] {
+        for started in [false, true] {
+            let (mut relay, _) = events_sent();
+            if started {
+                let first = event(json!({"kind":"status-update","status":{"state":"working"}}));
+                assert!(!part(relay.on_piece(far(Some(200), &first, false))).last);
+                let _ = relay.take_settled();
+                let _ = relay.take_reading();
+            }
+            let answer = relay.on_piece(far(Some(200), data, false));
+            if started {
+                let end = part(answer);
+                assert!(end.last && !end.head && end.body.is_empty());
+            } else {
+                let PieceAnswer::ToCaller(reply) = answer else {
+                    panic!("{answer:?}");
+                };
+                assert_eq!(reply.status, 502);
+                assert!(!String::from_utf8_lossy(&reply.body).contains("PRIVATE"));
+            }
+            assert_eq!(relay.take_settled(), vec![TaskSettled::Failed]);
+            assert_eq!(relay.take_reading(), Some(Reading::Transient));
+            assert_eq!(
+                relay.on_piece(far(None, b"late", true)),
+                PieceAnswer::Nothing
+            );
+        }
+    }
 }
 
 /// A status outside 2xx is the unary hop's backend-status refusal, whatever the body.
@@ -1244,12 +1350,19 @@ fn a_refused_hops_journal_line_names_the_backend_and_the_callers_answer_does_not
                 let (mut r, _) = events_sent();
                 let first =
                     event(json!({ "kind": "status-update", "status": { "state": "working" } }));
-                let _ = r.on_piece(far(Some(200), &first, false));
-                let _ = r.on_piece(far(None, other, false));
+                let started = part(r.on_piece(far(Some(200), &first, false)));
+                assert!(started.head && !started.last && !started.body.is_empty());
+                let refused = part(r.on_piece(far(None, other, false)));
+                assert!(
+                    !refused.head && refused.last,
+                    "the refusal ends the caller's stream"
+                );
+                let mut body = started.body;
+                body.extend(refused.body);
                 RelayReply {
                     status: 0,
                     content_type: "",
-                    body: Vec::new(),
+                    body,
                 }
             }),
         ),

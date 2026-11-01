@@ -13,7 +13,7 @@ fn fed(r: &mut SseReader, chunk: &[u8]) -> Vec<String> {
     r.frames().map(str::to_string).collect()
 }
 
-/// All three of the spec's line terminators end a line, so all nine of their pairings end a frame —
+/// The spec's LF, CR and CRLF line terminators end a line. Each distinct two-line boundary ends a frame —
 /// mirroring the http transport's `sse::proto` test `every_spec_line_terminator_pairing_ends_a_frame`
 /// over `SseReader::feed` rather than the bare scanner. A bare-CR stream (or one mixing terminators
 /// across the frame boundary) must frame exactly like an LF/CRLF one.
@@ -25,7 +25,7 @@ fn every_spec_line_terminator_pairing_ends_a_frame() {
         ("data: a\r\n\rrest", "data: a\r\n\r"),
         ("data: a\n\r\nrest", "data: a\n\r\n"),
         ("data: a\r\n\n", "data: a\r\n\n"),
-        ("data: a\n\r\n", "data: a\n\r\n"),
+        ("data: a\r\r\nrest", "data: a\r\r\n"),
         ("data: a\n\nrest", "data: a\n\n"),
         ("data: a\r\n\r\nrest", "data: a\r\n\r\n"),
     ];
@@ -53,6 +53,7 @@ fn test_terminator_split_across_chunks_still_frames() {
         ("data: a\r\n", "\r\n", "data: a\r\n\r\n", ""),
         ("data: a\r\n\r", "\n", "data: a\r\n\r\n", ""),
         ("data: a\n", "\n", "data: a\n\n", ""),
+        ("data: a\r", "\r\nrest", "data: a\r\r\n", "rest"),
         // A bare CR ending the tail is ITSELF ambiguous (it may still turn out to be a CRLF), so
         // the tail carries one more, unambiguous byte after it; that byte is not part of the
         // terminator and stays pending.

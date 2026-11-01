@@ -1,6 +1,7 @@
 {
   "_comment": [
-    "The A2A method inventory: every method x originator x role x transport cell, moved here from busbar's qa/method-inventory.json."
+    "Historical method and role metadata moved from busbar's qa/method-inventory.json; this file is not coverage certification.",
+    "Unused gRPC wire-name copies were removed. Service-path behavior is exercised by the framed request and dial tests."
   ],
   "a2a_spec_tag": "v1.0.1",
   "derived_from": {
@@ -26,8 +27,7 @@
       "wire_names": {
         "jsonrpc_1_0": "CancelTask",
         "jsonrpc_0_3": "tasks/cancel",
-        "http+json": "POST /tasks/{id=*}:cancel",
-        "grpc": "/a2a.v1.A2AService/CancelTask"
+        "http+json": "POST /tasks/{id=*}:cancel"
       },
       "na": {}
     },
@@ -46,8 +46,7 @@
       "wire_names": {
         "jsonrpc_1_0": "CreateTaskPushNotificationConfig",
         "jsonrpc_0_3": "tasks/pushNotificationConfig/set",
-        "http+json": "POST /tasks/{task_id=*}/pushNotificationConfigs",
-        "grpc": "/a2a.v1.A2AService/CreateTaskPushNotificationConfig"
+        "http+json": "POST /tasks/{task_id=*}/pushNotificationConfigs"
       },
       "na": {}
     },
@@ -66,8 +65,7 @@
       "wire_names": {
         "jsonrpc_1_0": "DeleteTaskPushNotificationConfig",
         "jsonrpc_0_3": "tasks/pushNotificationConfig/delete",
-        "http+json": "DELETE /tasks/{task_id=*}/pushNotificationConfigs/{id=*}",
-        "grpc": "/a2a.v1.A2AService/DeleteTaskPushNotificationConfig"
+        "http+json": "DELETE /tasks/{task_id=*}/pushNotificationConfigs/{id=*}"
       },
       "na": {}
     },
@@ -86,8 +84,7 @@
       "wire_names": {
         "jsonrpc_1_0": "GetExtendedAgentCard",
         "jsonrpc_0_3": "agent/getAuthenticatedExtendedCard",
-        "http+json": "GET /extendedAgentCard",
-        "grpc": "/a2a.v1.A2AService/GetExtendedAgentCard"
+        "http+json": "GET /extendedAgentCard"
       },
       "na": {}
     },
@@ -106,8 +103,7 @@
       "wire_names": {
         "jsonrpc_1_0": "GetTask",
         "jsonrpc_0_3": "tasks/get",
-        "http+json": "GET /tasks/{id=*}",
-        "grpc": "/a2a.v1.A2AService/GetTask"
+        "http+json": "GET /tasks/{id=*}"
       },
       "na": {}
     },
@@ -126,8 +122,7 @@
       "wire_names": {
         "jsonrpc_1_0": "GetTaskPushNotificationConfig",
         "jsonrpc_0_3": "tasks/pushNotificationConfig/get",
-        "http+json": "GET /tasks/{task_id=*}/pushNotificationConfigs/{id=*}",
-        "grpc": "/a2a.v1.A2AService/GetTaskPushNotificationConfig"
+        "http+json": "GET /tasks/{task_id=*}/pushNotificationConfigs/{id=*}"
       },
       "na": {}
     },
@@ -146,8 +141,7 @@
       "wire_names": {
         "jsonrpc_1_0": "ListTaskPushNotificationConfigs",
         "jsonrpc_0_3": "tasks/pushNotificationConfig/list",
-        "http+json": "GET /tasks/{task_id=*}/pushNotificationConfigs",
-        "grpc": "/a2a.v1.A2AService/ListTaskPushNotificationConfigs"
+        "http+json": "GET /tasks/{task_id=*}/pushNotificationConfigs"
       },
       "na": {}
     },
@@ -166,8 +160,7 @@
       "wire_names": {
         "jsonrpc_1_0": "ListTasks",
         "jsonrpc_0_3": "tasks/list",
-        "http+json": "GET /tasks",
-        "grpc": "/a2a.v1.A2AService/ListTasks"
+        "http+json": "GET /tasks"
       },
       "na": {}
     },
@@ -186,8 +179,7 @@
       "wire_names": {
         "jsonrpc_1_0": "SendMessage",
         "jsonrpc_0_3": "message/send",
-        "http+json": "POST /message:send",
-        "grpc": "/a2a.v1.A2AService/SendMessage"
+        "http+json": "POST /message:send"
       },
       "na": {}
     },
@@ -206,8 +198,7 @@
       "wire_names": {
         "jsonrpc_1_0": "SendStreamingMessage",
         "jsonrpc_0_3": "message/stream",
-        "http+json": "POST /message:stream",
-        "grpc": "/a2a.v1.A2AService/SendStreamingMessage"
+        "http+json": "POST /message:stream"
       },
       "na": {}
     },
@@ -226,8 +217,7 @@
       "wire_names": {
         "jsonrpc_1_0": "SubscribeToTask",
         "jsonrpc_0_3": "tasks/resubscribe",
-        "http+json": "GET /tasks/{id=*}:subscribe",
-        "grpc": "/a2a.v1.A2AService/SubscribeToTask"
+        "http+json": "GET /tasks/{id=*}:subscribe"
       },
       "na": {}
     },

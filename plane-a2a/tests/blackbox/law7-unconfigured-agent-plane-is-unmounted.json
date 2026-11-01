@@ -111,6 +111,10 @@
         "port": "data",
         "method": "POST",
         "path": "/a2a",
+        "status": 404,
+        "body_contains": [
+          "\"error\""
+        ],
         "body_lacks": [
           "error_description"
         ]

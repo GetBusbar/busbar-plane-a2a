@@ -27,6 +27,15 @@ struct ObjectMember {
     value: Range<usize>,
 }
 
+// Observe the actual old initialized owner at retirement without changing its nonwiping drop.
+#[cfg(test)]
+impl Drop for ObjectMember {
+    fn drop(&mut self) {
+        crate::tests::raw_custody_probe::before_wipe(self.key.as_bytes());
+        crate::tests::raw_custody_probe::after_wipe(self.key.as_bytes());
+    }
+}
+
 /// `i` moved past the JSON whitespace at it.
 fn past_blank(b: &[u8], mut i: usize) -> usize {
     while i < b.len() && matches!(b[i], b' ' | b'\t' | b'\n' | b'\r') {
@@ -77,14 +86,18 @@ fn object_members(b: &[u8], span: &Range<usize>) -> Option<Vec<ObjectMember>> {
             return None;
         }
         let key_span = value_at(b, j)?;
-        let key: String = serde_json::from_slice(&b[key_span.clone()]).ok()?;
+        let mut member = ObjectMember {
+            key: serde_json::from_slice(&b[key_span.clone()]).ok()?,
+            value: 0..0,
+        };
         j = past_blank(b, key_span.end);
         if b.get(j) != Some(&b':') {
             return None;
         }
         let value = value_at(b, j + 1)?;
         j = past_blank(b, value.end);
-        out.push(ObjectMember { key, value });
+        member.value = value;
+        out.push(member);
         match b.get(j)? {
             b',' => j = past_blank(b, j + 1),
             b'}' => return Some(out),

@@ -8,6 +8,20 @@ use serde_json::{json, Value};
 
 use super::*;
 
+#[test]
+fn malformed_member_wipes_the_decoded_pending_key() {
+    // The unescaped key is borrowed by serde_json's reader and copied into the actual key
+    // String. The retirement hook sees that owner, independently of escaped parser scratch.
+    const MALFORMED_MEMBER_ENDINGS: [&str; 2] = ["}", ":}"];
+    let key = std::str::from_utf8(crate::tests::raw_custody_probe::SECRET).unwrap();
+    for ending in MALFORMED_MEMBER_ENDINGS {
+        let input = format!("{{\"{key}\"{ending}");
+        crate::tests::raw_custody_probe::assert_wiped(|| {
+            assert!(object_members(input.as_bytes(), &(0..input.len())).is_none());
+        });
+    }
+}
+
 const WRAPPERS: [(&str, &str); 4] = [
     ("task", "id"),
     ("message", "taskId"),

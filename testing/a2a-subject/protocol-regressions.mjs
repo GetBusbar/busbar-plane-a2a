@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import net from 'node:net';
 import http from 'node:http';
+import http2 from 'node:http2';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
@@ -13,7 +14,9 @@ import { setTimeout as delay } from 'node:timers/promises';
 const directory = fileURLToPath(new URL('.', import.meta.url));
 const children = [];
 const temporary = await mkdtemp(join(tmpdir(), 'a2a-protocol-'));
+const received = [];
 const backend = http.createServer((req, res) => {
+  received.push(req.headers);
   res.setHeader('content-type', 'application/json');
   res.end(JSON.stringify({ name: 'probe', 'Ā': 1, 'ÿ': 2 }));
 });
@@ -31,8 +34,11 @@ async function unusedPort() {
   return port;
 }
 async function start(script, port, ...args) {
+  const credential = script === 'binding-shim.mjs' ? args.pop() : null;
+  if (credential !== null) args.push('-');
   const child = spawn(process.execPath, [join(directory, script), String(port), ...args.map(String)],
-                      { stdio: ['ignore', 'ignore', 'inherit'] });
+                      { stdio: [credential === null ? 'ignore' : 'pipe', 'ignore', 'inherit'] });
+  if (credential !== null) child.stdin.end(credential);
   children.push(child);
   for (let attempt = 0; attempt < 100; attempt++) {
     if (child.exitCode !== null) throw new Error(`${script} exited ${child.exitCode}`);
@@ -85,6 +91,29 @@ try {
                        Buffer.from(signature.signature, 'base64url')), 'signature must use UTF-16 key order');
   const shimPort = await unusedPort();
   await start('binding-shim.mjs', shimPort, backendPort, 'fixture-token');
+  const local = `http://127.0.0.1:${shimPort}`;
+  assert.equal((await fetch(local)).status, 200);
+  assert.equal(received.at(-1).authorization, 'Bearer fixture-token');
+  assert.equal((await fetch(local, { headers: { authorization: 'Bearer explicit' } })).status, 200);
+  assert.equal(received.at(-1).authorization, 'Bearer explicit');
+  const beforeRefusal = received.length;
+  assert.equal((await fetch(local, { headers: { host: 'attacker.invalid' } })).status, 403);
+  assert.equal((await fetch(local, { headers: { origin: 'https://attacker.invalid' } })).status, 403);
+  assert.equal(received.length, beforeRefusal, 'rejected HTTP/1 requests must never reach upstream');
+  const session = http2.connect(local);
+  try {
+    const status = await new Promise((resolve, reject) => {
+      const stream = session.request({ ':path': '/', ':authority': 'attacker.invalid' });
+      stream.on('error', reject);
+      stream.on('response', headers => resolve(headers[':status']));
+      stream.resume();
+      stream.end();
+    });
+    assert.equal(status, 403);
+    assert.equal(received.length, beforeRefusal, 'rejected HTTP/2 requests must never reach upstream');
+  } finally {
+    session.close();
+  }
   for (const length of [1, 2, 3, 23, 24]) await fragmentedPreface(shimPort, length);
   console.log('A2A subject protocol regressions passed');
 } finally {

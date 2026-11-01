@@ -755,8 +755,14 @@ mod both_ways {
         // R-15: the agent's own card is served at the protocol's discovery path under its
         // endpoint, the same answer as the agent's card at its endpoint.
         let after = |l: &str, target: &str| {
+            assert!(
+                l.contains(&format!("{:?}", Outcome::Ready)),
+                "the compared arrival must be Ready: {l}"
+            );
             l.split_once(&format!(" {target} "))
-                .map(|(_, r)| r.to_string())
+                .unwrap_or_else(|| panic!("arrival does not contain its target `{target}`: {l}"))
+                .1
+                .to_string()
         };
         assert_eq!(
             after(
@@ -791,9 +797,10 @@ mod both_ways {
             line(&t, "refusal cause=1 ")
         );
         // THE gRPC LINE: a call arrives on the framed dialect; a method the service does not have
-        // is UNIMPLEMENTED with no message, a message that does not read INTERNAL, a kernel
-        // refusal the status the engine's bridge read off its envelope (`-32004`, UNIMPLEMENTED)
-        // with its words. Each is the call's closing block (`grpc-status`, then the percent-encoded
+        // is UNIMPLEMENTED with no message, a message that does not read INTERNAL, and a kernel
+        // budget refusal UNAVAILABLE with its words. The refusal's catch-all envelope code
+        // does not mean that the requested method is unimplemented. Each is the call's closing
+        // block (`grpc-status`, then the percent-encoded
         // `grpc-message` where there is one) at the refusal's neutral status, with no media type:
         // the stream's framer sends the block as the whole answer (SEAM-4l).
         let sent = line(&t, "arrive 8 ");
@@ -821,7 +828,7 @@ mod both_ways {
             framed[1]
         );
         assert!(
-            framed[2].contains("[] grpc-status: 12\r\n")
+            framed[2].contains("[] grpc-status: 14\r\n")
                 && framed[2].contains("grpc-message: this%20key%20is%20over%20its%20budget\r\n"),
             "{}",
             framed[2]
@@ -879,8 +886,8 @@ mod both_ways {
         );
         assert_eq!(body_of(rest)["tool"], json!("SendMessage"));
         assert_eq!(
-            line(&t, "project 5 "),
-            line(&t, "project 5 "),
+            body_of(line(&t, "project 5 ")),
+            json!({ "tool": "ListTasks", "arguments": { "pageSize": 5, "status": "working" } }),
             "a listing projects its envelope too"
         );
     }

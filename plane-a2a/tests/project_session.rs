@@ -30,6 +30,15 @@ fn ops() -> &'static Ops {
 /// checked as the loader checks every answer (`check_project`): the outcome and the session the
 /// view names, as text (`None` = absent).
 fn project_session(claim: usize, target: &str, body: &[u8]) -> (Outcome, Option<String>) {
+    let (outcome, session, _) = project_view(claim, target, body);
+    (outcome, session)
+}
+
+fn project_view(
+    claim: usize,
+    target: &str,
+    body: &[u8],
+) -> (Outcome, Option<String>, Option<serde_json::Value>) {
     use busbar_contract::abi::hook::SignalEntry;
     use busbar_contract::abi::mechanism::call::{AbiStr, Blob, BLOB_OCTETS};
     use busbar_contract::abi::sdk::door::{blank_in, blank_out};
@@ -96,7 +105,37 @@ fn project_session(claim: usize, target: &str, body: &[u8]) -> (Outcome, Option<
         let at = s.ptr() as usize - arena.as_ptr() as usize;
         String::from_utf8(arena[at..at + s.len()].to_vec()).unwrap()
     });
-    (outcome, session)
+    let body = out.body;
+    let projection =
+        (body.offset != busbar_contract::abi::mechanism::check::SPAN_ABSENT).then(|| {
+            let at = body.offset as usize;
+            serde_json::from_slice(&arena[at..at + body.len as usize]).unwrap()
+        });
+    (outcome, session, projection)
+}
+
+#[test]
+fn the_projection_and_session_keep_the_same_request_values() {
+    let params = json!({
+        "message": {"role":"user", "messageId":"m-one", "contextId":"ctx-one",
+                    "parts":[{"text":"screen this"}, {"data":{"id":"user-id","nested":[1,2,3]}}]},
+        "metadata": {"name":"user-name", "timestamp":"user-time"}
+    });
+    let body = serde_json::to_vec(
+        &json!({"jsonrpc":"2.0", "id":7, "method":"message/send", "params":params}),
+    )
+    .unwrap();
+    let (outcome, session, projection) = project_view(
+        claim_of("POST", "/a2a/agents/{agent_id}"),
+        "/a2a/agents/vendor",
+        &body,
+    );
+    assert_eq!(outcome, Outcome::Ready);
+    assert_eq!(session.as_deref(), Some("ctx-one"));
+    assert_eq!(
+        projection,
+        Some(json!({"tool":"message/send", "arguments":params}))
+    );
 }
 
 /// The claim the door states for `verb target`.

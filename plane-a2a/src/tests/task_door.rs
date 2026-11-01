@@ -178,3 +178,6 @@ fn the_sizes_book_is_bounded() {
     );
     assert_eq!(grown.len(), 1);
 }
+
+#[path = "task_door_lifecycle_cases.rs"]
+mod lifecycle_cases;

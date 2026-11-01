@@ -13,6 +13,9 @@ use crate::proto::pb;
 use prost::Message as _;
 use serde_json::json;
 
+#[path = "relay_grpc_g2_tests.rs"]
+mod relay_grpc_g2_tests;
+
 /// The operator's `url:` for the agent: its path is never the rpc's.
 const URL: &str = "https://backend.agent.test/a2a";
 
@@ -413,9 +416,9 @@ fn a_grpc_attempt_rides_the_doors_grpc_need() {
 /// THE CALL'S END AS THE KERNEL HANDS IT ON (`BUSBAR-1.6.0.md` l.394, l.747): a call that ends
 /// with an error status reaches the plane as its trailers, the answer's LAST piece, with the status
 /// the transport read off them beside them. The caller is answered the A2A error the status binds,
-/// and the breaker is handed the destination ANSWERING (the engine's `classify_hop`: a well-formed
-/// backend error is a success to the breaker, never a transient); UNAUTHENTICATED refuses busbar
-/// itself, as a 401 does. Trailers handed on with NO status state no code, whatever their details
+/// and the breaker reads the gRPC status (transient failures, authorization refusals, or a
+/// healthy work refusal); UNAUTHENTICATED refuses busbar itself, as a 401 does.
+/// Trailers handed on with NO status state no code, whatever their details
 /// carry (RED: the details' own `google.rpc.Status` code was read as the call's status).
 #[test]
 fn a_status_handed_on_with_the_last_trailers_ends_the_call() {
@@ -470,12 +473,10 @@ fn a_status_handed_on_with_the_last_trailers_ends_the_call() {
     block.extend_from_slice(LINE_END);
     let mut r = hop();
     let reply = answered(r.on_far_fields(&block, None, true));
-    assert_ne!(
-        body(&reply)["error"]["code"],
-        -32001,
-        "the details state no status: {:?}",
-        body(&reply)
-    );
+    assert_eq!(reply.status, 502);
+    assert_eq!(body(&reply)["error"]["code"], -32006);
+    assert!(body(&reply).get("result").is_none());
+    assert_eq!(r.take_reading(), Some(Reading::Transient));
 }
 
 /// MONEY (this cell touches money: it reads the count the door reports as the hop's billed
