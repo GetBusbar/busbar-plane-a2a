@@ -824,11 +824,7 @@ impl Deliveries {
             }
         });
         // Wake even a held attempt: drive abandons its now-withdrawn exchange before continuing.
-        self.wake.with(&(), |armed| {
-            if let Some(wake) = armed {
-                wake();
-            }
-        });
+        self.wake_unconditionally();
     }
 }
 
@@ -994,3 +990,7 @@ impl PushLimiter {
 #[cfg(test)]
 #[path = "tests/push.rs"]
 pub(crate) mod tests;
+
+#[cfg(test)]
+#[path = "tests/push_wake_custody.rs"]
+mod wake_custody_tests;
