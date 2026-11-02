@@ -44,7 +44,7 @@ unsafe impl GlobalAlloc for InspectBeforeFree {
 
     unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
         let _ = WATCH.try_with(|watch| {
-            if let Some((watched, len)) = watch.get().filter(|(watched, _)| *watched == pointer) {
+            if let Some((_, len)) = watch.get().filter(|(watched, _)| *watched == pointer) {
                 watch.set(None);
                 let wiped = len <= layout.size()
                     && (0..len).all(|index| {
