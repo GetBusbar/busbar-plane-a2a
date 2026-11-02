@@ -1629,11 +1629,8 @@ async fn an_agent_unit_outside_the_callers_grant_is_refused_before_it_dials() {
         ("ListTasks", "{}"),
         ("tasks/list", "{}"),
     ] {
-        let (status, body) = answered(
-            &s.router,
-            rpc("planner", method, params, Some(&s.token)),
-        )
-        .await;
+        let (status, body) =
+            answered(&s.router, rpc("planner", method, params, Some(&s.token))).await;
         assert_not_granted(status, &body, "planner");
         assert!(heard.try_recv().is_err(), "{method}: nothing was dialled");
         assert_eq!(admitted(&s), 0, "{method}: nothing charged");
