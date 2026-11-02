@@ -15,10 +15,8 @@ use busbar_contract::abi::host::service::{self as svc, DestJudgeIn, TrustServesI
 use busbar_contract::abi::mechanism::call::Outcome;
 use busbar_contract::abi::mechanism::ticket::Ticket;
 use busbar_contract::abi::sdk::conn::Host;
-use busbar_contract::abi::sdk::test_support::fake::{
-    conn, host, FakeHost, FakeService, ServiceCall,
-};
 use busbar_contract::abi::sdk::Services;
+use busbar_test_kit::test_support::fake::{conn, host, FakeHost, FakeService, ServiceCall};
 
 use super::*;
 

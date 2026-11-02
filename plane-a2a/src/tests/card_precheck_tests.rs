@@ -12,7 +12,7 @@ use busbar_contract::abi::host::conn::connector::EstablishIn;
 use busbar_contract::abi::mechanism::call::Outcome;
 use busbar_contract::abi::mechanism::ticket::Ticket;
 use busbar_contract::abi::sdk::conn::Host;
-use busbar_contract::abi::sdk::test_support::fake::{conn, FakeHost, FakeService, ServiceCall};
+use busbar_test_kit::test_support::fake::{conn, FakeHost, FakeService, ServiceCall};
 
 use super::*;
 
@@ -139,7 +139,7 @@ fn the_canonical_paths_refusal_survives_the_legacy_paths() {
     let fake: &'static FakeHost = Box::leak(Box::new(
         FakeHost::new()
             .serve(
-                busbar_contract::abi::sdk::test_support::fake::host::DEST_JUDGE,
+                busbar_test_kit::test_support::fake::host::DEST_JUDGE,
                 LoopbackThenUnresolvable,
             )
             .serve(conn::ESTABLISH, Dial),
