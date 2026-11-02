@@ -74,7 +74,7 @@ mod actual_admission {
         let linked_parts =
             unsafe { busbar_contract::abi::mechanism::door::Door::read_parts(linked_address) };
         assert_ne!(
-            door_address, linked_address as usize,
+            door_address, linked_address as *const _ as usize,
             "the actual images have distinct doors"
         );
         assert_ne!(
