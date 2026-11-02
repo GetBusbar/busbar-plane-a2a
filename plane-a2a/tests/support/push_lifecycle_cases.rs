@@ -488,11 +488,15 @@ fn settlement_driver(door: &Door, receipt: &[u8], tick: bool) -> Driven {
         input.head.extensions = octets(&extensions);
         let mut output: TickOut = z();
         output.head = out_head::<TickOut>();
-        let result = lifecycle().tick.unwrap()(
-            door.instance,
-            std::ptr::from_ref(&input).cast(),
-            std::ptr::from_mut(&mut output).cast(),
-        );
+        // SAFETY: the active Door owns this table's instance. TickIn/Out and the input's
+        // extension bytes remain live through the call and copying/releasing its answer.
+        let result = unsafe {
+            lifecycle().tick.unwrap()(
+                door.instance,
+                std::ptr::from_ref(&input).cast(),
+                std::ptr::from_mut(&mut output).cast(),
+            )
+        };
         Driven {
             outcome: result.outcome(),
             extensions: copied_extensions(door, &output.head),
@@ -511,11 +515,15 @@ fn settlement_driver(door: &Door, receipt: &[u8], tick: bool) -> Driven {
         input.drive.head.extensions = octets(&extensions);
         let mut output: PlaneDriveOut = z();
         output.head = out_head::<PlaneDriveOut>();
-        let result = lifecycle().drive.unwrap()(
-            door.instance,
-            std::ptr::from_ref(&input).cast(),
-            std::ptr::from_mut(&mut output).cast(),
-        );
+        // SAFETY: the active Door owns this table's instance. The complete PlaneDriveIn/Out,
+        // extension bytes and exclusive initialized sessions buffer stay live for the call.
+        let result = unsafe {
+            lifecycle().drive.unwrap()(
+                door.instance,
+                std::ptr::from_ref(&input).cast(),
+                std::ptr::from_mut(&mut output).cast(),
+            )
+        };
         Driven {
             outcome: result.outcome(),
             extensions: copied_extensions(door, &output.head),
@@ -695,6 +703,10 @@ fn piece_sized(
                 std::ptr::from_mut(&mut o).cast(),
             )
         };
+        assert!(
+            o.emitted <= reply_cap as u64,
+            "the reply window fits its buffer"
+        );
         let ext = copied_extensions(door, &o.head);
         if busbar_contract::abi::sdk::plane::conditional::read_request(&ext)
             .unwrap()
@@ -717,8 +729,7 @@ fn piece_sized(
         if let Some(next) = next_conditional(
             ticket(unit),
             ret.outcome(),
-            o.reply_needed > reply_cap as u64
-                || o.fields_needed as usize > fields.len()
+            o.fields_needed as usize > fields.len()
                 || o.arena_needed as usize > arena.len()
                 || o.records_needed as usize > records.len()
                 || o.units_needed as usize > units.len(),

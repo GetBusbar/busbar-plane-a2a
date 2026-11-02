@@ -1025,11 +1025,15 @@ impl Door {
         let mut o: PlaneCancelOut = z();
         o.cancel.head = out_head::<PlaneCancelOut>();
         let f = lifecycle().cancel.expect("cancel");
-        let ret = f(
-            self.instance,
-            std::ptr::from_ref(&i).cast(),
-            std::ptr::from_mut(&mut o).cast(),
-        );
+        // SAFETY: this live Door owns the instance of this lifecycle table. The complete
+        // PlaneCancelIn/Out frames stay live for the synchronous call; no buffers are lent.
+        let ret = unsafe {
+            f(
+                self.instance,
+                std::ptr::from_ref(&i).cast(),
+                std::ptr::from_mut(&mut o).cast(),
+            )
+        };
         ret.outcome()
     }
 
@@ -1044,11 +1048,15 @@ impl Door {
         let mut o: PlaneCancelOut = z();
         o.cancel.head = out_head::<PlaneCancelOut>();
         let f = lifecycle().cancel.expect("cancel");
-        let ret = f(
-            self.instance,
-            std::ptr::from_ref(&i).cast(),
-            std::ptr::from_mut(&mut o).cast(),
-        );
+        // SAFETY: this live Door owns the instance of this lifecycle table. The complete
+        // PlaneCancelIn/Out frames stay live for the synchronous call; no buffers are lent.
+        let ret = unsafe {
+            f(
+                self.instance,
+                std::ptr::from_ref(&i).cast(),
+                std::ptr::from_mut(&mut o).cast(),
+            )
+        };
         assert_eq!(ret.outcome(), Outcome::Ready);
         o.cancel.disposition
     }
