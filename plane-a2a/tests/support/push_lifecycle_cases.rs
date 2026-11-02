@@ -8,6 +8,9 @@ use serde_json::{json, Value};
 #[path = "conditional_callback_host.rs"]
 mod conditional_host;
 
+#[path = "refusal_output_cases.rs"]
+mod refusal_output_cases;
+
 #[derive(Default)]
 struct Script {
     conditional: conditional_host::Host,

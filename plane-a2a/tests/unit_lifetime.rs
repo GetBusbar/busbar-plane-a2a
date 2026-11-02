@@ -685,6 +685,18 @@ impl PieceFrame {
             outcome: Some(outcome),
             more: o.more,
             flags: o.flags,
+            reply_status: Some(o.reply_status),
+            records_written: Some(o.records_written),
+            units_written: Some(o.units_written),
+            lane: Some(if o.lane.len == 0 {
+                String::new()
+            } else {
+                at(o.lane)
+            }),
+            need: (o.flags & busbar_contract::abi::plane::EMIT_TO_FAR_END != 0).then(|| o.need),
+            fault: Some(o.fault),
+            final_status: (o.flags & busbar_contract::abi::plane::EMIT_FINAL_STATUS != 0)
+                .then(|| o.final_status),
             verb: if o.verb.len == 0 {
                 String::new()
             } else {
@@ -780,6 +792,13 @@ struct Answered {
     outcome: Option<Outcome>,
     more: u32,
     flags: u32,
+    reply_status: Option<u32>,
+    records_written: Option<u32>,
+    units_written: Option<u32>,
+    lane: Option<String>,
+    need: Option<u32>,
+    fault: Option<u8>,
+    final_status: Option<u32>,
     verb: String,
     target: String,
     fields: Vec<(String, String)>,
