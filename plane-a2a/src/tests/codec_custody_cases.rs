@@ -9,6 +9,64 @@ use crate::tests::request_custody_probe::assert_wiped;
 const SECRET: &str = "callback-credential-custody-canary";
 
 #[test]
+fn outbound_http_json_retires_its_cloned_credentials_on_success_and_every_refusal() {
+    let send = json!({"message":{"messageId":"m"}, "configuration":{
+        "pushNotificationConfig":{"authentication":{"credentials":SECRET}}
+    }});
+    let invalid_tenant = json!({"tenant":"..", "privateExtension":SECRET});
+    let missing_path = json!({"privateExtension":SECRET});
+    let invalid_path = json!({"id":false, "privateExtension":SECRET});
+    let unsupported_get = json!({"id":"t", "privateExtension":SECRET});
+    for (method, params, succeeds) in [
+        ("SendMessage", &send, true),
+        ("SendMessage", &invalid_tenant, false),
+        ("GetTask", &missing_path, false),
+        ("GetTask", &invalid_path, false),
+        ("GetTask", &unsupported_get, false),
+    ] {
+        assert_wiped(|| {
+            let framed = crate::binding::compose("https://agent.example", method, params);
+            assert_eq!(framed.is_ok(), succeeds);
+            if let Ok(framed) = framed {
+                let body: Value = serde_json::from_slice(&framed.body).unwrap();
+                assert_eq!(
+                    body["configuration"]["pushNotificationConfig"]["authentication"]
+                        ["credentials"],
+                    SECRET
+                );
+            }
+        });
+    }
+    assert_eq!(
+        send["configuration"]["pushNotificationConfig"]["authentication"]["credentials"],
+        SECRET
+    );
+}
+
+#[test]
+fn outbound_http_json_body_has_custody_until_transfer_or_abandonment() {
+    let secret = std::str::from_utf8(crate::tests::raw_custody_probe::SECRET).unwrap();
+    let params = json!({"message":{"messageId":"m"},"credential":secret});
+    crate::tests::raw_custody_probe::assert_wiped(|| {
+        let framed =
+            crate::binding::compose("https://agent.example", "SendMessage", &params).unwrap();
+        assert!(framed
+            .body
+            .windows(secret.len())
+            .any(|part| part == secret.as_bytes()));
+        drop(framed);
+    });
+    crate::tests::raw_custody_probe::assert_wiped(|| {
+        assert!(std::panic::catch_unwind(|| {
+            let _framed =
+                crate::binding::compose("https://agent.example", "SendMessage", &params).unwrap();
+            panic!("injected caller unwind");
+        })
+        .is_err());
+    });
+}
+
+#[test]
 fn rest_body_copies_wipe_their_initialized_credentials_and_keep_path_precedence() {
     let body = serde_json::to_vec(&json!({"taskId":"body-task", "task_id":SECRET,
         "url":"https://callback.example", "authentication":{"scheme":"Bearer", "credentials":SECRET}})).unwrap();

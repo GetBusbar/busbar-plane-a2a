@@ -972,17 +972,17 @@ impl HopRelay {
                 None => PieceAnswer::Refused,
             },
             Binding::HttpJson => match binding::compose(url, &self.method, &self.params) {
-                Ok(framed) => {
+                Ok(mut framed) => {
                     let mut fields = Vec::new();
                     if framed.has_body {
                         fields.push((H_CONTENT_TYPE, JSON_MEDIA_TYPE.into()));
                     }
                     fields.push((H_ACCEPT, self.accept().into()));
                     fields.push(version);
-                    self.instead = Some(framed.body.into());
+                    self.instead = Some(std::mem::take(&mut framed.body).into());
                     PieceAnswer::Attempt(Attempt {
                         verb: framed.verb,
-                        target: framed.target,
+                        target: std::mem::take(&mut framed.target),
                         fields,
                     })
                 }

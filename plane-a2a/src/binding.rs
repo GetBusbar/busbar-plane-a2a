@@ -11,7 +11,9 @@
 //! the rpc's message ([`crate::framed::request_message`]).
 
 use serde_json::Value;
+use zeroize::Zeroizing;
 
+use crate::request_json::RequestJson;
 use crate::task_identity::TASK_ID_MEMBERS;
 
 /// The JSON-RPC binding's card word.
@@ -277,6 +279,18 @@ pub struct Framed {
     pub body: Vec<u8>,
 }
 
+impl Drop for Framed {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        #[cfg(test)]
+        crate::tests::raw_custody_probe::before_wipe(&self.body);
+        self.body.as_mut_slice().zeroize();
+        #[cfg(test)]
+        crate::tests::raw_custody_probe::after_wipe(&self.body);
+        self.body.zeroize();
+    }
+}
+
 /// COMPOSE `method` with `params` on the HTTP+JSON binding under the agent URL `base` (A2A section
 /// 11.3): the path joined onto the operator's, its `{member}`s taken from `params`, the query
 /// members on the query string, what is left as the body.
@@ -293,19 +307,25 @@ pub fn compose(base: &str, method: &str, params: &Value) -> Result<Framed, Strin
         format!("`{method}` is not one of the eleven operations A2A's HTTP+JSON binding defines")
     })?;
     let base = url::Url::parse(base).map_err(|e| format!("the agent URL does not parse: {e}"))?;
-    let mut left = params
-        .as_object()
-        .ok_or_else(|| format!("`{method}` params must be an object"))?
-        .clone();
+    let mut remaining = RequestJson::new(Value::Object(
+        params
+            .as_object()
+            .ok_or_else(|| format!("`{method}` params must be an object"))?
+            .clone(),
+    ));
+    let left = remaining
+        .as_object_mut()
+        .expect("an object was constructed");
     let mut path = String::new();
     // Every operation also has the proto's optional leading /{tenant} binding.
     if let Some(tenant) = left.remove("tenant") {
-        let tenant = if tenant.is_null() {
+        let tenant = RequestJson::new(tenant);
+        let tenant = Zeroizing::new(if tenant.is_null() {
             String::new()
         } else {
             scalar(&tenant)
-        };
-        if tenant == "." || tenant == ".." {
+        });
+        if tenant.as_str() == "." || tenant.as_str() == ".." {
             return Err(format!(
                 "`{method}`'s `tenant` is a dot segment, which would re-point the request line"
             ));
@@ -334,6 +354,7 @@ pub fn compose(base: &str, method: &str, params: &Value) -> Result<Framed, Strin
             .find_map(|s| left.remove(*s))
             .or_else(|| left.remove(name))
             .ok_or_else(|| format!("`{method}` names no `{name}` to address"))?;
+        let value = RequestJson::new(value);
         let value = value
             .as_str()
             .ok_or_else(|| format!("`{method}`'s `{name}` must be a string"))?;
@@ -358,8 +379,11 @@ pub fn compose(base: &str, method: &str, params: &Value) -> Result<Framed, Strin
         // Keep the operator's own query, as the JSON-RPC binding does.
         let mut query = url.query_pairs_mut();
         for name in op.query {
-            if let Some(value) = left.remove(*name).filter(|value| !value.is_null()) {
-                query.append_pair(name, &scalar(&value));
+            if let Some(value) = left.remove(*name) {
+                let value = RequestJson::new(value);
+                if !value.is_null() {
+                    query.append_pair(name, &Zeroizing::new(scalar(&value)));
+                }
             }
         }
     }
@@ -376,7 +400,7 @@ pub fn compose(base: &str, method: &str, params: &Value) -> Result<Framed, Strin
         ));
     }
     let body = if op.body {
-        serde_json::to_vec(&Value::Object(left))
+        crate::relay::json_bytes(&remaining)
             .map_err(|e| format!("the request params could not be rendered: {e}"))?
     } else {
         Vec::new()
