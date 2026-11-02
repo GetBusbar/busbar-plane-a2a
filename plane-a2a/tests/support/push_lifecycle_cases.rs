@@ -793,6 +793,7 @@ fn piece_sized(
             .map(|field| (at(field.name), at(field.value)))
             .collect(),
         fields_needed: o.fields_needed,
+        arena_needed: o.arena_needed,
         emitted: reply[..usize::try_from(o.emitted).unwrap().min(reply_cap)].to_vec(),
         units: units[..(o.units_written as usize).min(units.len())]
             .iter()
@@ -1156,8 +1157,12 @@ fn an_applied_task_open_keeps_its_identity_through_output_short_recall() {
         attempt.flags, attempt.emitted.len(), script(|s| s.conditional.requests.len()), script(|s| s.conditional.observations.len()));
     let applied = script(|s| s.conditional.applied);
     let rows = store().clone();
-    let short = piece(&door, 1130, Given::caller(SUBMIT), 0);
+    let short = piece_sized(&door, 1130, Given::caller(SUBMIT), 65536, 16, 0);
     assert_eq!(short.outcome, Some(Outcome::Failed));
+    assert!(
+        short.arena_needed > 0,
+        "the auxiliary arena causes an actual SHORT"
+    );
     let recalled = piece(&door, 1130, Given::caller(SUBMIT), 65536);
     assert_eq!(recalled.outcome, Some(Outcome::Ready));
     assert!(!recalled.emitted.is_empty());
@@ -1169,6 +1174,36 @@ fn an_applied_task_open_keeps_its_identity_through_output_short_recall() {
             2,
             "submitted and delegated are one atomic opening"
         );
+        assert_eq!(s.claims, 0);
+    });
+}
+
+#[test]
+fn an_applied_task_open_streams_a_zero_room_body_without_reopening_the_task() {
+    let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    let (_reset, door) = open_scripted();
+    assert_eq!(door.connect("vendor").1, 200);
+    arrive_submit(&door, 1131);
+    let attempt = piece(&door, 1131, Given::attempt(b"vendor"), 65536);
+    assert_eq!(attempt.outcome, Some(Outcome::Ready));
+    assert_ne!(
+        attempt.flags & busbar_contract::abi::plane::EMIT_TO_FAR_END,
+        0
+    );
+    let applied = script(|s| s.conditional.applied);
+    let rows = store().clone();
+    let blocked = piece(&door, 1131, Given::caller(SUBMIT), 0);
+    assert_eq!(blocked.outcome, Some(Outcome::Ready));
+    assert_eq!(blocked.more, 1);
+    assert!(blocked.emitted.is_empty());
+    let drained = piece(&door, 1131, Given::more(), 65536);
+    assert_eq!(drained.outcome, Some(Outcome::Ready));
+    assert_eq!(drained.more, 0);
+    assert!(!drained.emitted.is_empty());
+    assert_eq!(*store(), rows);
+    script(|s| {
+        assert_eq!(s.conditional.applied, applied);
+        assert_eq!(s.conditional.events.len(), 2);
         assert_eq!(s.claims, 0);
     });
 }

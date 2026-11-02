@@ -689,6 +689,7 @@ struct Answered {
     target: String,
     fields: Vec<(String, String)>,
     fields_needed: u32,
+    arena_needed: u64,
     emitted: Vec<u8>,
     units: Vec<(u32, u64)>,
 }
@@ -938,6 +939,11 @@ impl Door {
                 } else {
                     0
                 },
+                arena_needed: if outcome == Outcome::Failed {
+                    frame.output.arena_needed
+                } else {
+                    0
+                },
                 ..Answered::default()
             };
         }
@@ -971,6 +977,7 @@ impl Door {
                 .map(|field| (at(field.name), at(field.value)))
                 .collect(),
             fields_needed: o.fields_needed,
+            arena_needed: o.arena_needed,
             emitted: reply[..usize::try_from(o.emitted).unwrap().min(reply_cap)].to_vec(),
             units: units[..(o.units_written as usize).min(units.len())]
                 .iter()
