@@ -324,7 +324,46 @@ fn v03_jsonrpc_mirrors_use_the_declared_versions_methods_and_params() {
 #[test]
 fn an_originated_transport_failure_is_logged_without_the_connectors_secret_text() {
     use busbar_contract::abi::sdk::conn::ConnFailure;
-    let capture = busbar_test_kit::warn_capture::WarnCapture::default();
+    // This one synchronous mirror call emits one warning. Observe its actual structured event.
+    #[derive(Clone)]
+    struct TransportWarning(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+    struct Fields(String);
+    impl tracing::field::Visit for Fields {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            use std::fmt::Write;
+            write!(&mut self.0, " {}={value:?}", field.name()).unwrap();
+        }
+        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+            use std::fmt::Write;
+            write!(&mut self.0, " {}={value}", field.name()).unwrap();
+        }
+    }
+    impl tracing::Subscriber for TransportWarning {
+        fn register_callsite(
+            &self,
+            _: &'static tracing::Metadata<'static>,
+        ) -> tracing::subscriber::Interest {
+            tracing::subscriber::Interest::sometimes()
+        }
+        fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+            *metadata.level() <= tracing::Level::WARN
+        }
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+        fn event(&self, event: &tracing::Event<'_>) {
+            if *event.metadata().level() <= tracing::Level::WARN {
+                let mut fields = Fields(String::new());
+                event.record(&mut fields);
+                self.0.lock().unwrap().push(fields.0);
+            }
+        }
+        fn enter(&self, _: &tracing::span::Id) {}
+        fn exit(&self, _: &tracing::span::Id) {}
+    }
+    let capture = TransportWarning(std::sync::Arc::default());
     tracing::subscriber::with_default(capture.clone(), || {
         assert_eq!(
             landed(
@@ -338,7 +377,7 @@ fn an_originated_transport_failure_is_logged_without_the_connectors_secret_text(
             Ok(None)
         );
     });
-    let messages = capture.messages();
+    let messages = capture.0.lock().unwrap();
     assert_eq!(messages.len(), 1, "{messages:?}");
     let line = &messages[0];
     for context in [
