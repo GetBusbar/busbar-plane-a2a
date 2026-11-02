@@ -293,7 +293,7 @@ impl Hop {
 /// What a piece's answer still owes the host: its head, once, then its bytes, `reply_cap` at a
 /// time. `live` while any of it is unwritten; `recall` after a short answer, whose re-call carries
 /// the same piece and must not apply it twice.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct Outbox {
     /// The bytes to write are the caller's piece itself, lent by the host for this call
     /// ([`PieceAnswer::ToFarEndLent`]): written straight from it, and only what the host's buffer could
@@ -320,26 +320,6 @@ struct Outbox {
     /// The breaker's reading of the far end's answer this piece read (`FAULT_NONE` = none yet),
     /// stated on the answer that writes it ([`relay::Reading`]).
     fault: u8,
-}
-
-impl Default for Outbox {
-    fn default() -> Self {
-        Self {
-            lent: false,
-            live: false,
-            recall: false,
-            to_far: false,
-            done: false,
-            head: None,
-            bytes: relay::RawBytes::default(),
-            at: 0,
-            writes: Vec::new(),
-            queue: std::collections::VecDeque::new(),
-            messages: false,
-            final_status: None,
-            fault: 0,
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -556,6 +536,8 @@ pub(crate) fn drive_mirror(
     Poll::Ready(())
 }
 
+type CardWarmSnapshot = (u64, Option<Arc<AgentsCfg>>);
+
 /// One instance: the public base URL `open` was given, the host tables, every live generation's
 /// snapshot and section, the units in flight, whether (and when) the task records were restored,
 /// and the far end's own id for each relayed task busbar learnt it for.
@@ -578,7 +560,7 @@ pub struct A2aDoor {
     /// both listings landed ([`warm_cards`]).
     cards_warmed: Keyed<(), bool>,
     /// The registration snapshot captured before a warm issues its first listing.
-    warming: Keyed<(u32, u32), (u64, Option<std::sync::Arc<AgentsCfg>>)>,
+    warming: Keyed<(u32, u32), CardWarmSnapshot>,
     /// The host refused the last tick's (or its drive's) warm: the next tick attempts the
     /// deliveries, and the one after warms again, so a store that keeps refusing the listing never
     /// holds the deliveries up.
@@ -3661,7 +3643,7 @@ fn fetch_card(
         crate::card_trust::Handshake,
         u32,
     ),
-    LookParked,
+    Box<LookParked>,
 > {
     use busbar_contract::abi::sdk::exchange::{exchange, Exchange, Request};
     let urls = match crate::card_trust::discovery_urls(&def.url) {
@@ -3699,12 +3681,12 @@ fn fetch_card(
                     }
                     let (start, within) = match judge_hop(at, &url, def.allow_private, hop.issued) {
                         Poll::Pending => {
-                            return Err(LookParked::Fetching {
+                            return Err(Box::new(LookParked::Fetching {
                                 registration: def.clone(),
                                 generation: at.generation,
                                 hop,
                                 exchange: None,
-                            })
+                            }))
                         }
 
                         Poll::Ready(Err(refusal)) => {
@@ -3746,12 +3728,12 @@ fn fetch_card(
                     let mut conn = host.connector_from(at.ticket, start);
                     match exchange(&mut conn, &mut state, statement::NEED_AGENT, Some(&url)) {
                         Poll::Pending => {
-                            return Err(LookParked::Fetching {
+                            return Err(Box::new(LookParked::Fetching {
                                 registration: def.clone(),
                                 generation: at.generation,
                                 hop,
                                 exchange: Some((start, Box::new(state))),
-                            });
+                            }));
                         }
                         Poll::Ready(answer) => {
                             hop.issued = conn.issued();
@@ -3872,7 +3854,7 @@ fn look(
     name: &str,
     def: &crate::a2a::config::AgentDefCfg,
     parked: Option<LookParked>,
-) -> Result<(CardLook, u32), LookParked> {
+) -> Result<(CardLook, u32), Box<LookParked>> {
     use crate::card_trust::Sighting;
     let resumed = match parked {
         Some(LookParked::Sighted {
@@ -3951,15 +3933,15 @@ fn settle_look(
     sighted: Option<busbar_contract::abi::sdk::Pend<u64>>,
     issued: u32,
     unreachable: bool,
-) -> Result<(CardLook, u32), LookParked> {
+) -> Result<(CardLook, u32), Box<LookParked>> {
     match sighted {
-        Some(Poll::Pending) => Err(LookParked::Sighted {
+        Some(Poll::Pending) => Err(Box::new(LookParked::Sighted {
             registration: def.clone(),
             generation: at.generation,
             looked,
             issued,
             unreachable,
-        }),
+        })),
         Some(Poll::Ready(Err(e))) => {
             busbar_contract::diag_warn!(
                 crate::diagnostics::A2A_TRUST_SIGHTING_UNRECORDED,
@@ -4050,7 +4032,7 @@ fn verify_agent_on_call(
     let (looked, issued) = match looking(held, || look(&at, member, def, parked)) {
         Ok(done) => done,
         Err(parked) => {
-            hop.verifying = Some(parked);
+            hop.verifying = Some(*parked);
             return Poll::Pending;
         }
     };
@@ -4302,7 +4284,7 @@ slot!(
         let looked = match look(&at, &name, &def, parked) {
             Ok((looked, _)) => looked,
             Err(parked) => {
-                instance.park(parked);
+                instance.park(*parked);
                 return Outcome::Pending;
             }
         };

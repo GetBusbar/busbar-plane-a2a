@@ -11,10 +11,12 @@ use std::cell::Cell;
 
 impl A2aDoor {
     pub(crate) fn listing_lifecycle_fixture(host: StaticHost, services: StaticServices) -> Self {
-        let mut plane = A2aDoor::default();
-        plane.host = Some(host);
-        plane.services = Some(services);
-        plane.public_url = Some("https://gw.example".into());
+        let plane = A2aDoor {
+            host: Some(host),
+            services: Some(services),
+            public_url: Some("https://gw.example".into()),
+            ..A2aDoor::default()
+        };
         let section = std::sync::Arc::new(agents_section(br#"{"planner":{"url":"https://agent.example/a2a","pin":{"mechanism":"unpinned"}}}"#).unwrap());
         let disposition = AgentDisposition::Request {
             row: crate::ops::row_for("ListTasks").unwrap(),
@@ -80,9 +82,11 @@ fn a_real_failed_mirror_dial_is_visible_without_changing_best_effort_completion(
             .serve(fake::conn::ESTABLISH, FailedDial),
     ));
     let tables = fake.lent();
-    let mut plane = A2aDoor::default();
-    plane.host = Some(Host::of(tables));
-    plane.services = Services::of(tables);
+    let plane = A2aDoor {
+        host: Some(Host::of(tables)),
+        services: Services::of(tables),
+        ..A2aDoor::default()
+    };
     let mut flight = crate::mirror::Flight {
         stage: crate::mirror::Stage::Mirror,
         method: crate::mirror::method::CREATE_PUSH_CONFIG,

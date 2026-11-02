@@ -66,7 +66,7 @@ fn publication(j: &Journal, life: &ChainLife) -> wire::Request {
         },
     ];
     assert_eq!(
-        j.publish(5, &[p], &[life.clone()], &writes),
+        j.publish(5, &[p], std::slice::from_ref(&life), &writes),
         Err(Halt::Pending)
     );
     j.0.with_all(|all| {

@@ -67,15 +67,17 @@ struct After {
     owed_done: bool,
 }
 
+type AppliedNotification = (
+    crate::TaskRow,
+    Option<Result<Option<crate::local::PushConfig>, ()>>,
+);
+
 /// Acknowledged effects to apply after releasing the journal's guard.
 #[derive(Default)]
 pub(crate) struct Applied {
     pub(crate) owner: Option<Arc<()>>,
     pub(crate) deletes: Vec<Write>,
-    pub(crate) notify: Vec<(
-        crate::TaskRow,
-        Option<Result<Option<crate::local::PushConfig>, ()>>,
-    )>,
+    pub(crate) notify: Vec<AppliedNotification>,
     pub(crate) backends: Vec<(crate::TaskRow, String)>,
     pub(crate) owed: Vec<crate::push::OwedReceipt>,
     pub(crate) release_owed: Vec<crate::push::OwedReceipt>,
@@ -98,7 +100,7 @@ enum Action {
         writes: Vec<Write>,
         answer: Option<Result<Decision, wire::ConditionalFailure>>,
         metadata_taken: bool,
-        after: After,
+        after: Box<After>,
     },
 }
 
@@ -439,14 +441,14 @@ impl Journal {
                         writes: writes.to_vec(),
                         answer: None,
                         metadata_taken: false,
-                        after: After {
+                        after: Box::new(After {
                             draft: draft.clone(),
                             row,
                             config_withdrawn: false,
                             notify_done: false,
                             backend_done: false,
                             owed_done: false,
-                        },
+                        }),
                     },
                 });
             }
