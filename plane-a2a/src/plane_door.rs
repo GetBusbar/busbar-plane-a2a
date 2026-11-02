@@ -4781,3 +4781,7 @@ busbar_contract::plugin_door! {
         serve: Safe<Serve>, hydrate: Safe<Hydrate>, start: Safe<Start>, project: Safe<Project>,
     },
 }
+
+#[cfg(test)]
+#[path = "tests/request_ownership_cases.rs"]
+mod request_ownership_cases;

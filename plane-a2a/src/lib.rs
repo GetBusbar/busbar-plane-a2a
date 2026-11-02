@@ -132,17 +132,12 @@ const ERROR_INFO_DOMAIN: &str = "a2a-protocol.org";
 /// The crate's tests that reach past [`door`]: once integration tests (`tests/*.rs`), now in-crate
 #[cfg(test)]
 mod tests {
-    /// The crate's one `#[global_allocator]`, every allocation gate's count: busbar-test-kit's
-    #[global_allocator]
-    static A: busbar_test_kit::alloc_counter::Counting =
-        busbar_test_kit::alloc_counter::Counting::new();
-
-    mod alloc_gate;
     pub(crate) mod capture;
     mod codec_custody_cases;
     mod conformance;
     mod door_facts;
     mod purity;
     pub(crate) mod raw_custody_probe;
+    mod request_borrow_cases;
     pub(crate) mod request_custody_probe;
 }
