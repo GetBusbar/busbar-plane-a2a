@@ -43,11 +43,15 @@ impl Drop for Instance {
             size: std::mem::size_of::<OutHead>() as u32,
             ..zero()
         };
-        ops().head.close.unwrap()(
-            self.0,
-            std::ptr::from_ref(&input).cast(),
-            std::ptr::from_mut(&mut output).cast(),
-        );
+        // SAFETY: this unique Instance owns the nonnull pointer returned by this door's OPEN.
+        // Drop calls CLOSE once; the complete head frames remain live for the call.
+        unsafe {
+            ops().head.close.unwrap()(
+                self.0,
+                std::ptr::from_ref(&input).cast(),
+                std::ptr::from_mut(&mut output).cast(),
+            );
+        }
     }
 }
 
@@ -70,11 +74,15 @@ fn open(section: &Value) -> (Outcome, String, Vec<String>) {
     };
     let mut output: PlaneOpenOut = zero();
     output.open.head.size = std::mem::size_of::<PlaneOpenOut>() as u32;
-    let outcome = ops().head.open.unwrap()(
-        std::ptr::null_mut(),
-        std::ptr::from_ref(&input).cast(),
-        std::ptr::from_mut(&mut output).cast(),
-    )
+    // SAFETY: OPEN receives complete PlaneOpenIn/Out frames, live settings and static URL
+    // bytes, and an exclusive reason buffer. Instance below owns the returned pointer.
+    let outcome = unsafe {
+        ops().head.open.unwrap()(
+            std::ptr::null_mut(),
+            std::ptr::from_ref(&input).cast(),
+            std::ptr::from_mut(&mut output).cast(),
+        )
+    }
     .outcome();
     let _instance = Instance(output.open.instance);
     assert!(output.open.err_len <= reason.len());
@@ -118,11 +126,15 @@ fn validate(section: &Value) -> Outcome {
         size: std::mem::size_of::<OutHead>() as u32,
         ..zero()
     };
-    ops().head.validate.unwrap()(
-        std::ptr::null_mut(),
-        std::ptr::from_ref(&input).cast(),
-        std::ptr::from_mut(&mut output).cast(),
-    )
+    // SAFETY: stateless VALIDATE receives its complete frames, live settings bytes and an
+    // exclusive reason buffer for this synchronous call; it retains no instance.
+    unsafe {
+        ops().head.validate.unwrap()(
+            std::ptr::null_mut(),
+            std::ptr::from_ref(&input).cast(),
+            std::ptr::from_mut(&mut output).cast(),
+        )
+    }
     .outcome()
 }
 

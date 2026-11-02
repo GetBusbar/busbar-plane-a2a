@@ -69,11 +69,15 @@ fn project_view(
     };
 
     let project = ops().project.expect("the door states project");
-    let outcome = project(
-        std::ptr::null_mut(),
-        std::ptr::from_ref(&input).cast(),
-        std::ptr::from_mut(&mut out).cast(),
-    )
+    // SAFETY: document/target PROJECT permits no instance. The complete ProjectIn/Out,
+    // target/body bytes and exclusive initialized signal/message/arena buffers stay live.
+    let outcome = unsafe {
+        project(
+            std::ptr::null_mut(),
+            std::ptr::from_ref(&input).cast(),
+            std::ptr::from_mut(&mut out).cast(),
+        )
+    }
     .outcome();
     // SAFETY: the production project operation above wrote into these live host buffers. Its
     // current A2A projection emits no signals, so no recognized tag can select an uninitialized
