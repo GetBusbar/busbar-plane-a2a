@@ -19,6 +19,7 @@ mod local_admission_cases;
 #[path = "support/raw_custody_cases.rs"]
 mod raw_custody_cases;
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::os::raw::c_void;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -37,7 +38,7 @@ use busbar_contract::abi::mechanism::call::{
     AbiStr, Blob, Field, InHead, OutHead, Outcome, RawOutcome, BLOB_OCTETS,
 };
 use busbar_contract::abi::mechanism::lifecycle::{
-    slot as life, CancelIn, DriveIn, OpenIn, OpenOut, OpsHead, TickIn, TickOut,
+    slot as life, CancelIn, OpenIn, OpenOut, OpsHead, TickIn, TickOut,
 };
 use busbar_contract::abi::mechanism::ticket::{HostCtx, HostTables, Ticket};
 use busbar_contract::abi::plane::{
@@ -575,6 +576,208 @@ const CARD_READ: &[u8] =
 /// One opened instance of the door.
 struct Door {
     instance: *mut c_void,
+    owned: bool,
+    pending: RefCell<HashMap<Ticket, Box<PieceFrame>>>,
+    pending_serves: RefCell<HashMap<Ticket, Box<push_lifecycle_cases::ServeFrame>>>,
+    driver: RefCell<Option<Box<DriveFrame>>>,
+}
+
+/// One existing caller's continuation: every original frame and lent allocation stays put.
+struct PieceFrame {
+    input: Box<OnPieceIn>,
+    output: Box<OnPieceOut>,
+    member: zeroize::Zeroizing<Vec<u8>>,
+    bytes: zeroize::Zeroizing<Vec<u8>>,
+    reply: zeroize::Zeroizing<Vec<u8>>,
+    fields: Vec<OutField>,
+    arena: zeroize::Zeroizing<Vec<u8>>,
+    records: Vec<RecordWrite>,
+    units: Vec<UnitCount>,
+    extensions: zeroize::Zeroizing<Vec<u8>>,
+}
+
+impl PieceFrame {
+    fn new(
+        unit: u64,
+        given: Given<'_>,
+        reply_cap: usize,
+        fields_cap: usize,
+        arena_cap: usize,
+    ) -> Box<Self> {
+        let mut frame = Box::new(Self {
+            input: Box::new(z()),
+            output: Box::new(z()),
+            member: zeroize::Zeroizing::new(given.member.to_vec()),
+            bytes: zeroize::Zeroizing::new(given.bytes.to_vec()),
+            reply: zeroize::Zeroizing::new(vec![0; reply_cap]),
+            fields: vec![z(); fields_cap],
+            arena: zeroize::Zeroizing::new(vec![0; arena_cap]),
+            records: vec![z(); 16],
+            units: vec![z(); 8],
+            extensions: zeroize::Zeroizing::new(Vec::new()),
+        });
+        let i = &mut frame.input;
+        i.head = head::<OnPieceIn>(slot::ON_PIECE, ticket(unit));
+        i.unit = unit;
+        (i.from, i.flags, i.attempt_no) = (given.from, given.flags, given.attempt);
+        (i.reason, i.status_code) = (given.reason, given.status);
+        i.member = str_of(&frame.member);
+        i.bytes = octets(&frame.bytes);
+        i.caller_ref = str_of(ALICE);
+        (i.reply_buf, i.reply_cap) = (frame.reply.as_mut_ptr(), frame.reply.len());
+        (i.fields_buf, i.fields_cap) = (frame.fields.as_mut_ptr(), frame.fields.len());
+        (i.arena_buf, i.arena_cap) = (frame.arena.as_mut_ptr(), frame.arena.len());
+        (i.records_buf, i.records_cap) = (frame.records.as_mut_ptr(), frame.records.len());
+        (i.units_buf, i.units_cap) = (frame.units.as_mut_ptr(), frame.units.len());
+        frame
+    }
+
+    fn check_resume(
+        &self,
+        unit: u64,
+        given: Given<'_>,
+        reply_cap: usize,
+        fields_cap: usize,
+        arena_cap: usize,
+    ) {
+        let i = &self.input;
+        assert!(
+            i.head.ticket == ticket(unit)
+                && i.unit == unit
+                && i.from == given.from
+                && i.flags == given.flags
+                && i.attempt_no == given.attempt
+                && i.reason == given.reason
+                && i.status_code == given.status
+                && self.member.as_slice() == given.member
+                && self.bytes.as_slice() == given.bytes,
+            "a pending piece must resume its exact logical input"
+        );
+        assert_eq!(
+            (self.reply.len(), self.fields.len(), self.arena.len()),
+            (reply_cap, fields_cap, arena_cap),
+            "pending output loans cannot be replaced; only terminal SHORT permits fresh buffers"
+        );
+    }
+
+    fn extensions(&mut self, bytes: Vec<u8>) {
+        self.extensions = zeroize::Zeroizing::new(bytes);
+        self.input.head.extensions = octets(&self.extensions);
+    }
+
+    fn answer(&self, outcome: Outcome) -> Answered {
+        if outcome != Outcome::Ready {
+            return Answered {
+                outcome: Some(outcome),
+                fields_needed: if outcome == Outcome::Failed {
+                    self.output.fields_needed
+                } else {
+                    0
+                },
+                arena_needed: if outcome == Outcome::Failed {
+                    self.output.arena_needed
+                } else {
+                    0
+                },
+                ..Answered::default()
+            };
+        }
+        let o = &self.output;
+        let at = |s: busbar_contract::abi::mechanism::call::Span| {
+            let from = s.offset as usize;
+            String::from_utf8_lossy(&self.arena[from..from + s.len as usize]).into_owned()
+        };
+        Answered {
+            outcome: Some(outcome),
+            more: o.more,
+            flags: o.flags,
+            verb: if o.verb.len == 0 {
+                String::new()
+            } else {
+                at(o.verb)
+            },
+            target: if o.target.len == 0 {
+                String::new()
+            } else {
+                at(o.target)
+            },
+            fields: self.fields[..(o.fields_written as usize).min(self.fields.len())]
+                .iter()
+                .map(|f| (at(f.name), at(f.value)))
+                .collect(),
+            fields_needed: o.fields_needed,
+            arena_needed: o.arena_needed,
+            emitted: self.reply[..(o.emitted as usize).min(self.reply.len())].to_vec(),
+            units: self.units[..(o.units_written as usize).min(self.units.len())]
+                .iter()
+                .map(|u| (u.class, u.amount))
+                .collect(),
+        }
+    }
+}
+
+/// The real driver's DRIVE frame stays owned across Pending (worker::Action::Drive).
+struct DriveFrame {
+    input: Box<PlaneDriveIn>,
+    output: Box<PlaneDriveOut>,
+    sessions: Box<[u64; 4]>,
+    extensions: zeroize::Zeroizing<Vec<u8>>,
+    pending: bool,
+}
+
+impl DriveFrame {
+    fn new() -> Box<Self> {
+        let mut frame = Box::new(Self {
+            input: Box::new(z()),
+            output: Box::new(z()),
+            sessions: Box::new([0; 4]),
+            extensions: zeroize::Zeroizing::new(Vec::new()),
+            pending: false,
+        });
+        frame.input.drive.head = head::<PlaneDriveIn>(life::DRIVE, ticket(1 << 29));
+        frame.input.drive.driver = ticket(1 << 29);
+        frame.input.sessions_buf = frame.sessions.as_mut_ptr();
+        frame.input.sessions_cap = frame.sessions.len();
+        frame
+    }
+}
+
+impl Drop for Door {
+    fn drop(&mut self) {
+        if !self.owned {
+            assert!(
+                self.pending.get_mut().is_empty(),
+                "a borrowed door owns no continuations"
+            );
+            assert!(self.pending_serves.get_mut().is_empty() && self.driver.get_mut().is_none());
+            return;
+        }
+        let input = head::<InHead>(life::CLOSE, Ticket::NONE);
+        let mut output = out_head::<OutHead>();
+        let outcome = lifecycle().close.map_or(Outcome::Fault, |close| {
+            // SAFETY: this owner closes exactly its OPEN's still-live instance, synchronously,
+            // with every retained pending frame and allocation alive until CLOSE returns.
+            unsafe {
+                close(
+                    self.instance,
+                    std::ptr::from_ref(&input).cast(),
+                    std::ptr::from_mut(&mut output).cast(),
+                )
+            }
+            .outcome()
+        });
+        if outcome != Outcome::Ready {
+            // A broken CLOSE is a test failure, but cannot authorize freeing unresolved loans.
+            std::mem::forget(std::mem::take(self.pending.get_mut()));
+            std::mem::forget(std::mem::take(self.pending_serves.get_mut()));
+            std::mem::forget(self.driver.get_mut().take());
+        }
+        assert_eq!(
+            outcome,
+            Outcome::Ready,
+            "the owned door closes before its loans retire"
+        );
+    }
 }
 
 /// What one `on_piece` answered.
@@ -587,6 +790,7 @@ struct Answered {
     target: String,
     fields: Vec<(String, String)>,
     fields_needed: u32,
+    arena_needed: u64,
     emitted: Vec<u8>,
     units: Vec<(u32, u64)>,
 }
@@ -707,12 +911,30 @@ fn open_with(section: &[u8]) -> Door {
         )
     };
     assert_eq!(ret.outcome(), Outcome::Ready, "the door opens");
-    Door {
-        instance: o.open.instance,
-    }
+    Door::new(o.open.instance)
 }
 
 impl Door {
+    fn new(instance: *mut c_void) -> Self {
+        Self {
+            instance,
+            owned: true,
+            pending: RefCell::new(HashMap::new()),
+            pending_serves: RefCell::new(HashMap::new()),
+            driver: RefCell::new(None),
+        }
+    }
+
+    fn borrowed(instance: *mut c_void) -> Self {
+        Self {
+            instance,
+            owned: false,
+            pending: RefCell::new(HashMap::new()),
+            pending_serves: RefCell::new(HashMap::new()),
+            driver: RefCell::new(None),
+        }
+    }
+
     /// `arrive` of `body` at `target` on the route `(verb, route)`: its outcome and refusal status.
     fn arrive(
         &self,
@@ -721,6 +943,11 @@ impl Door {
         target: &str,
         body: &[u8],
     ) -> (Outcome, u32) {
+        assert!(
+            !self.pending.borrow().contains_key(&ticket(unit))
+                && !self.pending_serves.borrow().contains_key(&ticket(unit)),
+            "a fresh arrival cannot replace a pending piece on the same full ticket"
+        );
         let mut i: ArriveIn = z();
         i.head = head::<ArriveIn>(slot::ARRIVE, Ticket::NONE);
         i.unit = unit;
@@ -773,68 +1000,61 @@ impl Door {
         reply_cap: usize,
         fields_cap: usize,
     ) -> Answered {
-        let mut reply = vec![0_u8; reply_cap];
-        let mut fields = vec![z::<OutField>(); fields_cap];
-        let mut arena = vec![0_u8; 1 << 14];
-        let mut records = [z::<RecordWrite>(); 16];
-        let mut units = [z::<UnitCount>(); 8];
-        let mut i: OnPieceIn = z();
-        i.head = head::<OnPieceIn>(slot::ON_PIECE, ticket(unit));
-        i.unit = unit;
-        i.from = given.from;
-        i.flags = given.flags;
-        i.bytes = octets(given.bytes);
-        i.attempt_no = given.attempt;
-        i.member = str_of(given.member);
-        i.caller_ref = str_of(ALICE);
-        i.reason = given.reason;
-        i.status_code = given.status;
-        (i.reply_buf, i.reply_cap) = (reply.as_mut_ptr(), reply.len());
-        (i.fields_buf, i.fields_cap) = (fields.as_mut_ptr(), fields.len());
-        (i.arena_buf, i.arena_cap) = (arena.as_mut_ptr(), arena.len());
-        (i.records_buf, i.records_cap) = (records.as_mut_ptr(), records.len());
-        (i.units_buf, i.units_cap) = (units.as_mut_ptr(), units.len());
-        let mut o: OnPieceOut = z();
-        o.head = out_head::<OnPieceOut>();
+        let (mut frame, _) = self.piece_frame(unit, given, reply_cap, fields_cap, 1 << 14);
+        *frame.output = z();
+        frame.output.head = out_head::<OnPieceOut>();
         let f = ops().on_piece.expect("on_piece");
-        // SAFETY: `f` is the door's own slot, called over an `in` and an `out` laid out as its ABI
-        // states and live for the call.
+        // SAFETY: the Door retains these exact boxed frames and every original lent allocation
+        // through PENDING. A resume changes only FLAG_RESUME; terminal SHORT ends this loan.
         #[allow(unused_unsafe)]
         let ret = unsafe {
             f(
                 self.instance,
-                std::ptr::from_ref(&i).cast(),
-                std::ptr::from_mut(&mut o).cast(),
+                std::ptr::from_ref(&*frame.input).cast(),
+                std::ptr::from_mut(&mut *frame.output).cast(),
             )
         };
-        let at = |s: busbar_contract::abi::mechanism::call::Span| {
-            let from = s.offset as usize;
-            String::from_utf8_lossy(&arena[from..from + s.len as usize]).into_owned()
-        };
-        Answered {
-            outcome: Some(ret.outcome()),
-            more: o.more,
-            flags: o.flags,
-            verb: if o.verb.len == 0 {
-                String::new()
-            } else {
-                at(o.verb)
-            },
-            target: if o.target.len == 0 {
-                String::new()
-            } else {
-                at(o.target)
-            },
-            fields: fields[..(o.fields_written as usize).min(fields.len())]
-                .iter()
-                .map(|field| (at(field.name), at(field.value)))
-                .collect(),
-            fields_needed: o.fields_needed,
-            emitted: reply[..usize::try_from(o.emitted).unwrap().min(reply_cap)].to_vec(),
-            units: units[..(o.units_written as usize).min(units.len())]
-                .iter()
-                .map(|u| (u.class, u.amount))
-                .collect(),
+        let outcome = ret.outcome();
+        if outcome == Outcome::Pending {
+            // Retain custody before reading or allocating any ordinary reply payload.
+            self.pending.borrow_mut().insert(ticket(unit), frame);
+            return Answered {
+                outcome: Some(outcome),
+                ..Answered::default()
+            };
+        }
+        frame.answer(outcome)
+    }
+
+    fn piece_frame(
+        &self,
+        unit: u64,
+        given: Given<'_>,
+        reply_cap: usize,
+        fields_cap: usize,
+        arena_cap: usize,
+    ) -> (Box<PieceFrame>, bool) {
+        assert!(self.owned, "a borrowed door cannot own a pending piece");
+        assert!(
+            !self.pending_serves.borrow().contains_key(&ticket(unit)),
+            "a piece cannot replace a pending callback on the same full ticket"
+        );
+        {
+            let mut pending = self.pending.borrow_mut();
+            if let Some(frame) = pending.get(&ticket(unit)) {
+                // Validate while custody is still in the Door: a rejected re-entry keeps it.
+                frame.check_resume(unit, given, reply_cap, fields_cap, arena_cap);
+            }
+            match pending.remove(&ticket(unit)) {
+                Some(mut frame) => {
+                    frame.input.head.flags |= busbar_contract::abi::mechanism::call::FLAG_RESUME;
+                    (frame, true)
+                }
+                None => (
+                    PieceFrame::new(unit, given, reply_cap, fields_cap, arena_cap),
+                    false,
+                ),
+            }
         }
     }
 
@@ -934,34 +1154,60 @@ impl Door {
         body: &[u8],
         flags: u32,
     ) -> (Outcome, u32, String, u32) {
-        let mut reply = vec![0_u8; 1 << 14];
-        let mut out_fields = [z::<OutField>(); 8];
-        let mut arena = vec![0_u8; 1 << 14];
-        let mut records = [z::<RecordWrite>(); 64];
-        let mut i: ServeIn = z();
-        i.head = head::<ServeIn>(slot::SERVE, ticket(1 << 30));
-        i.head.flags = flags;
-        i.route = route;
-        i.target = str_of(target.as_bytes());
-        (i.fields, i.fields_len) = (fields.as_ptr(), fields.len());
-        i.body = octets(body);
-        (i.reply_buf, i.reply_cap) = (reply.as_mut_ptr(), reply.len());
-        (i.fields_buf, i.fields_cap) = (out_fields.as_mut_ptr(), out_fields.len());
-        (i.arena_buf, i.arena_cap) = (arena.as_mut_ptr(), arena.len());
-        (i.records_buf, i.records_cap) = (records.as_mut_ptr(), records.len());
-        let mut o: ServeOut = z();
-        o.head = out_head::<ServeOut>();
+        let slot_id = 1 << 30;
+        assert!(
+            !self.pending.borrow().contains_key(&ticket(slot_id)),
+            "an admin verb cannot replace a pending piece on the same full ticket"
+        );
+        let given = push_lifecycle_cases::ServeGiven {
+            route,
+            target: target.as_bytes(),
+            fields,
+            body,
+        };
+        let caps = (1 << 14, 1 << 14);
+        let mut frame = {
+            let mut pending = self.pending_serves.borrow_mut();
+            if let Some(frame) = pending.get(&ticket(slot_id)) {
+                frame.check_resume(slot_id, given, caps, flags);
+            }
+            pending.remove(&ticket(slot_id)).map_or_else(
+                || push_lifecycle_cases::ServeFrame::new(slot_id, given, caps, flags),
+                |mut frame| {
+                    frame.input.head.flags |= busbar_contract::abi::mechanism::call::FLAG_RESUME;
+                    frame
+                },
+            )
+        };
+        *frame.output = z();
+        frame.output.head = out_head::<ServeOut>();
         let f = ops().serve.expect("serve");
-        // SAFETY: `f` is the door's own slot, called over an `in` and an `out` laid out as its ABI
-        // states and live for the call.
+        // SAFETY: complete semantic input and every original lent allocation are owned by the
+        // typed boxed frame until terminal; an owned Door retains it across Pending.
         #[allow(unused_unsafe)]
         let ret = unsafe {
             f(
                 self.instance,
-                std::ptr::from_ref(&i).cast(),
-                std::ptr::from_mut(&mut o).cast(),
+                std::ptr::from_ref(&*frame.input).cast(),
+                std::ptr::from_mut(&mut *frame.output).cast(),
             )
         };
+        if ret.outcome() == Outcome::Pending {
+            if !self.owned {
+                // A temporary callback wrapper cannot close its shared owner. Unexpected
+                // Pending fails the test while keeping the outstanding loans alive.
+                std::mem::forget(frame);
+                panic!("a borrowed admin callback must complete synchronously");
+            }
+            let head = frame.output.head;
+            self.pending_serves
+                .borrow_mut()
+                .insert(ticket(slot_id), frame);
+            forward_diagnostics(&head);
+            return (Outcome::Pending, 0, String::new(), 0);
+        }
+        let (o, reply, arena, records) =
+            (&frame.output, &frame.reply, &frame.arena, &frame.records);
 
         forward_diagnostics(&o.head);
         let held = door_facts::HELD_KINDS;
@@ -1012,29 +1258,49 @@ impl Door {
 
     /// The `drive` a wake of the instance's driver ticket runs, on the ticket its `tick` ran on.
     fn drive(&self) -> Outcome {
-        let mut sessions = [0_u64; 4];
-        let i = PlaneDriveIn {
-            drive: DriveIn {
-                head: head::<PlaneDriveIn>(life::DRIVE, ticket(1 << 29)),
-                driver: ticket(1 << 29),
-            },
-            sessions_buf: sessions.as_mut_ptr(),
-            sessions_cap: sessions.len(),
+        self.drive_with_extensions(Vec::new()).0
+    }
+
+    fn drive_with_extensions(&self, extensions: Vec<u8>) -> (Outcome, Vec<u8>, bool) {
+        assert!(
+            self.owned,
+            "a borrowed door cannot own a driver continuation"
+        );
+        let mut frame = self
+            .driver
+            .borrow_mut()
+            .take()
+            .unwrap_or_else(DriveFrame::new);
+        frame.input.drive.head.flags = if frame.pending {
+            busbar_contract::abi::mechanism::call::FLAG_RESUME
+        } else {
+            0
         };
-        let mut o: PlaneDriveOut = z();
-        o.head = out_head::<PlaneDriveOut>();
+        // Like the real loader's conditional::prepare, receipt extensions are lent per crossing;
+        // the original frame and its sessions allocation stay fixed across a pending DRIVE.
+        frame.extensions = zeroize::Zeroizing::new(extensions);
+        frame.input.drive.head.extensions = octets(&frame.extensions);
+        *frame.output = z();
+        frame.output.head = out_head::<PlaneDriveOut>();
         let f = lifecycle().drive.expect("drive");
-        // SAFETY: `f` is the door's own slot, called over an `in` and an `out` laid out as its ABI
-        // states and live for the call.
+        // SAFETY: the per-Door boxed driver frames and original sessions loan remain owned
+        // across Pending, matching worker::Action::Drive's persistent frame and resume flag.
         #[allow(unused_unsafe)]
         let ret = unsafe {
             f(
                 self.instance,
-                std::ptr::from_ref(&i).cast(),
-                std::ptr::from_mut(&mut o).cast(),
+                std::ptr::from_ref(&*frame.input).cast(),
+                std::ptr::from_mut(&mut *frame.output).cast(),
             )
         };
-        ret.outcome()
+        let outcome = ret.outcome();
+        frame.pending = outcome == Outcome::Pending;
+        let short = outcome == Outcome::Failed
+            && frame.output.sessions_needed as usize > frame.sessions.len();
+        let head = frame.output.head;
+        *self.driver.borrow_mut() = Some(frame);
+        let extensions = push_lifecycle_cases::copied_extensions(self, &head);
+        (outcome, extensions, short)
     }
 
     /// The kernel's `cancel` of `unit`'s ticket.
@@ -1057,7 +1323,15 @@ impl Door {
                 std::ptr::from_mut(&mut o).cast(),
             )
         };
-        ret.outcome()
+        let outcome = ret.outcome();
+        if outcome == Outcome::Ready {
+            self.pending.borrow_mut().remove(&ticket(unit));
+            self.pending_serves.borrow_mut().remove(&ticket(unit));
+            if unit == 1 << 29 {
+                self.driver.borrow_mut().take();
+            }
+        }
+        outcome
     }
 
     /// The host's own cancel of `unit`, naming it by the key `arrive` kept it under as well as by
@@ -1080,7 +1354,15 @@ impl Door {
                 std::ptr::from_mut(&mut o).cast(),
             )
         };
-        ret.outcome()
+        let outcome = ret.outcome();
+        if outcome == Outcome::Ready {
+            self.pending.borrow_mut().remove(&ticket(unit));
+            self.pending_serves.borrow_mut().remove(&ticket(unit));
+            if unit == 1 << 29 {
+                self.driver.borrow_mut().take();
+            }
+        }
+        outcome
     }
 
     /// The host's own cancel of `unit` (by its key and its ticket): the disposition the door
@@ -1103,6 +1385,13 @@ impl Door {
                 std::ptr::from_mut(&mut o).cast(),
             )
         };
+        if ret.outcome() == Outcome::Ready {
+            self.pending.borrow_mut().remove(&ticket(unit));
+            self.pending_serves.borrow_mut().remove(&ticket(unit));
+            if unit == 1 << 29 {
+                self.driver.borrow_mut().take();
+            }
+        }
         assert_eq!(ret.outcome(), Outcome::Ready);
         o.cancel.disposition
     }

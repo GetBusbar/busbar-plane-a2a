@@ -123,12 +123,7 @@ fn open_scripted(pend_restore: bool) -> (Door, Reset) {
         )
     };
     assert_eq!(result.outcome(), Outcome::Ready);
-    (
-        Door {
-            instance: output.open.instance,
-        },
-        Reset(store().clone()),
-    )
+    (Door::new(output.open.instance), Reset(store().clone()))
 }
 
 fn piece(
@@ -138,36 +133,33 @@ fn piece(
     fields_cap: usize,
     arena_cap: usize,
 ) -> (Outcome, OnPieceOut, Vec<u8>) {
-    let mut body = vec![0u8; 65536];
-    let mut fields = vec![z::<OutField>(); fields_cap];
-    let mut arena = vec![0u8; arena_cap];
-    let mut records = [z::<RecordWrite>(); 16];
-    let mut units = [z::<UnitCount>(); 8];
-    let mut input: OnPieceIn = z();
-    input.head = head::<OnPieceIn>(slot::ON_PIECE, ticket(unit));
-    input.unit = unit;
-    input.from = FROM_CALLER;
-    input.flags = PIECE_LAST;
-    input.bytes = octets(bytes);
-    input.member = str_of(b"vendor");
-    input.caller_ref = str_of(ALICE);
-    (input.reply_buf, input.reply_cap) = (body.as_mut_ptr(), body.len());
-    (input.fields_buf, input.fields_cap) = (fields.as_mut_ptr(), fields.len());
-    (input.arena_buf, input.arena_cap) = (arena.as_mut_ptr(), arena.len());
-    (input.records_buf, input.records_cap) = (records.as_mut_ptr(), records.len());
-    (input.units_buf, input.units_cap) = (units.as_mut_ptr(), units.len());
-    let mut output: OnPieceOut = z();
-    output.head = out_head::<OnPieceOut>();
-    // SAFETY: every input/output/buffer lives through this call and has the stated capacity.
-    let result = unsafe {
+    let given = Given {
+        member: b"vendor",
+        ..Given::caller(bytes)
+    };
+    let (mut frame, _) = door.piece_frame(unit, given, 65536, fields_cap, arena_cap);
+    *frame.output = z();
+    frame.output.head = out_head::<OnPieceOut>();
+    // SAFETY: the per-Door boxed frames and original loans remain live through Pending,
+    // cancellation or synchronous CLOSE, including the body and caller identity.
+    let outcome = unsafe {
         ops().on_piece.unwrap()(
             door.instance,
-            std::ptr::from_ref(&input).cast(),
-            std::ptr::from_mut(&mut output).cast(),
+            std::ptr::from_ref(&*frame.input).cast(),
+            std::ptr::from_mut(&mut *frame.output).cast(),
         )
+    }
+    .outcome();
+    if outcome == Outcome::Pending {
+        door.pending.borrow_mut().insert(ticket(unit), frame);
+        return (outcome, z(), Vec::new());
+    }
+    let body = if outcome == Outcome::Ready {
+        frame.reply[..frame.output.emitted as usize].to_vec()
+    } else {
+        Vec::new()
     };
-    body.truncate(output.emitted as usize);
-    (result.outcome(), output, body)
+    (outcome, *frame.output, body)
 }
 
 #[test]
@@ -238,6 +230,7 @@ fn cancel_by_unit_or_ticket_releases_a_pending_restore_for_the_next_real_local_v
             Outcome::Ready
         );
         assert_eq!(piece(&door, 1, body, 16, 16384).0, Outcome::Pending);
+        assert!(door.pending.borrow().contains_key(&ticket(1)));
         assert_eq!(
             if named {
                 door.cancel_unit(1)
@@ -246,6 +239,7 @@ fn cancel_by_unit_or_ticket_releases_a_pending_restore_for_the_next_real_local_v
             },
             Outcome::Ready
         );
+        assert!(!door.pending.borrow().contains_key(&ticket(1)));
         SCRIPT
             .lock()
             .unwrap_or_else(PoisonError::into_inner)

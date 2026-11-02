@@ -25,9 +25,7 @@ pub(super) fn refresh_during_admission() {
             .unwrap()
             .replace("/agent", "/replacement");
         refresh(
-            &Door {
-                instance: instance as *mut c_void,
-            },
+            &Door::borrowed(instance as *mut c_void),
             2,
             moved.as_bytes(),
         );
@@ -57,9 +55,7 @@ pub(super) fn note_decision() {
             .unwrap()
             .replace("vendor.example", "replacement.example");
         refresh(
-            &Door {
-                instance: instance as *mut c_void,
-            },
+            &Door::borrowed(instance as *mut c_void),
             2,
             moved.as_bytes(),
         );
@@ -282,12 +278,65 @@ fn pending_connect_and_approve_keep_the_original_registration_through_reload() {
                 door.verb_audited_flags(route, target, &fields, &body, 0).0,
                 Outcome::Pending
             );
+            let loans = || {
+                let pending = door.pending_serves.borrow();
+                let frame = &pending[&ticket(1 << 30)];
+                [
+                    std::ptr::from_ref(&*frame.input) as usize,
+                    std::ptr::from_ref(&*frame.output) as usize,
+                    frame.input.target.ptr() as usize,
+                    frame.input.body.ptr as usize,
+                    frame.input.fields as usize,
+                    frame.input.reply_buf as usize,
+                    frame.input.fields_buf as usize,
+                    frame.input.arena_buf as usize,
+                    frame.input.records_buf as usize,
+                ]
+            };
+            let original_loans = loans();
+            let changed_fields = [Field {
+                name: str_of(b"content-type"),
+                value: str_of(b"text/plain"),
+            }];
+            for (changed_route, changed_target, changed_fields, changed_body) in [
+                (1 - route, target, fields.as_slice(), body.as_slice()),
+                (
+                    route,
+                    "/agents/other/connect",
+                    fields.as_slice(),
+                    body.as_slice(),
+                ),
+                (route, target, changed_fields.as_slice(), body.as_slice()),
+                (route, target, fields.as_slice(), b"different".as_slice()),
+            ] {
+                assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    door.verb_audited_flags(
+                        changed_route,
+                        changed_target,
+                        changed_fields,
+                        changed_body,
+                        FLAG_RESUME,
+                    )
+                }))
+                .is_err());
+                assert_eq!(
+                    loans(),
+                    original_loans,
+                    "invalid admin re-entry retains every loan"
+                );
+            }
             let before = store().clone();
             let moved = String::from_utf8(SIGNED_SECTION.to_vec())
                 .unwrap()
                 .replace("vendor.example", "replacement.example");
             refresh(&door, 2, moved.as_bytes());
+            assert_eq!(
+                loans(),
+                original_loans,
+                "refresh keeps the pending admin call's original loans"
+            );
             let result = door.verb_audited_flags(route, target, &fields, &body, FLAG_RESUME);
+            assert!(!door.pending_serves.borrow().contains_key(&ticket(1 << 30)));
             assert_eq!(
                 (result.0, result.1),
                 (Outcome::Ready, 404),

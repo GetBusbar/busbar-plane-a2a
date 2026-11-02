@@ -44,10 +44,7 @@ pub(super) fn during_verdict() {
         .unwrap_or_else(PoisonError::into_inner)
         .take();
     if let Some((instance, fingerprint)) = approval {
-        let result = Door {
-            instance: instance as *mut c_void,
-        }
-        .approve("vendor", &fingerprint);
+        let result = Door::borrowed(instance as *mut c_void).approve("vendor", &fingerprint);
         *APPROVED.lock().unwrap_or_else(PoisonError::into_inner) = Some(result);
     }
 }
@@ -78,6 +75,99 @@ fn arrive(door: &Door, unit: u64) {
         .0,
         Outcome::Ready
     );
+}
+
+#[test]
+fn pending_piece_retains_its_frames_and_loans_and_rejects_replacement_inputs() {
+    let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    let _reset = Reset;
+    store().clear();
+    let door = open_with(SIGNED_SECTION);
+    assert_eq!(door.connect("vendor").1, 200);
+    arrive(&door, 780);
+    PEND_SIGHTING.store(780, Ordering::SeqCst);
+    let given = Given::attempt(b"vendor");
+    assert_eq!(door.piece(780, given, 4096).outcome, Some(Outcome::Pending));
+    let loans = || {
+        let pending = door.pending.borrow();
+        let frame = pending.get(&ticket(780)).unwrap();
+        [
+            std::ptr::from_ref(&*frame.input) as usize,
+            std::ptr::from_ref(&*frame.output) as usize,
+            frame.input.member.ptr() as usize,
+            frame.input.bytes.ptr as usize,
+            frame.input.reply_buf as usize,
+            frame.input.fields_buf as usize,
+            frame.input.records_buf as usize,
+            frame.input.units_buf as usize,
+            frame.input.arena_buf as usize,
+        ]
+    };
+    let original = loans();
+    let mut changed = given;
+    changed.attempt += 1;
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        door.piece(780, changed, 4096)
+    }))
+    .is_err());
+    assert_eq!(
+        loans(),
+        original,
+        "a rejected input retains the original loans"
+    );
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        door.piece(780, given, 8192)
+    }))
+    .is_err());
+    assert_eq!(
+        loans(),
+        original,
+        "Pending cannot replace the output allocation"
+    );
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| { arrive(&door, 780) })).is_err()
+    );
+    assert_eq!(
+        loans(),
+        original,
+        "a fresh arrival cannot erase the continuation"
+    );
+    let resumed = door.piece(780, given, 4096);
+    assert_eq!(resumed.outcome, Some(Outcome::Ready));
+    assert_ne!(resumed.flags & EMIT_TO_FAR_END, 0);
+    assert!(door.pending.borrow().is_empty());
+}
+
+#[test]
+fn definitive_cancel_retires_pending_loans_and_borrowed_wrappers_do_not_close_the_owner() {
+    let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    let _reset = Reset;
+    store().clear();
+    let door = open_with(SIGNED_SECTION);
+    drop(Door::borrowed(door.instance));
+    assert_eq!(
+        door.connect("vendor").1,
+        200,
+        "the borrowed wrapper did not close it"
+    );
+    arrive(&door, 781);
+    PEND_SIGHTING.store(781, Ordering::SeqCst);
+    assert_eq!(
+        door.piece(781, Given::attempt(b"vendor"), 4096).outcome,
+        Some(Outcome::Pending)
+    );
+    assert_eq!(door.pending.borrow().len(), 1);
+    assert_eq!(door.cancel_unit(781), Outcome::Ready);
+    assert!(door.pending.borrow().is_empty());
+    arrive(&door, 782);
+    PEND_SIGHTING.store(782, Ordering::SeqCst);
+    assert_eq!(
+        door.piece(782, Given::attempt(b"vendor"), 4096).outcome,
+        Some(Outcome::Pending)
+    );
+    assert_eq!(door.pending.borrow().len(), 1);
+    // Owned Drop crosses real CLOSE before these unresolved loans are wiped and freed.
+    drop(door);
 }
 
 #[test]
