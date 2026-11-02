@@ -854,6 +854,7 @@ fn served_core(
     );
 
     let tables = busbar_kernel::plane_driver::serve::ServeTables::default();
+    let builder = busbar_kernel_testkit::test_support::TestApp::new();
     let mut compose = rig::DoorCompose::new(
         vec![(instance.to_string(), plane)],
         &dispatcher,
@@ -892,7 +893,7 @@ fn served_core(
 
     rig::register_door(door(), "serve-agent-row").expect("the door binds and folds");
     rig::install_root_auth();
-    let mut builder = busbar_kernel_testkit::test_support::TestApp::new()
+    let mut builder = builder
         .serve_tables(tables.clone())
         .keys_chain()
         .admin_chain(vec![busbar_kernel::config::operator_provider().to_string()])
@@ -1432,7 +1433,20 @@ async fn malformed_rest_bodies_never_dispatch_or_charge_and_empty_cancel_still_d
         .await
         .expect("the initial task was dispatched");
     let before_requests = admitted(&s);
-    let before_counts = caller_counts(&s);
+    let billed_before = Billed::of(&s);
+    let audit_rows = || {
+        let caller = busbar_kernel_audit::Subject::PrincipalId(s.key.id.clone());
+        s.book
+            .lock()
+            .expect("unpoisoned")
+            .audit_records
+            .iter()
+            .filter(|record| record.subject == caller)
+            .map(|record| ((record.node, record.seq), record.clone()))
+            .collect::<BTreeMap<_, _>>()
+    };
+    let before_rows = audit_rows();
+    let mut refused = 0;
     for target in [
         format!("{}/tasks/{task}:cancel", mount()),
         format!("{}/message:send", mount()),
@@ -1455,7 +1469,39 @@ async fn malformed_rest_bodies_never_dispatch_or_charge_and_empty_cancel_still_d
                 "a refused body must never reach the agent"
             );
             assert_eq!(admitted(&s), before_requests);
-            assert_eq!(caller_counts(&s).len(), before_counts.len());
+            refused += 1;
+            let after_rows = audit_rows();
+            assert_eq!(after_rows.len(), before_rows.len() + refused);
+            for (identity, row) in &before_rows {
+                assert_eq!(
+                    after_rows.get(identity),
+                    Some(row),
+                    "a sealed row is unchanged"
+                );
+            }
+            for (identity, row) in &after_rows {
+                if before_rows.contains_key(identity) {
+                    continue;
+                }
+                assert!(row.usage.lines.iter().all(|line| line.quantity == 0));
+                assert_eq!(row.usage.fee_count, 0);
+            }
+            let billed_after = Billed::of(&s);
+            assert_eq!(
+                (
+                    billed_after.requests,
+                    billed_after.fees,
+                    billed_after.bytes,
+                    billed_after.spend
+                ),
+                (
+                    billed_before.requests,
+                    billed_before.fees,
+                    billed_before.bytes,
+                    billed_before.spend
+                ),
+                "a refused body changes no ledger amount"
+            );
         }
     }
     let target = format!("{}/tasks/{task}:cancel", mount());
