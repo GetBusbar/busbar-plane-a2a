@@ -785,10 +785,9 @@ fn a_v10_push_config_verb_never_reads_its_config_id_as_the_task() {
 /// engine's scheme words.
 #[test]
 fn malformed_urls_are_refused() {
-    let words =
-        |_url: &str| "push callback URL is malformed: `<malformed URL omitted>`".to_string();
+    let words = |shown: &str| format!("push callback URL is malformed: `{shown}`");
     for (url, verdict, said) in [
-        ("not-a-url", DEST_ALLOWED, words("not-a-url")),
+        ("not-a-url", DEST_ALLOWED, words("<malformed URL omitted>")),
         (
             "https:/caller.example",
             DEST_ALLOWED,
@@ -799,11 +798,11 @@ fn malformed_urls_are_refused() {
             DEST_ALLOWED,
             "push callback URL has no host".to_string(),
         ),
-        ("://x", DEST_ALLOWED, words("://x")),
+        ("://x", DEST_ALLOWED, words("<malformed URL omitted>")),
         (
             "https://caller.example:99999/",
             DEST_NO_HOST,
-            words("https://caller.example:99999/"),
+            words("<malformed URL omitted>"),
         ),
         (
             "ftp://caller.example/",
