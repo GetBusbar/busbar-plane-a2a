@@ -7881,7 +7881,7 @@ fn total(lines: &[String]) -> f64 {
 /// `lane=WIRE_JSONRPC`), in the model plane's series shape.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_relayed_task_counts_an_upstream_attempt_naming_the_agent_it_was_issued_to() {
-    busbar_kernel::snapshot::init();
+    busbar_kernel_testkit::test_support::metrics::init();
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-metered";
     let mut agent = Agent::start(200, ANSWER).await;
@@ -7923,7 +7923,7 @@ async fn a_relayed_task_counts_an_upstream_attempt_naming_the_agent_it_was_issue
 /// relay_leg_metrics_tests.rs:157 `pool="planner"`; relay.rs:1737-1741).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_backend_that_cannot_be_reached_is_counted_as_a_transient_upstream_failure() {
-    busbar_kernel::snapshot::init();
+    busbar_kernel_testkit::test_support::metrics::init();
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-unreachable";
     let mut agent = Agent::start(200, ANSWER).await;
