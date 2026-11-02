@@ -55,13 +55,20 @@ use std::collections::BTreeMap;
 
 #[derive(Default)]
 struct ListingHost {
+    // The service results already held under this callback's handles remain stable on replay.
     rows: BTreeMap<(String, String), Vec<u8>>,
+    committed: BTreeMap<(String, String), Vec<u8>>,
+    read_handles: std::collections::BTreeSet<u32>,
+    receipt: Vec<u8>,
+    publications: usize,
+    pending_entries: usize,
     fail_task: bool,
     fail_second_config: bool,
     config_reads: Vec<String>,
     failed: bool,
     writes: usize,
     delivery: bool,
+    first_delivery: Option<(String, String, bool)>,
     tokens: Vec<bool>,
 }
 thread_local! { static LISTING: RefCell<ListingHost> = RefCell::new(ListingHost::default()); }
@@ -74,7 +81,9 @@ impl FakeService for Get {
         let key = call.text(|i| &i.key).to_string();
         let (failed, value) = LISTING.with(|s| {
             let mut s = s.borrow_mut();
-            if kind == crate::records::KIND_PUSH_CONFIG {
+            if kind == crate::records::KIND_PUSH_CONFIG
+                && s.read_handles.insert(call.input().head.handle.seq)
+            {
                 s.config_reads.push(key.clone());
             }
             let failed = (s.fail_task && kind == crate::records::KIND_TASK)
@@ -171,7 +180,11 @@ mod listing_probe {
                 {"id":"backend-t1","status":{"state":"TASK_STATE_COMPLETED"}},
                 {"id":"backend-t2","status":{"state":"TASK_STATE_COMPLETED"}}]}});
             plane.on_unit(1, |u| {
-                u.pass.listed = Some((1, Some((200, serde_json::to_vec(&doc).unwrap()))))
+                u.pass.listed = Some((
+                    1,
+                    crate::binding::Binding::JsonRpc,
+                    Some((200, serde_json::to_vec(&doc).unwrap())),
+                ))
             });
             instance.open(plane);
             Outcome::Ready
@@ -189,41 +202,96 @@ mod listing_probe {
         ) -> Outcome {
             let plane = instance.get().unwrap();
             let host = plane.host.as_ref().unwrap();
+            let journal = plane
+                .units
+                .with(&1, |u| u.unwrap().pass.publication.clone());
+            let mut extensions = busbar_contract::abi::sdk::plane::conditional::encode_capability(
+                busbar_contract::abi::sdk::plane::conditional::Capability {
+                    ticket: instance.ticket(),
+                    epoch: 1,
+                },
+            );
+            extensions.extend(LISTING.with(|s| std::mem::take(&mut s.borrow_mut().receipt)));
+            journal.enter(instance.ticket(), &extensions).unwrap();
             let section = plane
                 .units
                 .with(&1, |u| u.unwrap().section.clone())
                 .unwrap();
-            let mut via = Via::new(host, plane.services, instance.ticket(), 0, &plane.grown);
+            let mut via = Via::new(host, plane.services, instance.ticket(), 0, &plane.grown)
+                .publishing(&journal);
             let mut writes = Vec::new();
             let setup = LISTING.with(|s| s.borrow().fail_task);
-            let failed = if setup {
+            let result = if setup {
                 let envelope = serde_json::json!({"method":"GetTaskPushNotificationConfig","params":{"taskId":"t1"}});
-                matches!(
-                    mirror_flight(
-                        plane,
-                        &instance,
-                        &mut via,
-                        (crate::mirror::method::GET_PUSH_CONFIG, "1.0"),
-                        &envelope,
-                        ("a11ce", "planner"),
-                        (Some(&section), 0, 100)
-                    ),
-                    Err(Halt::Failed(_))
+                mirror_flight(
+                    plane,
+                    &instance,
+                    &mut via,
+                    (crate::mirror::method::GET_PUSH_CONFIG, "1.0"),
+                    &envelope,
+                    ("a11ce", "planner"),
+                    (Some(&section), 0, 100),
                 )
+                .map(|_| ())
             } else {
-                matches!(
-                    refresh_listed(
-                        plane,
-                        &instance,
-                        1,
-                        &mut via,
-                        ("a11ce", "planner"),
-                        (Some(&section), 0, 100, "1.0"),
-                        &mut writes
-                    ),
-                    Err(Halt::Failed(_))
+                refresh_listed(
+                    plane,
+                    &instance,
+                    1,
+                    &mut via,
+                    ("a11ce", "planner"),
+                    (Some(&section), 0, 100, "1.0"),
+                    &mut writes,
                 )
             };
+            assert!(
+                writes.is_empty(),
+                "conditional records never escape as ordinary writes"
+            );
+            if result == Err(Halt::Pending) {
+                let receipt =
+                    crate::conditional_publication::fixture::receipt(&journal, |request| {
+                        use busbar_contract::abi::sdk::plane::conditional::RecordMutation;
+                        use busbar_contract::abi::sdk::store::conditional::{Decision, Expected};
+                        LISTING.with(|state| {
+                            let mut state = state.borrow_mut();
+                            for predicate in &request.candidate.predicates {
+                                let key = String::from_utf8(predicate.key.clone()).unwrap();
+                                let kind =
+                                    crate::records::HELD_KINDS[predicate.kind as usize].to_string();
+                                let actual = state.rows.get(&(kind, key));
+                                assert!(match &predicate.expected {
+                                    Expected::Absent => actual.is_none(),
+                                    Expected::Bytes(value) => actual == Some(value),
+                                });
+                            }
+                            for mutation in &request.candidate.mutations {
+                                if let RecordMutation::Put { kind, key, value } = mutation {
+                                    let kind =
+                                        crate::records::HELD_KINDS[*kind as usize].to_string();
+                                    state.committed.insert(
+                                        (kind, String::from_utf8(key.clone()).unwrap()),
+                                        value.clone(),
+                                    );
+                                } else {
+                                    panic!("listing moves only put task rows");
+                                }
+                            }
+                            state.publications += 1;
+                        });
+                        Decision::Applied
+                    });
+                LISTING.with(|s| {
+                    let mut s = s.borrow_mut();
+                    s.receipt = receipt;
+                    s.pending_entries += 1;
+                });
+                return Outcome::Pending;
+            }
+            let failed = result.is_err();
+            // Each exact Applied publication owns its effects even when a later independent
+            // config read fails. Notification authority captured as unavailable stays deferred.
+            crate::push_door::apply_publication(plane, &journal);
             let tokens = ["t1", "t2"]
                 .iter()
                 .map(|id| {
@@ -233,13 +301,20 @@ mod listing_probe {
                         .is_some()
                 })
                 .collect();
-            let delivery = plane.deliveries.next_due(0).is_some();
+            let delivery = plane.deliveries.next_due(0);
             LISTING.with(|s| {
                 let mut s = s.borrow_mut();
                 s.failed = failed;
                 s.writes = writes.len();
                 s.tokens = tokens;
-                s.delivery = delivery;
+                s.delivery = delivery.is_some();
+                s.first_delivery = delivery.as_ref().map(|delivery| {
+                    (
+                        delivery.task_id.clone(),
+                        delivery.url.clone(),
+                        delivery.unresolved.is_some(),
+                    )
+                });
             });
             Outcome::Ready
         }
@@ -303,41 +378,66 @@ fn drive_listing() {
     assert_eq!(opened.outcome, Outcome::Ready);
     let instance = opened.take_instance().unwrap();
     let input = TestIn::<DriveIn>::new().set(|i| &i.head.ticket, TICKET);
-    let result = reply::call_in(
-        view.op::<busbar_contract::abi::export::Ops>(|t| &t.head.drive)
-            .unwrap(),
-        Some(&instance),
-        &input,
-        zeroed::<OutHead>(),
-    );
-    assert_eq!(result.outcome, Outcome::Ready);
+    for _ in 0..10 {
+        let result = reply::call_in(
+            view.op::<busbar_contract::abi::export::Ops>(|t| &t.head.drive)
+                .unwrap(),
+            Some(&instance),
+            &input,
+            zeroed::<OutHead>(),
+        );
+        if result.outcome == Outcome::Ready {
+            return;
+        }
+        assert_eq!(result.outcome, Outcome::Pending);
+    }
+    panic!("listing did not finish its bounded observation/publication sequence");
 }
 
 #[test]
-fn a_late_listing_config_failure_cannot_queue_or_invalidate_an_earlier_tasks_token() {
+fn a_late_listing_config_failure_keeps_earlier_applied_moves_and_defers_missing_authority() {
     listing_fixture(true, false);
     drive_listing();
     LISTING.with(|s| {
         let s = s.borrow();
         assert!(s.failed);
-        assert!(
-            s.writes > 0,
-            "both state transitions were staged before the injected late config failure"
+        assert_eq!(s.writes, 0);
+        assert_eq!(s.publications, 2);
+        assert_eq!(s.pending_entries, 4);
+        assert!(s.config_reads.iter().any(|key| key == "a11ce/t1"));
+        assert!(s.config_reads.iter().any(|key| key == "a11ce/t2"));
+        assert!(s.delivery, "the earlier acknowledged notification survives");
+        assert_eq!(
+            s.first_delivery,
+            Some(("t1".into(), "https://receiver.example/t1".into(), false))
         );
-        assert_eq!(s.config_reads, ["a11ce/t1", "a11ce/t2"]);
-        assert!(!s.delivery);
-        assert_eq!(s.tokens, [true, true]);
+        assert_eq!(
+            s.tokens,
+            [false, false],
+            "both acknowledged rows are terminal"
+        );
     });
 }
 #[test]
-fn the_success_control_reads_both_configs_and_stages_the_actual_task_transitions() {
+fn the_success_control_reads_both_configs_and_acknowledges_actual_task_transitions() {
     listing_fixture(false, false);
     drive_listing();
     LISTING.with(|s| {
         let s = s.borrow();
         assert!(!s.failed);
-        assert!(s.writes > 0);
-        assert_eq!(s.config_reads, ["a11ce/t1", "a11ce/t2"]);
+        assert_eq!(s.writes, 0);
+        assert_eq!(s.publications, 2);
+        assert_eq!(s.pending_entries, 4);
+        assert!(s.delivery);
+        assert_eq!(s.tokens, [false, false]);
+        for id in ["t1", "t2"] {
+            let raw = &s.committed[&(
+                crate::records::KIND_TASK.into(),
+                tasks::task_key("a11ce", id),
+            )];
+            let held: tasks::HeldTask = serde_json::from_slice(raw).unwrap();
+            assert_eq!(held.row.state, "completed");
+        }
     });
 }
 #[test]

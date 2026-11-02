@@ -948,3 +948,7 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/conditional_raw_custody.rs"]
 mod raw_custody_tests;
+
+#[cfg(test)]
+#[path = "tests/conditional_fixture.rs"]
+pub(crate) mod fixture;
