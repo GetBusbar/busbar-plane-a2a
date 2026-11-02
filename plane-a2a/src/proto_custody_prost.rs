@@ -30,6 +30,24 @@ impl MapValue for String {
 pub(crate) mod encoding {
     pub(crate) use ::prost::encoding::*;
 
+    enum MergeFailure {
+        Underflow,
+        InvalidUtf8,
+    }
+
+    impl MergeFailure {
+        #[expect(
+            deprecated,
+            reason = "Pinned prost requires its DecodeError at the Message boundary; its public API has no nondeprecated constructor for these custody-preserving errors"
+        )]
+        fn into_error(self) -> ::prost::DecodeError {
+            ::prost::DecodeError::new(match self {
+                Self::Underflow => "buffer underflow",
+                Self::InvalidUtf8 => "invalid string value: data is not UTF-8 encoded",
+            })
+        }
+    }
+
     pub(crate) mod bytes {
         use super::*;
         use crate::proto::custody::{Guard, Wipe};
@@ -47,8 +65,7 @@ pub(crate) mod encoding {
             check_wire_type(WireType::LengthDelimited, wire)?;
             let len = decode_varint(buf)?;
             if len > buf.remaining() as u64 {
-                const UNDERFLOW: &str = "buffer underflow";
-                return Err(::prost::DecodeError::new(UNDERFLOW));
+                return Err(MergeFailure::Underflow.into_error());
             }
 
             incoming.resize(len as usize, 0);
@@ -78,9 +95,6 @@ pub(crate) mod encoding {
             encode, encode_repeated, encoded_len, encoded_len_repeated,
         };
 
-        /// Exact prost invalid-UTF8 diagnostic, retained across its safe ownership adapter.
-        const INVALID_UTF8: &str = "invalid string value: data is not UTF-8 encoded";
-
         pub(crate) fn merge(
             wire: WireType,
             value: &mut String,
@@ -93,7 +107,7 @@ pub(crate) mod encoding {
             value.clear();
             super::bytes::merge(wire, &mut incoming, buf, ctx)?;
             if std::str::from_utf8(&incoming).is_err() {
-                return Err(::prost::DecodeError::new(INVALID_UTF8));
+                return Err(MergeFailure::InvalidUtf8.into_error());
             }
 
             match String::from_utf8(incoming.take()) {
@@ -104,7 +118,7 @@ pub(crate) mod encoding {
                 Err(error) => {
                     let mut bytes = Guard::new(error.into_bytes());
                     bytes.wipe();
-                    Err(::prost::DecodeError::new(INVALID_UTF8))
+                    Err(MergeFailure::InvalidUtf8.into_error())
                 }
             }
         }
