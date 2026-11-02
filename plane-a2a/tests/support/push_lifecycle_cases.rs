@@ -1052,21 +1052,31 @@ fn callback_pending_and_short_refusals_preserve_one_budget_charge_and_one_warnin
             .iter()
             .filter(|d| d.contains("BUSBAR-7050"))
             .count(),
-        1
+        0,
+        "SHORT preflight emits no warning before a complete response fits"
     );
-    let recalled = recall(&door, 759, &auth, WORKING, 4096);
+    // Terminal SHORT is a fresh same-ticket call; only Pending permits FLAG_RESUME.
+    let recalled = serve(&door, 759, &auth, WORKING, 4096);
     assert_eq!(
         (recalled.outcome, recalled.status),
         (Outcome::Ready, 503),
         "{recalled:?}"
     );
-    assert!(!recalled.diags.iter().any(|d| d.contains("BUSBAR-7050")));
+    assert_eq!(
+        recalled
+            .diags
+            .iter()
+            .filter(|d| d.contains("BUSBAR-7050"))
+            .count(),
+        1,
+        "the complete fresh refusal emits exactly one warning"
+    );
     script(|s| s.read_failed = false);
     assert_eq!(serve(&door, 760, &auth, WORKING, 4096).status, 429);
     let short_limit = serve(&door, 761, &auth, WORKING, 0);
     assert_eq!(short_limit.outcome, Outcome::Failed);
     assert!(short_limit.needed > 0);
-    let recalled_limit = recall(&door, 761, &auth, WORKING, 4096);
+    let recalled_limit = serve(&door, 761, &auth, WORKING, 4096);
     assert_eq!(
         (recalled_limit.outcome, recalled_limit.status),
         (Outcome::Ready, 429)
@@ -1162,7 +1172,7 @@ fn malformed_callback_short_recall_keeps_its_refusal_and_single_charge() {
     let short = serve(&door, 1059, &auth, b"{", 0);
     assert_eq!(short.outcome, Outcome::Failed);
     assert!(short.needed > 0);
-    let recalled = recall(&door, 1059, &auth, b"{", 4096);
+    let recalled = serve(&door, 1059, &auth, b"{", 4096);
     assert_eq!(
         (recalled.outcome, recalled.status),
         (Outcome::Ready, 400),
