@@ -346,10 +346,11 @@ fn many_sse_events_keep_order_all_terminators_and_the_first_error_boundary() {
         .iter()
         .map(|m| {
             let got = crate::proto::pb::StreamResponse::decode(m.as_slice()).unwrap();
-            let Some(crate::proto::pb::stream_response::Payload::Task(task)) = got.payload else {
+            let Some(crate::proto::pb::stream_response::Payload::Task(task)) = got.payload.as_ref()
+            else {
                 panic!("a task event")
             };
-            task.id
+            task.id.clone()
         })
         .collect();
     assert_eq!(ids, (0..256).map(|n| format!("t{n}")).collect::<Vec<_>>());
