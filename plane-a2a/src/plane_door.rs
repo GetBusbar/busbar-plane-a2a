@@ -2111,7 +2111,11 @@ pub(crate) fn admit_unit(
         None => agent_arrival::scope_refusal(""),
     };
     let Some(card) = plane.cards.at(member, generation) else {
-        return Err(excluded(crate::skill::Unfit::NoCachedCard));
+        return Err(not_serving(
+            addressed,
+            crate::card_trust::State::Pending,
+            UNTRUSTED_STATUS,
+        ));
     };
     let shape = envelope
         .map(crate::skill::TaskShape::of)
