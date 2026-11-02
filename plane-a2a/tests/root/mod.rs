@@ -224,6 +224,39 @@ impl Refusing {
 }
 
 impl busbar_contract::store_calls::StoreCalls for Refusing {
+    fn supports_usage_correction(&self) -> bool {
+        self.inner.supports_usage_correction()
+    }
+    fn apply_usage_correction<'a>(
+        &'a self,
+        request: &'a busbar_contract::records::correction::Request,
+    ) -> busbar_contract::store_calls::StoreCall<'a, busbar_contract::records::correction::Decision>
+    {
+        self.inner.apply_usage_correction(request)
+    }
+    fn supports_record_transaction(&self) -> bool {
+        self.inner.supports_record_transaction()
+    }
+    fn record_transaction<'a>(
+        &'a self,
+        request: &'a busbar_contract::abi::sdk::store::conditional::Request,
+    ) -> busbar_contract::store_calls::StoreCall<
+        'a,
+        busbar_contract::abi::sdk::store::conditional::Decision,
+    > {
+        if request
+            .mutations
+            .iter()
+            .any(|mutation| self.refuses(mutation.address().1))
+        {
+            return Box::pin(async {
+                Err(busbar_contract::store_calls::StoreFailure::Refused(
+                    "disk is full".to_string(),
+                ))
+            });
+        }
+        self.inner.record_transaction(request)
+    }
     fn add_usage_batch<'a>(
         &'a self,
         op: busbar_contract::abi::store::OpId,
@@ -7618,12 +7651,10 @@ async fn a_submission_whose_task_the_store_refuses_answers_the_engines_503() {
     }
 }
 
-/// AN INTERRUPTED TASK WHOSE RESUMPTION THE STORE REFUSES is answered as predev answered a task
-/// it could not move back to `working`: `409` with `-32002` "this task cannot be resumed" and
-/// its `TASK_NOT_CANCELABLE` `ErrorInfo`, echoing the request id (busbar-a2a
-/// `receive.rs:1985-2001`, `rpcerror.rs:305-318`), and the agent is never dialled.
+/// A store refusal while resuming an interrupted task is retryable: the task stays held and the
+/// agent receives nothing until its transition can be recorded.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_resumption_the_store_refuses_answers_the_engines_409() {
+async fn a_resumption_the_store_refuses_is_retryable_and_never_dials_the_agent() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-resume-refused";
     let mut agent = Agent::start_answering(
@@ -7652,20 +7683,23 @@ async fn a_resumption_the_store_refuses_answers_the_engines_409() {
     assert_eq!(
         (status, doc),
         (
-            StatusCode::CONFLICT,
+            StatusCode::SERVICE_UNAVAILABLE,
             serde_json::json!({ "jsonrpc": "2.0", "id": 1, "error": {
-                "code": -32002,
+                "code": -32603,
                 "message": "this task cannot be resumed",
-                "data": [{
-                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
-                    "domain": surface("error_info_domain"),
-                    "reason": "TASK_NOT_CANCELABLE",
-                }],
             } })
         ),
     );
     let sent = heard(&mut agent);
     assert!(sent.is_empty(), "the agent was dialled: {sent:?}");
+    *s.refuse.lock().expect("unpoisoned") = None;
+    let (status, doc) = document(&s, rpc("planner", "message/send", turn, Some(&s.token))).await;
+    assert_eq!(status, StatusCode::OK, "retry after store recovery: {doc}");
+    assert_eq!(doc["result"]["id"], task);
+    assert!(
+        !heard(&mut agent).is_empty(),
+        "the recovered retry reaches the agent"
+    );
 }
 
 // ── PORTED FROM THE ENGINE'S `serve_tests`, `sign_tests` AND `relay_leg_metrics_tests` ─────────
