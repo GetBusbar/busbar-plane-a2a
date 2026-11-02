@@ -4,40 +4,110 @@
 //! THE CARD FETCH'S PRE-CHECK FAILS CLOSED (docs/security.md, the A2A card fetch: every hop is
 
 use std::cell::Cell;
+use std::ffi::c_void;
+use std::mem::size_of;
 
-use busbar_contract::abi::host::conn::connector::EstablishIn;
-use busbar_contract::abi::mechanism::call::Outcome;
-use busbar_contract::abi::mechanism::ticket::Ticket;
+use busbar_contract::abi::host::conn::connector::{self, ConnectorSlots, EstablishIn};
+use busbar_contract::abi::host::service::{self as svc, ServiceHead, ServiceOut};
+use busbar_contract::abi::mechanism::call::{Outcome, RawOutcome};
+use busbar_contract::abi::mechanism::ticket::{HostCtx, HostTables, Ticket};
+use busbar_contract::abi::sdk::Services;
 use busbar_contract::abi::sdk::conn::Host;
-use busbar_test_kit::test_support::fake::{conn, FakeHost, FakeService, ServiceCall};
+use busbar_contract::abi::sdk::test_support::{lend, zeroed};
 
 use super::*;
 
 thread_local! {
-    /// The dials this thread's fake connector was asked for.
+    /// The dials this thread's test connector was asked for.
     static DIALS: Cell<usize> = const { Cell::new(0) };
 }
 
-/// The connector: every dial is counted and fails (nothing listens).
-struct Dial;
-impl FakeService for Dial {
-    type In = EstablishIn;
-    fn serve(_: &mut ServiceCall<EstablishIn>) -> Outcome {
-        DIALS.with(|d| d.set(d.get() + 1));
-        Outcome::Failed
+/// The connector counts every actual dial and fails it: nothing listens.
+#[allow(unsafe_code)]
+unsafe extern "C" fn dial(ctx: HostCtx, input: *const c_void, out: *mut ServiceOut) -> RawOutcome {
+    if ctx != HostCtx::NONE || input.is_null() || out.is_null() {
+        return RawOutcome::of(Outcome::Refused);
+    }
+    // SAFETY: the actual SDK service call lends an initialized ServiceHead for this crossing.
+    // Check its exact operation and input prefix before accepting this concrete service.
+    let head = unsafe { input.cast::<ServiceHead>().read_unaligned() };
+    if svc::check_head(
+        &head,
+        connector::service::ESTABLISH,
+        size_of::<EstablishIn>(),
+    )
+    .is_err()
+    {
+        return RawOutcome::of(Outcome::Refused);
+    }
+    // SAFETY: the SDK owns and exclusively lends out, including its readable leading size.
+    // Only the prefix it advertises may be written; no output or nested buffer is retained.
+    let Some(lent) = (unsafe { svc::lent_out(out) }) else {
+        return RawOutcome::of(Outcome::Refused);
+    };
+    DIALS.with(|d| d.set(d.get() + 1));
+    let outcome = RawOutcome::of(Outcome::Failed);
+    let value = 0;
+    // SAFETY: lent_out capped this live, exclusively writable SDK output at our layout.
+    // The scalar answer has no borrowed data, and write_out touches only that lent prefix.
+    unsafe {
+        svc::write_out(
+            out,
+            ServiceOut {
+                outcome,
+                value,
+                ..ServiceOut::ZERO
+            },
+            lent,
+        );
+    }
+    outcome
+}
+
+/// Copy this test's concrete tables into the actual SDK handles, without retaining a loan.
+#[allow(unsafe_code)]
+fn card_door(with_judgements: bool) -> A2aDoor {
+    let conns = ConnectorSlots {
+        size: size_of::<ConnectorSlots>() as u32,
+        slots: connector::SERVICES,
+        establish: Some(dial),
+        ..zeroed()
+    };
+    let services = svc::HostSlots {
+        size: size_of::<svc::HostSlots>() as u32,
+        slots: svc::SERVICES,
+        dest_judge: with_judgements.then_some(judge),
+        ..zeroed()
+    };
+    let tables = HostTables {
+        size: size_of::<HostTables>() as u32,
+        _reserved: 0,
+        ctx: HostCtx::NONE,
+        wake: None,
+        conns: &conns,
+        services: &services,
+        io: std::ptr::null(),
+    };
+    // SAFETY: both complete, initialized nested tables remain live through both SDK
+    // constructors, which copy their advertised prefixes. Every non-NULL callback is a
+    // static function, validates NONE context before state access, and retains no raw
+    // input/output pointer. Other slots are NULL; only existing thread-local Cells persist.
+    let tables = unsafe { lend(&tables) };
+    A2aDoor {
+        host: Some(Host::of(tables)),
+        services: if with_judgements {
+            Services::of(tables)
+        } else {
+            None
+        },
+        ..A2aDoor::default()
     }
 }
 
 /// A card fetch of `planner` by a door that holds a connector and NO host services is refused,
 #[test]
 fn a_card_fetch_without_host_services_is_refused() {
-    let fake: &'static FakeHost = Box::leak(Box::new(FakeHost::new().serve(conn::ESTABLISH, Dial)));
-    let tables = fake.lent();
-    let plane = A2aDoor {
-        host: Some(Host::of(tables)),
-        services: None,
-        ..A2aDoor::default()
-    };
+    let plane = card_door(false);
     let def: crate::a2a::config::AgentDefCfg = serde_json::from_value(serde_json::json!({
         "url": "https://agent.example/a2a",
         "pin": {"mechanism": "unpinned"},
@@ -95,26 +165,51 @@ fn a_refused_relay_endpoint_is_named_in_a_diagnostic() {
 }
 
 thread_local! {
-    /// The destination judgements this thread's fake host was asked for.
+    /// The destination judgements this thread's test host was asked for.
     static JUDGED: Cell<usize> = const { Cell::new(0) };
 }
 
-/// The destination judgement: the first host it is asked about is a loopback name, every later one
-struct LoopbackThenUnresolvable;
-impl FakeService for LoopbackThenUnresolvable {
-    type In = busbar_contract::abi::host::service::DestJudgeIn;
-    fn serve(call: &mut ServiceCall<busbar_contract::abi::host::service::DestJudgeIn>) -> Outcome {
-        let n = JUDGED.with(|j| {
-            j.set(j.get() + 1);
-            j.get()
-        });
-        call.set_value(if n == 1 {
-            busbar_contract::abi::host::service::DEST_INTERNAL
-        } else {
-            busbar_contract::abi::host::service::DEST_UNRESOLVABLE
-        });
-        Outcome::Ready
+/// The canonical destination is a loopback name; the legacy destination does not resolve.
+#[allow(unsafe_code)]
+unsafe extern "C" fn judge(ctx: HostCtx, input: *const c_void, out: *mut ServiceOut) -> RawOutcome {
+    if ctx != HostCtx::NONE || input.is_null() || out.is_null() {
+        return RawOutcome::of(Outcome::Refused);
     }
+    // SAFETY: the actual SDK service call lends an initialized ServiceHead for this crossing.
+    // Check its exact operation and input prefix before accepting this concrete service.
+    let head = unsafe { input.cast::<ServiceHead>().read_unaligned() };
+    if svc::check_head(&head, svc::op::DEST_JUDGE, size_of::<svc::DestJudgeIn>()).is_err() {
+        return RawOutcome::of(Outcome::Refused);
+    }
+    // SAFETY: the SDK owns and exclusively lends out, including its readable leading size.
+    // Only the prefix it advertises may be written; no output or nested buffer is retained.
+    let Some(lent) = (unsafe { svc::lent_out(out) }) else {
+        return RawOutcome::of(Outcome::Refused);
+    };
+    let n = JUDGED.with(|j| {
+        j.set(j.get() + 1);
+        j.get()
+    });
+    let value = if n == 1 {
+        svc::DEST_INTERNAL
+    } else {
+        svc::DEST_UNRESOLVABLE
+    };
+    let outcome = RawOutcome::of(Outcome::Ready);
+    // SAFETY: lent_out capped this live, exclusively writable SDK output at our layout.
+    // The scalar answer has no borrowed data, and write_out touches only that lent prefix.
+    unsafe {
+        svc::write_out(
+            out,
+            ServiceOut {
+                outcome,
+                value,
+                ..ServiceOut::ZERO
+            },
+            lent,
+        );
+    }
+    outcome
 }
 
 fn planner_def(url: &str) -> crate::a2a::config::AgentDefCfg {
@@ -128,20 +223,7 @@ fn planner_def(url: &str) -> crate::a2a::config::AgentDefCfg {
 /// G1-45: THE CANONICAL PATH'S REFUSAL IS NOT LOST TO THE LEGACY PATH'S: a card whose canonical
 #[test]
 fn the_canonical_paths_refusal_survives_the_legacy_paths() {
-    let fake: &'static FakeHost = Box::leak(Box::new(
-        FakeHost::new()
-            .serve(
-                busbar_test_kit::test_support::fake::host::DEST_JUDGE,
-                LoopbackThenUnresolvable,
-            )
-            .serve(conn::ESTABLISH, Dial),
-    ));
-    let tables = fake.lent();
-    let plane = A2aDoor {
-        host: Some(Host::of(tables)),
-        services: busbar_contract::abi::sdk::Services::of(tables),
-        ..A2aDoor::default()
-    };
+    let plane = card_door(true);
     let at = LookAt {
         plane: &plane,
         generation: 1,

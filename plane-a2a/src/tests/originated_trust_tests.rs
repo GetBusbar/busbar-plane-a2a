@@ -4,78 +4,284 @@
 //! TRUST IS RE-CHECKED BEFORE EVERY OUTBOUND REQUEST, busbar's own included (docs/a2a.md "Trust
 
 use std::cell::Cell;
+use std::ffi::c_void;
+use std::mem::size_of;
 
-use busbar_contract::abi::host::conn::connector::EstablishIn;
-use busbar_contract::abi::host::service::{self as svc, DestJudgeIn, TrustServesIn, DEST_ALLOWED};
-use busbar_contract::abi::mechanism::call::Outcome;
-use busbar_contract::abi::mechanism::ticket::Ticket;
-use busbar_contract::abi::sdk::conn::Host;
+use busbar_contract::abi::host::conn::connector::{self, ConnectorSlots, EstablishIn};
+use busbar_contract::abi::host::service::{self as svc, ServiceHead, ServiceOut};
+use busbar_contract::abi::mechanism::call::{Outcome, RawOutcome};
+use busbar_contract::abi::mechanism::ticket::{HostCtx, HostTables, Ticket};
 use busbar_contract::abi::sdk::Services;
-use busbar_test_kit::test_support::fake::{conn, host, FakeHost, FakeService, ServiceCall};
+use busbar_contract::abi::sdk::conn::Host;
+use busbar_contract::abi::sdk::test_support::{lend, zeroed};
 
 use super::*;
 
 thread_local! {
-    /// The dials this thread's fake connector was asked for.
+    /// The dials this thread's test connector was asked for.
     static DIALS: Cell<usize> = const { Cell::new(0) };
     static VERDICT: Cell<u64> = const { Cell::new(svc::DISTRUST_NONE) };
 }
 
-/// The agent's url judged: admitted, as the open web's guard admits a public name.
-struct Admitted;
-impl FakeService for Admitted {
-    type In = DestJudgeIn;
-    fn serve(call: &mut ServiceCall<DestJudgeIn>) -> Outcome {
-        call.set_value(DEST_ALLOWED);
-        Outcome::Ready
+/// The agent's public destination is admitted by the concrete destination service.
+#[allow(unsafe_code)]
+unsafe extern "C" fn admitted(
+    ctx: HostCtx,
+    input: *const c_void,
+    out: *mut ServiceOut,
+) -> RawOutcome {
+    if ctx != HostCtx::NONE || input.is_null() || out.is_null() {
+        return RawOutcome::of(Outcome::Refused);
     }
+    // SAFETY: the actual SDK service call lends an initialized ServiceHead for this crossing.
+    // Check its exact operation and input prefix before accepting this concrete service.
+    let head = unsafe { input.cast::<ServiceHead>().read_unaligned() };
+    if svc::check_head(&head, svc::op::DEST_JUDGE, size_of::<svc::DestJudgeIn>()).is_err() {
+        return RawOutcome::of(Outcome::Refused);
+    }
+    // SAFETY: the SDK owns and exclusively lends out, including its readable leading size.
+    // Only the prefix it advertises may be written; no output or nested buffer is retained.
+    let Some(lent) = (unsafe { svc::lent_out(out) }) else {
+        return RawOutcome::of(Outcome::Refused);
+    };
+    let outcome = RawOutcome::of(Outcome::Ready);
+    let value = svc::DEST_ALLOWED;
+    // SAFETY: lent_out capped this live, exclusively writable SDK output at our layout.
+    // The scalar answer has no borrowed data, and write_out touches only that lent prefix.
+    unsafe {
+        svc::write_out(
+            out,
+            ServiceOut {
+                outcome,
+                value,
+                ..ServiceOut::ZERO
+            },
+            lent,
+        );
+    }
+    outcome
 }
 
-/// The kernel's trust book: the agent is QUARANTINED.
-struct Quarantined;
-impl FakeService for Quarantined {
-    type In = TrustServesIn;
-    fn serve(call: &mut ServiceCall<TrustServesIn>) -> Outcome {
-        call.set_value(svc::DISTRUST_QUARANTINED);
-        Outcome::Ready
+/// The trust service quarantines the agent.
+#[allow(unsafe_code)]
+unsafe extern "C" fn quarantined(
+    ctx: HostCtx,
+    input: *const c_void,
+    out: *mut ServiceOut,
+) -> RawOutcome {
+    if ctx != HostCtx::NONE || input.is_null() || out.is_null() {
+        return RawOutcome::of(Outcome::Refused);
     }
+    // SAFETY: the actual SDK service call lends an initialized ServiceHead for this crossing.
+    // Check its exact operation and input prefix before accepting this concrete service.
+    let head = unsafe { input.cast::<ServiceHead>().read_unaligned() };
+    if svc::check_head(
+        &head,
+        svc::op::TRUST_SERVES,
+        size_of::<svc::TrustServesIn>(),
+    )
+    .is_err()
+    {
+        return RawOutcome::of(Outcome::Refused);
+    }
+    // SAFETY: the SDK owns and exclusively lends out, including its readable leading size.
+    // Only the prefix it advertises may be written; no output or nested buffer is retained.
+    let Some(lent) = (unsafe { svc::lent_out(out) }) else {
+        return RawOutcome::of(Outcome::Refused);
+    };
+    let outcome = RawOutcome::of(Outcome::Ready);
+    let value = svc::DISTRUST_QUARANTINED;
+    // SAFETY: lent_out capped this live, exclusively writable SDK output at our layout.
+    // The scalar answer has no borrowed data, and write_out touches only that lent prefix.
+    unsafe {
+        svc::write_out(
+            out,
+            ServiceOut {
+                outcome,
+                value,
+                ..ServiceOut::ZERO
+            },
+            lent,
+        );
+    }
+    outcome
 }
 
-/// The kernel's trust book: the agent is served.
-struct Serving;
-impl FakeService for Serving {
-    type In = TrustServesIn;
-    fn serve(call: &mut ServiceCall<TrustServesIn>) -> Outcome {
-        call.set_value(svc::DISTRUST_NONE);
-        Outcome::Ready
+/// The trust service serves the agent.
+#[allow(unsafe_code)]
+unsafe extern "C" fn serving(
+    ctx: HostCtx,
+    input: *const c_void,
+    out: *mut ServiceOut,
+) -> RawOutcome {
+    if ctx != HostCtx::NONE || input.is_null() || out.is_null() {
+        return RawOutcome::of(Outcome::Refused);
     }
+    // SAFETY: the actual SDK service call lends an initialized ServiceHead for this crossing.
+    // Check its exact operation and input prefix before accepting this concrete service.
+    let head = unsafe { input.cast::<ServiceHead>().read_unaligned() };
+    if svc::check_head(
+        &head,
+        svc::op::TRUST_SERVES,
+        size_of::<svc::TrustServesIn>(),
+    )
+    .is_err()
+    {
+        return RawOutcome::of(Outcome::Refused);
+    }
+    // SAFETY: the SDK owns and exclusively lends out, including its readable leading size.
+    // Only the prefix it advertises may be written; no output or nested buffer is retained.
+    let Some(lent) = (unsafe { svc::lent_out(out) }) else {
+        return RawOutcome::of(Outcome::Refused);
+    };
+    let outcome = RawOutcome::of(Outcome::Ready);
+    let value = svc::DISTRUST_NONE;
+    // SAFETY: lent_out capped this live, exclusively writable SDK output at our layout.
+    // The scalar answer has no borrowed data, and write_out touches only that lent prefix.
+    unsafe {
+        svc::write_out(
+            out,
+            ServiceOut {
+                outcome,
+                value,
+                ..ServiceOut::ZERO
+            },
+            lent,
+        );
+    }
+    outcome
 }
 
-struct Verdict;
-impl FakeService for Verdict {
-    type In = TrustServesIn;
-    fn serve(call: &mut ServiceCall<TrustServesIn>) -> Outcome {
-        call.set_value(VERDICT.with(Cell::get));
-        Outcome::Ready
+/// The trust service returns this thread's exact verdict.
+#[allow(unsafe_code)]
+unsafe extern "C" fn verdict(
+    ctx: HostCtx,
+    input: *const c_void,
+    out: *mut ServiceOut,
+) -> RawOutcome {
+    if ctx != HostCtx::NONE || input.is_null() || out.is_null() {
+        return RawOutcome::of(Outcome::Refused);
     }
+    // SAFETY: the actual SDK service call lends an initialized ServiceHead for this crossing.
+    // Check its exact operation and input prefix before accepting this concrete service.
+    let head = unsafe { input.cast::<ServiceHead>().read_unaligned() };
+    if svc::check_head(
+        &head,
+        svc::op::TRUST_SERVES,
+        size_of::<svc::TrustServesIn>(),
+    )
+    .is_err()
+    {
+        return RawOutcome::of(Outcome::Refused);
+    }
+    // SAFETY: the SDK owns and exclusively lends out, including its readable leading size.
+    // Only the prefix it advertises may be written; no output or nested buffer is retained.
+    let Some(lent) = (unsafe { svc::lent_out(out) }) else {
+        return RawOutcome::of(Outcome::Refused);
+    };
+    let outcome = RawOutcome::of(Outcome::Ready);
+    let value = VERDICT.with(Cell::get);
+    // SAFETY: lent_out capped this live, exclusively writable SDK output at our layout.
+    // The scalar answer has no borrowed data, and write_out touches only that lent prefix.
+    unsafe {
+        svc::write_out(
+            out,
+            ServiceOut {
+                outcome,
+                value,
+                ..ServiceOut::ZERO
+            },
+            lent,
+        );
+    }
+    outcome
 }
 
-struct Unavailable;
-impl FakeService for Unavailable {
-    type In = TrustServesIn;
-    fn serve(_: &mut ServiceCall<TrustServesIn>) -> Outcome {
-        Outcome::Failed
+/// The trust service is present but its call fails.
+#[allow(unsafe_code)]
+unsafe extern "C" fn unavailable(
+    ctx: HostCtx,
+    input: *const c_void,
+    out: *mut ServiceOut,
+) -> RawOutcome {
+    if ctx != HostCtx::NONE || input.is_null() || out.is_null() {
+        return RawOutcome::of(Outcome::Refused);
     }
+    // SAFETY: the actual SDK service call lends an initialized ServiceHead for this crossing.
+    // Check its exact operation and input prefix before accepting this concrete service.
+    let head = unsafe { input.cast::<ServiceHead>().read_unaligned() };
+    if svc::check_head(
+        &head,
+        svc::op::TRUST_SERVES,
+        size_of::<svc::TrustServesIn>(),
+    )
+    .is_err()
+    {
+        return RawOutcome::of(Outcome::Refused);
+    }
+    // SAFETY: the SDK owns and exclusively lends out, including its readable leading size.
+    // Only the prefix it advertises may be written; no output or nested buffer is retained.
+    let Some(lent) = (unsafe { svc::lent_out(out) }) else {
+        return RawOutcome::of(Outcome::Refused);
+    };
+    let outcome = RawOutcome::of(Outcome::Failed);
+    let value = 0;
+    // SAFETY: lent_out capped this live, exclusively writable SDK output at our layout.
+    // The scalar answer has no borrowed data, and write_out touches only that lent prefix.
+    unsafe {
+        svc::write_out(
+            out,
+            ServiceOut {
+                outcome,
+                value,
+                ..ServiceOut::ZERO
+            },
+            lent,
+        );
+    }
+    outcome
 }
 
-/// The connector: every dial is counted and fails (nothing listens), so the request is not
-struct Dial;
-impl FakeService for Dial {
-    type In = EstablishIn;
-    fn serve(_: &mut ServiceCall<EstablishIn>) -> Outcome {
-        DIALS.with(|d| d.set(d.get() + 1));
-        Outcome::Failed
+/// The connector counts every dial and fails it: no request reaches a backend.
+#[allow(unsafe_code)]
+unsafe extern "C" fn dial(ctx: HostCtx, input: *const c_void, out: *mut ServiceOut) -> RawOutcome {
+    if ctx != HostCtx::NONE || input.is_null() || out.is_null() {
+        return RawOutcome::of(Outcome::Refused);
     }
+    // SAFETY: the actual SDK service call lends an initialized ServiceHead for this crossing.
+    // Check its exact operation and input prefix before accepting this concrete service.
+    let head = unsafe { input.cast::<ServiceHead>().read_unaligned() };
+    if svc::check_head(
+        &head,
+        connector::service::ESTABLISH,
+        size_of::<EstablishIn>(),
+    )
+    .is_err()
+    {
+        return RawOutcome::of(Outcome::Refused);
+    }
+    // SAFETY: the SDK owns and exclusively lends out, including its readable leading size.
+    // Only the prefix it advertises may be written; no output or nested buffer is retained.
+    let Some(lent) = (unsafe { svc::lent_out(out) }) else {
+        return RawOutcome::of(Outcome::Refused);
+    };
+    DIALS.with(|d| d.set(d.get() + 1));
+    let outcome = RawOutcome::of(Outcome::Failed);
+    let value = 0;
+    // SAFETY: lent_out capped this live, exclusively writable SDK output at our layout.
+    // The scalar answer has no borrowed data, and write_out touches only that lent prefix.
+    unsafe {
+        svc::write_out(
+            out,
+            ServiceOut {
+                outcome,
+                value,
+                ..ServiceOut::ZERO
+            },
+            lent,
+        );
+    }
+    outcome
 }
 
 const TICKET: Ticket = Ticket {
@@ -83,32 +289,41 @@ const TICKET: Ticket = Ticket {
     generation: 5,
 };
 
-/// A door opened over `fake`: its host and its services, nothing else.
-fn door_over(fake: &'static FakeHost) -> A2aDoor {
-    let tables = fake.lent();
+/// Copy this test's concrete tables into the actual SDK handles, without retaining a loan.
+#[allow(unsafe_code)]
+fn door_over(trust_serves: Option<svc::ServiceFn>) -> A2aDoor {
+    let conns = ConnectorSlots {
+        size: size_of::<ConnectorSlots>() as u32,
+        slots: connector::SERVICES,
+        establish: Some(dial),
+        ..zeroed()
+    };
+    let services = svc::HostSlots {
+        size: size_of::<svc::HostSlots>() as u32,
+        slots: svc::SERVICES,
+        dest_judge: Some(admitted),
+        trust_serves,
+        ..zeroed()
+    };
+    let tables = HostTables {
+        size: size_of::<HostTables>() as u32,
+        _reserved: 0,
+        ctx: HostCtx::NONE,
+        wake: None,
+        conns: &conns,
+        services: &services,
+        io: std::ptr::null(),
+    };
+    // SAFETY: both complete, initialized nested tables remain live through both SDK
+    // constructors, which copy their advertised prefixes. Every non-NULL callback is a
+    // static function, validates NONE context before state access, and retains no raw
+    // input/output pointer. Other slots are NULL; only existing thread-local Cells persist.
+    let tables = unsafe { lend(&tables) };
     A2aDoor {
         host: Some(Host::of(tables)),
         services: Services::of(tables),
         ..A2aDoor::default()
     }
-}
-
-fn quarantined_host() -> &'static FakeHost {
-    Box::leak(Box::new(
-        FakeHost::new()
-            .serve(host::DEST_JUDGE, Admitted)
-            .serve(host::TRUST_SERVES, Quarantined)
-            .serve(conn::ESTABLISH, Dial),
-    ))
-}
-
-fn serving_host() -> &'static FakeHost {
-    Box::leak(Box::new(
-        FakeHost::new()
-            .serve(host::DEST_JUDGE, Admitted)
-            .serve(host::TRUST_SERVES, Serving)
-            .serve(conn::ESTABLISH, Dial),
-    ))
 }
 
 fn originated() -> crate::mirror::Originated {
@@ -155,7 +370,7 @@ fn list_dials(plane: &A2aDoor) -> usize {
 /// A QUARANTINED agent is sent no mirrored push config: the mirror busbar originates is held to
 #[test]
 fn a_quarantined_agent_is_sent_no_mirrored_push_config() {
-    let plane = door_over(quarantined_host());
+    let plane = door_over(Some(quarantined));
     assert_eq!(
         mirror_dials(&plane),
         0,
@@ -166,7 +381,7 @@ fn a_quarantined_agent_is_sent_no_mirrored_push_config() {
 /// A QUARANTINED agent is asked no `ListTasks` refresh. RED before the fix: it was dialled.
 #[test]
 fn a_quarantined_agent_is_asked_no_list_tasks_refresh() {
-    let plane = door_over(quarantined_host());
+    let plane = door_over(Some(quarantined));
     assert_eq!(
         list_dials(&plane),
         0,
@@ -177,20 +392,14 @@ fn a_quarantined_agent_is_asked_no_list_tasks_refresh() {
 /// The control: an agent the trust book serves IS dialled for both, so the cases above see a dial
 #[test]
 fn a_serving_agent_is_dialled_for_its_mirror_and_its_refresh() {
-    let plane = door_over(serving_host());
+    let plane = door_over(Some(serving));
     assert!(mirror_dials(&plane) >= 1, "the mirror dialled the agent");
     assert_eq!(list_dials(&plane), 1, "the refresh dialled the agent");
 }
 
 #[test]
 fn every_nonserving_trust_verdict_refuses_both_originated_requests() {
-    let fake = Box::leak(Box::new(
-        FakeHost::new()
-            .serve(host::DEST_JUDGE, Admitted)
-            .serve(host::TRUST_SERVES, Verdict)
-            .serve(conn::ESTABLISH, Dial),
-    ));
-    let plane = door_over(fake);
+    let plane = door_over(Some(verdict));
     for verdict in [
         svc::DISTRUST_UNKNOWN,
         svc::DISTRUST_UNSIGHTED,
@@ -213,7 +422,7 @@ fn every_nonserving_trust_verdict_refuses_both_originated_requests() {
 
 #[test]
 fn failed_sightings_and_unavailable_trust_services_refuse_originated_requests() {
-    let plane = door_over(serving_host());
+    let plane = door_over(Some(serving));
     plane.trust.insert(
         "planner".into(),
         crate::card_trust::TrustStanding {
@@ -224,23 +433,13 @@ fn failed_sightings_and_unavailable_trust_services_refuse_originated_requests() 
     assert_eq!(mirror_dials(&plane), 0);
     assert_eq!(list_dials(&plane), 0);
 
-    let failed = Box::leak(Box::new(
-        FakeHost::new()
-            .serve(host::DEST_JUDGE, Admitted)
-            .serve(host::TRUST_SERVES, Unavailable)
-            .serve(conn::ESTABLISH, Dial),
-    ));
-    let missing = Box::leak(Box::new(
-        FakeHost::new()
-            .serve(host::DEST_JUDGE, Admitted)
-            .serve(conn::ESTABLISH, Dial),
-    ));
-    for fake in [failed, missing] {
-        let plane = door_over(fake);
+    let trust_services: [Option<svc::ServiceFn>; 2] = [Some(unavailable), None];
+    for trust_serves in trust_services {
+        let plane = door_over(trust_serves);
         assert_eq!(mirror_dials(&plane), 0);
         assert_eq!(list_dials(&plane), 0);
     }
-    let mut plane = door_over(serving_host());
+    let mut plane = door_over(Some(serving));
     plane.services = None;
     assert_eq!(mirror_dials(&plane), 0);
     assert_eq!(list_dials(&plane), 0);
