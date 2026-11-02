@@ -493,6 +493,7 @@ impl Records for Via<'_> {
         }
     }
 
+    #[cfg(test)]
     fn claim(&mut self, kind: &str, key: &str, ttl_ms: u64) -> Result<bool, Halt> {
         self.issue((0, 0), |services, handle, _, _| {
             services.records_claim(handle, kind, key.as_bytes(), ttl_ms)

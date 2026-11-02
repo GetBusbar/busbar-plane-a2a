@@ -143,7 +143,6 @@ pub struct ErrorInfo {
 
 impl crate::proto::custody::Wipe for ErrorInfo {
     fn wipe(&mut self) {
-        use crate::proto::custody::Wipe;
         self.reason.wipe();
         self.domain.wipe();
         self.metadata.wipe();
@@ -182,7 +181,6 @@ mod rpc {
 
     impl crate::proto::custody::Wipe for Status {
         fn wipe(&mut self) {
-            use crate::proto::custody::Wipe;
             self.message.wipe();
             self.details.wipe();
         }
@@ -190,7 +188,6 @@ mod rpc {
 
     impl crate::proto::custody::Wipe for Any {
         fn wipe(&mut self) {
-            use crate::proto::custody::Wipe;
             self.type_url.wipe();
             self.value.wipe();
         }

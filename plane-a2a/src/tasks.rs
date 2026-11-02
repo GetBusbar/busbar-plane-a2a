@@ -68,6 +68,7 @@ pub trait Records {
     /// Every live record of `kind` whose key starts with `prefix`, in key order.
     fn list(&mut self, kind: &str, prefix: &str) -> Result<Vec<(String, Vec<u8>)>, Halt>;
     /// Put `key` of `kind` if absent, for `ttl_ms`: `true` when this call made the claim.
+    #[cfg(test)]
     fn claim(&mut self, kind: &str, key: &str, ttl_ms: u64) -> Result<bool, Halt>;
 
     /// Compare every predicate and publish all writes in one host transaction. `true` means
@@ -195,6 +196,7 @@ impl Records for Staged<'_> {
         Ok(listed.take().into_iter().collect())
     }
 
+    #[cfg(test)]
     fn claim(&mut self, kind: &str, key: &str, ttl_ms: u64) -> Result<bool, Halt> {
         self.rec.claim(kind, key, ttl_ms)
     }
