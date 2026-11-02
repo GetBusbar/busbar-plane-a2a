@@ -147,12 +147,20 @@ pub const CONFIG_UNDELETED: &str =
 /// The answer when the store refuses verb `verb`'s own record write (the kernel ends its unit
 #[must_use]
 pub fn unrecorded(verb: LocalVerb, rpc_id: &Value) -> Option<AgentRefusal> {
-    let message = match verb {
+    Some(refusal(rpc_id, INTERNAL, unrecorded_message(verb)?))
+}
+
+fn unrecorded_message(verb: LocalVerb) -> Option<&'static str> {
+    Some(match verb {
         LocalVerb::CreatePushConfig(_) => CONFIG_UNRECORDED,
         LocalVerb::DeletePushConfig(_) => CONFIG_UNDELETED,
         _ => return None,
-    };
-    Some(refusal(rpc_id, INTERNAL, message))
+    })
+}
+
+/// The same durable-write refusal when its exact conditional receipt answers the local verb.
+pub(crate) fn unrecorded_answer(verb: LocalVerb, rpc_id: &Value) -> Option<LocalAnswer> {
+    Some(err(rpc_id, INTERNAL, unrecorded_message(verb)?))
 }
 
 /// The answer when the task store could not be reached: JSON-RPC's internal error.

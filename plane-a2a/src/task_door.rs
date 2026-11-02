@@ -31,6 +31,8 @@ use crate::tasks::{self, Halt, Records, Write};
 pub struct Pass {
     /// Exact conditional attempts on this unit's current callback epoch.
     pub(crate) publication: crate::conditional_publication::Journal,
+    /// A received definitive refusal allows a caller reply alone, across all its windows.
+    pub(crate) response_only: bool,
     /// The host services its finished pieces made: the next piece's handles count on from here.
     pub(crate) issued: u32,
     /// The held cards' warm runs on this unit's handles and has not landed: the next entry
@@ -937,7 +939,12 @@ fn local_piece(
         Err(Halt::Failed(_)) => {
             writes.clear();
             plane.on_unit(unit, |u| u.pass.refreshed.clear());
-            local::unreadable(envelope.get("id").unwrap_or(&Value::Null))
+            let id = envelope.get("id").unwrap_or(&Value::Null);
+            if journal.refused_commit() {
+                local::unrecorded_answer(verb, id).unwrap_or_else(|| local::unreadable(id))
+            } else {
+                local::unreadable(id)
+            }
         }
 
         Ok(None) => return Some(Outcome::Refused),
@@ -951,9 +958,11 @@ fn local_piece(
         .flatten();
     plane.on_unit(unit, |u| {
         u.pass.unrecorded = unrecorded;
-        u.pass.served = served;
+        u.pass.response_only |= journal.response_only();
+        u.pass.served = served && !u.pass.response_only;
 
-        u.pass.audit = served.then(|| (crate::statement::agent_resource(member), true));
+        u.pass.audit = (served && !u.pass.response_only)
+            .then(|| (crate::statement::agent_resource(member), true));
     });
 
     let mirrored = crate::mirror::mirrored_verb(verb).filter(|_| served && answer.status == 200);
@@ -1425,6 +1434,12 @@ fn window_core(
     writes: &[Write],
     first: Option<WindowHead<'_>>,
 ) -> Outcome {
+    let response_only = plane
+        .units
+        .with(&unit, |u| u.is_some_and(|u| u.pass.response_only));
+    if response_only && !writes.is_empty() {
+        return Outcome::Failed;
+    }
     let (mut reply, mut fields, mut records, mut arena, mut units) = (
         input.reply_buf(),
         input.fields_buf(),
@@ -1432,9 +1447,10 @@ fn window_core(
         input.arena_buf(),
         input.units_buf(),
     );
-    if plane
-        .units
-        .with(&unit, |u| u.is_some_and(|u| u.pass.served))
+    if !response_only
+        && plane
+            .units
+            .with(&unit, |u| u.is_some_and(|u| u.pass.served))
     {
         units.push(UnitCount {
             class: crate::statement::CLASS_FEE_INDEX,
@@ -1466,11 +1482,15 @@ fn window_core(
         });
     }
 
-    let audit = first.as_ref().and(
-        plane
-            .units
-            .with(&unit, |u| u.and_then(|u| u.pass.audit.clone())),
-    );
+    let audit = if response_only {
+        None
+    } else {
+        first.as_ref().and(
+            plane
+                .units
+                .with(&unit, |u| u.and_then(|u| u.pass.audit.clone())),
+        )
+    };
     if let Some((resource, applied)) = &audit {
         records.push(crate::statement::audit_write(
             &mut arena, resource, *applied,
@@ -1827,6 +1847,10 @@ pub fn card_piece(
 #[cfg(test)]
 #[path = "tests/task_door.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/task_refusal_output_tests.rs"]
+mod refusal_output_tests;
 
 #[cfg(test)]
 #[path = "tests/record_scratch_custody.rs"]
