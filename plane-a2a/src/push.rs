@@ -404,6 +404,7 @@ impl Deliveries {
         effects
     }
 
+    #[cfg(test)]
     pub(crate) fn forget_config(&self, key: &str) {
         self.with(|book| book.forget_config(key));
         self.wake_unconditionally();
@@ -507,6 +508,7 @@ impl Deliveries {
     }
 
     /// File `delivery` behind its task's earlier ones. Answers whether the oldest waiting one was
+    #[cfg(test)]
     pub fn enqueue(&self, delivery: Delivery, now_ns: u64) -> bool {
         self.with(|book| book.enqueue(delivery, now_ns))
     }
@@ -727,6 +729,7 @@ impl Deliveries {
     }
 
     /// FORGET what `task_id`'s deleted push config was queued for: every waiting delivery queued for
+    #[cfg(test)]
     pub fn forget_task(&self, task_id: &str) {
         self.with(|b| {
             let Some(queue) = b.queues.get_mut(task_id) else {

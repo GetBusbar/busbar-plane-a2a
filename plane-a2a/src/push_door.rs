@@ -19,9 +19,12 @@ use crate::plane_door::A2aDoor;
 #[cfg(test)]
 use crate::push::Owed;
 use crate::push::{Attempted, Deliveries, Delivery, DeliverySettled, Tokens};
+#[cfg(test)]
 use crate::records::KIND_PUSH_CONFIG;
 use crate::statement::NEED_OPEN_WEB;
-use crate::tasks::{self, Halt, Records, Stamp, Write};
+use crate::tasks::{self, Halt, Stamp};
+#[cfg(test)]
+use crate::tasks::{Records, Write};
 use crate::TaskRow;
 
 /// The jitter byte that moves a retry's wait by nothing: used when the host lends no random byte
@@ -48,6 +51,7 @@ pub(crate) fn captured(row: &TaskRow, config: Option<&PushConfig>) -> Option<Del
 }
 
 /// Capture the notification's URL and credential together, then queue it once.
+#[cfg(test)]
 pub fn queue(deliveries: &Deliveries, row: &TaskRow, config: Option<&PushConfig>) -> bool {
     let Some(delivery) = captured(row, config) else {
         return false;
@@ -66,6 +70,7 @@ pub fn ended(tokens: &Tokens, row: &TaskRow) {
 }
 
 /// Forget what every push config `writes` deletes for `caller` (the tombstone of its task's config
+#[cfg(test)]
 pub fn forget_deleted(deliveries: &Deliveries, writes: &[Write]) {
     for w in writes
         .iter()
@@ -158,6 +163,7 @@ pub(crate) fn settle_publications<T: busbar_contract::abi::sdk::door::AbiOut>(
 }
 
 /// [`queue`] for a relayed piece of `caller`'s that moved `row`: the task's push_config record read
+#[cfg(test)]
 pub fn queue_moved(
     deliveries: &Deliveries,
     rec: &mut dyn Records,
@@ -175,6 +181,7 @@ pub fn queue_moved(
 }
 
 /// Preserve a move's notification intent when its config could not be read. The existing
+#[cfg(test)]
 pub(crate) fn defer(deliveries: &Deliveries, row: &TaskRow) {
     deliveries.enqueue(deferred(row), 0);
     busbar_contract::diag_warn!(

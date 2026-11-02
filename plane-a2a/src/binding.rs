@@ -143,6 +143,7 @@ fn endpoint_matches(configured_url: &str, advertised: &str) -> bool {
 }
 
 /// The binding at the card's primary endpoint. Consumers with an operator endpoint use
+#[cfg(test)]
 #[must_use]
 pub fn binding_of(card: Option<&Value>) -> String {
     let endpoint = card

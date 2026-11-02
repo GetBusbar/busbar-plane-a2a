@@ -4433,6 +4433,7 @@ slot!(
 );
 
 /// Projects an A2A request envelope into the hook's `tool` and `arguments` JSON view.
+#[cfg(test)]
 #[must_use]
 pub fn projection(envelope: &[u8]) -> Option<Vec<u8>> {
     let envelope = serde_json::from_slice::<crate::request_json::RequestJson>(envelope).ok()?;
@@ -4487,6 +4488,7 @@ pub(crate) fn hook_view(
 }
 
 /// THE SESSION a request's hook view carries: the `contextId` its message names, which groups an
+#[cfg(test)]
 #[must_use]
 pub fn context_session(envelope: &[u8]) -> Option<String> {
     let envelope = serde_json::from_slice::<crate::request_json::RequestJson>(envelope).ok()?;
@@ -4597,10 +4599,10 @@ fn target_body(route: &statement::Route, params: &serde_json::Value) -> Option<V
 
 slot!(
     /// `project`: the hook view of an arrival on the JSON-RPC or the HTTP+JSON line: its
-    /// [`projection`] as the body (the envelope its request spelled, on the HTTP+JSON line), the
-    /// plane's own key as the ingress dialect (the engine's gate label), the agent the target
-    /// addresses by name as the pool (none when the kernel's walk picks one), its [`context_session`] as
-    /// the session, and the prompt view a content-granted hook reads (the one `user` turn of the
+    /// projection from [`hook_view`] as the body (the envelope its request spelled, on the HTTP+JSON
+    /// line), the plane's own key as the ingress dialect (the engine's gate label), the agent the target
+    /// addresses by name as the pool (none when the kernel's walk picks one), the session from
+    /// [`hook_view`], and the prompt view a content-granted hook reads (the one `user` turn of the
     /// params as JSON text, as the served engine projected an A2A submission). No signals.
     ///
     /// A request-stage hook's rewrite ([`rewritten_params`]) is applied first: the envelope with its
@@ -4770,26 +4772,6 @@ slot!(
         Outcome::Ready
     }
 );
-
-/// THE INVOCATION the served engine's hooks read an A2A request as: the method as the tool and the
-#[must_use]
-pub fn invocation_of(envelope: &[u8]) -> busbar_contract::ir::invoke::InvokeReq {
-    let mut value =
-        serde_json::from_slice::<crate::request_json::RequestJson>(envelope).unwrap_or_default();
-    let tool = value
-        .get("method")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    busbar_contract::ir::invoke::InvokeReq {
-        tool,
-        arguments: value
-            .as_object_mut()
-            .and_then(|object| object.remove("params"))
-            .unwrap_or(serde_json::Value::Null),
-        extra: Default::default(),
-    }
-}
 
 #[cfg(test)]
 #[path = "tests/plane_door_tests.rs"]

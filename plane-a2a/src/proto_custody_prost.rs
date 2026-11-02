@@ -41,7 +41,7 @@ pub(crate) mod encoding {
             wire: WireType,
             value: &mut Vec<u8>,
             buf: &mut impl ::prost::bytes::Buf,
-            ctx: DecodeContext,
+            _ctx: DecodeContext,
         ) -> Result<(), ::prost::DecodeError> {
             let mut incoming = Guard::new(Vec::new());
             check_wire_type(WireType::LengthDelimited, wire)?;
