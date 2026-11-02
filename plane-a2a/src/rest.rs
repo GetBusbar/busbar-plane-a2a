@@ -287,6 +287,17 @@ pub fn captures(
     Ok(Some(out))
 }
 
+/// Whether the target belongs to a stated REST route, including a matched capture that cannot decode.
+#[must_use]
+pub fn on_target(target: &str) -> bool {
+    crate::statement::ROUTES.iter().any(|route| {
+        matches!(
+            crate::statement::line_of(route),
+            crate::statement::Line::Target
+        ) && !matches!(captures(route, target), Ok(None))
+    })
+}
+
 /// The query string of `target`, if it has one.
 fn query_of(target: &str) -> Option<&str> {
     let rest = target.split('#').next().unwrap_or(target);

@@ -459,3 +459,26 @@ fn rest_queries_refuse_invalid_utf8_and_wrong_proto_scalar_types() {
     assert_eq!(value["params"]["pageSize"], 2);
     assert_eq!(value["params"]["pageToken"], "\u{fffd}");
 }
+
+#[test]
+fn a_rest_refusal_is_classified_by_the_stated_route_before_decoding_its_body_or_captures() {
+    for target in [
+        "/a2a/message:send",
+        "/a2a/message:stream?unused=value",
+        "/a2a/tasks/owned:cancel",
+        "/a2a/tasks/%FF:cancel",
+        "/a2a/tasks/owned/pushNotificationConfigs",
+    ] {
+        assert!(on_target(target), "{target}");
+    }
+    for target in [
+        "/a2a",
+        "/a2a/",
+        "/a2a/agents/planner",
+        "/a2a/agents/planner/.well-known/agent-card.json",
+        "/lf.a2a.v1.A2AService/SendMessage",
+        "/unclaimed/message:send",
+    ] {
+        assert!(!on_target(target), "{target}");
+    }
+}
