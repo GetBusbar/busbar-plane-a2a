@@ -4,7 +4,7 @@ use super::*;
 
 #[test]
 fn client_identity_files_are_unique_for_repeated_names() {
-    rig::install_crypto_provider();
+    busbar_core_connector::tls::install_crypto_provider();
     let first = client_identity_files("repeated-identity-fixture", "planner");
     let cert = std::fs::read(&first.1).unwrap();
     let key = std::fs::read(&first.2).unwrap();
@@ -57,7 +57,7 @@ async fn accepted_socket_counter_observes_non_http_traffic_before_parsing() {
 
 #[test]
 fn client_identity_files_are_removed_when_the_owner_is_dropped() {
-    rig::install_crypto_provider();
+    busbar_core_connector::tls::install_crypto_provider();
     let files = client_identity_files("identity-drop-fixture", "planner");
     let cert = files.1.clone();
     let key = files.2.clone();

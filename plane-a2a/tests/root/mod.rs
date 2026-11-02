@@ -9,6 +9,7 @@ use std::sync::Arc;
 use axum::http::StatusCode;
 use busbar_contract::abi::mechanism::door::DoorFn;
 use busbar_contract::conn::DeclaredConns;
+use busbar_kernel::governance::signing::{TokenSigner, DEFAULT_KID};
 use busbar_kernel::governance::{GovState, NewKeySpec};
 use busbar_kernel::{
     plane_driver::{EndPost, PlaneMoney},
