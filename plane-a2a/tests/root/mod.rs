@@ -5319,12 +5319,12 @@ mod upstream_credential {
         .await;
         assert_eq!(status, StatusCode::OK, "{body}");
         let (_, posts) = split(agent.take());
-        assert!(
-            posts
-                .iter()
-                .any(|p| p.contains("CreateTaskPushNotificationConfig")),
-            "busbar mirrored its own callback onto the agent: {posts:?}"
+        let callback = v03_callback_token(&posts, "far-1");
+        assert_ne!(
+            callback, "vendor-token-1",
+            "the callback has its own capability"
         );
+        assert_ne!(callback, s.token, "never the caller's credential");
         for post in &posts {
             assert_eq!(header(post, "authorization"), bearer, "{post}");
         }
@@ -5448,12 +5448,15 @@ mod upstream_credential {
                 heard.iter().any(|p| p.contains("ListTasks")),
                 "{name}: busbar refreshed the agent's task list: {heard:?}"
             );
-            assert!(
-                heard
-                    .iter()
-                    .any(|p| p.contains("CreateTaskPushNotificationConfig")),
-                "{name}: busbar mirrored its own callback onto the agent: {heard:?}"
-            );
+            let callback = v03_callback_token(&heard, "far-1");
+            assert_ne!(callback, s.token, "{name}: never the caller's credential");
+            if let Some(credential) = &expected {
+                assert_ne!(
+                    format!("Bearer {callback}"),
+                    *credential,
+                    "{name}: the callback has its own capability"
+                );
+            }
             for post in &heard {
                 assert!(post.contains(&at), "{name}: only its own path: {post}");
                 assert_eq!(header(post, "authorization"), expected, "{name}: {post}");
@@ -6257,8 +6260,25 @@ fn far_answer(request: &str, send_state: &str, listed_state: &str) -> String {
         serde_json::json!({ "jsonrpc": "2.0", "id": "busbar-originated", "result": result })
             .to_string()
     };
-    if request.contains("\"CreateTaskPushNotificationConfig\"") {
-        return originated(serde_json::json!({ "taskId": FAR_TASK, "id": "busbar-far-task" }));
+    let envelope: serde_json::Value = serde_json::from_str(
+        request
+            .split_once("\r\n\r\n")
+            .expect("an HTTP request body")
+            .1,
+    )
+    .expect("a JSON-RPC request");
+    // `card` advertises the legacy interface: its originated registration uses v0.3.
+    if envelope["method"] == "tasks/pushNotificationConfig/set" {
+        assert_eq!(envelope["params"]["taskId"], FAR_TASK);
+        let config = envelope["params"]["pushNotificationConfig"]
+            .as_object()
+            .expect("v0.3 nests the registered config");
+        return serde_json::json!({
+            "jsonrpc": "2.0", "id": envelope["id"], "result": {
+                "taskId": FAR_TASK, "pushNotificationConfig": config,
+            }
+        })
+        .to_string();
     }
     if request.contains("\"ListTasks\"") {
         return originated(serde_json::json!({ "tasks": [
@@ -6307,18 +6327,45 @@ fn heard(agent: &mut Agent) -> Vec<String> {
     heard
 }
 
-/// The capability busbar registered with the agent, read off the registration it sent (never
-fn token_sent(requests: &[String]) -> String {
-    let create = requests
-        .iter()
-        .find(|r| r.contains("\"CreateTaskPushNotificationConfig\""))
-        .unwrap_or_else(|| panic!("busbar registered nothing with the agent: {requests:?}"));
-    let body = create.split_once("\r\n\r\n").map_or("", |(_, b)| b);
-    let doc: serde_json::Value = serde_json::from_str(body).expect("a JSON-RPC request");
-    doc["params"]["authentication"]["credentials"]
+/// The exact v0.3 registration sent to the legacy card's backend, including its own capability.
+fn v03_callback_token(requests: &[String], backend_task: &str) -> String {
+    let mut creates = requests.iter().filter_map(|request| {
+        let (_, body) = request.split_once("\r\n\r\n")?;
+        let doc: serde_json::Value = serde_json::from_str(body).ok()?;
+        (doc["method"] == "tasks/pushNotificationConfig/set").then_some(doc)
+    });
+    let doc = creates
+        .next()
+        .expect("a v0.3 callback registration reached the agent");
+    assert!(
+        creates.next().is_none(),
+        "one callback registration per create"
+    );
+    let token = doc["params"]["pushNotificationConfig"]["authentication"]["credentials"]
         .as_str()
-        .unwrap_or_else(|| panic!("the registration carried no capability: {doc}"))
-        .to_string()
+        .filter(|token| !token.is_empty())
+        .expect("the nested v0.3 registration carried a capability")
+        .to_string();
+    assert_eq!(
+        doc,
+        serde_json::json!({
+            "jsonrpc": "2.0", "id": "busbar-originated",
+            "method": "tasks/pushNotificationConfig/set", "params": {
+                "taskId": backend_task, "pushNotificationConfig": {
+                    "id": format!("busbar-{backend_task}"),
+                    "url": format!("https://gw.example{}", surface("push_path")),
+                    "authentication": {"schemes": ["Bearer"], "credentials": token},
+                }
+            }
+        }),
+        "the backend sees the selected v0.3 wire and busbar's own callback"
+    );
+    token
+}
+
+/// The capability registered for the port cells' one backend task.
+fn token_sent(requests: &[String]) -> String {
+    v03_callback_token(requests, FAR_TASK)
 }
 
 /// An agent's report that its task is now `state`, to busbar's own callback, bearing `token`.
