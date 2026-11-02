@@ -66,7 +66,7 @@ fn accepted(input: &Lent<'_, ServeIn>, out: &mut Out<'_, ServeOut>, writes: &[Wr
 /// so a re-entry does not spend it twice.
 #[derive(Default)]
 struct Admitted {
-    charged: bool,
+    charge: Option<crate::push::PushCharge>,
     publication: crate::conditional_publication::Journal,
     prepared: Option<Prepared>,
     refusal: Option<(u32, &'static str)>,
@@ -91,9 +91,15 @@ fn cached_refusal(
 ) -> Outcome {
     state.refusal = Some((status, message));
     let outcome = refused(input, out, status, message, &[]);
-    if outcome != Outcome::Ready {
-        instance.park(state);
-    } else {
+    let short = outcome == Outcome::Failed
+        && (out.get().reply_needed > input.reply_buf().cap() as u64
+            || out.get().fields_needed as usize > input.fields_buf().cap()
+            || out.get().arena_needed > input.arena_buf().cap() as u64);
+    if short {
+        if let Some(charge) = state.charge.take() {
+            charge.refund();
+        }
+    } else if outcome == Outcome::Ready {
         if let Some(plane) = instance.get() {
             crate::push_door::apply_publication(plane, &state.publication);
             state.publication.finished();
@@ -111,11 +117,14 @@ fn unavailable(
     out: &mut Out<'_, ServeOut>,
     state: Admitted,
 ) -> Outcome {
-    busbar_contract::diag_warn!(
-        crate::diagnostics::A2A_PUSH_CHECK_UNAVAILABLE,
-        "a2a: push check or task store unavailable; answered 503 for retry"
-    );
-    cached_refusal(instance, input, out, state, 503, UNAVAILABLE)
+    let outcome = cached_refusal(instance, input, out, state, 503, UNAVAILABLE);
+    if outcome == Outcome::Ready {
+        busbar_contract::diag_warn!(
+            crate::diagnostics::A2A_PUSH_CHECK_UNAVAILABLE,
+            "a2a: push check or task store unavailable; answered 503 for retry"
+        );
+    }
+    outcome
 }
 
 /// The synchronous signer retains the service's Short/failure distinction. A failed signer is
@@ -246,21 +255,19 @@ pub(crate) fn serve(
     };
     let now = reading.wall_ns / 1_000_000_000;
 
-    if !state.charged && !plane.pushes.admit(&task_id, now) {
-        let window = crate::push::PUSH_RATE_WINDOW_SECS.to_string();
-        let outcome = refused(
-            &input,
-            &mut out,
-            429,
-            RATE_LIMITED,
-            &[("retry-after", window.as_str())],
-        );
-        if outcome != Outcome::Ready {
-            instance.park(state);
-        }
-        return outcome;
+    if state.charge.is_none() {
+        let Some(charge) = plane.pushes.charge(&task_id, now) else {
+            let window = crate::push::PUSH_RATE_WINDOW_SECS.to_string();
+            return refused(
+                &input,
+                &mut out,
+                429,
+                RATE_LIMITED,
+                &[("retry-after", window.as_str())],
+            );
+        };
+        state.charge = Some(charge);
     }
-    state.charged = true;
 
     let body = input.body().bytes();
     if body.len() > MAX_PUSH_BODY {

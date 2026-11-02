@@ -5,6 +5,7 @@
 
 use busbar_contract::abi::mechanism::ticket::Ticket;
 use std::collections::{BTreeMap, VecDeque};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use busbar_contract::abi::sdk::cred::{Cred, Seal};
@@ -869,12 +870,39 @@ pub fn verified(signature: &[u8], presented: &str) -> bool {
 #[derive(Debug, Default)]
 pub struct PushLimiter {
     latest: Keyed<(), u64>,
-    windows: Keyed<String, (u64, u32)>,
+    windows: Keyed<String, Arc<PushWindow>>,
+}
+
+#[derive(Debug)]
+struct PushWindow {
+    start: u64,
+    used: AtomicU32,
+}
+
+/// One admitted push. Dropping it preserves the charge; only a terminal SHORT refunds it.
+#[derive(Debug)]
+pub(crate) struct PushCharge(Arc<PushWindow>);
+
+impl PushCharge {
+    pub(crate) fn refund(self) {
+        self.0
+            .used
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+                used.checked_sub(1)
+            })
+            .expect("a linear push charge can be refunded once");
+    }
 }
 
 impl PushLimiter {
     /// Spend one push from `task_id`'s budget at `now` (unix seconds): `false` once the window's
+    #[cfg(test)]
     pub fn admit(&self, task_id: &str, now: u64) -> bool {
+        self.charge(task_id, now).is_some()
+    }
+
+    /// Reserve the existing charge, keeping its exact window alive across a pending callback.
+    pub(crate) fn charge(&self, task_id: &str, now: u64) -> Option<PushCharge> {
         let arrived_in = now - (now % PUSH_RATE_WINDOW_SECS);
         let window = self.latest.with_all(|m| {
             let w = arrived_in.max(m.get(&()).copied().unwrap_or(0));
@@ -882,13 +910,20 @@ impl PushLimiter {
             w
         });
         self.windows.with_all(|m| {
-            m.retain(|_, (w, _)| *w >= window);
-            let entry = m.entry(task_id.to_string()).or_insert((window, 0));
-            if entry.1 >= PUSH_RATE_LIMIT {
-                return false;
-            }
-            entry.1 += 1;
-            true
+            m.retain(|_, held| held.start >= window);
+            let entry = m.entry(task_id.to_string()).or_insert_with(|| {
+                Arc::new(PushWindow {
+                    start: window,
+                    used: AtomicU32::new(0),
+                })
+            });
+            entry
+                .used
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+                    used.checked_add(1).filter(|next| *next <= PUSH_RATE_LIMIT)
+                })
+                .ok()
+                .map(|_| PushCharge(Arc::clone(entry)))
         })
     }
 }
