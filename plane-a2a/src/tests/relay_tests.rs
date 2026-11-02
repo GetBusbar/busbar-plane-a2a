@@ -2,8 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! The unary hop, piece by piece: the request each attempt sends, the body relayed verbatim, and
-//! the caller's answer in the served engine's bytes (`busbar-a2a` `relay`, `refusal_client`,
-//! `receive::refuse_hop_early`).
 
 use super::*;
 
@@ -114,7 +112,7 @@ fn an_agent_url_with_no_path_is_posted_to_at_its_root() {
 }
 
 /// The target read off a url's own bytes is the one a parse serializes, for every url the fast
-/// read takes, and a url it does not take is parsed: the answer never depends on which ran.
+
 #[test]
 fn a_target_read_without_a_parse_is_the_parsed_target() {
     let parsed = |url: &str| {
@@ -183,8 +181,7 @@ fn a_correlated_result_is_relayed_whole_under_the_callers_id() {
     };
     assert_eq!(reply.status, 200);
     assert_eq!(reply.content_type, "application/json");
-    // The far end's own bytes, its member order kept (Q128 M8): the caller's id is the far end's,
-    // so nothing is rewritten.
+
     assert_eq!(
         reply.body,
         br#"{"jsonrpc":"2.0","id":7,"result":{"name":"Vendor","skills":[]}}"#.to_vec()
@@ -250,9 +247,7 @@ fn a_reply_that_is_not_a_json_rpc_answer_is_refused() {
 }
 
 /// A REDIRECTING RELAY PEER IS A FAILURE, NEVER FOLLOWED (docs/security.md: no surface follows an
-/// upstream's redirect): every 3xx the agent answers a relayed hop with is the backend-status
-/// refusal, its `Location` named nowhere in the caller's answer, and the relay asks for no second
-/// attempt at it.
+
 #[test]
 fn a_redirecting_relay_peer_is_a_failure() {
     for status in [301, 302, 303, 307, 308] {
@@ -333,25 +328,10 @@ fn a_last_far_end_piece_with_no_status_is_refused() {
 }
 
 /// P-ITEM: UNARY/EMPTY TERMINALITY (spec DONE item 2, "All P-item behaviours match 1.5.5"; the
-/// drive log's P3, commit 470351a480). A unary answer closes its unit exactly once, an empty
-/// envelope is never an answer, and a streamed answer ends only at its last frame.
-///
-/// The old `!has("/result/kind")` predicate had this money boundary backwards: a real Task or
-/// Message answer carries a `kind`, so it never ended its unit, while an empty envelope carried none
-/// and closed as `Complete` for nothing. Here the unary hop ends on its far end's one answer, a
-/// `result` (relayed, the task's report settled, the destination read healthy) or an `error` (the
-/// destination answering, refused to the caller), exactly once; an envelope carrying neither is
-/// never relayed, never settled as the task's answer and never read as the agent answering. A
-/// streamed answer's events, a whole initial Task among them, are frames, not endings: the answer
-/// ends once, on its last frame. The 1.5.5 behaviour this plane matches is its one surface's (the
-/// llm surface; owner correction 2026-09-28): a delivered answer is billed once, at its end, and a
-/// response the caller cannot use is not billed as a delivered one (v1.5.5
-/// `crates/busbar/src/proxy/response_body.rs:415-440`, the token-billing gate on an aborted
-/// stream; `crates/busbar/src/proxy/usage.rs:57-103`, the one accrual site per delivered response).
+
 #[test]
 fn p_item_unary_empty_terminality_an_answer_closes_once_an_empty_envelope_never_and_a_stream_at_its_last_frame(
 ) {
-    // A unary Task answer: relayed, its report settled, read healthy; once.
     let task_answer = br#"{"jsonrpc":"2.0","id":7,"result":{"kind":"task","id":"far-1","status":{"state":"completed"}}}"#;
     let mut r = task_sent(false);
     let reply = answered(&mut r, 200, task_answer);
@@ -373,7 +353,6 @@ fn p_item_unary_empty_terminality_an_answer_closes_once_an_empty_envelope_never_
     );
     assert_eq!(r.take_settled(), Vec::new(), "nothing settles twice");
 
-    // A unary Message answer, likewise.
     let message = br#"{"jsonrpc":"2.0","id":7,"result":{"kind":"message","messageId":"m-1"}}"#;
     let mut r = sent();
     let reply = answered(&mut r, 200, message);
@@ -382,7 +361,6 @@ fn p_item_unary_empty_terminality_an_answer_closes_once_an_empty_envelope_never_
     assert_eq!(r.take_reading(), Some(Reading::Healthy));
     assert_eq!(r.on_piece(far(None, message, true)), PieceAnswer::Nothing);
 
-    // An error answer is the destination answering: it closes the unit too, once.
     let error = br#"{"jsonrpc":"2.0","id":7,"error":{"code":-32001,"message":"no"}}"#;
     let mut r = sent();
     let reply = answered(&mut r, 200, error);
@@ -392,8 +370,6 @@ fn p_item_unary_empty_terminality_an_answer_closes_once_an_empty_envelope_never_
     assert_eq!(r.take_reading(), Some(Reading::Healthy));
     assert_eq!(r.on_piece(far(None, error, true)), PieceAnswer::Nothing);
 
-    // An envelope with neither result nor error is NOT an answer: never relayed as one, never
-    // settled as the task's report, never read as the agent answering.
     let empty = br#"{"jsonrpc":"2.0","id":7}"#;
     let mut r = sent();
     let reply = answered(&mut r, 200, empty);
@@ -417,9 +393,6 @@ fn p_item_unary_empty_terminality_an_answer_closes_once_an_empty_envelope_never_
     );
     assert_eq!(r.take_reading(), Some(Reading::Transient));
 
-    // A streamed answer: its first event is a whole Task, and it is not the end; an intermediate
-    // status update is not the end; the answer ends once, on its last frame (the `final:true`
-    // update the far end closes on), and nothing follows it.
     let (mut r, _) = events_sent();
     let initial = event(json!({ "kind": "task", "id": "far-1", "contextId": "far-c",
         "status": { "state": "submitted" } }));
@@ -448,8 +421,6 @@ fn p_item_unary_empty_terminality_an_answer_closes_once_an_empty_envelope_never_
         "and it ends once"
     );
 }
-
-// ── a hop about a task (ARCHITECT ruling B1) ─────────────────────────────────────────────────────
 
 const SEND: &[u8] = br#"{"jsonrpc":"2.0","id":7,"method":"SendMessage","params":{}}"#;
 
@@ -502,7 +473,7 @@ fn a_task_hops_answer_leaves_under_busbars_identity_and_says_what_the_far_end_re
 }
 
 /// The engine's task-hop refusal body: `code`, `message`, its `ErrorInfo` when A2A defines the code,
-/// and the task's `ResourceInfo`.
+
 fn about(code: i64, reason: &str, message: &str) -> serde_json::Value {
     json!({ "jsonrpc": "2.0", "id": 7, "error": { "code": code, "message": message,
         "data": [
@@ -679,8 +650,6 @@ fn a_partial_sensitive_answer_is_replaced_on_retry_and_a_refusal_does_not_echo_i
     assert!(!String::from_utf8_lossy(&reply.body).contains("upstream-secret"));
 }
 
-// ── the outbound binding (ARCHITECT ruling B4) ───────────────────────────────────────────────────
-
 const GET: &[u8] = br#"{"jsonrpc":"2.0","id":7,"method":"GetTask","params":{"id":"t1"}}"#;
 
 fn rest_relay(task_hop: Option<TaskHop>) -> HopRelay {
@@ -785,8 +754,6 @@ fn a_card_naming_only_grpc_is_refused_by_name_before_the_hop() {
     assert_eq!(r.on_piece(caller(SEND)), PieceAnswer::Nothing);
 }
 
-// ── a hop whose answer is events (the engine's event-stream hop) ────────────────────────────────
-
 const STREAM: &[u8] = br#"{"jsonrpc":"2.0","id":7,"method":"message/stream","params":{}}"#;
 
 /// An events hop about a task, through its attempt and the caller's body.
@@ -837,7 +804,7 @@ fn an_events_attempt_accepts_an_event_stream_or_one_document() {
 }
 
 /// Each event goes out as it is framed, under busbar's identity: the first starts the caller's
-/// answer, the last piece ends it, and every state the events report is settled as it passes.
+
 #[test]
 fn events_are_answered_as_they_come_and_settled_as_they_pass() {
     let (mut r, _) = events_sent();
@@ -891,15 +858,7 @@ fn events_are_answered_as_they_come_and_settled_as_they_pass() {
 }
 
 /// AN ERROR FRAME MID-STREAM PASSES THROUGH AND THE STREAM ENDS WHERE THE FAR END CLOSES IT
-/// (coordinator ruling, parity principle: "do exactly what v1.5.5 did"). v1.5.5 had no A2A stream
-/// to relay one on: its tree holds no a2a crate or module (`git ls-tree -r --name-only v1.5.5`
-/// names no path matching `a2a`), no JSON-RPC reader (`git grep -il jsonrpc v1.5.5` matches no
-/// file), and names A2A only as work to come (v1.5.5 `qa/segments.toml:61` "a2a -> 1.5.6" and
-/// `:169-172`, the `a2a` segment `status = "reserved"`; `crates/busbar/src/config/named_map.rs:16`,
-/// "`agents:` (1.5.6 A2A)"). So the relay keeps what it does, pinned here: a JSON-RPC error event
-/// after the answer has started goes to the caller as one more event, under the caller's id; it
-/// settles nothing about the task and does not end the answer; the events after it pass too, and
-/// the answer ends once, on the far end's last piece.
+
 #[test]
 fn an_error_frame_mid_stream_passes_through_and_the_stream_ends_where_the_far_end_closes() {
     let (mut r, _) = events_sent();
@@ -968,7 +927,7 @@ fn one_document_to_an_events_hop_is_the_unary_answer() {
 }
 
 /// A frame answering another request refuses the hop before its answer started, the task failed;
-/// after it started, the answer ends there and the task fails.
+
 #[test]
 fn an_uncorrelated_event_refuses_before_the_answer_and_ends_it_after() {
     let other = b"data: {\"jsonrpc\":\"2.0\",\"id\":99,\"result\":{}}\n\n";
@@ -1055,13 +1014,7 @@ fn an_http_json_far_ends_bare_events_are_read_as_results() {
 }
 
 /// THE BREAKER'S READING (ARCHITECT ruling: the engine's `classify_hop` table, stated by the plane;
-/// its ORDER per the COORDINATOR ruling 2026-10-07 on finding A, predev `relay.rs:1813-1819` and
-/// `classify_hop` `:1575`/`:1583-1586`): the STATUS FIRST. Outside `2xx` the status table alone
-/// reads the answer, whatever its body — a TaskNotFound error under a `502` or a `500` is a
-/// transient failure, under a `404` the caller's, under a `401` hard; `408`, `429` and `529` are
-/// transient; a `3xx` is the caller's (`ClientError`, nothing recorded). Only on a `2xx` is the body
-/// read: a result or a protocol error is the destination answering, and a body that is no usable
-/// answer is transient. Nothing is read before the answer is whole.
+
 #[test]
 fn the_far_ends_whole_answer_states_the_breakers_reading() {
     let not_found =
@@ -1109,11 +1062,7 @@ fn the_far_ends_whole_answer_states_the_breakers_reading() {
 }
 
 /// A HOP THE KERNEL REFUSED FOR BUSBAR'S OWN CREDENTIAL (`credential_unavailable`: the agent's
-/// `upstream_credential` no longer resolves), in the engine's bytes (`receive.rs`, the `mint_from`
-/// arm): a task hop is `fail_task`'s answer, `502` `-32006` "the backend agent did not complete this
-/// task" naming the task, and the task ends `failed` — whether the hop opened it or addressed it, as
-/// `fail_task` ended either; the extended-card read opened no task, so it is refused in its own
-/// words and nothing is settled.
+
 #[test]
 fn a_hop_refused_for_busbars_own_credential_answers_in_the_engines_words() {
     for addressed in [false, true] {
@@ -1150,8 +1099,7 @@ fn a_hop_refused_for_busbars_own_credential_answers_in_the_engines_words() {
 }
 
 /// Ported from busbar-a2a a2a/tests/rpcerror_tests.rs::push_notification_not_supported_and_extension_support_required_round_trip.
-/// The relay path looks the backend's code up and re-emits it: a backend `-32003`/`-32008` reaches
-/// the caller as itself (HTTP 400), not as the gateway fault `-32006` (502).
+
 #[test]
 fn a_far_ends_push_and_extension_refusals_are_relayed_as_themselves() {
     for (code, reason) in [
@@ -1181,9 +1129,7 @@ fn reply_text(reply: &RelayReply) -> String {
 }
 
 /// Ported from busbar-a2a a2a/tests/transport_tests.rs::a_buffered_hop_that_dies_mid_answer_bills_its_request_and_the_bytes_received.
-/// The far end reads the whole request, answers a head promising a long body, sends part of it and
-/// is cut: nothing is relayed, but the request crossed the wire and so did the bytes received, so
-/// the hop moved both (the rule a cut stream already followed).
+
 #[test]
 fn a_buffered_hop_that_dies_mid_answer_bills_its_request_and_the_bytes_received() {
     const DELIVERED: usize = 300;
@@ -1194,7 +1140,7 @@ fn a_buffered_hop_that_dies_mid_answer_bills_its_request_and_the_bytes_received(
         PieceAnswer::Nothing,
         "the answer is incomplete, so nothing is relayed"
     );
-    // The connection dies here: no last piece ever arrives.
+
     assert!(!r.answered, "an answer cut short is not an answer");
     assert_eq!(
         r.moved(),
@@ -1216,7 +1162,7 @@ fn every_hop_refusal_carries_its_own_stable_code() {
         HopRefusal::EndpointRefused,
         HopRefusal::Transport,
     ];
-    // Exhaustive by construction: a new arm fails to compile here until it is listed above.
+
     for arm in arms {
         match arm {
             HopRefusal::Status
@@ -1262,16 +1208,13 @@ fn answer_of_len(len: usize) -> Vec<u8> {
 }
 
 /// Ported from busbar-a2a a2a/tests/transport_tests.rs::an_oversized_body_is_cut_one_byte_past_the_ceiling_so_the_driver_can_refuse_it.
-/// An over-cap body is kept ONE BYTE past the ceiling, which is what lets the answer's own size
-/// check refuse it: a body that ends at the ceiling and one that overran it must not look alike.
+
 #[test]
 fn an_oversized_body_is_cut_one_byte_past_the_ceiling_so_the_driver_can_refuse_it() {
-    // At the ceiling: relayed whole.
     let at_cap = answer_of_len(MAX_REPLY_BYTES);
     let reply = answered(&mut sent(), 200, &at_cap);
     assert_eq!(reply.status, 200, "a body AT the ceiling is not over it");
 
-    // One byte over: refused.
     let over = answer_of_len(MAX_REPLY_BYTES + 1);
     let reply = answered(&mut sent(), 200, &over);
     assert_eq!(reply.status, 502);
@@ -1283,7 +1226,6 @@ fn an_oversized_body_is_cut_one_byte_past_the_ceiling_so_the_driver_can_refuse_i
         )
     );
 
-    // Far over, in pieces: only one byte past the ceiling is ever held, and it is refused.
     let huge = answer_of_len(MAX_REPLY_BYTES * 3);
     let mut r = sent();
     let (a, b) = huge.split_at(MAX_REPLY_BYTES * 2);
@@ -1307,8 +1249,6 @@ fn an_oversized_body_is_cut_one_byte_past_the_ceiling_so_the_driver_can_refuse_i
     assert_eq!(r.far.len(), MAX_REPLY_BYTES + 1);
 }
 
-// ── the operator's journal names the backend; the caller's answer never does ───────────────────
-
 /// What `run` answers the caller, and the lines it journaled.
 fn journaled(run: impl FnOnce() -> RelayReply) -> (RelayReply, Vec<(tracing::Level, String)>) {
     let (sent, heard) = std::sync::mpsc::channel();
@@ -1317,9 +1257,7 @@ fn journaled(run: impl FnOnce() -> RelayReply) -> (RelayReply, Vec<(tracing::Lev
 }
 
 /// Ported from origin/predev `crates/busbar-a2a/src/a2a/tests/refusal_leak_tests.rs`
-/// `the_operator_rendering_still_names_the_backend` (`receive.rs:3300`, `:3326`, `relay.rs:499`
-/// `Display`): a refused hop's journal line names the backend's url at debug, and the caller's
-/// answer, the one the wire-scan cells read, names no backend. RED arm: nothing was journaled.
+
 #[test]
 fn a_refused_hops_journal_line_names_the_backend_and_the_callers_answer_does_not() {
     let host = "vendor.example";
@@ -1391,10 +1329,7 @@ fn a_refused_hops_journal_line_names_the_backend_and_the_callers_answer_does_not
 }
 
 /// A MESSAGE-ONLY ANSWER SETTLES THE TASK THE HOP OPENED `completed`: a server message names a
-/// task only if one was created (A2A v1.0 `Message`, a2a.proto:254-259), so a standalone message is
-/// the whole interaction, and busbar's task for it is terminal (and so swept by retention), never
-/// left `working`. In both vocabularies, unary and streamed. A message in a task, or one answering
-/// a hop addressed to a held task, reads as before.
+
 #[test]
 fn a_message_only_answer_settles_the_opened_task_completed() {
     for far in [
@@ -1450,10 +1385,7 @@ fn a_message_only_answer_settles_the_opened_task_completed() {
 }
 
 /// THE FAR END'S RESULT LEAVES AS ITS OWN BYTES, BUSBAR'S IDENTITY SPLICED IN (Law 5: a relay sends
-/// the bytes with governed byte-level splices; Q128 a2a M8). Member order, an integer past 64 bits
-/// and a number past `f64`'s range reach the caller as the far end wrote them; only the task's id
-/// and context are busbar's. RED before the fix: the result was re-serialised through a JSON value
-/// (members re-ordered, the long integer rounded) and the out-of-range number refused it whole.
+
 #[test]
 fn a_relayed_result_is_the_far_ends_bytes_with_busbars_identity_spliced_in() {
     let mut r = task_sent(false);
@@ -1464,7 +1396,7 @@ fn a_relayed_result_is_the_far_ends_bytes_with_busbars_identity_spliced_in() {
         String::from_utf8(reply.body.clone()).unwrap(),
         r#"{"jsonrpc":"2.0","id":7,"result":{"status":{"state":"completed"},"id":"a2a-p-0102030405060708","n":123456789012345678901234567890,"big":1e400,"contextId":"ctx-1","kind":"task"}}"#
     );
-    // No task: the result is relayed verbatim, in the far end's member order.
+
     let mut r = sent();
     let reply = answered(
         &mut r,
@@ -1478,9 +1410,7 @@ fn a_relayed_result_is_the_far_ends_bytes_with_busbars_identity_spliced_in() {
 }
 
 /// A RESULT THAT IS NO OBJECT IS NO ANSWER ABOUT A TASK (Law 11: no invented answer): the plane
-/// cannot read it and refuses it as it refuses an answer that is not JSON. The task the hop opened
-/// fails; a task the caller addressed is a failed request. RED: the result was replaced by
-/// `{"kind":"task"}` under busbar's identity and relayed as the agent's answer.
+
 #[test]
 fn a_task_hops_result_that_is_no_object_is_refused_not_invented() {
     for result in ["\"done\"", "[1]", "7", "null"] {

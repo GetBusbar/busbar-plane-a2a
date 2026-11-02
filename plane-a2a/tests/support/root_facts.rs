@@ -2,12 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! WHAT THE ROOT LEG (`tests/root/mod.rs`) NAMES OF THE PLANE'S PRIVATE ITEMS. The root leg is
-//! compiled into the composition root's test binary and reaches the plane only through `door`
-//! (the crate's one public item), so the facts it needs are carried here as plain data and the
-//! protobuf messages it sends and reads are written on the wire directly, with no generated type.
-//! The crate's own unit test `door_facts` (`src/tests/door_facts.rs`) includes this same file and
-//! holds every value to the private item it restates and every helper to the generated message
-//! it stands for, so a drift is red in the crate before the root leg reads a stale copy.
 
 /// `statement::PUSH_SECTION`: the plane's own `agent_push:` section.
 pub const PUSH_SECTION: &str = "agent_push";
@@ -91,10 +85,7 @@ pub fn get_task_request(id: &str) -> Vec<u8> {
 }
 
 /// Every field of one message, in wire order.
-///
-/// # Errors
-///
-/// A truncated message, or a wire type other than varint and length-delimited.
+
 pub fn fields(mut bytes: &[u8]) -> Result<Vec<(u32, Field)>, String> {
     fn varint(bytes: &mut &[u8]) -> Result<u64, String> {
         let mut v = 0u64;
@@ -152,10 +143,7 @@ pub struct SentMessage {
 }
 
 /// Read a `SendMessageRequest`'s message.
-///
-/// # Errors
-///
-/// Bytes that are not a `SendMessageRequest` carrying a message.
+
 pub fn read_send_message_request(request: &[u8]) -> Result<SentMessage, String> {
     let message = bytes_of(request, 2)?.ok_or("the request carries no message")?;
     let mut read = SentMessage {
@@ -179,10 +167,7 @@ pub fn read_send_message_request(request: &[u8]) -> Result<SentMessage, String> 
 }
 
 /// The `TaskState` number of the task a `SendMessageResponse` carried.
-///
-/// # Errors
-///
-/// Bytes that are not a `SendMessageResponse` carrying a task with a status.
+
 pub fn send_message_response_task_state(response: &[u8]) -> Result<u64, String> {
     let task = bytes_of(response, 1)?.ok_or("the response carries no task")?;
     let status = bytes_of(&task, 3)?.ok_or("the task carries no status")?;

@@ -14,10 +14,7 @@ fn the_arrival_is_deterministic() {
             .into_bytes()
         })
         .collect();
-    // The bodies are DERIVED — a filter over one declared table looked up in another — so an
-    // op class dropped from the first, or a method row dropped from the second, empties this
-    // vector and the loop below runs zero times. A determinism test that examined nothing would
-    // report `ok`, which is the shape this assertion exists to make impossible.
+
     assert!(
         !bodies.is_empty(),
         "no request body was derived from the declared op classes, so nothing was driven twice"

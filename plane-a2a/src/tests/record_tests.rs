@@ -2,14 +2,11 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! Round-trip tests for the A2A plane rows (`TaskRow` / `TaskEventRow`) through the store-seam
-//! `PlaneRecord` encoding — field-name stability across the plugin ABI and terminal-state
-//! disposition. Relocated out of `record.rs` per the tests-in-their-own-file convention.
 
 use super::*;
 
 /// The task rows round-trip through serde unchanged. They cross a plugin ABI, so a field whose
-/// serialized name drifts is a field a backend silently stops persisting. (Moved here from
-/// `busbar-api` in the 1.7.0 plane extraction — the plane owns its own row schema now.)
+
 #[test]
 fn task_rows_round_trip_through_the_store_seam_encoding() {
     let task = TaskRow {

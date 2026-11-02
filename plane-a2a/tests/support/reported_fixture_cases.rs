@@ -202,7 +202,7 @@ fn a_restarted_door_restores_cards_across_multiple_full_record_pages() {
         }
     }
     let _restore = Restore(old);
-    // Each card writes at least one row; 65 registrations exceed the actual 64-row request.
+
     let names: Vec<String> = (0..65).map(|n| format!("vendor-{n:03}")).collect();
     let agents: serde_json::Map<String, serde_json::Value> = names.iter().map(|name| {
         (name.clone(), serde_json::json!({"url":"https://vendor.example/agent", "pin":{"mechanism":"unpinned"}}))

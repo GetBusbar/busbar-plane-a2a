@@ -12,8 +12,7 @@ fn a_task() -> Task {
 }
 
 /// The listed state tokens round-trip. These strings are the store row, the audit row
-/// and the admin response, so a token that parses to a different state than it renders from is a
-/// task that changes state by being written and read.
+
 #[test]
 fn every_state_token_round_trips() {
     let all = [
@@ -34,7 +33,7 @@ fn every_state_token_round_trips() {
             s.as_str()
         );
     }
-    // Keep the persisted spellings of these listed states stable.
+
     let tokens: std::collections::BTreeSet<&str> = all.iter().map(|s| s.as_str()).collect();
     assert_eq!(
         tokens,
@@ -53,7 +52,7 @@ fn every_state_token_round_trips() {
 }
 
 /// An unknown token is REFUSED, never defaulted. A row written by a newer engine must not be
-/// classified by guesswork — the cheap guess ("unknown is terminal") deletes a live task.
+
 #[test]
 fn an_unknown_state_token_is_refused_not_defaulted() {
     assert_eq!(
@@ -84,13 +83,10 @@ fn the_transition_table_is_total_and_terminal_is_terminal() {
         for to in all {
             let allowed = from.can_transition_to(to);
             let expected = match (from, to) {
-                // Nothing leaves a terminal state, including to itself.
                 (f, _) if f.is_terminal() => false,
-                // Nothing returns to `submitted`: a started task can never truthfully claim it has
-                // not started.
+
                 (_, Submitted) => false,
-                // A task never transitions to the state it is already in — a repeated transition is
-                // the shape a duplicate delivery takes, and accepting it double-bills the caller.
+
                 (f, t) if f == t => false,
                 _ => true,
             };
@@ -107,8 +103,7 @@ fn the_transition_table_is_total_and_terminal_is_terminal() {
 }
 
 /// The two interrupt states reach each other DIRECTLY. Forcing an input-required task through
-/// `working` to become auth-required would emit a `task.working` provenance event claiming work
-/// happened when none did.
+
 #[test]
 fn an_interrupt_may_become_the_other_interrupt_without_pretending_to_work() {
     assert!(TaskState::InputRequired.can_transition_to(TaskState::AuthRequired));
@@ -116,8 +111,7 @@ fn an_interrupt_may_become_the_other_interrupt_without_pretending_to_work() {
 }
 
 /// A refused transition leaves the task COMPLETELY untouched, `updated_at` included. If a rejected
-/// move bumped the age key, a task could be kept alive forever by a caller retrying an illegal
-/// transition — or aged out by one.
+
 #[test]
 fn a_refused_transition_changes_nothing_at_all() {
     let mut t = a_task();
@@ -137,7 +131,7 @@ fn a_refused_transition_changes_nothing_at_all() {
 }
 
 /// Identity is checked on the way IN. An empty principal is a task nobody can be shown and nobody
-/// can be billed for; an empty task id collides with the next one.
+
 #[test]
 fn a_task_without_identity_is_refused_at_construction() {
     assert_eq!(
@@ -155,7 +149,7 @@ fn a_task_without_identity_is_refused_at_construction() {
 }
 
 /// The store projection round-trips every field. A field added to `Task` and forgotten in `to_row`
-/// is a field that silently resets on every restart, which is the quietest possible data loss.
+
 #[test]
 fn the_store_projection_round_trips_every_field() {
     let mut t = a_task();
@@ -167,15 +161,13 @@ fn the_store_projection_round_trips_every_field() {
     let back = Task::from_row(&t.to_row()).expect("a row we wrote must read back");
     assert_eq!(back, t, "every field survives the store seam");
 
-    // And the empty callback is `None` rather than `Some("")` — a distinction that decides whether
-    // the delivery path tries to POST to the empty string.
     let mut plain = a_task();
     plain.push_callback = None;
     assert_eq!(Task::from_row(&plain.to_row()).unwrap().push_callback, None);
 }
 
 /// An INTERRUPTED task is neither terminal nor "just running". The classification is load-bearing:
-/// the retention sweep must never collect it, and the boot rehydrate must always resume it.
+
 #[test]
 fn an_interrupt_is_active_and_never_collectable() {
     for s in [TaskState::InputRequired, TaskState::AuthRequired] {

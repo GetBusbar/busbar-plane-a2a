@@ -2,17 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! Busbar's own callback, mirrored onto the agent (sent over the agent's need from the local
-//! verb's `on_piece`).
-//!
-//! Whatever the caller did to the push config busbar holds for it, busbar does to the config BUSBAR
-//! holds at the agent: a create arms the agent with busbar's own callback (`<public_url>/a2a/push`)
-//! and a capability for that one task ([`crate::push::Tokens`]), a delete disarms it, and a read
-//! reconciles: a read that does not find busbar's registration (or is not answered) re-arms it. The
-//! caller's URL and credential never leave busbar.
-//!
-//! As the engine did, the mirror runs after the caller's answer is decided and before it is sent,
-//! and only on a successful local answer about a task busbar holds as live, whose agent has named
-//! it; it is best effort, its outcome never changes the caller's answer, and it bills nothing.
 
 use serde_json::{json, Value};
 
@@ -33,11 +22,11 @@ pub mod method {
 }
 
 /// The id every busbar-originated request carries: busbar originated the hop, so there is no
-/// caller id to echo.
+
 pub const ORIGINATED_RPC_ID: &str = "busbar-originated";
 
 /// The verb busbar issues when a caller uses `verb`; `None` for a local verb that mirrors onto
-/// nothing (`ListTasks` and `SubscribeToTask` name no registration busbar holds at an agent).
+
 #[must_use]
 pub fn mirrored_verb(verb: LocalVerb) -> Option<&'static str> {
     Some(match verb {
@@ -50,9 +39,7 @@ pub fn mirrored_verb(verb: LocalVerb) -> Option<&'static str> {
 }
 
 /// Busbar's own callback address for `public_url`, or `None` where busbar offers none: no
-/// `public_url`, or one that is not `https` (a task token in cleartext is refused, with no knob).
-/// Read the one way every published URL is ([`crate::a2a::public::absolute`]): the path is the
-/// served `/a2a/push` route, whatever path or query `public_url` carries.
+
 #[must_use]
 pub fn callback_url(public_url: &str) -> Option<String> {
     let url = url::Url::parse(public_url).ok()?;
@@ -90,7 +77,7 @@ pub fn params_for(method: &str, backend_task: &str, create: &Value) -> Value {
 }
 
 /// One originated request, framed for the agent's binding as a relayed one is: its verb, target,
-/// head fields and body. `None` for a request the binding cannot frame.
+
 #[must_use]
 pub fn request(
     binding: Binding,
@@ -131,9 +118,7 @@ pub fn request(
     let body = match relay.on_piece(piece(From::Caller)) {
         PieceAnswer::ToFarEnd(bytes) => bytes,
         PieceAnswer::ToFarEndLent => body.clone(),
-        // A read's HTTP request and a zero-field protobuf request have no payload. The
-        // successful Attempt already established the request line; an empty body is not
-        // a framing failure (the gRPC transport supplies its message length prefix).
+
         PieceAnswer::Nothing => crate::relay::RawBytes::default(),
         _ => return None,
     };
@@ -190,9 +175,7 @@ fn v03_request<'a>(method: &'a str, params: &Value) -> Option<(&'a str, Value)> 
 }
 
 /// THE ANSWER TO ONE ORIGINATED REQUEST, as the readers below read it: its status and body as the
-/// far end answered them, except on the gRPC binding, where a call that ended `OK` (the exchange
-/// completed) carries the rpc's response message, transcoded to the JSON-RPC envelope it is
-/// (`200`, under [`ORIGINATED_RPC_ID`]); `None` for a gRPC answer that carries no message to read.
+
 #[must_use]
 pub fn answered(
     binding: Binding,
@@ -225,16 +208,11 @@ pub fn answered(
 pub struct Unleased;
 
 /// What one originated request came to: its status and body (`None` when it was not answered),
-/// or [`Unleased`].
+
 pub type Landed = Result<Option<(u16, Vec<u8>)>, Unleased>;
 
 /// What one originated request came to, out of its exchange's `answer`: the status and body
-/// [`answered`] reads (`None` for a request that was not answered), or [`Unleased`] for one the host
-/// refused for an unavailable credential, logged as a lease it could not mint
-/// (`A2A_OUTBOUND_CRED_UNLEASED`, naming `agent`).
-///
-/// # Errors
-/// [`Unleased`].
+
 pub fn landed(
     binding: Binding,
     agent: &str,
@@ -269,8 +247,7 @@ pub fn landed(
 }
 
 /// Whether a read's answer leaves busbar's registration drifted (gone at the agent): an answer that
-/// is not a JSON-RPC `result` holding a config whose `id` is exactly [`config_id`] (a refusal, an
-/// error, nothing, or only other configs) has drifted.
+
 #[must_use]
 pub fn drifted(binding: Binding, answered: Option<(u16, &[u8])>, config_id: &str) -> bool {
     let Some((status, body)) = answered else {
@@ -283,7 +260,7 @@ pub fn drifted(binding: Binding, answered: Option<(u16, &[u8])>, config_id: &str
     let envelope = crate::relay::RawBytes::from(
         match binding {
             Binding::HttpJson => crate::answer_bytes::rewrap(body, &id).ok(),
-            // A gRPC answer was transcoded to its JSON-RPC envelope as it arrived ([`answered`]).
+
             Binding::JsonRpc | Binding::Grpc => Some(body.to_vec()),
         }
         .unwrap_or_default(),
@@ -296,8 +273,7 @@ pub fn drifted(binding: Binding, answered: Option<(u16, &[u8])>, config_id: &str
 }
 
 /// Whether `found` holds the config `config_id`, compared whole on its `id` member: a config itself
-/// (v1.0's `TaskPushNotificationConfig`), one nested as v0.3 nests it (`pushNotificationConfig`),
-/// or one of a listing (v1.0's `configs`, v0.3's bare array).
+
 fn holds_config(found: &Value, config_id: &str) -> bool {
     match found {
         Value::Array(items) => items.iter().any(|i| holds_config(i, config_id)),
@@ -323,12 +299,9 @@ pub enum Stage {
 }
 
 /// ONE REQUEST BUSBAR ORIGINATES to an agent, across its piece's PENDING entries: the agent (its
-/// registration name, url, private reach, binding and the version the request declares), the
-/// handle the next host call takes, and the request in flight.
+
 pub struct Originated {
     /// The agent's registration name: the dial names it ([`Exchange::as_member`]).
-    ///
-    /// [`Exchange::as_member`]: busbar_contract::abi::sdk::exchange::Exchange::as_member
     pub agent: String,
     /// The agent's url.
     pub url: String,
@@ -355,7 +328,7 @@ impl std::fmt::Debug for Originated {
 }
 
 /// ONE MIRROR: where it stands, the verb it mirrors, the agent's own id for the task, the create a
-/// re-arm issues, and the requests it originates.
+
 pub struct Flight {
     /// Where it stands.
     pub stage: Stage,
@@ -403,7 +376,7 @@ impl Flight {
     }
 
     /// The stage after this one's request came to `landed`: an [`Unleased`] request ends the mirror
-    /// (none of it is originated, re-arm included); else [`Flight::advance`].
+
     pub fn land(&mut self, landed: Result<Option<(u16, &[u8])>, Unleased>) {
         match landed {
             Err(Unleased) => self.stage = Stage::Done,
@@ -412,7 +385,7 @@ impl Flight {
     }
 
     /// The stage after this one's request was answered (`answered` = its status and body, `None`
-    /// when it was not answered or could not be framed).
+
     pub fn advance(&mut self, answered: Option<(u16, &[u8])>) {
         self.stage = match self.stage {
             Stage::Mirror => {
@@ -435,9 +408,7 @@ impl Flight {
 pub const LIST_TASKS: &str = "ListTasks";
 
 /// WHAT A LISTING TAUGHT BUSBAR: for each entry of the agent's answer whose id is the agent's own
-/// id for a task in `ours` (agent id to busbar id), the state it reports, read STRICTLY (an entry
-/// whose state cannot be read taught nothing). An entry busbar cannot match is ignored in silence:
-/// that is what stops one caller's list from moving another caller's row.
+
 #[must_use]
 pub fn listed_states(
     binding: Binding,
@@ -454,7 +425,7 @@ pub fn listed_states(
     let envelope = crate::relay::RawBytes::from(
         match binding {
             Binding::HttpJson => crate::answer_bytes::rewrap(body, &id).ok(),
-            // A gRPC answer was transcoded to its JSON-RPC envelope as it arrived ([`answered`]).
+
             Binding::JsonRpc | Binding::Grpc => Some(body.to_vec()),
         }
         .unwrap_or_default(),

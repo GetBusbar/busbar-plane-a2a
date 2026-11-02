@@ -55,7 +55,6 @@ use std::collections::BTreeMap;
 
 #[derive(Default)]
 struct ListingHost {
-    // The service results already held under this callback's handles remain stable on replay.
     rows: BTreeMap<(String, String), Vec<u8>>,
     committed: BTreeMap<(String, String), Vec<u8>>,
     read_handles: std::collections::BTreeSet<u32>,
@@ -161,8 +160,7 @@ impl FakeService for Claim {
 
 mod listing_probe {
     use super::*;
-    // The synthetic export door only opens and drives the real listing state. Its remaining
-    // lifecycle slots are explicitly typed; close lets the SDK retire that same state.
+
     macro_rules! fixture_slot {
         ($name:ident, $input:ty, $output:ty, $outcome:expr) => {
             pub struct $name;
@@ -317,8 +315,7 @@ mod listing_probe {
                 return Outcome::Pending;
             }
             let failed = result.is_err();
-            // Each exact Applied publication owns its effects even when a later independent
-            // config read fails. Notification authority captured as unavailable stays deferred.
+
             crate::push_door::apply_publication(plane, &journal);
             let tokens = ["t1", "t2"]
                 .iter()
@@ -508,8 +505,7 @@ fn the_success_control_reads_both_configs_and_acknowledges_actual_task_transitio
 #[test]
 fn a_real_mirror_setup_read_failure_is_reported_without_exposing_request_material() {
     listing_fixture(false, true);
-    // The actual SDK slot capture owns these events; the host observes them on its reply,
-    // rather than through an outer tracing subscriber the trampoline replaces (Decision #85).
+
     let events = drive_listing();
     LISTING.with(|s| assert!(s.borrow().failed));
     assert!(
@@ -535,8 +531,7 @@ fn a_full_book_refuses_an_untracked_handle_before_any_host_issue_even_on_reentry
         let _ = held.grow(handle(ticket(2), seq), 2, 0);
     }
     let mut host_calls = 0;
-    // The first error answer may itself have short output buffers; its re-entry must still
-    // refuse BEFORE issuing an untracked host handle, rather than asking it SHORT twice.
+
     for _ in 0..2 {
         let mut via = Via::new(&host, Services::of(tables), ticket(1), 0, &grown);
         let result = via.issue((1, 0), |_, _, buf, _| {

@@ -2,11 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! TRUST IS RE-CHECKED BEFORE EVERY OUTBOUND REQUEST, busbar's own included (docs/a2a.md "Trust
-//! re-checked before every outbound request"): the requests busbar ORIGINATES to an agent (the
-//! push-config mirror, the `ListTasks` refresh) go through [`drive_originated`], and an agent the
-//! kernel's trust book does not serve (quarantined, its card changed, never approved) is sent
-//! nothing. The host here is a fake whose destination judgement admits the agent and whose
-//! connector counts every dial, so a request that left is a counted ESTABLISH.
 
 use std::cell::Cell;
 
@@ -74,7 +69,7 @@ impl FakeService for Unavailable {
 }
 
 /// The connector: every dial is counted and fails (nothing listens), so the request is not
-/// answered, which is all these cases need to know.
+
 struct Dial;
 impl FakeService for Dial {
     type In = EstablishIn;
@@ -159,7 +154,7 @@ fn list_dials(plane: &A2aDoor) -> usize {
 }
 
 /// A QUARANTINED agent is sent no mirrored push config: the mirror busbar originates is held to
-/// the agent's trust as a relayed hop is. RED before the fix: the mirror dialled it.
+
 #[test]
 fn a_quarantined_agent_is_sent_no_mirrored_push_config() {
     let plane = door_over(quarantined_host());
@@ -182,7 +177,7 @@ fn a_quarantined_agent_is_asked_no_list_tasks_refresh() {
 }
 
 /// The control: an agent the trust book serves IS dialled for both, so the cases above see a dial
-/// when one is made.
+
 #[test]
 fn a_serving_agent_is_dialled_for_its_mirror_and_its_refresh() {
     let plane = door_over(serving_host());

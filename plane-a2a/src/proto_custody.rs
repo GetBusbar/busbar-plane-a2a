@@ -14,7 +14,6 @@ use zeroize::Zeroize;
 
 #[path = "proto_custody_prost.rs"]
 #[allow(dead_code, unused_imports)]
-// Preserve prost's generated helper surface in the local facade.
 pub(crate) mod prost;
 
 /// Wipe only initialized values. Containers drain keys as well as recursively owned values.
@@ -248,7 +247,6 @@ where
                     } else {
                         fields.insert(key.take(), value);
                     }
-                    // An equal incoming key stays under its guard; the existing key is retained.
                 }
                 Ok(fields.take())
             }
@@ -342,8 +340,7 @@ impl<'de> Decode<'de> for BytesDeserialize<Vec<u8>> {
                         _ => Err(error),
                     })
                     .map_err(de::Error::custom)?;
-                // decode_slice may initialize bytes beyond its result on an error; the entire
-                // destination was already initialized and stays under Zeroizing until transfer.
+
                 bytes[decoded..].zeroize();
                 bytes.truncate(decoded);
                 Ok(std::mem::take(&mut *bytes))

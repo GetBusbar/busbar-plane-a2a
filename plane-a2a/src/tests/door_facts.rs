@@ -2,14 +2,9 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! THE DOOR-DRIVEN TESTS' FACTS ARE THE DOOR'S. `tests/unit_lifetime.rs`,
-//! `tests/project_session.rs` and the plugin crate's `plane-a2a-plugin/tests/both_ways.rs` reach the plane only through `door` (the crate's one public item, and
-//! its root keeps the literal `#![forbid(unsafe_code)]`, so the raw door table they drive is read in
-//! those test crates, not here). The private constants they need are restated in
-//! `tests/support/door_facts.rs`; this test includes that same file and holds each value to the item
-//! it restates.
 
 #[path = "../../tests/support/door_facts.rs"]
-#[allow(dead_code)] // `claim` is the door-driven tests' reader, not this check's
+#[allow(dead_code)]
 mod stated;
 
 #[test]
@@ -50,11 +45,11 @@ fn the_door_driven_tests_restate_the_doors_own_constants() {
 }
 
 #[path = "../../tests/support/root_facts.rs"]
-#[allow(dead_code)] // the root leg's reader, each item held by a check below
+#[allow(dead_code)]
 mod root_stated;
 
 /// THE ROOT LEG'S RESTATED FACTS ARE THE DOOR'S OWN: each constant `tests/root/mod.rs` names is
-/// equal to the private item it restates.
+
 #[test]
 fn the_root_leg_restates_the_doors_own_constants() {
     use crate::statement as ds;
@@ -76,9 +71,7 @@ fn the_root_leg_restates_the_doors_own_constants() {
 }
 
 /// THE ROOT LEG'S PROTOBUF WORDS ARE THE GENERATED MESSAGES': the requests it writes decode, as the
-/// generated messages, to what the plane's own encoder writes for the same params, and the readers
-/// it holds the far end's bytes to read what the plane's encoder wrote and what the generated
-/// response encodes.
+
 #[test]
 fn the_root_leg_writes_and_reads_the_generated_messages() {
     use crate::framed::{request_message, Rpc};

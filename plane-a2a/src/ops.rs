@@ -2,21 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! The operation vocabulary: which method name is which priced operation.
-//!
-//! This protocol spells the same eleven operations two ways. The older wording is slash-separated
-//! and lower-case; the newer one is a verb in title case. They are the SAME operations — a request
-//! carrying either name asks for the same thing and is priced the same — so the table below maps
-//! both spellings onto one operation class each, and the class is what the Statement declares.
-//!
-//! The table is the plane's one statement of the vocabulary; a test holds it to busbar's method
-//! inventory, under both of each operation's JSON-RPC names.
-//!
-//! ## Two spellings, one class, and why not two classes
-//!
-//! An operation class PRICES a unit. A deployment that priced "send a message" differently
-//! depending on which of the two spellings a caller used would be charging for the caller's choice
-//! of vocabulary rather than for the work, and the two spellings do identical work. So the class is
-//! the operation, and which spelling arrived is a FACT, not a class.
 
 use busbar_contract::ids::OpClassId;
 
@@ -54,10 +39,7 @@ pub const OP_PUSH_CONFIG_DELETE: OpClassId = OpClassId::new("push_config_delete"
 pub const OP_AGENT_CARD: OpClassId = OpClassId::new("agent_card");
 
 /// One push event arriving from an agent this node dialled.
-///
-/// This is the provider-initiated class. No client ever sends it: it is what the plane says a frame
-/// arriving on an upstream connection MEANS, and the loop runs all seven steps over it exactly as it
-/// does over a client's own request.
+
 pub const OP_PUSH_EVENT: OpClassId = OpClassId::new("push_event");
 
 /// Every operation class this plane's units can be, in declaration order.
@@ -102,9 +84,7 @@ pub struct MethodRow {
 }
 
 /// Every method name this plane reads, in the order the vocabulary tables list them.
-///
-/// Both spellings of every operation appear. A name absent from here is not refused: it is relayed
-/// to the agent verbatim, under the class [`relay_class`] gives it.
+
 pub const METHODS: &[MethodRow] = &[
     MethodRow {
         method: "message/send",
@@ -247,13 +227,11 @@ pub fn row_for(method: &str) -> Option<&'static MethodRow> {
 }
 
 /// The suffix a method the vocabulary does not list reads as a stream by: such a method is
-/// relayed on the streaming hop, every other one on the unary hop.
+
 pub const STREAM_SUFFIX: &str = "/stream";
 
 /// The class a method is relayed as: its row's, or for a method the vocabulary does not list, the
-/// class of the hop it is relayed on verbatim ([`OP_MESSAGE_STREAM`] when it reads as a
-/// stream, [`OP_MESSAGE_SEND`] otherwise), which is how it is admitted, audited and billed (never
-/// refused).
+
 #[must_use]
 pub fn relay_class(method: &str) -> OpClassId {
     match row_for(method) {

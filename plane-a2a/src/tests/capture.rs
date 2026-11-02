@@ -4,8 +4,7 @@
 //! The tests' one `tracing` capture.
 
 /// Every event's level and rendered fields, sent down a channel (the plane holds no subscriber
-/// dependency, so the `tracing` trait is implemented by hand). Admits every level, so an assertion
-/// holds whichever side of an error-once latch this process is on.
+
 pub(crate) struct Capture(pub(crate) std::sync::mpsc::Sender<(tracing::Level, String)>);
 
 struct Render<'a>(&'a mut String);

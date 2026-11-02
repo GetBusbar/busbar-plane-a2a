@@ -2,20 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! One event off a relayed event stream. Pure: the relay feeds it frames
-//! ([`crate::sse::SseReader`]) and the door writes
-//! what it answers.
-//!
-//! * Frames without data carry comments and keep-alives and pass through unchanged. A data
-//!   payload must be a JSON-RPC response; malformed data refuses the hop.
-//! * A frame that IS a JSON-RPC response is CORRELATED to the caller's request id and answered
-//!   under it; one that names a different request is an error, and the hop is refused, as it is
-//!   for a `result` that is no object (no event about a task is a string or a number).
-//! * An `error` frame is relayed as it stands under the caller's id: mid-stream, the status is
-//!   already spent and the far end's error is content the caller is owed.
-//! * A `result` frame leaves as the far end's own bytes under busbar's task identity
-//!   ([`crate::answer_bytes::rewrite_identity`]); the state it reports, whether it carried an
-//!   artifact and the far end's own task id are read off it first, through the v1.0 wrappers as
-//!   well as the v0.3 bare shape (its `kind` naming the member that names the task).
 
 use std::borrow::Cow;
 
@@ -67,7 +53,7 @@ fn json_event(value: &Value) -> Vec<u8> {
 }
 
 /// `payload` as one complete event: each of its lines a `data:` line of its own, as the
-/// event-stream format joins them back (a far end's JSON may break its lines between tokens).
+
 fn data_event(payload: &[u8]) -> Vec<u8> {
     let mut out = RawBytes::default();
     for line in payload.split(|b| *b == b'\n') {
@@ -80,13 +66,7 @@ fn data_event(payload: &[u8]) -> Vec<u8> {
 }
 
 /// READ ONE FAR-END EVENT `frame_text` and frame it for the caller of request `rpc_id`, under
-/// busbar's `task_id`, `context_id` and the matched `skill`; a task the event refers to by one of
-/// the far end's ids in `references` (each the far end's id, then busbar's) is named by busbar's.
-///
-/// # Errors
-/// The hop's refusal: the frame answers a different request ([`HopRefusal::Uncorrelated`]), or
-/// its `result` is no object the plane can read as an event about a task
-/// ([`HopRefusal::NotJson`]).
+
 pub fn read_event(
     frame_text: &str,
     rpc_id: &Value,
@@ -147,12 +127,12 @@ pub fn read_event(
         return Err(HopRefusal::NotJson);
     }
     let payload = task_identity::payload_of(result);
-    // An artifact UPDATE is a relayed chunk; a task snapshot's `artifacts` is not one.
+
     let artifact = payload.get("artifact").is_some() || result.get("artifactUpdate").is_some();
     let state = task_identity::reported_task_state(result);
     let backend_task_id = task_identity::backend_task_id(result);
     let names_no_task = task_identity::names_no_task(result);
-    // The far end's own `result` bytes with busbar's identity spliced in.
+
     let spliced = crate::answer_bytes::result_span(data.as_bytes()).and_then(|r| {
         crate::answer_bytes::rewrite_identity(
             &data.as_bytes()[r],
@@ -186,8 +166,7 @@ pub fn read_event(
 }
 
 /// AN HTTP+JSON FAR END'S FRAME, wrapped back into the one dialect: its `data:` payload is the
-/// bare event, so it becomes `result` under `rpc_id`, the far end's own bytes
-/// ([`crate::answer_bytes::rewrap`]); a frame with no JSON payload passes as it is.
+
 #[must_use]
 pub fn rewrap<'f>(frame_text: &'f str, rpc_id: &Value) -> Cow<'f, str> {
     sse_data(frame_text)
@@ -202,8 +181,7 @@ pub fn rewrap<'f>(frame_text: &'f str, rpc_id: &Value) -> Cow<'f, str> {
 }
 
 /// THE HTTP+JSON LINE'S EVENTS: every event of `buf` whose data is a JSON-RPC `result` becomes the
-/// bare result, the result's own bytes ([`crate::answer_bytes::result_span`]); everything else (an
-/// `error` frame, a keep-alive, a comment) passes byte for byte, each line's own terminator kept.
+
 #[must_use]
 pub fn reframe_events(buf: &[u8]) -> Vec<u8> {
     let Ok(text) = std::str::from_utf8(buf) else {
@@ -232,7 +210,7 @@ fn data_field(line: &str) -> Option<&str> {
 }
 
 /// One event's `lines` (each with its terminator) onto `out`: its data lines replaced, where they
-/// join to a JSON-RPC `result`, by that result's own bytes, one `data:` line per line of it.
+
 fn reframe_event(lines: &[&str], out: &mut RawBytes) {
     let data: Vec<&str> = lines.iter().copied().filter_map(data_field).collect();
     let joined = zeroize::Zeroizing::new(data.join("\n"));

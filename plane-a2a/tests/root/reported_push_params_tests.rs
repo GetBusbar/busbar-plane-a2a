@@ -17,7 +17,7 @@ async fn push_config_verbs_distinguish_malformed_task_ids_from_unheld_string_ids
     );
     approve(&s, "planner").await;
     let task = open_task(&s).await;
-    // Discard the one legitimate task-opening request before checking local-only behavior.
+
     assert!(agent.relayed());
     for (method, alias) in [
         ("CreateTaskPushNotificationConfig", "task_id"),
@@ -39,7 +39,7 @@ async fn push_config_verbs_distinguish_malformed_task_ids_from_unheld_string_ids
         ] {
             cases.push(serde_json::json!({"taskId": value}));
         }
-        // The first supplied member remains authoritative; a valid alias cannot hide null.
+
         let mut conflict = serde_json::json!({"taskId": null});
         conflict[alias] = serde_json::json!(task);
         cases.push(conflict);
@@ -54,7 +54,7 @@ async fn push_config_verbs_distinguish_malformed_task_ids_from_unheld_string_ids
             assert_eq!(body["id"], 1);
         }
         for name in ["taskId", alias] {
-            // Empty strings preserve the existing not-found behavior; only type/presence changes.
+
             for value in ["", "not-a-held-task"] {
                 let mut params = serde_json::json!({});
                 params[name] = serde_json::json!(value);
@@ -68,7 +68,7 @@ async fn push_config_verbs_distinguish_malformed_task_ids_from_unheld_string_ids
             }
         }
     }
-    // A real held task remains usable under each dialect's accepted alias.
+
     for (method, member) in [
         ("ListTaskPushNotificationConfigs", "task_id"),
         ("tasks/pushNotificationConfig/list", "id"),

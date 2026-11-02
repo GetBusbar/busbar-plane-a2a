@@ -2,22 +2,11 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! A2A plane diagnostics — the `A2A_*` catalog entries this crate OWNS.
-//!
-//! These consts are plane-specific vocabulary, so the host's neutral catalog names no `A2A_*`
-//! diagnostic. Each keeps its stable `BUSBAR-NNNN` number and slug: codes are REGISTERED, never
-//! renumbered or collapsed.
-//!
-//! [`DIAGNOSTICS`] holds the plane's catalogue. The `diagnostics` in `declares.json`
-//! rides the door's Statement, and
-//! the host installs a plane's codes from it, in a build that links the plane and in one that loads
-//! it dropped in alike. The codes the plane's predecessor registered and the plane no longer raises
-//! are held by its tests (`RESERVED`): never declared, and never reissued to another meaning.
 
 use busbar_contract::diagnostic::{Class, Diagnostic, Severity};
 
 /// A restored A2A task's per-task provenance chain failed verification at boot — tamper evidence.
-/// Raised by the restore path in `task_door.rs`; its subject is the provenance chain's integrity,
-/// so it is a 2000 code.
+
 pub const A2A_TASK_CHAIN_VERIFY_FAILED: Diagnostic = Diagnostic {
     code: 2030,
     class: Class::Audit,
@@ -182,7 +171,7 @@ pub const A2A_TASK_STATE_UNREAD: Diagnostic = Diagnostic {
 };
 
 /// A split card or approval record was not read back whole at the card warm: the agent is looked
-/// at afresh.
+
 pub const A2A_SPLIT_RECORD_UNREAD: Diagnostic = Diagnostic {
     code: 7031,
     class: Class::Plane,
@@ -204,7 +193,7 @@ pub const A2A_SPLIT_RECORD_UNREAD: Diagnostic = Diagnostic {
 };
 
 /// Part records of a split card or approval that no whole record names were found at the card
-/// warm: each is tombstoned on its agent's next write.
+
 pub const A2A_SPLIT_RECORD_STRAY_PARTS: Diagnostic = Diagnostic {
     code: 7032,
     class: Class::Plane,
@@ -369,7 +358,7 @@ pub const A2A_PROTOCOL_VERSION_IGNORED: Diagnostic = Diagnostic {
 };
 
 /// A relayed SSE frame was not valid UTF-8 and was dropped. Frozen: `BUSBAR-7104`, the published
-/// catalog entry of the same number, byte for byte.
+
 pub const PLANE_SSE_FRAME_NOT_UTF8: Diagnostic = Diagnostic {
     code: 7104,
     class: Class::Plane,
@@ -390,9 +379,7 @@ pub const PLANE_SSE_FRAME_NOT_UTF8: Diagnostic = Diagnostic {
 };
 
 /// THE CODES THE PLANE RAISES, ascending by code: every entry its source reports through
-/// `diag_*!`; `declares.json` carries the catalogue the host installs in either build.
-/// `BUSBAR-7104` came out of the host
-/// registry with the relay's frame reader that emits it, under its frozen number.
+
 #[cfg(test)]
 pub const DIAGNOSTICS: &[&Diagnostic] = &[
     &A2A_TASK_CHAIN_VERIFY_FAILED,

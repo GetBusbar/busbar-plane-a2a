@@ -2,8 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! THE OUTBOUND DELEGATION CREDENTIAL, as the `agents:` grammar spells it: a secret reference plus
-//! its lease policy, held by busbar and scoped to one registration. Only the operator-intent types
-//! live here; minting and presenting a lease is the host's.
 
 use busbar_contract::secret_ref::SecretRef;
 
@@ -25,10 +23,7 @@ pub enum CredentialPlacement {
 }
 
 /// THE TWO SPELLINGS the section grammar states (`busbar_contract::section`, `placement:`):
-/// `bearer`, or an object naming the header, `{header: <name>}`. Read by hand rather than derived
-/// because the section reaches this parse as a YAML value (`busbar_contract::section::split_section`),
-/// and a YAML value reads a derived enum only from a tag (`!header <name>`), never from the object
-/// the grammar documents; the tag spelling is read too.
+
 impl<'de> serde::Deserialize<'de> for CredentialPlacement {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         struct Placement;

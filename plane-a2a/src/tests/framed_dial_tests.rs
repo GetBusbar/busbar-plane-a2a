@@ -2,9 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! The gRPC line's codec in the direction that DIALS: the hop's params as the rpc's request
-//! message, each answered message as its ProtoJSON result, the length prefix, and the status the
-//! trailers state (the engine's `relay::GrpcFraming`). The oracle is the generated `pb` messages,
-//! decoded and encoded with `prost` directly, never this module's own reader.
 
 use super::*;
 use crate::proto::pb;
@@ -63,7 +60,7 @@ fn a_method_in_either_dialect_names_its_rpc() {
 }
 
 /// THE HOP'S PARAMS ARE THE REQUEST MESSAGE: a v1.0 send's content survives the transcode, and a
-/// task read names exactly the id the params name.
+
 #[test]
 fn the_params_are_written_as_the_rpcs_request_message() {
     let params = json!({
@@ -105,13 +102,13 @@ fn the_params_are_written_as_the_rpcs_request_message() {
         sent.authentication.as_ref().map(|a| a.credentials.as_str()),
         Some("t-1.sig")
     );
-    // A v0.3 document is not the request message's ProtoJSON: there is nothing to write.
+
     let v03 = json!({ "message": { "kind": "message", "role": "user", "parts": [] } });
     assert!(request_message(Rpc::SendMessage, &v03).is_err());
 }
 
 /// EACH ANSWERED MESSAGE IS ITS RESULT: the rpc's response message read back as ProtoJSON; a
-/// delete's `Empty` is `null`; a message that is not the rpc's response is refused.
+
 #[test]
 fn an_answered_message_is_read_as_the_rpcs_result() {
     let task = crate::proto::custody::initialized::<pb::Task>(|__custody_message| {
@@ -137,7 +134,7 @@ fn an_answered_message_is_read_as_the_rpcs_result() {
         Ok(Value::Null)
     );
     assert!(response_result(Rpc::GetTask, &[0xff, 0xff, 0xff]).is_err());
-    // The model refuses an answer with no payload.
+
     assert!(response_result(Rpc::SendMessage, &[]).is_err());
 }
 
@@ -151,7 +148,7 @@ fn a_message_is_taken_whole_off_its_length_prefix() {
     assert_eq!(take_message(&[0, 0, 0]), Ok(None));
     assert_eq!(take_message(&[0, 0, 0, 0, 0]), Ok(Some((0, 5))));
     assert!(take_message(&[1, 0, 0, 0, 0]).is_err());
-    // A declared length past the reply ceiling is refused at once, not waited for.
+
     assert!(take_message(&[0, 0xff, 0xff, 0xff, 0xff]).is_err());
 }
 
@@ -169,9 +166,7 @@ fn block(fields: &[(&str, &str)]) -> Vec<u8> {
 }
 
 /// THE STATUS THE TRAILERS STATE: the code the host passes beside them (the kernel hands on the
-/// status the transport read off them), with the `ErrorInfo` of the details' `google.rpc.Status`.
-/// The details never state the code: trailers handed on with no status state nothing, whatever
-/// their details say (RED: the details' own code was read as the call's status).
+
 #[test]
 fn the_trailers_state_the_calls_status_and_its_error_info() {
     use base64::Engine as _;
@@ -207,7 +202,7 @@ fn the_trailers_state_the_calls_status_and_its_error_info() {
         Some("TASK_NOT_FOUND")
     );
     assert_eq!(got.a2a_code(), Some(-32001));
-    // A padded value reads the same; the code is the one the host states, never the details'.
+
     let padded = base64::engine::general_purpose::STANDARD.encode(refused.details());
     let stated = ended(&block(&[(DETAILS_FIELD, &padded)]), Some(14)).expect("stated");
     assert_eq!(stated.code, 14);
@@ -219,7 +214,7 @@ fn the_trailers_state_the_calls_status_and_its_error_info() {
 }
 
 /// THE A2A CODE A STATUS CARRIES: the reason's, else the one section 5.4 binds to the status
-/// alone; a status several A2A codes share, with no reason, names none.
+
 #[test]
 fn a_status_names_the_a2a_code_its_reason_or_its_row_binds() {
     let bare = |code: Code| Ended {

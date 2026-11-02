@@ -15,7 +15,6 @@ struct Scope {
 
 thread_local! { static SCOPE: RefCell<Scope> = RefCell::new(Scope::default()); }
 
-// The regression-only tree has no production wipe hook yet.
 #[allow(dead_code)]
 pub(crate) fn observe(after_wipe: bool, text: &str) {
     SCOPE.with(|scope| {

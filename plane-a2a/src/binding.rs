@@ -2,13 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! The outbound binding: which of A2A's bindings a hop speaks to an agent, read off the agent's
-//! held card (JSON-RPC when no card is held), and the HTTP+JSON framing the relay composes in
-//! that binding.
-//!
-//! The card says HOW, the operator's `url:` says WHERE: a binding's own URL on the card is never
-//! dialled. All three of A2A's bindings are spoken (JSON-RPC, REST and gRPC are
-//! its lines): gRPC is dialled over the door's own gRPC need, at the operator's origin, its request
-//! the rpc's message ([`crate::framed::request_message`]).
 
 use serde_json::Value;
 use zeroize::Zeroizing;
@@ -75,10 +68,7 @@ pub struct Selected<'a> {
 }
 
 /// Select HOW the configured endpoint speaks without changing WHERE the operator sends it.
-/// Matching advertised interfaces take precedence. If the configured endpoint is an operator
-/// alias/private route and none matches, retain the primary HOW: v0.3's preferred transport
-/// (JSONRPC when unstated), or v1.0's first speakable interface as before. Never choose a v0.3
-/// additional transport merely because a different endpoint offers it.
+
 #[must_use]
 pub fn select<'a>(card: Option<&Value>, configured_url: &'a str) -> Selected<'a> {
     let word = match card {
@@ -141,7 +131,7 @@ pub fn select<'a>(card: Option<&Value>, configured_url: &'a str) -> Selected<'a>
 }
 
 /// Compare resolved URL references using the existing URL parser alone. Query order, path
-/// escaping and userinfo are not rewritten, and this result never supplies a dial target.
+
 fn endpoint_matches(configured_url: &str, advertised: &str) -> bool {
     if advertised.is_empty() {
         return false;
@@ -155,7 +145,7 @@ fn endpoint_matches(configured_url: &str, advertised: &str) -> bool {
 }
 
 /// The binding at the card's primary endpoint. Consumers with an operator endpoint use
-/// [`select`] so a matching additional interface is chosen coherently with that endpoint.
+
 #[must_use]
 pub fn binding_of(card: Option<&Value>) -> String {
     let endpoint = card
@@ -166,7 +156,7 @@ pub fn binding_of(card: Option<&Value>) -> String {
 }
 
 /// One untrusted word made safe for a caller's error body: at most 48 characters of an
-/// identifier-shaped alphabet, everything else `?`.
+
 #[must_use]
 pub fn bounded_word(word: &str) -> String {
     const MAX: usize = 48;
@@ -201,7 +191,7 @@ pub fn unframable_text(method: &str, binding: &str) -> String {
 }
 
 /// One operation's place on the HTTP+JSON binding: its request line, the `params` members its query
-/// string carries, and whether what is left of `params` is the body.
+
 struct RestOp {
     verb: &'static str,
     path: &'static str,
@@ -292,16 +282,7 @@ impl Drop for Framed {
 }
 
 /// COMPOSE `method` with `params` on the HTTP+JSON binding under the agent URL `base` (A2A section
-/// 11.3): the path joined onto the operator's, its `{member}`s taken from `params`, the query
-/// members on the query string, what is left as the body.
-///
-/// This is the vendored v1.0 HTTP mapping, including when a legacy method name selects it.
-/// Legacy `tasks/get` and `tasks/resubscribe` metadata has no field in its `GetTaskRequest` or
-/// `SubscribeToTaskRequest`: it is refused explicitly, never dropped or encoded as an invented
-/// query member. Use JSON-RPC when that legacy metadata must reach the agent.
-///
-/// # Errors
-/// Why the request cannot be carried on this binding (never shown to the caller).
+
 pub fn compose(base: &str, method: &str, params: &Value) -> Result<Framed, String> {
     let op = rest_op(method).ok_or_else(|| {
         format!("`{method}` is not one of the eleven operations A2A's HTTP+JSON binding defines")
@@ -317,7 +298,7 @@ pub fn compose(base: &str, method: &str, params: &Value) -> Result<Framed, Strin
         .as_object_mut()
         .expect("an object was constructed");
     let mut path = String::new();
-    // Every operation also has the proto's optional leading /{tenant} binding.
+
     if let Some(tenant) = left.remove("tenant") {
         let tenant = RequestJson::new(tenant);
         let tenant = Zeroizing::new(if tenant.is_null() {
@@ -343,7 +324,7 @@ pub fn compose(base: &str, method: &str, params: &Value) -> Result<Framed, Strin
             .ok_or_else(|| format!("the route template `{}` is malformed", op.path))?
             + open;
         let name = &rest[open + 1..close];
-        // `{id}` on the push-config routes is the CONFIG id, so it stays exact there.
+
         let spellings: &[&str] = match name {
             "id" if !op.path.contains("{taskId}") => &TASK_ID_MEMBERS,
             "taskId" => &["taskId", "task_id"],
@@ -361,9 +342,7 @@ pub fn compose(base: &str, method: &str, params: &Value) -> Result<Framed, Strin
         if value.is_empty() {
             return Err(format!("`{method}`'s `{name}` is empty"));
         }
-        // A DOT SEGMENT is the one value the allowlist passes that still moves the request line
-        // (`/tasks/..` resolves to `/`, and its percent-encoded spelling is read as a dot segment
-        // too): it addresses no task, so it is not carried.
+
         if value == "." || value == ".." {
             return Err(format!(
                 "`{method}`'s `{name}` is a dot segment, which would re-point the request line"
@@ -376,7 +355,6 @@ pub fn compose(base: &str, method: &str, params: &Value) -> Result<Framed, Strin
     let mut url = base.clone();
     url.set_path(&format!("{}{path}", base.path().trim_end_matches('/')));
     {
-        // Keep the operator's own query, as the JSON-RPC binding does.
         let mut query = url.query_pairs_mut();
         for name in op.query {
             if let Some(value) = left.remove(*name) {
@@ -426,7 +404,7 @@ fn scalar(value: &Value) -> String {
 }
 
 /// Percent-encode one path segment against an allowlist, so no `/`, `?`, `#` or `%` in an id can
-/// re-point the request line ([`compose`] refuses the dot segments, which the allowlist passes).
+
 fn percent(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     for b in raw.bytes() {

@@ -583,7 +583,7 @@ fn detached_ack_waits_for_the_original_claimed_effect_batch_to_complete() {
     let old_crossing = journal.applied_effects();
     assert_eq!(old_crossing.notify.len(), 1);
     assert!(!journal.effects_complete());
-    // Watchdog retirement can retain a still-running crossing when quarantine_after > 1.
+
     journal.cancelled();
     let receipt = settlement(&original, Ok(Decision::Applied));
     assert!(journal.settle(&receipt).unwrap());

@@ -2,17 +2,12 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! A REQUEST BUSBAR ORIGINATES WHOSE CREDENTIAL IS UNAVAILABLE (the engine's
-//! `originate.rs` `originate`, origin/predev `crates/busbar-a2a/src/a2a/originate.rs:80-86`: a lease
-//! that could not be minted is logged `A2A_OUTBOUND_CRED_UNLEASED` and the hop is not made, for the
-//! push-config mirror and the `ListTasks` refresh alike, `:235-244` and `:352-361`). The host names
-//! that refusal by its own cause (`ConnFailure::CredentialUnavailable`), so the door can log it as
-//! the engine did and make no further hop.
 
 use super::*;
 use busbar_contract::abi::sdk::conn::ConnFailure;
 
 /// A warn capture: every WARN event's fields, rendered, sent down a channel (the door holds no
-/// subscriber dependency, so the `tracing` trait is implemented by hand).
+
 struct WarnCapture(std::sync::mpsc::Sender<String>);
 
 struct Render<'a>(&'a mut String);
@@ -43,8 +38,7 @@ impl tracing::Subscriber for WarnCapture {
 }
 
 /// What `answer` lands as for the agent `planner`, and every WARN line it logged. Landed twice:
-/// a warn callsite's interest is cached process-wide, so a concurrent test's dispatcher can hide the
-/// first emission from this scoped subscriber.
+
 fn landing(
     answer: impl Fn() -> Result<busbar_contract::abi::sdk::exchange::ExchangeResponse, ConnFailure>,
 ) -> (Landed, Vec<String>) {
@@ -58,8 +52,7 @@ fn landing(
 }
 
 /// A request the host refused for an unavailable credential lands [`Unleased`] and is logged with
-/// the engine's diagnostic, naming the agent. RED arm: the host's plain refusal lands as a request
-/// that was not answered (`None`) and logs nothing.
+
 #[test]
 fn an_unavailable_credential_lands_unleased_and_is_logged_as_the_engine_logged_it() {
     let banner = crate::diagnostics::A2A_OUTBOUND_CRED_UNLEASED
@@ -120,8 +113,7 @@ fn read_flight() -> Flight {
 }
 
 /// An UNLEASED read ends the mirror: no re-arm is issued, as the engine's `mirror_push_config`
-/// returned before its first request when `originate` gave `None` (origin/predev
-/// `originate.rs:235-244`). RED arm: the same read not answered re-arms.
+
 #[test]
 fn an_unleased_read_ends_the_mirror_without_a_rearm() {
     let mut unleased = read_flight();

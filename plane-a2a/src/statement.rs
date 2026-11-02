@@ -2,21 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! THE A2A PLANE'S DOOR, its declarations: what the plane states once in its Statement tail, what
-//! each generation publishes in its snapshot, and how `validate`/`open` read the settings blob.
-//!
-//! ## What the kernel hands the plane
-//!
-//! The settings blob is the plane's own section value — the `agents:` map — as JSON, with the
-//! kernel's reserved sub-keys already read and stripped: the
-//! hook bindings and `upstream_credentials` never reach the plane, and neither do the kernel-owned
-//! trust keys each entry carries ([`TRUST_KEYS`]), which the kernel parses and
-//! judges first. The plane judges the rest with its one grammar,
-//! [`crate::a2a::config::AgentsCfg`] and [`crate::a2a::config::validate_agent`].
-//!
-//! ## What is written down here
-//!
-//! The tail's strings, the route table and the admin routes are stated here as constants, once;
-//! the door's tests read the Statement back and hold it to them.
 
 use busbar_contract::abi::host::conn::connector::{
     Need, DIRECTION_OUTBOUND, EGRESS_OPEN_WEB, EGRESS_PROVIDER, KEEP_NAMED,
@@ -65,9 +50,7 @@ pub const DEFAULT_RECOVERY_BACKOFF: &str = "15m";
 const NONE: AbiStr = AbiStr::ABSENT;
 
 /// The push queue's counters, the Statement's metric families (a per-task ordered bounded queue,
-/// drop-oldest and counted): the notifications a
-/// full queue dropped, and the delivery outcomes a full book dropped before a piece of their
-/// caller filed them. Each is reported as the increment since the last report, on the tick.
+
 pub const FAMILIES: &[busbar_contract::abi::mechanism::door::MetricFamily] = &[
     counter(
         METRIC_PUSH_DROPPED,
@@ -105,7 +88,7 @@ const fn counter(
 }
 
 /// The plane's settings sections, as its Statement states them: `agents:` is the one it declares;
-/// `agent_push:` ([`PUSH_SECTION`]) is its own beside it, handed as written at `open`.
+
 pub const SECTIONS: &[Section] = &[
     Section {
         name: abi_str(crate::CONFIG_SECTION),
@@ -120,28 +103,18 @@ pub const SECTIONS: &[Section] = &[
 ];
 
 /// THE PLANE'S OWN `agent_push:` SECTION (new in 1.6.0; absent = public roots): `{ca: <PEM>}`, the operator
-/// CA a push delivery's connection trusts on top of the public roots (
-/// the connector's per-connection trust, reached through the push need's `trust_from`,
-/// [`PUSH_TRUST_FROM`]). The host reads the PEM; the plane judges only the section's shape
-/// ([`read_push_section`]). A section of its own rather than an `agents:` key: every key of
-/// `agents:` is a registration.
+
 pub const PUSH_SECTION: &str = "agent_push";
 
 /// The [`PUSH_SECTION`] key holding the operator CA, PEM text.
 pub const PUSH_CA_KEY: &str = "ca";
 
 /// WHERE [`NEED_OPEN_WEB`]'s TRUST ANCHOR COMES FROM: [`PUSH_SECTION`]`.`[`PUSH_CA_KEY`] in the
-/// plane's owned sections (`busbar_contract::section::OWNED_PATH_PREFIX`), optional by definition.
+
 pub const PUSH_TRUST_FROM: &str = "owned.agent_push.ca";
 
 /// Judge the [`PUSH_SECTION`] the plane's owned sections (`{section: value}`, JSON) write: absent
-/// or empty is the push trusting the public roots alone; present, it is a mapping holding
-/// [`PUSH_CA_KEY`] alone, a non-empty text. Whether that text is a usable trust anchor is the
-/// host's to judge when it declares the push need (a PEM that is none refuses the boot).
-///
-/// # Errors
-///
-/// The section's words: not a mapping, an unknown key, or a `ca` that is not non-empty text.
+
 pub fn read_push_section(owned: &[u8]) -> Result<(), String> {
     use serde_json::Value;
     if owned.is_empty() {
@@ -213,13 +186,9 @@ const OP_CLASS_TABLE: &[OpClass] = &[
 
 const BILLABLE_CLASSES: &[BillableClass] = &[
     BillableClass {
-        // The class a hop's moved bytes are counted in: payload bytes relayed both ways per hop.
         class: abi_str("bytes"),
         family: abi_str(BYTES_FAMILY),
     },
-    // The fee unit is also a class (the tail check holds `fee_units ⊆ billable_classes`):
-    // reported `1` once the unit is served (its hop left the plane for the agent, or the plane
-    // answered the verb itself), so a unit refused before that has its `per_request` refunded.
     BillableClass {
         class: abi_str(FEE_PER_REQUEST),
         family: abi_str(FEE_FAMILY),
@@ -247,15 +216,11 @@ const RECORD_KINDS: &[AbiStr] = &[
 ];
 
 /// The retention rule of each held kind that is not purged by age: a task row is kept while it is
-/// active (working or interrupted), so a purge drops only the terminal ones. `task_event` rows are
-/// always written active (they are the task's chain), so they list no rule and go by age, as do
-/// the push configs and cards.
+
 const RECORD_RETENTIONS: &[RecordRetention] = &[record_retention(0, Retention::TerminalOnly)];
 
 /// The task chain: the task-event kind is chained, length-prefixed with its scope in the
-/// digest: the fields (`prev, task, seq, ts, kind, context, principal, agent, state`), each framed
-/// by its length, so no byte can move from one field to its neighbour unseen. The host frames the prelude and keeps and verifies the
-/// chain; the plane writes only each event's own fields ([`crate::tasks::suffix`]).
+
 const RECORD_CHAINS: &[RecordChain] = &[RecordChain {
     kind: crate::records::TASK_EVENT_INDEX,
     framing: CHAIN_LENGTH_PREFIXED,
@@ -264,8 +229,7 @@ const RECORD_CHAINS: &[RecordChain] = &[RecordChain {
 }];
 
 /// The pin's four mechanisms; three are authenticity roots and `unpinned` is not. `cert_spki` and
-/// `mtls` pin the agent's KEY: the host seals it into the agent's member route and the connector
-/// enforces it on every connection to the agent (Q-DEL-A2A-SPKI).
+
 const PIN_MECHANISMS: &[PinMechanism] = &[
     PinMechanism {
         token: abi_str("jws_issuer_key"),
@@ -290,9 +254,7 @@ const PIN_MECHANISMS: &[PinMechanism] = &[
 ];
 
 /// The kernel-owned trust keys of one entry (the `pin:` object over this plane's four mechanisms,
-/// and the two cadence durations with their defaults), then the registration's private reach, which the door path
-/// hands the host (the grammar keeps reading `allow_private` itself); declaration order is
-/// judgement order.
+
 const TRUST_KEYS: &[TrustKey] = &[
     trust_key("pin", TRUST_PIN, PIN_FINGERPRINT, NONE).with_mechanisms(PIN_MECHANISMS),
     trust_key(
@@ -307,9 +269,6 @@ const TRUST_KEYS: &[TrustKey] = &[
         0,
         abi_str(DEFAULT_RECOVERY_BACKOFF),
     ),
-    // The registration's private reach (the per-agent `allow_private: true`): the host seals it into the agent's anchors and the one guard admits
-    // the agent's own private or loopback destination on [`NEED_AGENT`]; never a metadata address.
-    // An agent without it is refused every private address by the guard.
     trust_key(PRIVATE_REACH_KEY, TRUST_PRIVATE_REACH, 0, NONE),
 ];
 
@@ -327,41 +286,32 @@ const fn trust_key(key: &'static str, role: u32, flags: u32, default: AbiStr) ->
 pub const PRIVATE_REACH_KEY: &str = "allow_private";
 
 /// The [`NEEDS`] index of the plane's own outbound hops to a caller's push callback, each to the
-/// target the plane names at the dial.
+
 pub const NEED_OPEN_WEB: u32 = 0;
 
 /// The [`NEEDS`] index of the relayed calls to the registered agents: one member route per agent,
-/// sealed by the kernel at its own `url`; the trust
-/// verbs fetch an agent's card over it, at the well-known paths of the agent's own origin.
+
 pub const NEED_AGENT: u32 = 1;
 
 /// The [`NEEDS`] index of the relayed calls to the registered agents whose card's binding is gRPC
-/// (gRPC on its own listener; transport de-frames, plane transcodes): the
-/// same member route as [`NEED_AGENT`], at the agent's own `url`, carried over the grpc transport,
-/// held to the same pin and client identity. The kernel binds a registration member on every
-/// member-target need its plane states, and an ATTEMPT names this one
-/// ([`crate::plane_door::attempt_need`]).
+
 pub const NEED_GRPC: u32 = 2;
 
 /// THE MEMBER-TARGET PATH of [`NEED_AGENT`] (`busbar_contract::section::MEMBER_TARGET_PREFIX`): each
-/// registered agent is reached at its own `url`, the plane spelling the path of every request it
-/// sends. The agent's `pin` stays the plane's trust key (`TRUST_KEYS`).
+
 pub const MEMBER_TARGET: &str = "settings.*.url";
 
 /// WHERE [`NEED_AGENT`]'s TRUST ANCHORS COME FROM, beside the agent's pin (Q-DEL-A2A-SPKI): each
-/// registered agent's `client_identity` (`{cert, key}`, secret references), busbar's client
-/// certificate for it, which the connector presents on every connection to the agent; the agent's
-/// `pin` key, under `cert_spki` and `mtls`, is the far end's key the connector holds it to.
+
 pub const CLIENT_IDENTITY_FROM: &str = "settings.*.client_identity";
 
 /// The far end's response fields the plane reads: the answer's media type (a JSON document or an
-/// event stream), and where a card fetch is redirected to.
+
 const KEEP_RESPONSE_HEADERS: &[AbiStr] =
     &[abi_str(crate::relay::H_CONTENT_TYPE), abi_str("location")];
 
 /// The secret references its section holds, by settings path (`*` = every registered agent): the
-/// leased outbound delegation credential and busbar's own client certificate and key for a mutual
-/// handshake. The kernel enumerates them so `--validate` and boot resolve each one.
+
 pub const SECRET_REFS: &[AbiStr] = &[
     abi_str("settings.*.upstream_credential.secret"),
     abi_str("settings.*.client_identity.cert"),
@@ -369,10 +319,7 @@ pub const SECRET_REFS: &[AbiStr] = &[
 ];
 
 /// THE PLANE'S CONNECTION NEEDS: its own outbound hops over http under the `open-web` class (public
-/// destinations over a secure connection only; metadata hosts refused before the dial), with no auth
-/// style and no configured target; and the relayed calls to the registered agents, governed as
-/// upstreams a plane reaches, each at its own `url`: over http ([`NEED_AGENT`]) and over grpc
-/// ([`NEED_GRPC`]), the two under the same trust anchors.
+
 pub const NEEDS: &[Need] = &[
     need(
         EGRESS_OPEN_WEB,
@@ -426,19 +373,12 @@ pub const TAIL: &PlaneTail = &{
         .with_record_chains(RECORD_CHAINS)
         .with_trust_keys(TRUST_KEYS)
         .with_admin_routes(ADMIN_ROUTES)
-        // The counters' lane words: the binding words a hop goes out on, the same vocabulary as
-        // the dialects.
         .with_metric_lanes(DIALECTS);
-    // The hook order for this plane: the agent's gates screen the projected
-    // `{tool, arguments}` first, keyed on the request's session, fail-closed, a veto at the hook's
-    // own status; then its `prompt: rw` rewrites, each applied here in `project`. And a hop refused
-    // for busbar's own credential, or one that left and heard nothing back, is handed here as a
-    // piece first, on the unit's own ticket, so its task is ended through the host's records (the
-    // engine's `end_task`).
+
     t.flags = TAIL_HOOKS_GATED | TAIL_REFUSED_PIECE;
     t.ingress = INGRESS_REQUEST_RESPONSE | INGRESS_RESPONSE_STREAM;
     t.dispatch_shape = SHAPE_PIECEWISE;
-    // The layout this plane writes its answers in: the contract's it was built against.
+
     t.answer_layout = ANSWER_LAYOUT;
     t.scope = abi_str(SCOPE);
     t.label = abi_str(LABEL);
@@ -450,23 +390,20 @@ pub const TAIL: &PlaneTail = &{
     t.cli_help = NONE;
     t.caller_credential_refusal = abi_str(REFUSE_PASSTHROUGH_SECTION);
     t.admin_openapi = Blob::json(ADMIN_OPENAPI.as_bytes());
-    // The kinds kept while active ([`RECORD_RETENTIONS`]).
+
     t.record_retentions = RECORD_RETENTIONS.as_ptr();
     t.record_retentions_len = RECORD_RETENTIONS.len();
-    // The stream ceiling: a streamed relay runs at most this long, and a caller that stops
-    // reading releases it there.
+
     t.stream_ceiling_secs = STREAM_CEILING_SECS;
     t
 };
 
 /// How long a unit whose answer streams may run (600 s): the plane's stated stream ceiling, which the kernel stamps as the unit's
-/// deadline once its route is known, so it bounds the whole stream and a caller that stops reading
-/// it alike.
+
 pub const STREAM_CEILING_SECS: u64 = 600;
 
 /// One path the plane answers on: the SDK's one route row ([`ServedRoute`]): the verb, the target
-/// (a `{name}` segment is a path variable), the transport claim it arrives over, and whether the
-/// route admits a caller with no credential at all (a discovery document or the push callback).
+
 pub type Route = ServedRoute;
 
 /// The carrier the document and target bindings arrive over.
@@ -491,12 +428,11 @@ const fn open(verb: &'static str, target: &'static str) -> Route {
 }
 
 /// ONE FRONTED AGENT'S JSON-RPC ENDPOINT, `POST /a2a/agents/{agent_id}`: a row of [`ROUTES`], and
-/// the route every agent's trailing-separator claim ([`agent_slash_claims`]) is served as.
+
 pub const AGENT_ENDPOINT: Route = keyed("POST", "/a2a/agents/{agent_id}");
 
 /// The plane's data routes, in declaration order: named operations and cards,
-/// discovery documents, agent addresses, JSON-RPC endpoints and the framed service.
-/// The public push callback is declared separately in [`ADMIN_VERBS`].
+
 pub const ROUTES: &[Route] = &[
     keyed("POST", "/a2a/message:send"),
     keyed("POST", "/a2a/message:stream"),
@@ -543,7 +479,7 @@ pub enum Line {
 
 impl Line {
     /// The [`DIALECTS`] index its refusals are rendered in; `None` for a card document, whose
-    /// refusals are its own slice's.
+
     #[must_use]
     pub const fn dialect(self) -> Option<u32> {
         match self {
@@ -577,7 +513,7 @@ pub fn line_of(route: &Route) -> Line {
 }
 
 /// The trust verbs the plane serves on the kernel's admin mount, relative to it: `(verb, target)`;
-/// then busbar's own push callback, a PUBLIC route ([`PUSH_ROUTE`]).
+
 pub const ADMIN_VERBS: &[(&str, &str)] = &[
     ("POST", "/agents/{name}/connect"),
     ("POST", "/agents/{name}/approve"),
@@ -585,20 +521,17 @@ pub const ADMIN_VERBS: &[(&str, &str)] = &[
 ];
 
 /// BUSBAR'S OWN PUSH CALLBACK's index in [`ADMIN_VERBS`]: `POST /a2a/push`, a PUBLIC route
-/// (`ROUTE_PUBLIC`) on the data listener's mount beside the plane's claims, served by `serve` to
-/// an agent that holds no busbar key. It is not a claim: the plane is not a second claimant of the path.
+
 pub const PUSH_ROUTE: usize = 2;
 
 /// The word the kernel's audit row names each [`ADMIN_VERBS`] request by: the audit verbs
-/// (the shared `connect`, and `approve`); the push callback is never audited.
+
 pub const ADMIN_AUDIT_VERBS: [&str; 3] = ["connect", "approve", ""];
 
 /// [`ADMIN_VERBS`] in the ABI's spelling, each audited under its [`ADMIN_AUDIT_VERBS`] word.
 pub const ADMIN_ROUTES: &[AdminRoute] = &[
     admin_route(ADMIN_VERBS[0], 0, ADMIN_AUDIT_VERBS[0]),
     admin_route(ADMIN_VERBS[1], 0, ADMIN_AUDIT_VERBS[1]),
-    // Addressed by busbar's own push token: its `authorization`
-    // crosses to `serve`, which verifies it through the host's signing service.
     admin_route(
         ADMIN_VERBS[PUSH_ROUTE],
         busbar_contract::abi::plane::ROUTE_PUBLIC
@@ -608,18 +541,11 @@ pub const ADMIN_ROUTES: &[AdminRoute] = &[
 ];
 
 /// The trust verbs' OpenAPI fragment, each path relative to the admin mount (the kernel keys it
-/// under the mount). Each verb's `200` names its typed body by `$ref`,
-/// `approve` names its required request body (`ApproveReq`, the one-field `{"fingerprint": …}`
-/// document) the same way, and the neutral `components.schemas` key carries both bodies
-/// (`A2aTrustView`, `ApproveReq`) as data, since a door links no schema generator; the kernel's
-/// fold inserts them into the admin document's `#/components/schemas`. It is the
-/// committed admin `openapi.json`'s entry verbatim (the scope, security, operation id, plane mark
-/// and error statuses are the admin generator's own stamps), which the admin crate's drift test
-/// holds.
+
 pub const ADMIN_OPENAPI: &str = include_str!("admin_openapi.json");
 
 /// THE TRUST VERBS' OpenAPI FRAGMENT ([`ADMIN_OPENAPI`]), each path keyed under `admin_prefix`
-/// (the door's snapshot passes none and states the paths relative to the admin mount).
+
 #[must_use]
 pub fn openapi_fragment(admin_prefix: &str) -> serde_json::Value {
     let Ok(serde_json::Value::Object(paths)) = serde_json::from_str(ADMIN_OPENAPI) else {
@@ -629,7 +555,6 @@ pub fn openapi_fragment(admin_prefix: &str) -> serde_json::Value {
         paths
             .into_iter()
             .map(|(rel, item)| {
-                // The `components` key is no path: it is the bodies the paths' `$ref`s name.
                 if rel == "components" {
                     (rel, item)
                 } else {
@@ -641,19 +566,12 @@ pub fn openapi_fragment(admin_prefix: &str) -> serde_json::Value {
 }
 
 /// `validate` and `open`: the settings blob read as the `agents:` section. An empty blob is the
-/// empty section. The error is the grammar's own sentence, without the JSON reader's position: the
-/// kernel hands the section it read from the config file, so a position in the blob it built would
-/// point nowhere the operator wrote (the kernel's own parse of the file names the line).
-///
-/// # Errors
-///
-/// The first rule the section breaks, in the grammar's words.
+
 pub fn read_agents_section(settings: &[u8]) -> Result<AgentsCfg, String> {
     if settings.is_empty() {
         return Ok(AgentsCfg::default());
     }
-    // THE FAILOVER POOLS the host hands the section at its reserved `pools` key are the host's,
-    // not a registration: lifted off before the section is read, and kept beside it.
+
     if let Some((rest, pools)) = lift_pools(settings) {
         let mut cfg = read_section(&rest)?;
         cfg.pools = pools;
@@ -666,8 +584,7 @@ pub fn read_agents_section(settings: &[u8]) -> Result<AgentsCfg, String> {
 type Pools = indexmap::IndexMap<String, Vec<String>>;
 
 /// The section's reserved `pools` key taken off `settings`: the rest of the section (its keys in
-/// the order written), and each pool's members, in the order declared (a member written as an
-/// object names its entry under `name`). `None` when the section states no pools.
+
 fn lift_pools(settings: &[u8]) -> Option<(Vec<u8>, Pools)> {
     use busbar_contract::section::{POOL_MEMBERS_KEY, POOL_MEMBER_NAME_KEY, RESERVED_POOLS_KEY};
     let mut section: indexmap::IndexMap<String, serde_json::Value> =
@@ -711,9 +628,7 @@ fn read_section(settings: &[u8]) -> Result<AgentsCfg, String> {
 }
 
 /// THE SECTION A DEALT `validate` BLOB CARRIES. The boot's stage-3g deal hands a declared-verb
-/// plugin `{<verb>: <section>}` (`config_validate::deal`), where `open` and `refresh` are handed the
-/// section itself; the one verb this plane declares is [`crate::CONFIG_SECTION`], so a blob that is
-/// exactly `{agents: …}` is unwrapped to its section and any other blob is the section already.
+
 #[must_use]
 pub fn dealt_section(settings: &[u8]) -> std::borrow::Cow<'_, [u8]> {
     match serde_json::from_slice::<serde_json::Map<String, serde_json::Value>>(settings) {
@@ -729,16 +644,7 @@ pub fn dealt_section(settings: &[u8]) -> std::borrow::Cow<'_, [u8]> {
 }
 
 /// ONE GENERATION'S SNAPSHOT, owned, for the SDK to publish until that generation's `retire`.
-///
-/// With a readable `public_url` the plane is admitted: it states its audience and its
-/// protected-resource metadata document, and it claims its routes. Without one it claims nothing,
-/// a plane with no public base has no audience a token could name.
-///
-/// A section that registers no agent (`fronts` false: an `agents:` section carrying only its
-/// reserved section-level keys) states no route at all: no claim, no audience, no metadata
-/// document, and not busbar's public push callback. Those keys are defaults FOR agents, and the
-/// mount nothing for an empty set; the kernel still loads the plane, its section being
-/// present. Its trust verbs stay stated, and answer every name `404`: none is registered.
+
 #[must_use]
 pub fn agents_snapshot_spec(public_url: Option<&str>, agents: &[&str]) -> SnapshotSpec {
     let fronts = !agents.is_empty();
@@ -762,8 +668,7 @@ pub fn agents_snapshot_spec(public_url: Option<&str>, agents: &[&str]) -> Snapsh
     };
     SnapshotSpec {
         claims,
-        // The public push callback is the last admin route, so dropping it leaves every trust
-        // verb at its index in [`ADMIN_VERBS`], which `serve` is handed.
+
         admin_routes: ADMIN_ROUTES
             .iter()
             .zip(ADMIN_VERBS)
@@ -784,11 +689,7 @@ pub fn agents_snapshot_spec(public_url: Option<&str>, agents: &[&str]) -> Snapsh
 }
 
 /// The trailing-separator spelling of each fronted agent's endpoint: an A2A client joins its relative calls to the card's `url` and so arrives at
-/// `/a2a/agents/<id>/`. The contract refuses a pattern claim that ends in a separator, so each
-/// configured agent's spelling is claimed EXACTLY, after [`ROUTES`], in the order the section's
-/// agents are read, and restated with every generation's snapshot; each is served as
-/// [`AGENT_ENDPOINT`] ([`route_of_claim`]). A name that is not one plain path segment claims
-/// nothing.
+
 #[must_use]
 pub fn agent_slash_claims(agents: &[&str]) -> Vec<ClaimSpec> {
     agents
@@ -824,9 +725,7 @@ fn plain_segment(name: &str) -> bool {
 }
 
 /// The route the kernel's claim index `claim` names: a row of [`ROUTES`], or past them one of the
-/// generation's trailing-separator claims ([`agent_slash_claims`]; `agent_claims` counts them and is
-/// asked only for an index past the table, so a routed arrival allocates nothing for it), served as
-/// [`AGENT_ENDPOINT`]. Any other index names no claim of this plane (an unclaimed request, a 404).
+
 #[must_use]
 pub fn route_of_claim(claim: u32, agent_claims: impl FnOnce() -> usize) -> Option<&'static Route> {
     let i = usize::try_from(claim).ok()?;
@@ -842,9 +741,7 @@ pub fn agent_claim_count<'a>(agents: impl IntoIterator<Item = &'a str>) -> usize
 }
 
 /// A route as the snapshot's claim ([`ServedRoute::claim_spec`]: an open route takes no inbound
-/// credential; a target with a path variable is a pattern, one level per variable, and any other
-/// target matches exactly), its refusals rendered in its line's dialect; an open document's in
-/// the JSON-RPC one.
+
 fn dialect_claim(r: &Route) -> ClaimSpec {
     let mut spec = r.claim_spec();
     spec.refusal_dialect =
@@ -853,9 +750,7 @@ fn dialect_claim(r: &Route) -> ClaimSpec {
 }
 
 /// The audit row every admitted unit of this plane leaves, written as a `RECORD_AUDIT` record
-/// write on the unit's answer: `applied` when the
-/// unit was served (its hop left the plane, or the plane answered it), `rejected` when it was
-/// refused after its admission (a gate, a budget, a breaker, a hop that never left).
+
 pub const AUDIT_ACTION: &str = "agent.call";
 
 /// The resource an agent's row names (the kernel's `agent_key`: `agent:<id>`).

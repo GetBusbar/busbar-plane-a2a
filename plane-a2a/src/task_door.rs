@@ -2,15 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! THE DOOR'S HALF OF THE TASK VERBS: the host records the task store reads and the destination
-//! judge, reached through [`Via`], and `on_piece` for a unit whose verb the plane answers itself
-//! ([`crate::local`]).
-//!
-//! A unit's pieces share its ticket, and the host keeps every service result under its handle until
-//! the ticket is recycled. So each piece's connector counts its handles on from what the unit's
-//! finished pieces issued ([`Pass`]), and a piece that answers PENDING, or is re-called for a short
-//! answer, runs again from the top with the same count and the same stamp: every call it makes is
-//! re-issued under its own handle and reads the stored result, so no record is read twice to
-//! different effect and no claim is won twice.
 
 use std::task::Poll;
 
@@ -90,7 +81,7 @@ impl Drop for Pass {
 }
 
 /// A finished listing: the handle the piece's calls count on from after it, and its answer's status
-/// and body (`None` = not answered).
+
 type Listed = (u32, crate::binding::Binding, Option<(u16, Vec<u8>)>);
 
 /// A local answer held across the mirror's PENDING entries.
@@ -113,10 +104,7 @@ struct Entry {
 }
 
 /// THE HOST RECORDS AND THE DESTINATION JUDGE, for one piece: its connector, and the host services
-/// the door was opened with. Every call counts on the piece's one handle sequence.
-///
-/// Both handles are the door's own install handles ('static by construction); a test passes the
-/// handles of a host it leaked, which is 'static too.
+
 pub struct Via<'h> {
     host: &'h StaticHost,
     services: Option<StaticServices>,
@@ -124,8 +112,6 @@ pub struct Via<'h> {
     conn: Connector<'h>,
     grown: &'h Grown,
     /// The bytes every records call of the piece is answered into, grown to the largest asked for
-    /// and never cleared: the host writes what it answers and the wrapper reads only that, so no
-    /// call allocates or zeroes a buffer of its own.
     scratch: crate::relay::RawBytes,
     /// The item spans every records call of the piece is answered into, grown as [`Via::scratch`].
     spans: Vec<ItemSpan>,
@@ -135,7 +121,7 @@ pub struct Via<'h> {
 
 impl<'h> Via<'h> {
     /// The piece's calls, counting on from the `issued` its unit's finished pieces made; `grown` is
-    /// the instance's book of the sizes short records answers named.
+
     pub fn new(
         host: &'h StaticHost,
         services: Option<StaticServices>,
@@ -143,8 +129,6 @@ impl<'h> Via<'h> {
         issued: u32,
         grown: &'h Grown,
     ) -> Self {
-        // Reusing a ticket slot retires only its older generations. Another live ticket's
-        // short-answer sizes must survive this piece, including while this one pends.
         grown.with_all(|sizes| {
             sizes.retain(|(slot, generation, _), _| {
                 *slot != ticket.slot || *generation == ticket.generation
@@ -180,7 +164,7 @@ impl<'h> Via<'h> {
     }
 
     /// The buffer sizes to issue `handle` at: what a short answer on it already named, else
-    /// `(bytes, items)`.
+
     fn sized(&self, handle: CompletionHandle, bytes: usize, items: usize) -> (usize, usize) {
         match self.grown.get(&grown_key(handle)) {
             Some(size) => (
@@ -192,7 +176,7 @@ impl<'h> Via<'h> {
     }
 
     /// A short answer on `handle` named `bytes` and `items`: kept, so every entry of the piece
-    /// issues the handle at that size from now on.
+
     fn grow(&self, handle: CompletionHandle, bytes: u64, items: u64) -> Result<(), Halt> {
         self.grown.with_all(|m| {
             let key = grown_key(handle);
@@ -212,7 +196,7 @@ impl<'h> Via<'h> {
     }
 
     /// Reserve room atomically before issuing a new handle: a later SHORT must be recordable,
-    /// including when this call first pends and another ticket fills the book in the meantime.
+
     fn reserve(&self, handle: CompletionHandle, bytes: usize, items: usize) -> Result<(), Halt> {
         self.grown.with_all(|sizes| {
             let key = grown_key(handle);
@@ -235,7 +219,7 @@ impl<'h> Via<'h> {
     }
 
     /// A call that never answered SHORT and has finished needs no replay size. Its original
-    /// buffers already held its immutable host answer, so release only its reservation.
+
     fn unreserve(&self, handle: CompletionHandle) {
         self.grown.with_all(|sizes| {
             let key = grown_key(handle);
@@ -251,9 +235,7 @@ impl<'h> Via<'h> {
     }
 
     /// `random.fill` into `buf`, under this piece's next handle.
-    ///
-    /// # Errors
-    /// [`Halt::Failed`] when the host serves no `random.fill` or declined it.
+
     pub fn random(&mut self, buf: &mut [u8]) -> Result<(), Halt> {
         let Some(services) = self.services else {
             return Err(Halt::Failed(format!("{:?}", ServiceError::Unserved)));
@@ -282,12 +264,7 @@ pub(crate) const fn handle(ticket: Ticket, seq: u32) -> CompletionHandle {
 }
 
 /// THE SIZES SHORT RECORDS ANSWERS NAMED, and pending calls' reservations, per handle
-/// (`ticket slot, ticket generation, handle
-/// sequence`). A piece that answers PENDING runs again from the top and re-issues every handle
-/// (the replay rule); one the host already answered short is re-issued at the size it named, so no
-/// handle is answered short twice (the design's host services, the short-buffer rule: a second
-/// short answer on one handle is FAULT). Completed/cancelled tickets and reused generations retire
-/// their own entries. At [`GROWN_MAX`] a new growth is refused without forgetting any live handle.
+
 pub type Grown = Keyed<(u32, u32, u32), RecordSize>;
 
 /// A reserved records call's initial room, or the room its SHORT answer named. Reservations
@@ -303,7 +280,7 @@ pub struct RecordSize {
 const GROWN_MAX: usize = 4096;
 
 /// Room for one record on its first read: a task row with its history and artifacts. A longer one
-/// is re-called once, on the same handle, at the size the host named.
+
 const RECORD_BYTES: usize = 64 * 1024;
 
 /// The records one page of a listing asks for; a page that comes back full asks for the next.
@@ -357,7 +334,7 @@ impl<T> Issued<T> {
 
 impl Via<'_> {
     /// The piece's buffers, `bytes` and `items` of them, grown when a call asks for more than
-    /// they hold.
+
     fn buffers(&mut self, bytes: usize, items: usize) -> (&mut [u8], &mut [ItemSpan]) {
         if self.scratch.len() < bytes {
             self.scratch.grow_zeroed(bytes);
@@ -372,9 +349,7 @@ impl Via<'_> {
     }
 
     /// One records call under this piece's next handle, issued at `(bytes, items)` (or the size a
-    /// short answer on the handle already named) and, answered short, re-issued ONCE on the same
-    /// handle at the size it names. `call` makes the crossing into the buffers it is handed and
-    /// answers an owned value.
+
     fn issue<T>(
         &mut self,
         (bytes, items): (usize, usize),
@@ -412,7 +387,7 @@ impl Via<'_> {
         match Issued::of(call(&services, handle, buf, spans))? {
             Issued::Value(v) => Ok(v),
             Issued::Pending => Err(Halt::Pending),
-            // The host named a size and then answered short at it: its own rule broken.
+
             Issued::Short(..) => Err(halted(ServiceError::Broken)),
         }
     }
@@ -446,8 +421,7 @@ impl Records for Via<'_> {
                 .find(|write| write.kind == crate::records::KIND_TASK && !write.value.is_empty())
                 .and_then(|write| serde_json::from_slice::<crate::TaskRow>(&write.value).ok())
                 .ok_or_else(|| Halt::Failed("notification task unavailable".into()))?;
-            // Bind captured authority to the exact stored bytes before Commit, including absence.
-            // Failed reads retain only an unresolved notification, carrying no URL or credential.
+
             let key = tasks::task_key(&row.principal, &row.task_id);
             match self.get(crate::records::KIND_PUSH_CONFIG, &key) {
                 Err(Halt::Pending) => return Err(Halt::Pending),
@@ -548,8 +522,7 @@ const JUDGED_BYTES: usize = 512;
 const JUDGED_ADDRESSES: usize = 16;
 
 /// The open-web judgement of a caller-named destination (a push callback) on `handle`: its
-/// `DEST_*` verdict and the set a dial must land within. Private reach is refused whatever the
-/// deployment's private-address setting (no knob admits one); the allow-list stands.
+
 pub(crate) fn judge_open_web(
     services: &StaticServices,
     handle: CompletionHandle,
@@ -592,7 +565,7 @@ impl Reach for Via<'_> {
 }
 
 /// The instance's restore is either owned by one live unit or has finished reporting.
-/// A cancelled pending owner releases the claim so the next local verb can finish the read.
+
 pub(crate) type Restore = Keyed<(), RestoreState>;
 
 #[derive(Debug, Clone, Copy)]
@@ -632,7 +605,7 @@ fn forget_sizes(grown: &Grown, ticket: Ticket) {
 }
 
 /// Release only the cancelled unit's pending restore and replay sizes. Called after the
-/// plane marks that unit over, using the SDK's named-unit-else-ticket cancellation rule.
+
 pub(crate) fn cancelled(plane: &A2aDoor, cancel: busbar_contract::abi::sdk::plane::UnitCancel) {
     let mut publications = Vec::new();
     let named = (cancel.unit != 0)
@@ -663,8 +636,7 @@ pub(crate) fn cancelled(plane: &A2aDoor, cancel: busbar_contract::abi::sdk::plan
             }
         });
     }
-    // A later pending observation has no detached commit receipt to raise the driver wake.
-    // The journal still owns any earlier Applied effects; wake only after releasing unit guards.
+
     for publication in publications {
         publication.owner_dropped();
     }
@@ -684,8 +656,7 @@ pub(crate) fn cancelled(plane: &A2aDoor, cancel: busbar_contract::abi::sdk::plan
 }
 
 /// Say what the restore found, once per unit: the counts, a row
-/// this build cannot read at WARN, each in-flight task's broken chain at ERROR as tamper evidence,
-/// and a restore that could not read the records at WARN.
+
 fn report_restore(plane: &A2aDoor, unit: u64, restored: Result<tasks::Restored, Halt>) {
     let first = plane.units.with(&unit, |u| {
         u.is_some_and(|u| !std::mem::replace(&mut u.pass.restore_reported, true))
@@ -731,7 +702,7 @@ fn report_restore(plane: &A2aDoor, unit: u64, restored: Result<tasks::Restored, 
 }
 
 /// The answer a NOTIFICATION gets: received, never answered (JSON-RPC 2.0 section 4.1: the server
-/// MUST NOT reply), so `202` and no body at all.
+
 pub(crate) const fn notice_answer() -> (u32, &'static [u8]) {
     (crate::agent_arrival::STATUS_ACCEPTED, b"")
 }
@@ -782,8 +753,7 @@ fn local_piece(
     journal: &crate::conditional_publication::Journal,
 ) -> Option<Outcome> {
     let unit = input.unit();
-    // A NOTIFICATION, acknowledged on the caller's piece: `202` and no body, nothing moved, no
-    // fee kept and no audit row (it is answered before anything is admitted).
+
     if plane.units.with(&unit, |u| {
         u.is_some_and(|u| matches!(u.disposition, AgentDisposition::Notice { .. }))
     }) {
@@ -826,11 +796,11 @@ fn local_piece(
                 u.pass.held.take(),
             ))
         })?;
-    // The next window of a reply already answered.
+
     if !rest.is_empty() {
         return Some(window(plane, unit, &input, out, (0, &rest), &[]));
     }
-    // An answer held while busbar's own callback is mirrored: the mirror goes on, then the answer.
+
     if let Some(mut held) = held {
         if !held.mirrored
             && crate::plane_door::drive_mirror(plane, instance.ticket(), &mut held.flight)
@@ -863,9 +833,8 @@ fn local_piece(
         }
         return Some(outcome);
     }
-    // The ATTEMPT piece: the caller's body follows, and the answer comes on it.
+
     if input.from() != FROM_CALLER {
-        // The agent the ATTEMPT reached, kept for the caller's piece.
         let given = input.member().as_str().unwrap_or_default();
         if !given.is_empty() {
             plane.on_unit(unit, |u| {
@@ -889,7 +858,7 @@ fn local_piece(
     })?;
     let mut via =
         Via::new(host, plane.services, instance.ticket(), base, &plane.grown).publishing(journal);
-    // An HTTP+JSON unit answers the envelope its request spelled, not the caller's body.
+
     let raw = composed
         .as_deref()
         .map(Vec::as_slice)
@@ -899,7 +868,6 @@ fn local_piece(
     let caller = input.caller_ref().as_str().unwrap_or_default();
     let mut writes = Vec::new();
     if entry.restore {
-        // The instance's restore: it writes nothing, and one that fails does not fail the verb.
         match tasks::restore(&mut via) {
             Err(Halt::Pending) => return Some(Outcome::Pending),
             answer => {
@@ -908,9 +876,7 @@ fn local_piece(
             }
         }
     }
-    // Local verbs have the same caller-liveness requirement as relayed work. Ask only for
-    // principal standing: the kernel already judged the route's grant. This service uses Via's
-    // next handle, after any restore reads, so it cannot read a records result as an entitlement.
+
     let handle = via.next_handle();
     let live = plane.services.is_some_and(|services| {
         services
@@ -920,8 +886,7 @@ fn local_piece(
             )
             .unwrap_or(false)
     });
-    // The admission and the catalogue, ahead of the local verbs: a selected member must exist
-    // in the unit's captured section, be approved, hold a card and fit the request.
+
     let given_member = input.member().as_str().unwrap_or_default();
     let held_member = plane
         .units
@@ -955,7 +920,7 @@ fn local_piece(
             status: refusal.status,
             body: crate::relay::json_bytes(&refusal.envelope()).unwrap_or_default(),
         })),
-        // `ListTasks` refreshes this caller's rows on the agent from the agent's own list first, then answers busbar's rows as they now stand.
+
         None if verb == local::LocalVerb::ListTasks => {
             match refresh_listed(
                 plane,
@@ -991,25 +956,23 @@ fn local_piece(
             plane.on_unit(unit, |u| u.pass.refreshed.clear());
             local::unreadable(envelope.get("id").unwrap_or(&Value::Null))
         }
-        // A subscribe to a live task is the relay's (`crate::plane_door`'s events hop); one that
-        // reached here carried no request the relay could send.
+
         Ok(None) => return Some(Outcome::Refused),
         Ok(Some(answer)) => answer,
     };
-    // A DELETED CONFIG TAKES ITS WEBHOOK CREDENTIAL WITH IT out of plane memory.
+
     plane.deliveries.apply_deletions(journal);
-    // THE ENGINE'S ANSWER IF THE STORE REFUSES THE VERB'S OWN WRITE.
+
     let unrecorded = (!writes.is_empty())
         .then(|| local::unrecorded(verb, envelope.get("id").unwrap_or(&Value::Null)))
         .flatten();
     plane.on_unit(unit, |u| {
         u.pass.unrecorded = unrecorded;
         u.pass.served = served;
-        // An admitted verb the plane answered is the caller's call, audited as served (after its
-        // admission).
+
         u.pass.audit = served.then(|| (crate::statement::agent_resource(member), true));
     });
-    // Busbar's own callback, mirrored onto the agent before the answer goes: only on a successful local answer about a live task the agent has named.
+
     let mirrored = crate::mirror::mirrored_verb(verb).filter(|_| served && answer.status == 200);
     let flight = match mirrored {
         Some(method) => match mirror_flight(
@@ -1078,12 +1041,7 @@ fn local_piece(
 }
 
 /// Refresh what busbar last saw from the agent doing the work: the caller's live rows on this agent whose agent ids busbar
-/// learnt are the whitelist; the agent is asked `ListTasks` (its default page) only when there is
-/// one; each matched entry's strictly-read state moves its row through the one transition table,
-/// and each move stages its delivery until the local answer is serialized. Nothing from the answer
-/// is rendered. Across PENDING entries
-/// the listing is held on the unit and every host call replays in its order; `via` counts on past
-/// the listing's calls when it returns.
+
 #[allow(clippy::too_many_arguments)]
 fn refresh_listed<'h>(
     plane: &'h A2aDoor,
@@ -1150,8 +1108,7 @@ fn refresh_listed<'h>(
                     });
                     return Err(Halt::Pending);
                 }
-                // A listing refused for the agent's unavailable credential made no hop and
-                // refreshes nothing.
+
                 Poll::Ready(landed) => {
                     let done = (hop.seq, hop.binding, landed.ok().flatten());
                     plane.on_unit(unit, |u| {
@@ -1181,16 +1138,14 @@ fn refresh_listed<'h>(
             notify: true,
             ..Default::default()
         });
-        // A refusal is the table doing its job (a re-reported or forbidden move), never the
-        // caller's error.
+
         match tasks::transition(via, &at, &busbar_id, state, writes) {
             Err(Halt::Pending) => return Err(Halt::Pending),
             Err(Halt::Failed(_)) | Ok(None) => {}
             Ok(Some(row)) => moved.push(row),
         }
     }
-    // Collect every required config before publishing any delivery/token side effect.
-    // PENDING and failed reads leave nothing observable outside this piece.
+
     let mut refreshed = Vec::new();
     for row in moved {
         let config =
@@ -1232,8 +1187,7 @@ pub(crate) fn listed_backend_ids(
 }
 
 /// THE MIRROR a successful push-config verb owes ([`crate::mirror`]), or `None` when it owes none:
-/// no `https` public url, no task the verb names live for this caller, no agent's own id for it, an
-/// agent whose card speaks no binding the plane frames, or a token the host would not sign.
+
 fn mirror_flight(
     plane: &A2aDoor,
     instance: &Instance<'_, A2aDoor>,
@@ -1334,7 +1288,7 @@ fn mirror_flight_inner(
 }
 
 /// The caller's local answer, written for its line: the gRPC line's message or status, the
-/// HTTP+JSON line's re-framed document, the JSON-RPC line's envelope as answered.
+
 #[allow(clippy::too_many_arguments)]
 fn answered_window(
     plane: &A2aDoor,
@@ -1347,7 +1301,6 @@ fn answered_window(
     issued: u32,
 ) -> Outcome {
     let done = match (framed, composed) {
-        // The gRPC line: the rpc's message, or the status the call ends with.
         (Some(rpc), _) => framed_window(
             plane,
             unit,
@@ -1410,9 +1363,7 @@ pub(crate) fn kind_index(kind: &str) -> u32 {
 }
 
 /// Answer one window of a local reply: as many bytes as the reply buffer holds, and on the first
-/// window (`status != 0`) its status, its `content-type` and the record writes. What does not fit
-/// is kept for the next window (`more = 1`); a short field, record or arena buffer is a short
-/// answer, written nowhere.
+
 fn window(
     plane: &A2aDoor,
     unit: u64,
@@ -1447,8 +1398,7 @@ fn window_with(
 }
 
 /// A WHOLE REPLY ON THE gRPC LINE ([`crate::framed::FramedReply`]): its status in the line's own
-/// numbering (`0` = `OK`), its details field when it has one, and no media type and no length (the
-/// grpc transport frames).
+
 fn framed_window(
     plane: &A2aDoor,
     unit: u64,
@@ -1457,9 +1407,6 @@ fn framed_window(
     reply: &crate::framed::FramedReply,
     writes: &[Write],
 ) -> Outcome {
-    // The gRPC line's answer: the head is the listener's `200` and the line's media type;
-    // an `OK` reply is its one message, and any other status is no message but the call's final
-    // status (its message and details), which the stream's framer renders on its close.
     let ok = reply.code == crate::framed::Code::Ok as u32;
     let body: &[u8] = if ok { &reply.body } else { &[] };
     window_core(
@@ -1482,7 +1429,7 @@ fn framed_window(
 }
 
 /// The first window's head: its fields, whether it states its length, and whether its body is one
-/// message (the gRPC line's: its last byte is a message boundary).
+
 struct WindowHead<'h> {
     fields: &'h [(&'h str, &'h str)],
     length: bool,
@@ -1525,7 +1472,7 @@ fn window_core(
                 value: arena.span(value.as_bytes()),
             });
         }
-        // A whole answer states its length, so it is sent under it (never chunked).
+
         if head.length {
             fields.push(OutField {
                 name: arena.span(crate::plane_door::H_CONTENT_LENGTH.as_bytes()),
@@ -1541,7 +1488,7 @@ fn window_core(
             value: arena.span(&w.value),
         });
     }
-    // THE UNIT'S AUDIT ROW, with its answer's first window.
+
     let audit = first.as_ref().and(
         plane
             .units
@@ -1552,12 +1499,11 @@ fn window_core(
             &mut arena, resource, *applied,
         ));
     }
-    // The unit's ledger lane: the resource its row names (`agent:<id>`, or the plane pool for
-    // busbar's extended card).
+
     let lane = audit
         .as_ref()
         .map(|(resource, _)| arena.span(resource.as_bytes()));
-    // THE CALL'S FINAL STATUS (the gRPC line), its message and details in the arena.
+
     let close = first.as_ref().and_then(|h| h.close).map(|r| {
         (
             r.code,
@@ -1593,8 +1539,7 @@ fn window_core(
     let rest = &body[n..];
     out.set(|o| &o.emitted, n as u64);
     out.set(|o| &o.reply_status, status);
-    // Whether the body is one message (the gRPC line's): the first window says, the later ones
-    // remember.
+
     let message = match &first {
         Some(head) => head.message,
         None => plane
@@ -1602,8 +1547,6 @@ fn window_core(
             .with(&unit, |u| u.is_some_and(|u| u.pass.message)),
     };
     if rest.is_empty() {
-        // The answer is written whole: the door is done with the unit, the first to make room
-        // ([`crate::plane_door::AgentUnit::over`]).
         let ticket = plane.units.with(&unit, |u| {
             let u = u?;
             u.over = true;
@@ -1634,8 +1577,7 @@ fn window_core(
 }
 
 /// THE HOST'S SIGNING SERVICE as a card's [`crate::served_card::Signer`]: the key id read with a
-/// first signature (the host names it beside every signature), then the signature, each on its own
-/// handle of the piece's ticket.
+
 pub(crate) struct HostSigner<'a> {
     pub(crate) services: Option<&'a StaticServices>,
     pub(crate) ticket: Ticket,
@@ -1656,7 +1598,7 @@ impl HostSigner<'_> {
 
 impl HostSigner<'_> {
     /// `entitlement.check` of the unit's caller for `target` (`<scope kind>:<name>`), on the next
-    /// handle; a check the host cannot answer is no entitlement.
+
     fn entitled(&mut self, target: &str) -> bool {
         let Some(services) = self.services else {
             return false;
@@ -1678,9 +1620,7 @@ impl crate::served_card::Signer for HostSigner<'_> {
 }
 
 /// Busbar's extended card for the unit's caller: one
-/// skill per fronted agent the caller's own catalogue holds (granted, approved, its card held),
-/// signed, in a JSON-RPC answer; a deployment fronting no agent answers
-/// `ExtendedAgentCardNotConfigured`, a card that cannot be built `Internal`.
+
 fn extended_card(
     plane: &A2aDoor,
     signer: &mut HostSigner<'_>,
@@ -1754,8 +1694,7 @@ fn card_error(code: &str, message: &str) -> Vec<u8> {
 }
 
 /// `on_piece` for a card read ([`crate::agent_arrival::CardAsk`]): its first piece (the caller's, for
-/// busbar's own card; the ATTEMPT naming the agent, for a fronted agent's) is answered whole, the card signed with
-/// busbar's key through the host's `sign`; a card read is never metered, so it reports no fee unit.
+
 pub fn card_piece(
     plane: &A2aDoor,
     instance: &Instance<'_, A2aDoor>,
@@ -1837,7 +1776,7 @@ pub fn card_piece(
                     status == 200,
                 ));
             });
-            // The gRPC line: the card's message, or the status the call ends with.
+
             if let Some(rpc) = framed {
                 let seq = signer.seq;
                 let reply = crate::framed::framed_reply(rpc, status, &body);

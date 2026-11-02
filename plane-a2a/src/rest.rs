@@ -2,16 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! THE HTTP+JSON LINE'S ARRIVAL: the JSON-RPC envelope the line's request spells, composed from
-//! the route, the path, the query and the body, and decided as the JSON-RPC line decides it.
-//!
-//! A2A section 11.3 defines the REST binding BY REFERENCE to the JSON-RPC one: the request body IS
-//! the JSON-RPC `params` verbatim, and the success body IS the `result` verbatim. So nothing about
-//! the operation differs between the two lines but where the method NAME comes from (the request
-//! line) and how the answer is wrapped. This module is the first half: [`compose`] builds the
-//! envelope (member for member, with a fixed id), and the
-//! door decides it with [`crate::agent_arrival::decide_and_read`] under the caller's own head
-//! fields: composed first, then the head judged and the composed body parsed. The one refusal
-//! composing can earn, a `POST /tasks/{id}:<verb>` naming no verb, comes first.
 
 use std::collections::HashMap;
 
@@ -22,12 +12,11 @@ use crate::request_json::RequestJson;
 use crate::statement::Route;
 
 /// THE JSON-RPC ID OF A COMPOSED ENVELOPE. A JSON-RPC id is a correlation handle for a channel
-/// that multiplexes requests; one HTTP request has none, so the id is a fixed string that says
-/// what it is, never seen by the caller (the answer is unwrapped before it leaves).
+
 pub const REST_RPC_ID: &str = "a2a-http-json";
 
 /// THE METHOD NAMES, in A2A v1.0's spelling. Both supported revisions define HTTP+JSON;
-/// these routes use v1.0 operation names, so a REST request composes a v1.0 envelope.
+
 pub mod method {
     /// `POST /message:send`.
     pub const SEND_MESSAGE: &str = "SendMessage";
@@ -54,13 +43,12 @@ pub mod method {
 }
 
 /// The two operations `POST /tasks/{id}:<verb>` spells. The verb is a suffix INSIDE the captured
-/// segment, so the segment is captured once and split here.
+
 const VERB_CANCEL: &str = "cancel";
 const VERB_SUBSCRIBE: &str = "subscribe";
 
 /// `404`: the status of a `POST /tasks/…` naming no verb this binding defines, of an arrival no
-/// line of the door serves, and of a task the caller does not hold (A2A section 5.4,
-/// `TaskNotFoundError`).
+
 pub(crate) const STATUS_NOT_FOUND: u32 = 404;
 
 use crate::agent_arrival::CODE_METHOD_NOT_FOUND;
@@ -93,7 +81,7 @@ impl Params {
     }
 
     /// Set `name` only if the caller supplied it: typed by [`json_scalar`] where the proto's field
-    /// is not a string ([`TYPED_QUERY_MEMBERS`]), the string as sent otherwise.
+
     #[must_use]
     pub fn maybe(mut self, name: &str, value: Option<&String>) -> Self {
         if let Some(v) = value {
@@ -108,7 +96,7 @@ impl Params {
     }
 
     /// Merge a request body in, VERBATIM (the REST body IS the `params`). A path-derived member is
-    /// set AFTER this, so the URL a caller addressed cannot be re-pointed by a member it posted.
+
     #[must_use]
     pub fn merge(mut self, body: &Value) -> Self {
         if let Some(obj) = body.as_object() {
@@ -133,14 +121,11 @@ impl Drop for Params {
 }
 
 /// THE QUERY MEMBERS WHOSE PROTO FIELD IS NOT A STRING (`ListTasksRequest`'s `page_size`,
-/// `history_length` and `include_artifacts`, `GetTaskRequest`'s `history_length`,
-/// `ListTaskPushNotificationConfigsRequest`'s `page_size`): only these are typed by
-/// [`json_scalar`]. Every other member (`contextId`, `pageToken`, `status`,
-/// `statusTimestampAfter`) is a string in the proto, so an all-digit context id stays a string.
+
 pub const TYPED_QUERY_MEMBERS: &[&str] = &["pageSize", "historyLength", "includeArtifacts"];
 
 /// A QUERY-STRING VALUE, TYPED THE WAY THE ENVELOPE WANTS IT: an integer is a number, `true` and
-/// `false` are booleans, anything else (a task id, a page token, a status name) stays a string.
+
 #[must_use]
 pub fn json_scalar(raw: &str) -> Value {
     if let Ok(n) = raw.parse::<i64>() {
@@ -154,7 +139,7 @@ pub fn json_scalar(raw: &str) -> Value {
 }
 
 /// THE QUERY STRING AS A `name -> value` MAP, decoded as `application/x-www-form-urlencoded`
-/// ([`form_decode`]). A repeated key keeps the last value; invalid UTF-8 refuses the query.
+
 #[must_use]
 pub fn query_map(query: Option<&str>) -> Option<HashMap<String, String>> {
     let mut map = HashMap::new();
@@ -169,7 +154,7 @@ pub fn query_map(query: Option<&str>) -> Option<HashMap<String, String>> {
 }
 
 /// Decode ONE `application/x-www-form-urlencoded` component: `+` is a space, `%XX` the byte,
-/// anything else verbatim; invalid UTF-8 is refused.
+
 #[must_use]
 pub fn form_decode(s: &str) -> Option<String> {
     let bytes = s.as_bytes();
@@ -206,7 +191,7 @@ fn hex(b: u8) -> Option<u8> {
 }
 
 /// One path capture, percent-decoded as the router decoded it (`%XX` is the byte; `+` stays a
-/// `+`). `None` when the decoded bytes are not UTF-8.
+
 #[must_use]
 pub fn path_decode(s: &str) -> Option<String> {
     let bytes = s.as_bytes();
@@ -227,7 +212,7 @@ pub fn path_decode(s: &str) -> Option<String> {
 }
 
 /// A request object's `params`, or the empty object when no body was supplied. Malformed
-/// nonempty input is refused before a path-derived task id can turn it into a valid operation.
+
 pub fn json_body(body: &[u8]) -> Result<Value, AgentRefusal> {
     if body.is_empty() {
         return Ok(json!({}));
@@ -265,7 +250,7 @@ fn without(body: &Value, members: &[&str]) -> Value {
 }
 
 /// The refusal for a `POST /tasks/…` that names no verb this binding defines: `404` +
-/// `MethodNotFound`.
+
 #[must_use]
 pub fn not_a_verb(addressed: &str) -> AgentRefusal {
     AgentRefusal::new(
@@ -280,11 +265,7 @@ pub fn not_a_verb(addressed: &str) -> AgentRefusal {
 }
 
 /// The path variables `target` binds against `route`'s pattern, by name, each decoded as the
-/// router decoded it. `Ok(None)` when the path does not have the pattern's shape.
-///
-/// # Errors
-///
-/// A matched path capture is not UTF-8.
+
 pub fn captures(
     route: &Route,
     target: &str,
@@ -295,7 +276,7 @@ pub fn captures(
     if want.len() != got.len() {
         return Ok(None);
     }
-    // Match every literal before decoding captures: an unrelated path is still unserved.
+
     if want
         .iter()
         .zip(&got)
@@ -327,14 +308,7 @@ fn query_of(target: &str) -> Option<&str> {
 }
 
 /// Compose the envelope a request on the HTTP+JSON line spells: `route` is the line's route the
-/// arrival matched, `target` the request target as sent (its path captures and query read here),
-/// `body` the request body. The envelope's bytes are what the line's unit relays.
-///
-/// # Errors
-///
-/// [`not_a_verb`] for a `POST /tasks/{id}` naming no verb, or invalid params for a path capture
-/// that does not decode as UTF-8. `Ok(None)` for a route that is not one of the line's, or a target
-/// that does not fit it, which the door answers as unserved.
+
 pub fn compose(route: &Route, target: &str, body: &[u8]) -> Result<Option<Vec<u8>>, AgentRefusal> {
     let Some(vars) = captures(route, target)? else {
         return Ok(None);
@@ -349,12 +323,7 @@ pub fn compose(route: &Route, target: &str, body: &[u8]) -> Result<Option<Vec<u8
 }
 
 /// [`compose`] over captures a router already decoded: `var` answers a path capture by name (the
-/// empty string for one the route does not have), `query` is the raw query string. The ONE home of
-/// what each of the line's routes composes.
-///
-/// # Errors
-///
-/// As [`compose`].
+
 pub fn compose_from(
     route: &Route,
     var: impl Fn(&str) -> String,
@@ -402,8 +371,6 @@ pub fn compose_from(
             .maybe("includeArtifacts", query.get("includeArtifacts"));
         (method::LIST_TASKS, params.into_value())
     } else if at("GET", crate::ROUTE_TASK) {
-        // `GET /tasks/{id}:subscribe` (proto `SubscribeToTask`): the verb suffix sits INSIDE the
-        // captured segment, as on the POST verbs, so it is split off before the read is composed.
         let addressed = var("id");
         match addressed.rsplit_once(':') {
             Some((id, VERB_SUBSCRIBE)) => (
@@ -427,23 +394,19 @@ pub fn compose_from(
             VERB_SUBSCRIBE => method::SUBSCRIBE_TO_TASK,
             _ => return Err(not_a_verb(&addressed)),
         };
-        // `:cancel` carries its request as the body (proto `CancelTask`, `body: "*"`: its
-        // `metadata`); THE PATH WINS, so the id is set after the merge.
+
         let posted = RequestJson::new(if name == method::CANCEL_TASK {
             json_body(body)?
         } else {
             json!({})
         });
-        // The path names the task alone: the body's other spellings of it are dropped.
+
         let posted = RequestJson::new(without(&posted, &crate::task_identity::TASK_ID_MEMBERS));
         (
             name,
             Params::new().merge(&posted).set("id", id).into_value(),
         )
     } else if at("POST", crate::ROUTE_PUSH_CONFIGS) {
-        // THE PATH WINS: merged first, `taskId` set after, so a posted member cannot re-point it.
-        // The path names the task alone: the body's other spelling of it is dropped (`id` here
-        // is the config's).
         let posted = RequestJson::new(json_body(body)?);
         let posted = RequestJson::new(without(&posted, &["task_id"]));
         let params = Params::new().merge(&posted).set("taskId", var("id"));
@@ -479,13 +442,7 @@ pub fn compose_from(
 }
 
 /// Re-frame a JSON-RPC answer for the HTTP+JSON line, by what it is:
-/// a `result` becomes the body, the answer's own `result` bytes cut out of it
-/// ([`crate::answer_bytes::result_span`]: member order and number spellings as the far end wrote
-/// them, busbar's identity already spliced in by the relay); an `error` becomes the AIP-193
-/// document at `status` ([`crate::agent_arrival::aip193`]); anything else (not JSON, or neither
-/// member) passes untouched. Read off the answer's bytes: only an `error` is read into a value.
-/// An error without a string message gets a fixed explanation; an unreadable document is kept
-/// intact rather than turned into an empty error.
+
 #[must_use]
 pub fn reframe(status: u32, body: &[u8]) -> Vec<u8> {
     use crate::answer_bytes::{is_json, member_span, result_span, with_readable};
@@ -495,7 +452,7 @@ pub fn reframe(status: u32, body: &[u8]) -> Vec<u8> {
     if let Some(result) = result_span(body) {
         return body[result].to_vec();
     }
-    // A JSON value spelled from `n` is `null`.
+
     match member_span(body, "error").filter(|error| body[error.start] != b'n') {
         Some(error) => {
             let Ok(error) = crate::answer_bytes::read_json(&body[error]) else {

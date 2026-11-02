@@ -81,7 +81,7 @@ fn arrive(door: &Door, unit: u64) {
 fn an_unreadable_clock_releases_the_holder_and_removes_refused_waiters() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
     let _reset = Reset;
-    // The readable-clock arm proves the original single-flight completion and wake control.
+
     for fail_clock in [false, true] {
         store().clear();
         let door = open_with(SIGNED_SECTION);

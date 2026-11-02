@@ -2,7 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! The door's declarations pass the dispatcher's own validators, and `read_agents_section` judges a
-//! section with the grammar's words.
 
 use super::*;
 use busbar_contract::abi::plane::check::{
@@ -39,7 +38,7 @@ fn s(a: AbiStr) -> &'static str {
     if a.is_absent() {
         return "";
     }
-    // The tail's strings are `'static` constants of this crate.
+
     std::str::from_utf8(known_bytes(a)).expect("utf-8")
 }
 
@@ -83,8 +82,7 @@ fn the_tail_passes_the_dispatchers_check() {
 }
 
 /// RED before ruling B1: the door declared no chain, so the host framed none. The task-event kind
-/// is declared chained, length-prefixed with its scope digested (B1 ruling 1, coordinator
-/// 2026-10-07), and passes the loader's check.
+
 #[test]
 fn the_tail_declares_the_task_chain() {
     assert_eq!(TAIL.record_chains_len(), 1);
@@ -162,12 +160,7 @@ fn a_generation_with_no_readable_public_base_claims_nothing() {
 }
 
 /// Ported from busbar-a2a plane_tests.rs::a_section_carrying_only_the_reserved_keys_is_still_no_plane
-/// (its plane half; the mounted surface is the root's `agent_door` cell of the same name).
-///
-/// `agents.hooks:` and `agents.upstream_credentials:` are DEFAULTS FOR agents, and defaults for an
-/// empty set front nothing: the section loads the plane (LAW 7), and its generation states no
-/// claim, no audience, no metadata document and no public push callback (ruling Q1(b)). Its trust
-/// verbs stay, each at its own index.
+
 #[test]
 fn a_section_carrying_only_the_reserved_keys_states_no_route_and_no_card() {
     use busbar_contract::abi::plane::ROUTE_PUBLIC;
@@ -228,9 +221,7 @@ fn exactly_the_discovery_documents_are_open_claims() {
 }
 
 /// BUSBAR'S OWN PUSH CALLBACK is the plane's one PUBLIC route, served by `serve` (ARCHITECT ruling
-/// Q3c), never a claim: the plane is not a second claimant of its path. It is addressed by busbar's
-/// own push token (`BUSBAR-1.6.0.md` l.4882; the lane's ruling of 2026-10-07 states the route bit),
-/// so it alone states `ROUTE_CARRIES_OWN_TOKEN` and its `authorization` reaches `serve`.
+
 #[test]
 fn the_push_callback_is_a_public_route_and_no_claim() {
     use busbar_contract::abi::plane::{ROUTE_CARRIES_OWN_TOKEN, ROUTE_PUBLIC};
@@ -266,9 +257,7 @@ fn the_openapi_fragment_keys_its_paths_under_the_prefix_given() {
 }
 
 /// THE ADMIN OPENAPI BLOB CARRIES ITS OWN BODIES (ARCHITECT Q2): every trust verb's `200` names a
-/// typed body by `$ref`, and every `$ref` in the blob, its schemas' included, names a schema the
-/// blob's `components.schemas` states. The schemas' bytes are held to the committed admin document
-/// by the admin crate's drift test.
+
 #[test]
 fn the_admin_openapi_blob_states_every_body_its_verbs_name() {
     fn refs(v: &serde_json::Value, out: &mut Vec<String>) {
@@ -329,13 +318,9 @@ fn a_valid_section_reads_and_a_bad_entry_is_refused_in_the_grammars_words() {
 }
 
 /// THE HOST'S FAILOVER POOLS at the section's reserved `pools` key (the neutral top-level `pools:`
-/// whose members are `agents:` registrations, handed by the root's `with_pools`) are lifted off the
-/// section before it is read: the registrations read in the order written, and each pool's
-/// members in the order declared, the first its primary (predev `receive.rs` `pool_of`). RED
-/// before the lift: `pools` is read as a registration and the whole section is refused.
+
 #[test]
 fn the_hosts_failover_pools_are_lifted_off_the_section_in_declared_order() {
-    // Written as text: the registrations' order is the order written.
     let (b, a) = (
         endpoint("vendor", "/planner-b"),
         endpoint("vendor", "/planner-a"),
@@ -361,7 +346,7 @@ fn the_hosts_failover_pools_are_lifted_off_the_section_in_declared_order() {
         ))
     );
     assert_eq!(cfg.pool_of("vendor"), None);
-    // A section with no pools reads as it always did.
+
     let plain = one_agent("vendor", &endpoint("vendor", "/a2a"));
     assert!(read_agents_section(&plain).expect("valid").pools.is_empty());
 }
@@ -377,7 +362,7 @@ fn every_route_is_one_line_of_the_dialect_in_mount_order() {
             Open, Open, Open, Document, Document, Document, Framed,
         ]
     );
-    // Each line's refusals speak the binding its dialect index names.
+
     let lens: Vec<usize> = [Document, Target, Framed]
         .iter()
         .map(|l| DIALECTS[l.dialect().expect("a line") as usize].len())
@@ -394,7 +379,7 @@ fn every_route_is_one_line_of_the_dialect_in_mount_order() {
 }
 
 /// THE DEALT VALIDATE BLOB: the boot's deal hands `{agents: <section>}`, which is unwrapped to the
-/// section; a bare section passes through as it is.
+
 #[test]
 fn a_dealt_validate_blob_is_unwrapped_to_its_section() {
     let dealt =
@@ -411,9 +396,7 @@ fn a_dealt_validate_blob_is_unwrapped_to_its_section() {
 }
 
 /// Two constants, and both are wire-visible: the credential kind appears on a stored credential row
-/// and the scope kind on every scope reference an operator writes. Changing either silently
-/// orphans every existing row, so they are pinned by value.
-/// Ported from busbar-a2a a2a/tests/inbound_tests.rs::the_credential_kind_and_the_scope_kind_are_the_spellings_the_rest_of_the_tree_uses.
+
 #[test]
 fn the_credential_kind_and_the_scope_kind_are_the_spellings_the_rest_of_the_tree_uses() {
     assert_eq!(
@@ -424,9 +407,7 @@ fn the_credential_kind_and_the_scope_kind_are_the_spellings_the_rest_of_the_tree
     assert_eq!(s(TAIL.scope), "agent");
 }
 /// THE AGENT FEE (the engine's `agents.fees`): the door counts `per_request` and only it, so the
-/// kernel's one rule over declared fee units validates `agents.fees.per_request` and refuses
-/// `agents.fees.per_session` naming `per_request` as the counted list; the fee unit is a billable
-/// class at the index the door reports it under, once per served unit.
+
 #[test]
 fn the_door_counts_the_per_request_fee_and_never_a_per_session_one() {
     let same = |a: AbiStr, b: &str| a.ptr() == b.as_ptr() && a.len() == b.len();
@@ -440,12 +421,7 @@ fn the_door_counts_the_per_request_fee_and_never_a_per_session_one() {
     ));
 }
 /// Ported from `busbar-a2a` `creds_tests::the_callers_credential_has_no_path_to_a_delegate`, its
-/// config half: the per-entry value that would mean "forward the caller's credential"
-/// (`upstream_credentials: passthrough`) is refused at validation in the plane's own sentence, and
-/// `own` is accepted, so the refusal is about the value and not the key. (Its source-scan half read
-/// a mint seam this plane no longer has: the composition binds `upstream_credential:` as busbar's
-/// own, never passthrough — `crates/busbar/src/root/tests/door_steps.rs`.) The block's grammar is
-/// the plane's: a zero `lease_ttl_ms` and a header placement naming no header are refused.
+
 #[test]
 fn the_callers_credential_has_no_path_to_a_delegate() {
     let def = |extra: serde_json::Value| -> crate::a2a::config::AgentDefCfg {
@@ -487,9 +463,7 @@ fn the_callers_credential_has_no_path_to_a_delegate() {
     assert!(err.contains("placement.header"), "{err}");
 }
 /// RED: the grammar's object spelling of a named-header placement, `placement: {header: <name>}`
-/// (`busbar_contract::section`'s `placement:` key), reads through the section split as the header
-/// it names, as `bearer` reads as the authorization header; a derived enum read off the section's
-/// YAML value took only a tag and refused the object, so the door would not open over it.
+
 #[test]
 fn a_named_header_placement_reads_through_the_section() {
     use crate::a2a::creds::CredentialPlacement;
@@ -549,13 +523,12 @@ fn the_registry_follows_config_order_rather_than_hash_order() {
 fn every_published_binding_is_one_the_a2a_plane_declares_a_wire_format_for() {
     use crate::binding::{BINDING_DOCUMENT, BINDING_FRAMED, BINDING_TARGET};
     let declared: Vec<&str> = [BINDING_DOCUMENT, BINDING_TARGET, BINDING_FRAMED].to_vec();
-    // The tail declares exactly those three, in this order.
+
     assert_eq!(DIALECTS.len(), declared.len());
     for (abi, name) in DIALECTS.iter().zip(&declared) {
         assert_eq!((abi.ptr(), abi.len()), (name.as_ptr(), name.len()));
     }
-    // Every binding the served card publishes is one of them, in the card's upper-case spelling,
-    // and the card publishes every one of them.
+
     let upper: Vec<String> = declared.iter().map(|d| d.to_uppercase()).collect();
     assert_eq!(
         crate::served_card::SERVABLE_BINDINGS,
@@ -570,7 +543,7 @@ fn every_published_binding_is_one_the_a2a_plane_declares_a_wire_format_for() {
             "busbar's own card publishes `{binding}`, which the plane does not declare"
         );
     }
-    // A fronted agent's card publishes a subset of them.
+
     for b in crate::served_card::AGENT_ADDRESS_BINDINGS {
         assert!(upper.iter().any(|d| d == b), "{b}");
     }
@@ -579,8 +552,6 @@ fn every_published_binding_is_one_the_a2a_plane_declares_a_wire_format_for() {
 /// Ported from busbar-a2a a2a/tests/serve_tests.rs::the_plane_declares_its_published_identity_and_its_claims_speak_its_wire_formats.
 #[test]
 fn the_plane_declares_its_published_identity_and_its_claims_speak_its_wire_formats() {
-    // The published literals, pinned as literals (the tail compares to the same constants, so a
-    // constant-to-constant check would pass a rename).
     assert_eq!(crate::PLANE_KEY, "a2a");
     assert_eq!(crate::CONFIG_SECTION, "agents");
     assert_eq!(AUDIT_KIND, "a2a_agent");
@@ -597,7 +568,6 @@ fn the_plane_declares_its_published_identity_and_its_claims_speak_its_wire_forma
     assert_eq!(crate::binding::BINDING_FRAMED, "grpc");
     assert_eq!(TAIL.dialects_len(), 3);
 
-    // Its claims: an admitted generation claims doors at exactly the plane's two mounts.
     let spec = agents_snapshot_spec(Some(&endpoint("gw", "")), &["vendor"]);
     assert!(!spec.claims.is_empty());
     for c in &spec.claims {
@@ -615,12 +585,12 @@ fn the_plane_declares_its_published_identity_and_its_claims_speak_its_wire_forma
             c.target
         );
     }
-    // A generation with no public base (a delegation-only plane) claims nothing.
+
     assert!(agents_snapshot_spec(None, &["vendor"]).claims.is_empty());
 }
 
 /// THE PUSH QUEUE IS DROP-OLDEST, COUNTED (THE DESIGN, a2a; A2A-PUSH "drop-oldest + metric"): the
-/// Statement declares the two unlabelled counters the door's tick reports their increments on.
+
 #[test]
 fn the_statement_declares_the_push_queue_counters() {
     let st = crate::plane_door::STATEMENT;
@@ -641,10 +611,7 @@ fn the_statement_declares_the_push_queue_counters() {
 }
 
 /// RED before R-16 (architect ruling 2026-10-24): each configured agent's endpoint is claimed in
-/// the trailing-separator spelling an A2A client sends, EXACTLY (the contract refuses a pattern
-/// that ends in a separator), after every route, in the section's order, restated per generation;
-/// each is served as the agent's JSON-RPC endpoint. A name that is not one plain path segment
-/// claims nothing.
+
 #[test]
 fn each_fronted_agent_claims_its_endpoint_with_a_trailing_separator() {
     let spec = agents_snapshot_spec(Some(&endpoint("gw", "")), &["vendor", "other"]);

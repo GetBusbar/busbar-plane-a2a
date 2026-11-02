@@ -110,7 +110,7 @@ fn an_answer_with_no_payload_is_refused() {
 }
 
 /// The card: a gRPC interface's URL loses `http://`; a scheme-less security scheme is dropped; an
-/// OAuth2 scheme with no flow gets the empty client-credentials one; no capabilities is empty ones.
+
 #[test]
 fn the_card_follows_the_models_rules() {
     let mut card = crate::proto::custody::initialized::<pb::AgentCard>(|__custody_message| {
@@ -164,7 +164,7 @@ fn a_null_repeated_member_reads_as_empty() {
 }
 
 /// A JSON `null` for a map member reads as empty (the generated serde's null-map patch): with no
-/// test of its own, a pbjson change that stops the patch matching would refuse a null map unseen.
+
 #[test]
 fn a_null_map_member_reads_as_empty() {
     let req: pb::SecurityRequirement =

@@ -44,7 +44,7 @@ pub const RATE_LIMITED: &str = "this task's push volume has exceeded its window 
 const JSON_FIELDS: &[(&str, &str)] = &[("content-type", crate::agent_arrival::JSON_MEDIA_TYPE)];
 
 /// A refusal in the one shape this endpoint speaks: `{"error":{"message":...}}`, not a JSON-RPC
-/// envelope (the caller is an HTTP webhook client).
+
 fn refused(
     input: &Lent<'_, ServeIn>,
     out: &mut Out<'_, ServeOut>,
@@ -59,7 +59,7 @@ fn refused(
 }
 
 /// `202`, with no document: the report was taken, the move it recorded written to the task's
-/// chain with the answer.
+
 fn accepted(input: &Lent<'_, ServeIn>, out: &mut Out<'_, ServeOut>, writes: &[Write]) -> Outcome {
     crate::plane_door::verb_answer(input, out, (202, &[], b""), AUDIT_NONE, writes)
 }
@@ -121,7 +121,7 @@ fn unavailable(
 }
 
 /// The synchronous signer retains the service's Short/failure distinction. A failed signer is
-/// not evidence that a caller presented an invalid capability.
+
 fn signature(
     plane: &A2aDoor,
     ticket: busbar_contract::abi::mechanism::ticket::Ticket,
@@ -172,8 +172,7 @@ fn finish_prepared(
 }
 
 /// THE MOVE A PUSHED `document` ASKS OF A TASK IN `held`: the state it reports, when it reports one
-/// this build can read and the task is not already in it. `None` is no move: an artifact update or
-/// a message reports no state, and a retried push re-reports the one already recorded.
+
 pub(crate) fn push_move(held: TaskState, document: &Value) -> Option<TaskState> {
     crate::task_identity::reported_task_state(document).filter(|reported| *reported != held)
 }
@@ -226,8 +225,7 @@ pub(crate) fn serve(
         })
         .and_then(|f| f.value().as_str().ok())
         .unwrap_or_default();
-    // 1. THE CAPABILITY: a token this instance minted, signed again by the host and compared in
-    //    constant time.
+
     let Some((task_id, caller, presented)) = plane.tokens.claim_of_authorization(authorization)
     else {
         return cached_refusal(instance, &input, &mut out, state, 401, UNAUTHORISED);
@@ -251,7 +249,7 @@ pub(crate) fn serve(
         Poll::Ready(Ok(reading)) => reading,
     };
     let now = reading.wall_ns / 1_000_000_000;
-    // 2. THE VOLUME BOUND, before any of the cost it bounds; spent once across re-entries.
+
     if !state.charged && !plane.pushes.admit(&task_id, now) {
         let window = crate::push::PUSH_RATE_WINDOW_SECS.to_string();
         let outcome = refused(
@@ -267,7 +265,7 @@ pub(crate) fn serve(
         return outcome;
     }
     state.charged = true;
-    // 3. THE BODY'S CEILING.
+
     let body = input.body().bytes();
     if body.len() > MAX_PUSH_BODY {
         return cached_refusal(
@@ -281,7 +279,7 @@ pub(crate) fn serve(
     }
     let mut via = crate::task_door::Via::new(host, plane.services, ticket, 2, &plane.grown)
         .publishing(&state.publication);
-    // 4. THE TASK, held and live.
+
     let pend = |state: Admitted, out: &mut Out<'_, ServeOut>| {
         plane.deliveries.retain_publication(&state.publication);
         let outcome = state
@@ -306,7 +304,7 @@ pub(crate) fn serve(
     if task.state.is_terminal() {
         return cached_refusal(instance, &input, &mut out, state, 401, UNAUTHORISED);
     }
-    // 5. A JSON DOCUMENT.
+
     let Ok(document) = serde_json::from_slice::<crate::request_json::RequestJson>(body) else {
         return cached_refusal(
             instance,
@@ -317,9 +315,7 @@ pub(crate) fn serve(
             "a push notification is a JSON task document",
         );
     };
-    // 6. THE MOVE, through the one transition table, read by the one reader of a task's state. A
-    //    push that reports no state, or the state the task holds, moves nothing: `202`, nothing
-    //    recorded and no notification queued.
+
     let Some(reported) = push_move(task.state, &document) else {
         let outcome = accepted(&input, &mut out, &[]);
         if outcome == Outcome::Ready {
@@ -357,8 +353,7 @@ pub(crate) fn serve(
     });
     match tasks::change(&mut via, &at, &task_id, &mut plan, &mut writes) {
         Err(Halt::Pending) => return pend(state, &mut out),
-        // Table refusals are no-ops in the plan, including a concurrent state change.
-        // A host/store failure remains retryable.
+
         Err(Halt::Failed(_)) => return unavailable(instance, &input, &mut out, state),
         Ok(None) => {
             let outcome = accepted(&input, &mut out, &[]);

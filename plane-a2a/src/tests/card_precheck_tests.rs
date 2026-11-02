@@ -2,9 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! THE CARD FETCH'S PRE-CHECK FAILS CLOSED (docs/security.md, the A2A card fetch: every hop is
-//! guarded): a door that has a connector but no host services has no destination judgement to ask,
-//! and a hop no judgement admitted is never dialled. The host here is a fake whose connector counts
-//! every dial; it lends the door its connector and nothing else.
 
 use std::cell::Cell;
 
@@ -32,8 +29,7 @@ impl FakeService for Dial {
 }
 
 /// A card fetch of `planner` by a door that holds a connector and NO host services is refused,
-/// and nothing is dialled. RED before the fix: the pre-check answered "admitted" with no
-/// judgement, and both discovery paths were dialled.
+
 #[test]
 fn a_card_fetch_without_host_services_is_refused() {
     let fake: &'static FakeHost = Box::leak(Box::new(FakeHost::new().serve(conn::ESTABLISH, Dial)));
@@ -105,7 +101,7 @@ thread_local! {
 }
 
 /// The destination judgement: the first host it is asked about is a loopback name, every later one
-/// does not resolve, so the canonical path and the legacy path are refused in different words.
+
 struct LoopbackThenUnresolvable;
 impl FakeService for LoopbackThenUnresolvable {
     type In = busbar_contract::abi::host::service::DestJudgeIn;
@@ -132,8 +128,7 @@ fn planner_def(url: &str) -> crate::a2a::config::AgentDefCfg {
 }
 
 /// G1-45: THE CANONICAL PATH'S REFUSAL IS NOT LOST TO THE LEGACY PATH'S: a card whose canonical
-/// well-known path is refused for one reason and whose legacy path is refused for another reports
-/// the canonical reason too.
+
 #[test]
 fn the_canonical_paths_refusal_survives_the_legacy_paths() {
     let fake: &'static FakeHost = Box::leak(Box::new(

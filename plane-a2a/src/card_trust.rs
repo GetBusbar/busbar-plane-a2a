@@ -2,31 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! THE TRUST SURFACE, PLANE SIDE: what a registered agent's card was last seen to BE, judged
-//! against the identity the operator APPROVED, and the two admin answers that render it
-//! (`connect`, `approve`). Pure: a fetched document, the kernel's
-//! signature verdict, the standing approval and the last sighting in, a state, a drift and the
-//! views out.
-//!
-//! * **The card** is fetched at the agent origin's two well-known paths, canonical first; the
-//!   legacy path is tried only when the canonical one produced no document ([`read_card`]).
-//! * **The verification** is the registration's declared mechanism ([`verify_card`]): a signed card is
-//!   verified against the operator's out-of-band issuer key by the KERNEL (`trust.verify`, this
-//!   plane only hands it the payload and the signatures and words the verdict, [`jws_refusal`]);
-//!   a transport-pinned mechanism (`cert_spki`, `mtls`) is the key the hop that served the card
-//!   presented, as the CONNECTOR observed it (Q-DEL-A2A-SPKI: the agent's pin is sealed into its
-//!   member route and the connector enforces it on every connection, reporting what it saw,
-//!   [`Handshake`]): a matching key is observed and approvable, none is refused as not observed,
-//!   another as a mismatch, and `mtls` over a hop that presented no client identity of busbar's as
-//!   one-way; `unpinned` has no root and no fingerprint.
-//! * **The decision is the KERNEL's** (trust is the kernel's
-//!   Approve step, pinning and demotion are kernel state): the plane SIGHTS each agent's verified
-//!   card fingerprint on the kernel's trust book (`trust.sight`, counterparty = the agent, the
-//!   fingerprint as its catalogue hash; an unreachable card is `trust.unreachable`, the last
-//!   verdict kept) and READS the book's verdict (`trust.serves`). A first sighting is refused until
-//!   the operator approves the key on the generic core-admin `/admin/trust`; a changed card is
-//!   quarantined. The plane holds no approval of its own.
-//! * **The state** an operator reads off `connect` is the kernel's verdict in words ([`verdict_state`]);
-//!   a failed contact is `error`.
 
 use std::collections::BTreeMap;
 
@@ -40,9 +15,7 @@ use crate::a2a::config::{AgentDefCfg, AgentPinCfg, PinMechanism};
 pub const WELL_KNOWN_CARD_PATH_LEGACY: &str = "/.well-known/agent.json";
 
 /// The largest card body accepted: a card is a small JSON document. This bounds what is PARSED; the
-/// read itself is bounded by the SDK exchange's own reply ceiling
-/// (`busbar_contract::abi::sdk::exchange::REPLY_MAX`), which a plane cannot lower, so a far end can
-/// still make the exchange buffer up to that ceiling before this check refuses the card.
+
 pub const MAX_CARD_BYTES: usize = 512 * 1024;
 
 /// How long one card fetch may take: ten seconds.
@@ -97,12 +70,11 @@ pub struct CardObservation {
 }
 
 /// The last contact with an agent: the SDK's one shape of a sighting
-/// ([`busbar_contract::abi::sdk::trust::Sighting`]), over what a verified card presented. `Never`
-/// is not a failure: an agent nobody looked at has not been contacted.
+
 pub type Sighting = busbar_contract::abi::sdk::trust::Sighting<CardObservation>;
 
 /// The mechanism the OBSERVED identity of `sighting` names, or `unpinned` where nothing was
-/// observed: what the endpoint proved, never the operator's own input echoed back.
+
 fn sighted_mechanism(sighting: &Sighting) -> &'static str {
     sighting
         .seen()
@@ -115,7 +87,6 @@ fn sighted_skills(sighting: &Sighting) -> usize {
 }
 
 /// The derived trust state: the SDK's one state word of a trust view
-/// ([`busbar_contract::abi::sdk::trust::State`]).
 pub use busbar_contract::abi::sdk::trust::State;
 
 /// ONE REGISTRATION'S TRUST, as the plane holds it in memory: the last sighting, the
@@ -152,7 +123,7 @@ pub struct Cadence {
 
 impl Cadence {
     /// The cadence `def` spells, its absent key at its declared default. The kernel judged the key
-    /// at parse, so a duration that does not read here reads as its default.
+
     #[must_use]
     pub fn of(def: &AgentDefCfg) -> Self {
         let secs = |text: &str| busbar_contract::duration::parse_duration_secs(text).ok();
@@ -168,7 +139,7 @@ impl Cadence {
     }
 
     /// Is a look due at `now_ms`? Never looked, a clock that
-    /// went backwards, and a lapsed `ttl_ms` are each due.
+
     #[must_use]
     pub fn due(&self, ledger: &Ledger, now_ms: u64) -> bool {
         ledger
@@ -177,8 +148,7 @@ impl Cadence {
     }
 
     /// RECORD one look: stamped on the ledger, and what it `observed` is the sighting now (a
-    /// failed contact is recorded as failed, never read as "unchanged"; what it means for serving
-    /// is the kernel's verdict, which an unreachable card leaves where it was).
+
     pub fn settle(&self, observed: Sighting, ledger: &mut Ledger, now_ms: u64) -> Sighting {
         ledger.last_checked_ms = Some(now_ms);
         observed
@@ -186,9 +156,7 @@ impl Cadence {
 }
 
 /// THE KERNEL'S VERDICT IN THE ADMISSION'S WORDS: a `trust.serves` answer (`DISTRUST_*`, the one
-/// trust vocabulary, also `RefusalIn.trust`) as the state an operator and a refused caller read.
-/// Serving is `approved`; a key never sighted or never approved is `pending`; a quarantined key,
-/// or one offered at another digest than approved, is `quarantined`.
+
 #[must_use]
 pub fn verdict_state(distrust: u64) -> State {
     match distrust {
@@ -199,10 +167,7 @@ pub fn verdict_state(distrust: u64) -> State {
 }
 
 /// The refusal of a unit whose agent is not serving, at `status`:
-/// addressed to the agent (`addressed`), its admission refusal (`-32004`, `fronted agent `<id>` is
-/// not serving (<state>)`); routed by the caller's scope, the catalogue's (an agent that is not
-/// serving is in no caller's catalogue, so none reaches: `400`, `-32004`). The kernel's trust
-/// refusal is [`UNTRUSTED_STATUS`].
+
 #[must_use]
 pub fn not_serving(
     addressed: Option<&str>,
@@ -219,16 +184,11 @@ pub fn not_serving(
 }
 
 /// The status a unit is refused with when the kernel's trust book does not trust its agent
-/// (`untrusted`: never approved, or quarantined).
+
 pub const UNTRUSTED_STATUS: u32 = 403;
 
-// ── THE FETCH ────────────────────────────────────────────────────────────────────────────────────
-
 /// The two well-known discovery URLs of `endpoint`'s origin, canonical first.
-///
-/// # Errors
-///
-/// `endpoint` is not a URL.
+
 pub fn discovery_urls(endpoint: &str) -> Result<[String; 2], String> {
     let base = url::Url::parse(endpoint)
         .map_err(|_| format!("agent card URL is not a URL: `{}`", endpoint.trim()))?;
@@ -246,7 +206,7 @@ pub fn discovery_urls(endpoint: &str) -> Result<[String; 2], String> {
 }
 
 /// The refusal of a card URL a registration may not be fetched at: a scheme other than `https`,
-/// unless the registration's `allow_private` admits plaintext.
+
 #[must_use]
 pub fn scheme_refusal(url: &str, allow_private: bool) -> Option<String> {
     let scheme = url
@@ -268,12 +228,7 @@ pub fn scheme_refusal(url: &str, allow_private: bool) -> Option<String> {
 pub const MAX_REDIRECTS: u8 = 3;
 
 /// The next hop of a card fetch that answered `status` at `url`: `None`
-/// when it is not a redirect; the URL its `location` names, resolved against `url`, when it is and
-/// the chain has followed fewer than [`MAX_REDIRECTS`] (`redirects`).
-///
-/// # Errors
-///
-/// A redirect past the bound, or one with no usable `location`.
+
 pub fn next_hop(
     url: &str,
     status: u16,
@@ -302,7 +257,7 @@ pub fn next_hop(
 }
 
 /// The host a card URL names: an IPv6 literal unbracketed and a
-/// trailing root dot dropped; `None` for a URL with no host.
+
 #[must_use]
 pub fn host_of(url: &str) -> Option<String> {
     let parsed = url::Url::parse(url).ok()?;
@@ -313,7 +268,7 @@ pub fn host_of(url: &str) -> Option<String> {
 }
 
 /// The guard's refusal of a card host by its name (the `DEST_*` verdict the destination judge gave
-/// the name alone); `None` for a verdict that admits it.
+
 #[must_use]
 pub fn refused_name(url: &str, verdict: u64) -> Option<String> {
     let host = host_of(url).unwrap_or_default();
@@ -346,7 +301,7 @@ pub fn refused_name(url: &str, verdict: u64) -> Option<String> {
 }
 
 /// The guard's refusal of an address a card host resolved to (a
-/// cloud-metadata address and an internal one alike: the sentence says which the knob speaks for).
+
 #[must_use]
 pub fn refused_address(url: &str, addr: &str) -> String {
     let host = host_of(url).unwrap_or_default();
@@ -358,7 +313,7 @@ pub fn refused_address(url: &str, addr: &str) -> String {
 }
 
 /// `host` as the URL a destination judge reads an address literal by; `None` when `host` is a
-/// name, not an address.
+
 #[must_use]
 pub fn literal_url(host: &str) -> Option<String> {
     match url::Host::parse(host).or_else(|_| url::Host::parse(&format!("[{host}]"))) {
@@ -378,7 +333,7 @@ pub fn no_addresses(host: &str) -> String {
 }
 
 /// A card host that did not resolve, naming the resolver's `reason` (none
-/// named when the judge gave none).
+
 #[must_use]
 pub fn unresolvable(host: &str, reason: &str) -> String {
     if reason.is_empty() {
@@ -388,10 +343,7 @@ pub fn unresolvable(host: &str, reason: &str) -> String {
 }
 
 /// The guard's refusal of a card hop, from the destination judge's
-/// `verdict` and what it named as deciding it (`detail`: the refused address, or the resolver's
-/// reason): an address refusal — a literal host's, or one the name resolved to, cloud-metadata or
-/// internal alike — names the address; a failed resolution names the resolver's reason; any other
-/// refusal is the name's.
+
 #[must_use]
 pub fn refused_judgement(url: &str, verdict: u64, detail: Option<&str>) -> String {
     let host = host_of(url).unwrap_or_default();
@@ -414,15 +366,7 @@ pub fn refused_judgement(url: &str, verdict: u64, detail: Option<&str>) -> Strin
 pub const HOP_DEADLINE_CAUSE: &str = "governed egress hop exceeded its deadline";
 
 /// The connection's failure in words: what the card fetch prints after
-/// "failed: ", the HTTP client's error with the cause chain flattened (`client error ({kind})`,
-/// then each cause): the socket's open failing as
-/// `client error (Connect): tcp connect error: <the socket's error>`, connection security as
-/// `client error (Connect): <its error>`, the open connection as
-/// `client error (SendRequest): connection error: <the socket's error>`, the framer failing the
-/// open connection as `client error (SendRequest): <its error>` (the far end closing before its
-/// reply is whole: `connection closed before message completed`), and a deadline as the hop's own
-/// words. `cause` is the `CAUSE_*` stage the connector named; with none named, the
-/// connector's own text.
+
 #[must_use]
 pub fn transport_err(cause: u64, failure: &busbar_contract::abi::sdk::conn::ConnFailure) -> String {
     use busbar_contract::abi::host::conn::connector::{
@@ -440,12 +384,7 @@ pub fn transport_err(cause: u64, failure: &busbar_contract::abi::sdk::conn::Conn
 }
 
 /// THE CARD one fetch of `url` answered: `answer` is the far end's status and body, or why the
-/// connection failed. A status outside 2xx, a body over [`MAX_CARD_BYTES`] and a body that is not
-/// a JSON object are each refused.
-///
-/// # Errors
-///
-/// The refusal.
+
 pub fn read_card(url: &str, answer: Result<(u16, &[u8]), String>) -> Result<Value, String> {
     let (status, body) = answer.map_err(|e| format!("agent card fetch of `{url}` failed: {e}"))?;
     if !(200..300).contains(&status) {
@@ -468,8 +407,6 @@ pub fn read_card(url: &str, answer: Result<(u16, &[u8]), String>) -> Result<Valu
     Ok(document.into_value())
 }
 
-// ── THE VERIFICATION ─────────────────────────────────────────────────────────────────────────────
-
 /// What the hop that served a card observed, as the connector's facts say (`peer_key_pin` off the
 /// accepted handshake, `client_identity_offered`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -481,8 +418,7 @@ pub struct Handshake {
 }
 
 /// The transport-layer root, checked. Returns the OBSERVED
-/// value, never the configured one: the pin recorded is a fact about the connection. The compare is
-/// on the trimmed strings and CASE-SENSITIVE (base64 is case-significant).
+
 fn transport_pin(
     mechanism: &str,
     expected: &str,
@@ -521,10 +457,7 @@ const MUTUAL_TLS_NOT_PRESENTED: &str = "`pin.mechanism: mtls` requires busbar to
      `client_identity.key:`, or use `cert_spki` for a one-way binding.";
 
 /// THE REFUSAL A FAILED CARD FETCH OF A TRANSPORT-PINNED REGISTRATION READS AS, where the hop says
-/// why: the connector refused a far end serving another key than the pinned one (`hop` names the
-/// key it served), or refused a plaintext card URL (`url`), which
-/// has no certificate to observe (its not-observed refusal). `None`: the fetch's own refusal
-/// stands.
+
 #[must_use]
 pub fn hop_refusal(pin: &AgentPinCfg, hop: &Handshake, url: &str) -> Option<String> {
     if !matches!(
@@ -549,11 +482,7 @@ pub fn hop_refusal(pin: &AgentPinCfg, hop: &Handshake, url: &str) -> Option<Stri
 }
 
 /// What the kernel's `trust.verify` is handed for a signed card: the detached payload (the
-/// canonical card minus its `signatures`) and the signatures as written (empty = none).
-///
-/// # Errors
-///
-/// The card cannot be canonicalized.
+
 pub fn signed_parts(card: &Value) -> Result<(Vec<u8>, Vec<u8>), String> {
     let payload = card::signing_payload(card).map_err(|e| e.to_string())?;
     let signatures = card
@@ -564,7 +493,7 @@ pub fn signed_parts(card: &Value) -> Result<(Vec<u8>, Vec<u8>), String> {
 }
 
 /// The kernel's `SIGNED_*` verdict on `card`, in this plane's words: `None` when it verified;
-/// `named` is the algorithm or critical member it refused.
+
 #[must_use]
 pub fn jws_refusal(verdict: u64, named: &str, card: &Value) -> Option<String> {
     Some(match verdict {
@@ -597,14 +526,7 @@ pub fn jws_refusal(verdict: u64, named: &str, card: &Value) -> Option<String> {
 }
 
 /// VERIFY one fetched card against the registration's declared pin. `signed` is the kernel's
-/// verdict on the card's signatures (`trust.verify`), asked only for a signed root: `Ok` when they
-/// verified, else the refusal in this plane's words. `hop` is what the connection that served the
-/// card observed: a transport-pinned mechanism's root (the peer half first, then `mtls`'s mutual
-/// half).
-///
-/// # Errors
-///
-/// Why the card is not accepted as the registration's.
+
 pub fn verify_card(
     pin: &AgentPinCfg,
     card: &Value,
@@ -638,8 +560,6 @@ pub fn verify_card(
             ))
         }
         (PinMechanism::CertKeyPin | PinMechanism::MutualTls, Some(expected)) => {
-            // THE PEER HALF FIRST: a mismatched endpoint is reported as one, never as busbar's
-            // missing client certificate.
             let key = transport_pin(mechanism.token(), expected, hop.peer_key_pin.as_deref())?;
             if mechanism == PinMechanism::MutualTls && !hop.client_identity_offered {
                 return Err(MUTUAL_TLS_NOT_PRESENTED.to_string());
@@ -664,8 +584,6 @@ pub fn verify_card(
     Ok(CardObservation { pin, skills })
 }
 
-// ── THE VERBS' ANSWERS ───────────────────────────────────────────────────────────────────────────
-
 /// The trust view of one registered agent: what both verbs answer with. Its `state` is the kernel's verdict on the agent's trust key (or the plane's own
 /// `error`), and `pin_changed` says the kernel quarantined a moved card. The per-skill queue
 /// (`added`, `changed`, `removed`) is the drift: the sighted card's skills against the skills of
@@ -686,10 +604,7 @@ struct AgentTrustView<'a> {
 }
 
 /// The drift queue of one sighting against what was approved: each
-/// sighted skill nobody approved is `added`, each approved at another digest `changed` (both in
-/// skill-id order), then each approved skill the card no longer offers `removed`. Nothing approved
-/// (`approved` is `None`) approves no skill, so every sighted skill is `added`; a sighting that
-/// presented no card has no queue.
+
 fn skill_drift(
     approved: Option<&BTreeMap<String, String>>,
     sighting: &Sighting,
@@ -716,9 +631,7 @@ fn skill_drift(
 }
 
 /// The view, `state` being the state the verb answers and `distrust` the kernel's own verdict (a
-/// `trust.serves` answer): a key the kernel holds no approval for (`pending`) has approved nothing,
-/// whatever skills the plane last held for it, and `pin_changed` is the kernel's own word that the
-/// card moved (`DISTRUST_CHANGED`), whatever the latest look did.
+
 fn agent_view(
     name: &str,
     state: State,
@@ -750,10 +663,7 @@ fn agent_view(
 }
 
 /// `connect`'s answer: a PREVIEW of what the card presented (`sighting`, which this look sighted on
-/// the kernel's trust book) under the state the agent's key stands in (`state`), its drift against
-/// the skills the operator approved (`approved`). It never reports `approved` — a key that serves
-/// is reported `pending`, so the preview cannot be read as the grant — and it surfaces the
-/// fingerprint the operator is being asked to approve.
+
 #[must_use]
 pub fn connect_view(
     name: &str,
@@ -769,7 +679,7 @@ pub fn connect_view(
 }
 
 /// `approve`'s answer: the registration as it now stands on the kernel's trust book (`state`), its
-/// fingerprint the one approved, its drift against the skills now approved (`approved`).
+
 #[must_use]
 pub fn registration_view(
     name: &str,
@@ -781,11 +691,7 @@ pub fn registration_view(
 }
 
 /// DOES WHAT THE ENDPOINT SERVES NOW AGREE WITH WHAT THE OPERATOR SAYS THEY APPROVED? Every arm
-/// is a refusal but the one where the observed fingerprint is the one `claimed` names.
-///
-/// # Errors
-///
-/// The refusal.
+
 pub fn agrees(sighting: &Sighting, claimed: &str) -> Result<(), String> {
     if claimed.is_empty() {
         return Err(
@@ -816,10 +722,7 @@ pub fn agrees(sighting: &Sighting, claimed: &str) -> Result<(), String> {
 }
 
 /// The `approve` body, `{"fingerprint": "…"}`: a JSON media type first, then the one field and no other. The fingerprint, or the refusal.
-///
-/// # Errors
-///
-/// The refusal, naming what the body must be.
+
 pub fn approve_body(content_type: Option<&str>, body: &[u8]) -> Result<String, String> {
     let refused = |e: String| {
         format!(
@@ -836,7 +739,6 @@ pub fn approve_body(content_type: Option<&str>, body: &[u8]) -> Result<String, S
     let mut reader = serde_json::Deserializer::from_slice(body);
     let fingerprint =
         serde::de::DeserializeSeed::deserialize(ApproveSeed(&mut inside), &mut reader)
-            // Trailing bytes after the one document are a syntax refusal with no field to name.
             .and_then(|fp| reader.end().map(|()| fp));
     fingerprint.map_err(|e| {
         let at = inside.map(|seg| format!("{seg}: ")).unwrap_or_default();
@@ -860,7 +762,7 @@ fn is_json_media_type(value: &str) -> bool {
 }
 
 /// The one field of the `approve` body, read with the path the reader was at when it failed
-/// recorded in `.0` (the field's name, or `[0]` for the array spelling).
+
 struct ApproveSeed<'a>(&'a mut Option<&'static str>);
 
 impl<'de> serde::de::DeserializeSeed<'de> for ApproveSeed<'_> {

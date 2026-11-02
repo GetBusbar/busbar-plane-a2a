@@ -77,12 +77,6 @@ fn write_value(value: &Value, out: &mut String) -> Result<(), CanonicalError> {
             out.push(']');
         }
         Value::Object(map) => {
-            // RFC 8785 section 3.2.3: members are sorted on the UTF-16 code units of their names.
-            // `serde_json`'s default map is already sorted, but by Rust's `str` ordering, which is
-            // UTF-8 CODE POINT order. The two disagree above the BMP: a supplementary character
-            // sorts BELOW U+E000..U+FFFF in UTF-16 and ABOVE it in code-point order. Relying on the
-            // map's own order would therefore be correct for every card anyone has yet written and
-            // wrong for the first one with an emoji in an extension key.
             let mut names: Vec<&String> = map.keys().collect();
             names.sort_by_key(|n| utf16_units(n));
             out.push('{');
@@ -105,8 +99,7 @@ fn utf16_units(s: &str) -> Vec<u16> {
 }
 
 /// RFC 8785 section 3.2.2.2: the SHORTEST escape wins, `\u` only below U+0020, and every other
-/// character is emitted literally as UTF-8. A serializer that escaped non-ASCII would still be legal
-/// JSON and would still hash differently, which is the whole hazard.
+
 fn write_string(s: &str, out: &mut String) {
     out.push('"');
     for c in s.chars() {
@@ -126,12 +119,8 @@ fn write_string(s: &str, out: &mut String) {
 }
 
 /// RFC 8785 section 3.2.2.3: EVERY number is an IEEE-754 double, printed as ECMAScript
-/// `Number.prototype.toString`. That includes a number that arrived as an integer: `9007199254740993`
-/// is the double `9007199254740992` and canonicalizes as that, because the signer's canonicalizer
-/// (any conforming JCS implementation) parsed it into a double before printing. Printing the integer
-/// exactly would verify a correctly signed card against a different document.
+
 fn number(n: &serde_json::Number) -> Result<String, CanonicalError> {
-    // `as f64` on an integer rounds to nearest, ties to even, which is what an ECMAScript parse does.
     let f = if let Some(i) = n.as_i64() {
         i as f64
     } else if let Some(u) = n.as_u64() {
@@ -146,21 +135,14 @@ fn number(n: &serde_json::Number) -> Result<String, CanonicalError> {
 }
 
 /// ECMAScript `Number::toString` for a finite double (ECMA-262 Number::toString steps 5-12).
-///
-/// The shortest round-tripping digit string comes from Rust's own float formatter; the LAYOUT is
-/// written out here so it follows the ECMAScript rules exactly rather than Rust's presentation.
-/// One more difference is in the digits themselves: when the double lies exactly halfway between two
-/// k-digit decimals that both round-trip, ECMAScript takes the one with the EVEN last digit and Rust
-/// takes the upper one. RFC 8785 Appendix B carries such a value (1424953923781206.25 is
-/// `1424953923781206.2`), so [`shortest_digits`] settles the tie the ECMAScript way.
+
 fn ecmascript_number(f: f64) -> String {
     if f == 0.0 {
-        // ECMAScript prints negative zero as "0".
         return "0".to_string();
     }
     let (digits, point) = shortest_digits(f.abs());
     let k = digits.len() as i32;
-    // The value is 0.<digits> x 10^n.
+
     let n = point + 1;
     let mut out = String::new();
     if f < 0.0 {
@@ -192,10 +174,10 @@ fn ecmascript_number(f: f64) -> String {
 }
 
 /// The shortest decimal digit string that round-trips to `abs` (a finite positive double) and the
-/// decimal exponent of its first digit, with an exact halfway tie settled to the even last digit.
+
 fn shortest_digits(abs: f64) -> (String, i32) {
     let (digits, exp) = split_scientific(&format!("{abs:e}"));
-    // The exact expansion of a double has at most 767 significant digits, so 800 is exact.
+
     let (exact, exact_exp) = split_scientific(&format!("{abs:.800e}"));
     let exact = exact.trim_end_matches('0');
     let k = digits.len();
@@ -205,7 +187,7 @@ fn shortest_digits(abs: f64) -> (String, i32) {
     }
     let lower = exact[..k].to_string();
     let mut upper = lower.clone().into_bytes();
-    // `lower` does not end in 9 here: a 9 would carry and the carried form would be shorter.
+
     if let Some(last) = upper.last_mut() {
         if *last == b'9' {
             return (digits, exp);

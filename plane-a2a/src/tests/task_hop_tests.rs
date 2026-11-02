@@ -2,7 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! The task a relayed hop is for, over the test's host records: opened as the served engine's
-//! unary hop opens it (addressed, resumed or minted), and settled on the far end's answer.
 
 use busbar_contract::abi::host::service::{DEST_ALLOWED, DEST_INTERNAL, DEST_PLAINTEXT};
 use serde_json::json;
@@ -159,9 +158,6 @@ fn a_fresh_request_mints_busbars_id_and_opens_the_task_dispatched_to_the_agent()
     assert_eq!(genesis.kind, "task.submitted");
     assert_eq!(dispatch.kind, "task.delegated");
     assert_eq!(dispatch.prev_hash, genesis.hash);
-    // The event's `request_id` join key is not on the chain: the host keeps a chained record's own
-    // bytes, every one of them digested, and the join key stays out of the digest (ARCHITECT
-    // ruling B1).
 }
 
 #[test]
@@ -269,7 +265,7 @@ fn a_held_task_id_whose_far_end_id_is_known_is_sent_on_as_the_far_ends() {
     let (_, instead) = hop(opened_with(&mut desk, &cancel, ALICE, &back));
     let sent: Value = serde_json::from_slice(&instead.expect("translated")).unwrap();
     assert_eq!(sent["params"]["id"], "far-t1");
-    // Another caller's task is never sent on, translated or not: it is refused as not found.
+
     let foreign =
         json!({ "jsonrpc": "2.0", "id": 7, "method": "CancelTask", "params": { "id": "t2" } });
     assert!(matches!(
@@ -340,8 +336,6 @@ fn the_answer_records_the_reported_state_and_a_failed_hop_ends_the_task_failed()
     assert_eq!(row.state, "failed");
 }
 
-// ── the push callback a request carries inline ─────────────────────────────────────────────────
-
 /// A message carrying `config` inline as v0.3 spells it.
 fn with_callback(config: Value) -> Value {
     send(json!({
@@ -364,9 +358,7 @@ fn refusal_of(opened: Opened) -> (u32, i64, String) {
 }
 
 /// A callback the floor refuses refuses the request `400` (InvalidParams) in the floor's words,
-/// before anything is opened: no id is minted and nothing is written (the engine's inline guard).
-/// The refusal is the host destination judge's verdict (plaintext, an internal literal or name),
-/// worded by the plane.
+
 #[test]
 fn an_inline_callback_the_floor_refuses_refuses_the_request_before_anything_opens() {
     for (url, verdict, words) in [
@@ -419,7 +411,7 @@ fn an_inline_credential_busbar_cannot_present_refuses_the_request() {
 }
 
 /// A callback that passes is the push callback on the task the request opens, and its credential
-/// rides back for the door to hold; the chain gains no event for it.
+
 #[test]
 fn an_inline_callback_that_passes_is_the_opened_tasks_callback() {
     let mut desk = desk();
@@ -457,7 +449,7 @@ fn an_inline_callback_that_passes_is_the_opened_tasks_callback() {
 }
 
 /// A request addressing a task the caller holds registers the callback as THAT task's push config,
-/// leaving its row and its chain where they were (no event is chained, and no row is rewritten).
+
 #[test]
 fn an_inline_callback_on_an_addressed_task_is_its_push_config_without_an_event() {
     let mut desk = desk();
@@ -494,27 +486,22 @@ fn a_request_with_no_inline_callback_registers_none() {
     assert_eq!(held.row.push_callback, "");
 }
 
-// ── the tenancy boundary, for every spelling of the task member ────────────────────────────────
-
 /// A `backends` answer that knows a far-end id for every busbar id asked about, so the only thing
-/// standing between a caller and a translation is the ownership read.
+
 fn far(id: &str) -> Option<String> {
     Some(format!("far-{id}"))
 }
 
 /// What `ALICE`'s request opens over a fresh desk (Alice holds `t1`, Bob `t2`): the task it is for
-/// and the bytes sent on instead of hers, if any.
+
 fn alice_sends(envelope: &Value) -> (TaskHop, Option<Vec<u8>>) {
     hop(opened_with(&mut desk(), envelope, ALICE, &far))
 }
 
 /// EVERY SPELLING OF THE ADDRESSING MEMBER, for the non-owner: the boundary must not depend on
-/// which of the three names a caller reached for. The owner's request is translated, and the
-/// non-owner's names a task it does not hold, so it is left as a never-existed id is left.
-/// Ported from busbar-a2a a2a/tests/idmap_tests.rs::no_spelling_of_the_task_member_crosses_the_boundary.
+
 #[test]
 fn no_spelling_of_the_task_member_crosses_the_boundary() {
-    // `id` names the task on v0.3's spelling; on v1.0's it is the config's id.
     for (member, method) in [
         ("id", "tasks/pushNotificationConfig/get"),
         ("taskId", "GetTaskPushNotificationConfig"),
@@ -534,7 +521,6 @@ fn no_spelling_of_the_task_member_crosses_the_boundary() {
         .unwrap();
         assert_eq!(sent["params"][member], "far-t1", "{member}");
 
-        // Bob holds `t2`: Alice naming it translates nothing, exactly as a task that never was.
         let (task, instead) = alice_sends(&naming("t2"));
         assert!(
             !task.addressed,
@@ -550,9 +536,7 @@ fn no_spelling_of_the_task_member_crosses_the_boundary() {
 }
 
 /// THE WRITE THROUGH THE SECOND TURN. `params.message.taskId` is how a caller continues a
-/// conversation: the owner's second turn reaches its own open task, and an intruder's pointed at
-/// another caller's task is refused, never sent on, exactly as one pointed at a task that never was.
-/// Ported from busbar-a2a a2a/tests/idmap_tests.rs::the_second_turns_task_id_cannot_be_pointed_at_another_principals_conversation.
+
 #[test]
 fn the_second_turns_task_id_cannot_be_pointed_at_another_principals_conversation() {
     let turn = |id: &str| {
@@ -581,9 +565,7 @@ fn the_second_turns_task_id_cannot_be_pointed_at_another_principals_conversation
 }
 
 /// EVERY SPELLING OF THE INLINE CALLBACK IS FOUND, so every spelling is judged by the floor: v0.3's
-/// `pushNotificationConfig`, v1.0's flat `taskPushNotificationConfig` and its nested one. What is
-/// not found is not guarded; and a callback the floor refuses is refused in all three.
-/// Ported from busbar-a2a a2a/tests/ingress_tests.rs::every_spelling_of_the_callback_is_found_so_every_spelling_is_guarded.
+
 #[test]
 fn every_spelling_of_the_callback_is_found_so_every_spelling_is_guarded() {
     let spellings = |url: &str| {
@@ -625,18 +607,16 @@ fn every_spelling_of_the_callback_is_found_so_every_spelling_is_guarded() {
             "{label}"
         );
     }
-    // The floor judges what was found: a plaintext callback is refused through each spelling.
+
     for (label, envelope) in spellings("http://hook.example/a") {
         let mut desk = desk();
-        // The host's judge answers a plaintext destination under the open-web class this need
-        // declares `DEST_PLAINTEXT` (busbar-core-connector process.rs, `GuardJudge::named`); the
-        // plane asks it rather than reading the scheme itself, so the double answers as it does.
+
         desk.verdict = DEST_PLAINTEXT;
         let (status, code, message) = refusal_of(opened(&mut desk, &envelope, ALICE));
         assert_eq!((status, code), (400, -32602), "{label}");
         assert!(message.contains("must be https"), "{label}: {message}");
     }
-    // And nothing is invented: a request that registers no callback acquires none.
+
     for envelope in [
         json!({"params": {}}),
         json!({"params": {"configuration": {}}}),
@@ -648,8 +628,7 @@ fn every_spelling_of_the_callback_is_found_so_every_spelling_is_guarded() {
 }
 
 /// A far end that issued the SAME id busbar did needs no translation: the caller's bytes go on
-/// unchanged, never re-serialized (and the pair would not occupy a slot).
-/// Ported from busbar-a2a a2a/tests/idmap_tests.rs::a_degenerate_pair_is_not_recorded (same-id half).
+
 #[test]
 fn a_far_end_id_equal_to_busbars_needs_no_translation() {
     let mut desk = desk();
@@ -659,7 +638,6 @@ fn a_far_end_id_equal_to_busbars_needs_no_translation() {
     let (_, instead) = hop(opened_with(&mut desk, &get_task, ALICE, &same));
     assert_eq!(instead, None, "the caller's bytes go on unchanged");
 }
-// ── a hop the kernel refused before it dialled ─────────────────────────────────────────────────
 
 /// Open `envelope` for Alice at 300: what opened, and the record writes the opening made (applied).
 fn opened_writing(desk: &mut Desk, envelope: &Value) -> (Opened, Vec<Write>) {
@@ -679,10 +657,8 @@ fn opened_writing(desk: &mut Desk, envelope: &Value) -> (Opened, Vec<Write>) {
     (opened, out)
 }
 
-// ── a refused hop's task end, racing another writer of the task ───────────────────────────────
-
 /// End the refused hop's `task` failed, as the door ends it on the refused piece, on the unit's
-/// own ticket: [`settle_on_answer`] on `TaskSettled::Failed` over the host's records (`plane_door::settle_task`).
+
 fn ended_on_refusal(d: &mut Desk, task: &TaskHop) -> Vec<Write> {
     let mut out = Vec::new();
     settle_on_answer(
@@ -699,11 +675,7 @@ fn ended_on_refusal(d: &mut Desk, task: &TaskHop) -> Vec<Write> {
 }
 
 /// A HOP REFUSED FOR AN UNAVAILABLE CREDENTIAL ENDS ITS TASK WITHOUT LOSING ANOTHER WRITER'S
-/// CHANGE (the engine's `end_task`, origin/predev `crates/busbar-a2a/src/a2a/receive.rs:3485-3500`:
-/// `TASKS.transition` under the task's own lock, `crates/busbar-kernel/src/plane/handle_engine.rs:
-/// 711-736`). Another unit moves the addressed task between the hop's opening and its refusal; the
-/// end is chained after that move: the other writer's event stands, the failure is the next one,
-/// and the task as held is failed with the chain's tail on the failure.
+
 #[test]
 fn a_refused_hops_task_end_keeps_a_concurrent_writers_change() {
     let mut d = desk();
@@ -718,7 +690,6 @@ fn a_refused_hops_task_end_keeps_a_concurrent_writers_change() {
         .unwrap()
         .next_seq;
 
-    // ANOTHER UNIT moves the task while the refused hop is handled: it wins the next sequence.
     let mut theirs = Vec::new();
     let other = Stamp {
         caller: ALICE,
@@ -749,12 +720,9 @@ fn a_refused_hops_task_end_keeps_a_concurrent_writers_change() {
     assert_eq!(failed.state, "failed", "the failure is the next event");
     let held = get(&mut d.book, ALICE, "t1", 300).unwrap().unwrap();
     assert_eq!(held.row.state, "failed");
-    // The failure is the chain's tail: the door holds no tail hash of its own, since the host seals
-    // the chain on the record path (B1 ruling 1, coordinator 2026-10-07).
+
     assert_eq!(held.next_seq, next + 2);
 }
-
-// ── ported from the engine's `relay_stream_tests` ──────────────────────────────────────────────
 
 /// Put `caller`'s `task` on [`MEMBER`] and walk it through `states` at 150.
 fn walk(desk: &mut Desk, caller: &str, task: &str, states: &[TaskState]) {
@@ -774,8 +742,7 @@ fn walk(desk: &mut Desk, caller: &str, task: &str, states: &[TaskState]) {
 }
 
 /// Ported from busbar-a2a a2a/tests/relay_stream_tests.rs::an_interrupt_from_the_backend_is_relayed_transparently_and_pauses_the_task.
-/// A far end's `input-required` answer is relayed as 200 with its question, under busbar's ids,
-/// and the task it settles is PAUSED: live, never terminal.
+
 #[test]
 fn an_interrupt_from_the_backend_is_relayed_transparently_and_pauses_the_task() {
     use crate::relay::{From as Side, HopRelay, Piece, PieceAnswer};
@@ -854,7 +821,7 @@ fn an_interrupt_from_the_backend_is_relayed_transparently_and_pauses_the_task() 
 #[test]
 fn a_context_id_belonging_to_another_principal_does_not_resume_that_task() {
     let mut desk = desk();
-    // Bob's task on the agent is interrupted under context `ctx-1`.
+
     walk(
         &mut desk,
         BOB,
@@ -936,16 +903,8 @@ fn a_streamed_artifact_advances_the_durable_resume_cursor() {
     );
 }
 
-// ── a hop that left and heard nothing back: its task end, racing another writer of the task ───
-
 /// A HOP THAT LEFT AND HEARD NOTHING BACK ENDS THE TASK IT OPENED WITHOUT LOSING ANOTHER WRITER'S
-/// CHANGE (the engine's `refuse_hop` on `RelayRefusal::Transport`, origin/predev
-/// `crates/busbar-a2a/src/a2a/receive.rs:3325` and its `fail_task` arm `:3463-3471`, then
-/// `end_task` `:3485-3500`: `TASKS.transition` under the task's own lock,
-/// `crates/busbar-kernel/src/plane/handle_engine.rs:711-736`). Another unit moves the task the hop
-/// minted between its opening and the end; the end is chained after that move: the other writer's
-/// event stands, the failure is the next one, and the task as held is failed with the chain's tail
-/// on the failure.
+
 #[test]
 fn a_hop_that_heard_nothing_back_ends_its_task_keeping_a_concurrent_writers_change() {
     let mut d = desk();
@@ -956,7 +915,6 @@ fn a_hop_that_heard_nothing_back_ends_its_task_keeping_a_concurrent_writers_chan
     let id = task.task_id.clone();
     let next = get(&mut d.book, ALICE, &id, 300).unwrap().unwrap().next_seq;
 
-    // ANOTHER UNIT moves the task while the hop's end is made: it wins the next sequence.
     let mut theirs = Vec::new();
     let other = Stamp {
         caller: ALICE,
@@ -987,15 +945,12 @@ fn a_hop_that_heard_nothing_back_ends_its_task_keeping_a_concurrent_writers_chan
     assert_eq!(failed.state, "failed", "the failure is the next event");
     let held = get(&mut d.book, ALICE, &id, 300).unwrap().unwrap();
     assert_eq!(held.row.state, "failed");
-    // The failure is the chain's tail: the door holds no tail hash of its own, since the host seals
-    // the chain on the record path (B1 ruling 1, coordinator 2026-10-07).
+
     assert_eq!(held.next_seq, next + 2);
 }
 
-// ── a record write the store refuses is reported, and the answer stands ────────────────────────
-
 /// Settle `how` on Alice's task as BOB, who holds no such task: the store refuses the write.
-/// Answers what the call answered, the writes it staged, and the lines it logged.
+
 fn refused_settle(how: &TaskSettled) -> (Result<Option<TaskRow>, Halt>, usize, Vec<String>) {
     let mut desk = desk();
     let (task, _) = hop(opened(&mut desk, &send(json!({})), ALICE));
@@ -1023,10 +978,7 @@ fn refused_settle(how: &TaskSettled) -> (Result<Option<TaskRow>, Halt>, usize, V
 }
 
 /// **A REFUSED CURSOR WRITE IS SURFACED, AND THE ANSWER STANDS.** Ported from origin/predev
-/// `crates/busbar-a2a/src/a2a/tests/relay_stream_tests.rs:824`
-/// `a_resume_cursor_the_store_refuses_is_surfaced` (`receive.rs:3180-3204`
-/// `advance_resume_cursor`): the diagnostic, naming the task, in predev's words. RED arm: the
-/// refusal was swallowed, so nothing was logged.
+
 #[test]
 fn a_resume_cursor_the_store_refuses_is_surfaced_and_the_answer_stands() {
     let artifact = TaskSettled::Event {
@@ -1049,8 +1001,7 @@ fn a_resume_cursor_the_store_refuses_is_surfaced_and_the_answer_stands() {
 }
 
 /// **A REFUSED STATE TRANSITION IS SURFACED, AND THE ANSWER STANDS**, each arm under predev's
-/// code and words: the unary hop's reported state (`receive.rs:3239`), a streamed event's state
-/// with the state named (`:2965`), and a task that could not be ended `failed` (`:3508`).
+
 #[test]
 fn a_transition_the_store_refuses_is_surfaced_and_the_answer_stands() {
     let reported = TaskSettled::Reported {
@@ -1101,8 +1052,7 @@ fn a_transition_the_store_refuses_is_surfaced_and_the_answer_stands() {
 }
 
 /// **WARNING ONCE, THEN DEBUG**, per condition, as the diagnostic catalog declares: the
-/// first refusal of a kind is logged at WARN and every one after it at DEBUG; a different kind has
-/// its own latch. The latches here are the test's own, so the order is not the process's.
+
 #[test]
 fn a_refused_write_is_a_warning_the_first_time_and_debug_after() {
     use tracing::Level;
@@ -1123,20 +1073,14 @@ fn a_refused_write_is_a_warning_the_first_time_and_debug_after() {
 }
 
 /// THE ENGINE'S ANSWER SHOULD THE STORE REFUSE THE OPENING'S WRITES (the kernel then ends the unit
-/// `durability_unavailable`, and the door's `refusal` renders this in place of the kernel's words),
-/// stated by the opening that staged them, echoing the request id: a fresh task's is predev's `503`
-/// `-32603` "the task could not be recorded" (`busbar-a2a` `receive.rs:2032-2049`); a resumed
-/// task's is `503` `-32603` "this task cannot be resumed": a storage failure is retryable. An
-/// addressed task's is none, because predev sent the hop whether or not the callback it carried was
-/// recorded (`receive.rs:2080-2096`).
+
 #[test]
 fn an_opening_states_the_engines_answer_should_the_store_refuse_its_writes() {
     let unrecorded = |opened: Opened| match opened {
         Opened::Hop { unrecorded, .. } => unrecorded,
         Opened::Refused(reply) => panic!("refused: {reply:?}"),
     };
-    // Each stage opens on a fresh desk: the constructor is kept under its own name, since the
-    // desks below shadow `desk`.
+
     let mut desk = desk();
     let fresh = unrecorded(opened(
         &mut desk,
@@ -1195,12 +1139,8 @@ fn an_opening_states_the_engines_answer_should_the_store_refuse_its_writes() {
     );
 }
 
-// ── a task-addressed verb naming a task the caller does not hold ───────────────────────────────
-
 /// A GetTask, CancelTask or second-turn SendMessage naming a task the caller does NOT hold is
-/// refused locally with A2A's `TaskNotFoundError` (`-32001`, `404`), and nothing is opened: no id
-/// is minted, nothing is written, and nothing is relayed. Another caller's task and a task that
-/// never was are refused with the same bytes, so the refusal is no existence oracle.
+
 #[test]
 fn a_task_verb_naming_a_task_the_caller_does_not_hold_is_refused_task_not_found() {
     let requests = |id: &str| {
@@ -1260,8 +1200,7 @@ fn a_task_verb_naming_a_task_the_caller_does_not_hold_is_refused_task_not_found(
 }
 
 /// A SECOND TURN (`params.message.taskId`, A2A v1.0 `Message.task_id`) naming a task the caller
-/// holds ADDRESSES that task: its identity is reused, nothing is minted or opened, and a pooled
-/// request is pinned to the member holding it.
+
 #[test]
 fn a_second_turn_naming_a_held_task_in_its_message_addresses_that_task() {
     let mut d = desk();
@@ -1289,10 +1228,8 @@ fn a_second_turn_naming_a_held_task_in_its_message_addresses_that_task() {
     assert_eq!(d.book, before, "nothing is opened");
 }
 
-// ── an inline callback on an addressed task, racing another writer ──────────────────────────────
-
 /// The writes opening `envelope` for Alice makes at 300, NOT applied: what the piece's answer
-/// carries out while other units may land theirs first.
+
 fn writes_of(desk: &mut Desk, envelope: &Value) -> Vec<Write> {
     let mut out = Vec::new();
     let req = Request {
@@ -1311,9 +1248,7 @@ fn writes_of(desk: &mut Desk, envelope: &Value) -> Vec<Write> {
 }
 
 /// AN INLINE CALLBACK ON AN ADDRESSED TASK IS A PUSH-CONFIG SET, last writer wins: two sets read
-/// the same task and land in turn, with another unit's move of the task landing between their read
-/// and their writes. The later set is the config held, and the other writer's move stands: the
-/// task's state and its chain's next sequence never go back, so the task moves on afterwards.
+
 #[test]
 fn two_inline_callbacks_on_an_addressed_task_leave_the_later_and_never_regress_the_task() {
     let mut d = desk();
@@ -1361,11 +1296,8 @@ fn two_inline_callbacks_on_an_addressed_task_leave_the_later_and_never_regress_t
     assert_eq!(cfg.url, "https://hook.example/b", "the later set wins");
 }
 
-// ── a cancel of a task busbar holds as terminal ────────────────────────────────────────────────
-
 /// A CANCEL OF A TASK BUSBAR HOLDS AS TERMINAL is answered by busbar, never relayed: A2A's
-/// `TaskNotCancelableError` (`-32002`, `409`) in the plane's words, nothing written. A read of the
-/// same task is still the agent's to answer.
+
 #[test]
 fn a_cancel_of_a_task_held_as_terminal_is_refused_not_cancelable() {
     for method in ["CancelTask", "tasks/cancel"] {
@@ -1393,12 +1325,8 @@ fn a_cancel_of_a_task_held_as_terminal_is_refused_not_cancelable() {
     }
 }
 
-// ── a task verb naming no task ──────────────────────────────────────────────────────────────────
-
 /// A TASK VERB WHOSE `params` NAME NO TASK AS A STRING (absent, a number, `null`, no `params` at
-/// all) is refused `400`, invalid params (`-32602`), before anything is opened: no id is minted,
-/// nothing is written, nothing is relayed. RED against a task verb read as unaddressed, which
-/// minted a task, recorded it and relayed the malformed read.
+
 #[test]
 fn a_task_verb_naming_no_task_is_refused_invalid_params_and_opens_nothing() {
     for method in [
@@ -1425,8 +1353,6 @@ fn a_task_verb_naming_no_task_is_refused_invalid_params_and_opens_nothing() {
         }
     }
 }
-
-// ── the retention sweep runs from a submit ──────────────────────────────────────────────────────
 
 /// Open `envelope` for Alice at `now`, its writes applied.
 fn opened_at(d: &mut Desk, envelope: &Value, now: u64) -> Opened {
@@ -1466,10 +1392,7 @@ fn held_tasks(d: &mut Desk) -> usize {
 }
 
 /// UNDER SUBMIT-ONLY TRAFFIC THE SETTLED TASKS ARE RETIRED AND THE STORE STAYS BOUNDED: each fresh
-/// submit carries the retention sweep, so a task finished past its window is tombstoned with its
-/// chain by the next submit, and a run of submits that each finish keeps only the window's worth.
-/// The active tasks are never swept. RED against a sweep that ran only from the local verbs: a
-/// workload that only submits never retired a task.
+
 #[test]
 fn submit_only_traffic_retires_settled_tasks_and_keeps_the_store_bounded() {
     let mut d = desk();
@@ -1525,8 +1448,7 @@ fn submit_only_traffic_retires_settled_tasks_and_keeps_the_store_bounded() {
 }
 
 /// A READ NEVER SWEEPS: a `GetTask` of a settled task past its window answers it as missing and
-/// writes nothing, and a second turn of a held task retires nothing either; only a fresh submit
-/// carries the sweep.
+
 #[test]
 fn a_read_or_an_addressed_turn_never_sweeps() {
     let mut d = desk();

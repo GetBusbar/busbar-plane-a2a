@@ -1,25 +1,11 @@
 //! The plane, driven over the vocabulary the conformance rigs actually send.
-//!
-//! ## Why this shape, and what it is not
-//!
-//! The judges of this work are the rigs: the official suite and the in-house battery, both of which
-//! speak to a booted node over a socket. These tests take the METHOD VOCABULARY out of the rig's own
-//! table and out of the codec's own source, drive each entry through the door's arrival (the one
-//! decode step the plane has, since the flip deleted the engine and its in-process `Plane` impl), and
-//! assert the operation class and the request id it reads; the door itself is then driven op by op,
-//! linked and dropped in, by the plugin crate's `tests/both_ways.rs`.
 
 use crate::agent_arrival::{self, AgentDisposition};
 use crate::ops;
 
 /// The rig's own vocabulary table, read out of the file the rig imports it from.
-///
-/// Reading the rig's source rather than restating it is the whole point: a rig that starts sending a
-/// method this plane does not carry must fail HERE, at build time, rather than in a battery run that
-/// someone has to interpret.
+
 fn rig_vocabulary(table: &str) -> Vec<(String, String)> {
-    // The rig is this repo's own `testing/a2a-supplement` (busbar 7f43d8a777 moved it here out of
-    // busbar's tree). A missing file is a failure, never a skip.
     let rig =
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../testing/a2a-supplement");
     let source = std::fs::read_to_string(rig.join("a2asup/transport.py")).expect(
@@ -52,7 +38,7 @@ fn request(id: &str, method: &str) -> Vec<u8> {
 }
 
 /// Drive one body through the door's arrival (the JSON-RPC line, no head fields) and hand back the
-/// method row it classed the request under and the request id it read.
+
 fn decode(body: &[u8]) -> Result<(ops::MethodRow, serde_json::Value), String> {
     match agent_arrival::decide_and_read(body, |_| None).0 {
         AgentDisposition::Request { row, id, .. } => Ok((*row, id)),
@@ -63,8 +49,6 @@ fn decode(body: &[u8]) -> Result<(ops::MethodRow, serde_json::Value), String> {
 /// Every method the rig's later-revision table names decodes to a declared class.
 #[test]
 fn every_method_of_the_later_vocabulary_decodes() {
-    // The slot name is the rig's own key for the row; the two tables are paired on it by
-    // `the_two_vocabularies_agree_slot_for_slot`, which is where that pairing is actually proved.
     for (_slot, method) in rig_vocabulary("METHODS_1_0") {
         let body = request("1", &method);
         let (row, correlation) = decode(&body)
@@ -92,9 +76,7 @@ fn every_method_of_the_earlier_vocabulary_decodes() {
 }
 
 /// The two vocabularies agree slot for slot on the class the unit is.
-///
-/// This is the property that says a caller's choice of wording does not move the money, checked
-/// against the rig's OWN pairing of the two tables rather than against this crate's.
+
 #[test]
 fn the_two_vocabularies_agree_slot_for_slot() {
     let later = rig_vocabulary("METHODS_1_0");

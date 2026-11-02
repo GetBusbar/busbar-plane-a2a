@@ -2,8 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! The HTTP+JSON line's arrival: the envelope each route composes (member for member the engine's
-//! `rest.rs`), the verb a `POST /tasks/{id}` names, the captures and the query as the router and
-//! `Query` decoded them, and the answer re-framed by what it is.
 
 use super::*;
 use crate::statement::ROUTES;
@@ -31,8 +29,7 @@ fn envelope(name: &str, params: Value) -> Value {
 }
 
 /// QUERY STRINGS ARE TYPED ON THE WAY INTO THE ENVELOPE. `historyLength=5` means the NUMBER five to
-/// every reader of the composed envelope; left as a string, a filter is silently not applied, which
-/// is the failure mode that errors nowhere.
+
 #[test]
 fn query_values_are_typed_the_way_the_envelope_wants_them() {
     assert_eq!(json_scalar("5"), json!(5));
@@ -44,8 +41,7 @@ fn query_values_are_typed_the_way_the_envelope_wants_them() {
 }
 
 /// ABSENT IS NOT EMPTY. A query parameter the caller omitted must not appear in the composed params
-/// at all: `historyLength` absent means "no opinion" and is a different request from
-/// `historyLength: null`.
+
 #[test]
 fn an_omitted_query_parameter_is_absent_from_the_params() {
     let params = Params::new()
@@ -63,7 +59,7 @@ fn an_omitted_query_parameter_is_absent_from_the_params() {
 }
 
 /// THE PATH WINS OVER THE BODY. A `taskId` member in a posted push-notification config must not
-/// re-point the request at a task the caller did not address.
+
 #[test]
 fn a_body_member_cannot_re_point_the_addressed_task() {
     let params = Params::new()
@@ -75,8 +71,7 @@ fn a_body_member_cannot_re_point_the_addressed_task() {
 }
 
 /// AN EMPTY BODY IS NOT A PARSE FAILURE. `POST /tasks/{id}:cancel` carries none, and neither does a
-/// `DELETE`; refusing them for a body they are not supposed to have would refuse the specification's
-/// own request shape.
+
 #[test]
 fn an_absent_body_composes_empty_params() {
     assert_eq!(json_body(b"").unwrap(), json!({}));
@@ -120,7 +115,7 @@ fn malformed_or_nonobject_bodies_never_compose_a_path_addressed_operation() {
 }
 
 /// EVERY ROUTE OF THE LINE composes the engine's envelope: the method its request line names, the
-/// path captures, the typed query members it reads (and no other), the body verbatim.
+
 #[test]
 fn each_route_composes_the_engines_envelope() {
     let body = br#"{"message":{"role":"ROLE_USER","parts":[]}}"#;
@@ -217,8 +212,7 @@ fn each_route_composes_the_engines_envelope() {
 }
 
 /// A `POST /tasks/{id}` NAMING NO VERB is the engine's `404` + `MethodNotFound`, in its words, before
-/// anything else is judged; a route that is not the line's, or a path that does not fit, composes
-/// nothing.
+
 #[test]
 fn a_task_post_naming_no_verb_is_the_engines_404() {
     let task = route("POST", "/a2a/tasks/{id}");
@@ -243,7 +237,7 @@ fn a_task_post_naming_no_verb_is_the_engines_404() {
 }
 
 /// A PATH CAPTURE IS DECODED AS THE ROUTER DECODED IT: `%XX` is the byte and `+` stays a `+`; a
-/// capture whose bytes are not UTF-8 is a bad request.
+
 #[test]
 fn path_captures_decode_as_the_router_did() {
     assert_eq!(path_decode("a%3Ab+c").as_deref(), Some("a:b+c"));
@@ -261,7 +255,7 @@ fn path_captures_decode_as_the_router_did() {
             "the `id` path capture must decode as UTF-8"
         );
     }
-    // Literal mismatches still do not claim a route, even with an invalid later capture.
+
     let config = route("GET", "/a2a/tasks/{id}/pushNotificationConfigs/{config_id}");
     assert_eq!(compose(config, "/a2a/tasks/%FF/other/%FF", b""), Ok(None));
     let refusal = compose(config, "/a2a/tasks/t/pushNotificationConfigs/%FF", b"")
@@ -277,7 +271,7 @@ fn path_captures_decode_as_the_router_did() {
 }
 
 /// A QUERY COMPONENT IS DECODED AS `Query` DECODED IT: `+` is a space, `%XX` the byte, a repeated
-/// key keeps the last value.
+
 #[test]
 fn query_components_decode_as_the_extractor_did() {
     let q = query_map(Some("a=1+2&b=%41&a=3&&c")).unwrap();
@@ -288,7 +282,7 @@ fn query_components_decode_as_the_extractor_did() {
 }
 
 /// RE-FRAMED BY WHAT IT IS: a result is the body verbatim, an error the AIP-193 document at the
-/// answer's status, anything else untouched.
+
 #[test]
 fn an_answer_is_reframed_by_what_it_is() {
     let result = br#"{"jsonrpc":"2.0","id":"a2a-http-json","result":{"tasks":[]}}"#;
@@ -355,9 +349,7 @@ fn an_unreadable_agent_error_is_preserved_without_fabricating_an_empty_error() {
 }
 
 /// THE RESULT IS THE ANSWER'S OWN BYTES (Law 5): member order, an integer past 64 bits and a
-/// number past `f64`'s range reach the HTTP+JSON caller as the far end wrote them. RED: the result
-/// was re-serialised through a JSON value (members re-sorted, the long integer rounded), and a
-/// number past `f64`'s range failed the reading, so the caller got the whole JSON-RPC envelope.
+
 #[test]
 fn a_result_is_the_answers_own_bytes() {
     let answer = br#"{"jsonrpc":"2.0","id":"a2a-http-json","result":{"z":1, "id":"a2a-p-1","n":123456789012345678901234567890,"big":1e400}}"#;
@@ -368,9 +360,7 @@ fn a_result_is_the_answers_own_bytes() {
 }
 
 /// Ported from busbar-a2a a2a/tests/rest_tests.rs::a_string_coded_refusal_re_frames_from_its_http_status.
-/// A refusal whose `code` is not a JSON-RPC integer (a deployment with no governance answers a
-/// plain document with a string one) still re-frames: the status name falls back to the HTTP
-/// status's, the only other fact the answer carries.
+
 #[test]
 fn a_string_coded_refusal_re_frames_from_its_http_status() {
     let doc = br#"{"error":{"code":"unavailable","message":"no card yet"}}"#;
@@ -385,8 +375,7 @@ fn a_string_coded_refusal_re_frames_from_its_http_status() {
 }
 
 /// SUBSCRIBE IS A GET (proto `SubscribeToTask`: `get: "/tasks/{id=*}:subscribe"`). The verb suffix
-/// sits inside the `{id}` segment, so a GET of `/tasks/{id}:subscribe` is the subscribe, never a
-/// read of a task whose id ends in `:subscribe`; a GET with no verb suffix stays the read.
+
 #[test]
 fn a_get_of_a_tasks_subscribe_suffix_is_subscribe_to_task() {
     let task = "/a2a/tasks/{id}";
@@ -405,7 +394,7 @@ fn a_get_of_a_tasks_subscribe_suffix_is_subscribe_to_task() {
 }
 
 /// A CANCEL'S BODY IS ITS PARAMS (proto `CancelTask`: `post: "/tasks/{id=*}:cancel" body: "*"`), so
-/// the caller's `metadata` reaches the operation; the path's id wins over a posted one.
+
 #[test]
 fn a_posted_cancel_body_reaches_the_params_and_the_path_wins() {
     assert_eq!(
@@ -423,9 +412,7 @@ fn a_posted_cancel_body_reaches_the_params_and_the_path_wins() {
 }
 
 /// ONLY THE PROTO'S NON-STRING QUERY MEMBERS ARE TYPED. `contextId`, `pageToken`, `status` and
-/// `statusTimestampAfter` are strings in the proto (`ListTasksRequest`,
-/// `ListTaskPushNotificationConfigsRequest`), so an all-digit or `true`-spelled value stays the
-/// string it was; `pageSize`, `historyLength` and `includeArtifacts` are typed.
+
 #[test]
 fn only_the_protos_non_string_query_members_are_typed() {
     assert_eq!(

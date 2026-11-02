@@ -2,80 +2,19 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! THE `agents:` SECTION — the A2A plane's config grammar, and the one place its values are judged.
-//!
-//! ## The section IS the plane
-//!
-//! There is no `plane:`, `bind:` or `target:` selector anywhere in here. `pools:`, `tools:` and
-//! `agents:` are SIBLINGS with the same shape, and which plane an entry is on is decided by which
-//! map it is written in. Hooks attach BY BARE NAME from the one top-level `hooks:` map, exactly as
-//! they do on the pool plane.
-//!
-//! ## Two words are reserved on every plane, including the ones that do not use them
-//!
-//! `hooks` and `upstream_credentials` are reserved at the section level here for the same reason
-//! they are on `pools:` — so the word space is IDENTICAL across planes. An operator who learns the
-//! rule once should not discover that a name legal on one plane is a section knob on another. There
-//! is ONE declaration of the pair (`RESERVED_SECTION_KEYS`) and one reader
-//! of it, so that cannot drift. The reserved set is closed; a new A2A knob lands under a per-entry
-//! key, never as a new section word.
-//!
-//! ## The pin is an OBJECT, and that is the whole trust story compressed into one field
-//!
-//! A2A's authenticity root is a JWS issuer key PLUS a card fingerprint, and where a card carries no
-//! signature it degrades to a transport binding. That is four mechanisms carrying different
-//! material, and a scalar `pin_hash:` can spell exactly one of them. So `pin:` is
-//! `{mechanism, key?, fingerprint?}` and the mechanism is checked against the material it requires
-//! at parse, by the kernel: the pin is a kernel trust key (the door's `TRUST_KEYS`). A registration cannot
-//! claim `jws_issuer_key` and carry nothing to verify with.
-//!
-//! `unpinned` is accepted and named out loud rather than being spelled as an absent field, because
-//! an operator reading a list of registrations needs to SEE which entries have no root. It is legal
-//! to write and impossible to approve. The kernel's `TRUST_KEYS` declaration judges
-//! the mechanism and its key material; this module does not duplicate that check.
-//!
-//! ## The pin is the peer's identity; `client_identity:` is busbar's
-//!
-//! [`ClientIdentityCfg`] is a SIBLING of `pin:`, not a field inside it, because the two describe
-//! opposite ends of the same handshake and only one of them is a trust root. Its `cert:` and `key:`
-//! are ordinary [`busbar_contract::secret_ref::SecretRef`]s — the same spelling `tls.cert:` uses for busbar's
-//! INBOUND identity — so key material is referenced and never written here, and it resolves through
-//! the one resolver every other secret in the config goes through.
-//!
-//! ## Cross-plane reference is refused, not ignored
-//!
-//! An `agents:` entry may name hooks. It may not name a pool, a tool, or another agent. The kernel's
-//! boot validation, which sees every plane's section, says so rather than silently dropping the
-//! reference, because a dropped reference is an operator believing a control is attached that is
-//! not.
 
 use busbar_contract::section::split_section;
 use serde::{Deserialize, Serialize};
 
 /// The default MAX VERIFICATION STALENESS for a registration that names none: five seconds.
-///
-/// The same `5s` as the MCP plane's verify TTL, because the two are one decision about one risk — how long a signed card may have drifted before the DELEGATION
-/// that submits to it re-verifies. Under verify-on-call this is a bound on reuse on the request path,
-/// not a background cadence: the intrinsic verify→submit race is already ms–s, so sub-second precision
-/// buys nothing, and single-flight holds the card fetch to at most one per `reverify_ttl` per agent.
-/// `reverify_ttl: 0` is strict-live; a larger value is an explicit, docs-flagged security downgrade.
-/// (The A2A key keeps its name `reverify_ttl`; the MCP sibling's is `verify_ttl` — the admin API
-/// projects both under one `reverify_ttl` view field, so the concept is one across the two planes.)
+
 pub const DEFAULT_REVERIFY_TTL: &str = "5s";
 
 /// WHAT ONE `agents:` ENTRY IS CALLED in the section's refusals and in the plane's declaration.
 pub const SUBJECT_NOUN: &str = "fronted agent";
 
 /// THE REFUSAL FOR `upstream_credentials: passthrough` ON THIS PLANE, written once so the per-entry
-/// and section-level paths cannot say different things about the same rule. The per-entry path is
-/// [`validate_agent`]'s; the section default is a kernel-reserved key, so the kernel emits this same
-/// sentence for it, read off the declaration's `caller_credential_refusal`.
-///
-/// `passthrough` means "forward the CALLER's credential upstream". On the delegation plane that
-/// would hand a third-party vendor a working busbar credential belonging to somebody else — the
-/// caller's key authenticated them TO busbar and authorised them against busbar's scopes, and it
-/// means nothing anywhere else. The WORD stays reserved on every plane so the vocabulary is learned
-/// once; the VALUE is refused loudly, because accepting it and quietly doing something else is how
-/// an operator ends up believing a credential is being forwarded when it is not, or the reverse.
+
 pub const REFUSE_PASSTHROUGH_SECTION: &str =
     "`upstream_credentials: passthrough` is refused on the `agents:` plane. busbar delegates AS \
      ITSELF: the caller's key authenticated them to busbar and means nothing to a third-party \
@@ -104,7 +43,7 @@ pub enum PinMechanism {
 
 impl PinMechanism {
     /// The config token, for diagnostics, pin renderings and audit rows. Deliberately the same
-    /// string `serde` accepts, so every surface spells a mechanism one way.
+
     pub fn token(self) -> &'static str {
         match self {
             PinMechanism::JwsIssuerKey => "jws_issuer_key",
@@ -170,7 +109,7 @@ pub struct AgentPinCfg {
 /// wrote and may edit, accumulation is what happened and may not be, and a field that lives in the
 /// wrong one is a field an admin write can silently rewrite history through.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)] // a typo'd key must fail boot, not silently un-pin an agent.
+#[serde(deny_unknown_fields)]
 pub struct AgentDefCfg {
     /// The real remote A2A endpoint. Never client-visible: callers reach it through busbar.
     pub url: String,
@@ -265,7 +204,7 @@ pub struct AgentsCfg {
 
 impl AgentsCfg {
     /// Report accepted-but-ignored version settings once when the successfully judged section
-    /// opens. Only registration names are logged, never the supplied version or other config.
+
     pub(crate) fn warn_ignored_protocol_versions(&self) {
         let agents: Vec<&str> = self
             .agents
@@ -283,7 +222,7 @@ impl AgentsCfg {
     }
 
     /// The pool `agent` is a member of, by name, and its members in declared order: the first pool
-    /// naming it, in the order the section states them.
+
     #[must_use]
     pub fn pool_of(&self, agent: &str) -> Option<(&str, &[String])> {
         self.pools
@@ -298,13 +237,6 @@ impl<'de> Deserialize<'de> for AgentsCfg {
     where
         D: serde::Deserializer<'de>,
     {
-        // THE SECTION SPLIT is `plane::config`'s — the reserved-key refusals, the two typed lifts
-        // and the order they happen in are a property of a plane SECTION, not of this plane. What
-        // stays here is what is genuinely this plane's: `validate_agent`, run through the same
-        // function the admin write path calls so the API rejects exactly what the file rejects.
-        // The section's `upstream_credentials:` default is a reserved key, so the KERNEL refuses
-        // `passthrough` there, in this plane's own sentence (the declaration's
-        // `caller_credential_refusal`), before the section reaches this parse.
         let section = split_section::<D, AgentDefCfg>(
             deserializer,
             crate::CONFIG_SECTION,
@@ -312,10 +244,6 @@ impl<'de> Deserialize<'de> for AgentsCfg {
             validate_agent,
         )?;
 
-        // THE SECTION DEFAULT, refused here too until the kernel's judgement of the reserved key
-        // (the declaration's `caller_credential_refusal`) runs on every path: the same sentence, so
-        // whichever refuses first the bytes are the same. On the door path the reserved key arrives
-        // stripped and this never fires.
         if section.upstream_credentials == Some(busbar_contract::config::UpstreamCreds::Passthrough)
         {
             return Err(serde::de::Error::custom(REFUSE_PASSTHROUGH_SECTION));
@@ -331,8 +259,7 @@ impl<'de> Deserialize<'de> for AgentsCfg {
 }
 
 /// `url` as a refusal may repeat it: any userinfo in its authority (everything before the last `@`
-/// ahead of the path) replaced by `***`. A malformed URL is omitted entirely: its credential
-/// boundaries cannot be inferred safely from delimiters in the raw input.
+
 #[must_use]
 pub fn without_userinfo(url: &str) -> std::borrow::Cow<'_, str> {
     if busbar_contract::net::parse_url(url).is_err() {
@@ -349,17 +276,10 @@ pub fn without_userinfo(url: &str) -> std::borrow::Cow<'_, str> {
 }
 
 /// THE VALUE-LEVEL RULES for one `agents:` entry.
-///
-/// Split out as a free function on purpose: `serde` types check SHAPE, and every rule below is
-/// about a VALUE that is well-typed and still wrong. Boot calls it from the `Deserialize` above and
-/// the admin write path calls it from
-/// the host's named-map section parser (`NamedMapSection::parse_def`), so the two paths cannot drift into
-/// different grammars — which is the exact defect that let the API persist a definition the file
-/// would have refused, and then drop it at the next rebuild with a log line.
+
 pub fn validate_agent(name: &str, def: &AgentDefCfg) -> Result<(), String> {
     let at = format!("`agents.{name}`");
 
-    // Use the same predicate that counts the actual trailing-separator route claims.
     if crate::statement::agent_claim_count([name]) == 0 {
         return Err(format!(
             "{at}: an agent name must be one plain path segment (letters, digits, `-`, `_`, `.`, \
@@ -370,10 +290,7 @@ pub fn validate_agent(name: &str, def: &AgentDefCfg) -> Result<(), String> {
     if def.url.trim().is_empty() {
         return Err(format!("{at}: `url:` must name the agent's A2A endpoint"));
     }
-    // The URL is PARSED here rather than at fetch time so the failure lands on the operator who
-    // wrote it, at boot, rather than on a delegation hours after: an `http://` or `https://`
-    // URL with a host, and no userinfo, which is refused without being repeated (a password in a
-    // URL is a credential, and a refusal is logged).
+
     let parsed = busbar_contract::net::parse_url(&def.url);
     let scheme_ok = def.url.split_once("://").is_some_and(|(scheme, _)| {
         scheme.eq_ignore_ascii_case("https") || scheme.eq_ignore_ascii_case("http")
@@ -400,14 +317,6 @@ pub fn validate_agent(name: &str, def: &AgentDefCfg) -> Result<(), String> {
         ));
     }
 
-    // THE PIN and the CADENCE (`reverify_ttl:`, `recovery_backoff:`) are not judged here: they are
-    // the kernel's trust keys (the door's `TRUST_KEYS`), judged by the kernel before the section reaches
-    // this validator.
-
-    // THE CLIENT IDENTITY, matched against the mechanism and the scheme the same way the pin is
-    // matched against its material. `mtls` is defined as "served behind mutual TLS"; a registration
-    // that claims it and names no certificate cannot get past the peer's `CertificateRequired`
-    // alert, and it would fail on the next verify-on-call lookup rather than here.
     if def.pin.mechanism == PinMechanism::MutualTls && def.client_identity.is_none() {
         return Err(format!(
             "{at}: `pin.mechanism: mtls` needs `client_identity:` — the `cert:` and `key:` \
@@ -416,9 +325,7 @@ pub fn validate_agent(name: &str, def: &AgentDefCfg) -> Result<(), String> {
              at the handshake with `CertificateRequired`, not at the pin."
         ));
     }
-    // A client certificate is a TLS-handshake object. Over `http://` there is no handshake to put it
-    // in, so an operator who wrote one there is being protected by nothing while reading the config
-    // as though they were.
+
     if def.client_identity.is_some() && parsed.as_ref().is_ok_and(|p| p.scheme == "http") {
         return Err(format!(
             "{at}: `client_identity:` is a TLS client certificate and `url:` is `http://`, which \
@@ -426,16 +333,10 @@ pub fn validate_agent(name: &str, def: &AgentDefCfg) -> Result<(), String> {
         ));
     }
 
-    // THE CALLER'S CREDENTIAL NEVER LEAVES BUSBAR. `passthrough` means "forward the CALLER's
-    // credential upstream", and a busbar key handed to a third-party vendor is a working busbar
-    // credential belonging to somebody else. Refused at parse, on this plane only, because the
-    // word is reserved on every plane and only the VALUE is inapplicable here.
     if def.upstream_credentials == Some(busbar_contract::config::UpstreamCreds::Passthrough) {
         return Err(format!("{at}: {REFUSE_PASSTHROUGH_SECTION}"));
     }
     if let Some(cred) = def.upstream_credential.as_ref() {
-        // A lease that has expired before it is used is a credential that can never be presented,
-        // so a zero TTL is an operator getting something other than what they wrote.
         if cred.lease_ttl_ms == 0 {
             return Err(format!(
                 "{at}: `upstream_credential.lease_ttl_ms:` must be greater than zero. A lease that \
@@ -457,8 +358,6 @@ pub fn validate_agent(name: &str, def: &AgentDefCfg) -> Result<(), String> {
         ));
     }
 
-    // A dotted hook reference is refused by the kernel, which sees every section; this validator
-    // sees only its own.
     Ok(())
 }
 

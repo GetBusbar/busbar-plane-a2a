@@ -2,36 +2,7 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! THE CANONICAL TASK: busbar's own struct for the unit of work A2A calls a Task, and the state
-//! machine that says which moves are legal.
-//!
-//! ## Why the type is ours
-//!
-//! This plane works protocol in, canonical type, protocol out. A2A is
-//! versioned and moving, and a task row is the longest-lived thing this plane writes — it outlives
-//! the process, and after a durable store is configured it outlives the release. A generated wire
-//! type in that row would mean a specification revision rewriting rows an operator has on disk.
-//!
-//! ## The state machine is not decoration, it is the thing that makes a resume safe
-//!
-//! A task moves `submitted` → `working`, may be INTERRUPTED to `input-required` or `auth-required`,
-//! and ends in exactly one of `completed`, `failed`, `canceled`, `rejected`. Two properties are
-//! enforced here rather than left to each call site:
-//!
-//! - **Terminal is terminal.** Nothing leaves a terminal state. A late artifact arriving after a
-//!   `completed`, or a cancel racing a completion, must be REFUSED rather than silently resurrect a
-//!   finished task — a resurrected task re-bills a caller and re-emits provenance for work that was
-//!   already accounted for.
-//! - **An interrupt is a pause, not an ending.** `input-required` and `auth-required` are the states
-//!   a task legitimately sits in for hours waiting on a human, which is precisely why the row has to
-//!   be durable and why the retention sweep must not treat "old" as "collectable".
-//!
-//! The transition table is a FUNCTION rather than a set of `if`s scattered across the relay, because
-//! the interesting failure is the transition nobody wrote a branch for.
 
-// THE TABLE IS DRIVEN. `Task::submitted` and the row projection open every task, and each next
-// state move of a held task is planned through [`plan_transition`], which enforces the table. Some
-// items of the vocabulary are read only by the tests that pin it, so dead code is allowed outside
-// tests.
 #![cfg_attr(not(test), allow(dead_code))]
 
 use serde::{Deserialize, Serialize};
@@ -50,7 +21,7 @@ pub enum Direction {
 
 impl Direction {
     /// The stable wire/store token. Config, admin responses, audit rows and store rows all spell it
-    /// this way, so an operator comparing two of them is comparing the same string.
+
     pub fn as_str(self) -> &'static str {
         match self {
             Direction::Inbound => "inbound",
@@ -59,8 +30,7 @@ impl Direction {
     }
 
     /// Parse a stored token. An UNKNOWN token is an error rather than a default, because defaulting
-    /// picks a direction for a row that will then be resumed the wrong way — re-subscribing to a
-    /// remote agent for a task that never had one, or relaying to a caller that never asked.
+
     pub fn parse(s: &str) -> Result<Self, TaskError> {
         match s {
             "inbound" => Ok(Direction::Inbound),
@@ -108,12 +78,7 @@ impl TaskState {
     }
 
     /// Parse a stored token, refusing an unknown one.
-    ///
-    /// FAILING CLOSED HERE IS THE POINT. A row written by a NEWER engine carrying a state this
-    /// binary does not know is a row this binary cannot reason about: it cannot tell whether it is
-    /// terminal (safe to compact) or interrupted (must be preserved and resumed). Defaulting such a
-    /// row to anything is guessing, and the cheap guess — "unknown means terminal" — is the one that
-    /// deletes a live task on a downgrade.
+
     pub fn parse(s: &str) -> Result<Self, TaskError> {
         match s {
             "submitted" => Ok(TaskState::Submitted),
@@ -137,36 +102,26 @@ impl TaskState {
     }
 
     /// PAUSED awaiting the caller. Distinct from terminal AND from active: an interrupted task
-    /// consumes no compute and may sit for a long time, and is the exact row the durable store
-    /// exists for.
+
     pub fn is_interrupted(self) -> bool {
         matches!(self, TaskState::InputRequired | TaskState::AuthRequired)
     }
 
     /// Is `to` a legal move from `self`?
-    ///
-    /// Written as a total function over the pair rather than as guards at the call sites, so the
-    /// combination nobody thought about is refused by default instead of falling through.
+
     pub fn can_transition_to(self, to: TaskState) -> bool {
         use TaskState::*;
         match self {
-            // A submitted task may start, be interrupted before starting (an auth challenge can
-            // land immediately), or end without ever running.
             Submitted => matches!(
                 to,
                 Working | InputRequired | AuthRequired | Completed | Failed | Canceled | Rejected
             ),
-            // Working may be interrupted or may end. It may NOT go back to submitted: `submitted`
-            // means "not yet started", and a task that has started can never truthfully claim that
-            // again — a resumed task returns to `working`, which is what resume actually means.
+
             Working => matches!(
                 to,
                 InputRequired | AuthRequired | Completed | Failed | Canceled | Rejected
             ),
-            // An interrupt resolves by RESUMING (back to working) or by ending. Crucially it may
-            // also move to the OTHER interrupt: a caller who supplies the requested input can then
-            // be challenged for auth, and forcing that through `working` would emit a provenance
-            // event claiming work happened when none did.
+
             InputRequired => matches!(
                 to,
                 Working | AuthRequired | Completed | Failed | Canceled | Rejected
@@ -175,9 +130,7 @@ impl TaskState {
                 to,
                 Working | InputRequired | Completed | Failed | Canceled | Rejected
             ),
-            // TERMINAL IS TERMINAL, including to ITSELF. A repeated `completed` is not harmless: it
-            // is the shape a duplicate delivery takes, and accepting it appends a second provenance
-            // event and a second billing attribution for one piece of work.
+
             Completed | Failed | Canceled | Rejected => false,
         }
     }
@@ -257,7 +210,7 @@ pub struct Task {
 
 impl Task {
     /// A freshly SUBMITTED task. The only constructor that invents a state, so every other path has
-    /// to go through [`Task::transition_to`] and be checked.
+
     pub fn submitted(
         task_id: impl Into<String>,
         context_id: impl Into<String>,
@@ -296,7 +249,7 @@ impl Task {
     }
 
     /// Move to `to`, or refuse. `updated_at` moves only on a move that was ACCEPTED, so the
-    /// retention sweep's age key never advances because of a rejected transition.
+
     pub fn transition_to(&mut self, to: TaskState, now: u64) -> Result<(), TaskError> {
         if !self.state.can_transition_to(to) {
             return Err(TaskError::IllegalTransition {
@@ -327,9 +280,7 @@ impl Task {
     }
 
     /// Read back from the store seam, validating every field that has a closed domain. A row that
-    /// does not parse is REFUSED and reported; the rehydrate path counts refusals rather than
-    /// dropping them, because a silently skipped row is an in-flight task that quietly ceased to
-    /// exist across a deploy — the exact failure the durable store was built to prevent.
+
     pub fn from_row(row: &crate::TaskRow) -> Result<Self, TaskError> {
         let task = Task {
             task_id: row.task_id.clone(),
@@ -354,13 +305,7 @@ impl Task {
 }
 
 /// Map an A2A state transition to its provenance event kind. The neutral core only hash-chains and
-/// persists whatever `kind` it is handed, so the classification, which needs the [`TaskState`]
-/// enum, lives here. The kind constants are the neutral audit vocabulary's
-/// (`busbar_contract::vocab::EV_*`).
-///
-/// `from` is the state BEFORE the move and it is load-bearing: an `interrupted → working` move is a
-/// RESUME, a distinct event from a fresh `working`, and the two are only separable by looking at the
-/// prior state. Submitted keeps the legacy `working` mapping; every state is named explicitly.
+
 pub fn event_kind_for_transition(from: TaskState, to: TaskState) -> &'static str {
     use busbar_contract::vocab::{EV_INTERRUPTED, EV_RESUMED, EV_TERMINAL, EV_WORKING};
     match to {
@@ -375,18 +320,14 @@ pub fn event_kind_for_transition(from: TaskState, to: TaskState) -> &'static str
 }
 
 /// THE TRANSITION PLAN the neutral engine applies under its working-set lock. Given the CURRENT
-/// persisted [`TaskRow`](crate::TaskRow), reconstruct the canonical [`Task`], VALIDATE the move
-/// against the state machine, choose the provenance event `kind`, and project the new row back — all
-/// A2A domain logic the neutral core must not name. Returns the new row + kind on success, or the
-/// codec's rendered message on refusal (an illegal move, an unreadable current row). The new row's
-/// `updated_at` is `now` (the move's timestamp), which is also the event `ts`.
+
 pub fn plan_transition(
     to: TaskState,
     now: u64,
 ) -> impl FnOnce(&crate::TaskRow) -> Result<(crate::TaskRow, &'static str), String> {
     move |row| {
         let mut task = Task::from_row(row).map_err(|e| e.to_string())?;
-        // Kind is chosen off the FROM-state (before the move), exactly as the pre-cleave engine did.
+
         let kind = event_kind_for_transition(task.state, to);
         task.transition_to(to, now).map_err(|e| e.to_string())?;
         Ok((task.to_row(), kind))
@@ -394,9 +335,7 @@ pub fn plan_transition(
 }
 
 /// The restore-row readability predicate the neutral rehydrate consults. Answers `Ok(())`
-/// when the row parses as a canonical [`Task`] (a known state + direction token and a present
-/// identity) and `Err(rendered message)` otherwise, so core names no codec. The terminal/active split is the task store's (the task store's neutral token check),
-/// applied only after this predicate confirms the token is one this binary knows.
+
 pub fn readable_row(row: &crate::TaskRow) -> Result<(), String> {
     Task::from_row(row).map(|_| ()).map_err(|e| e.to_string())
 }

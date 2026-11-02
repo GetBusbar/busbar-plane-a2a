@@ -2,7 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! The skill a request matches on a held card, and the refusal of one it does not fit, in the
-//! served engine's words (`busbar-a2a` `registry::judge`, `receive::admit`).
 
 use serde_json::json;
 
@@ -183,8 +182,6 @@ fn an_agent_with_no_held_card_is_refused_by_the_catalogue_s_name() {
     assert_eq!(refusal(&Unfit::NoCachedCard).status, 400);
 }
 
-// ── the engine's catalogue fitness cells (`busbar-a2a` `catalogue_tests.rs`), on the fit ─────────
-
 /// A card with `skills` and `capabilities`, its default modes JSON both ways.
 fn a_card(skills: Value, capabilities: Value) -> Value {
     json!({
@@ -213,7 +210,7 @@ fn researcher() -> Value {
 }
 
 /// A protocol capability the task requires and the card does not declare excludes the agent, on
-/// each of the two capabilities; a card that declares it fits.
+
 #[test]
 fn a_required_protocol_capability_the_card_does_not_declare_excludes_the_agent() {
     let streams = TaskShape {
@@ -237,7 +234,7 @@ fn a_required_protocol_capability_the_card_does_not_declare_excludes_the_agent()
 }
 
 /// The caller must be able to read what the agent produces: an output-mode mismatch excludes it,
-/// and a compatible output mode fits. A request states no input modes, so the shape carries none.
+
 #[test]
 fn output_modes_must_be_compatible() {
     let wants_pdf = TaskShape {
@@ -253,8 +250,7 @@ fn output_modes_must_be_compatible() {
 }
 
 /// CONTENT-BLINDNESS BY CONSTRUCTION: the shape the fit reads holds typed metadata only. An
-/// exhaustive destructure with no `..`, so a field for prose cannot arrive without this failing to
-/// compile.
+
 #[test]
 fn the_task_shape_carries_no_channel_for_prose() {
     let TaskShape {
@@ -269,8 +265,7 @@ fn the_task_shape_carries_no_channel_for_prose() {
 }
 
 /// A JSON `null` MEMBER OF A HELD CARD READS AS ABSENT, as the gRPC line's messages read it
-/// (build.rs: "a JSON `null` for a repeated or map member reads as empty"): a card an SDK
-/// serialised with explicit nulls is judged on what it declares, never refused as unreadable.
+
 #[test]
 fn a_held_card_with_null_members_reads_as_absent() {
     let card = json!({

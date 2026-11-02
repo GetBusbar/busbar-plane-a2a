@@ -9,7 +9,7 @@ fn client_identity_files_are_unique_for_repeated_names() {
     let cert = std::fs::read(&first.1).unwrap();
     let key = std::fs::read(&first.2).unwrap();
     let second = client_identity_files("repeated-identity-fixture", "planner");
-    // Also cleans the old tuple-only fixture after the regression panics.
+
     struct Cleanup(Vec<String>);
     impl Drop for Cleanup {
         fn drop(&mut self) {
@@ -38,7 +38,7 @@ async fn accepted_socket_counter_observes_non_http_traffic_before_parsing() {
     let mut socket = tokio::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, agent.port))
         .await
         .unwrap();
-    // A TLS-like record cannot be parsed as an HTTP GET by this plaintext fixture.
+
     socket
         .write_all(&[0x16, 0x03, 0x03, 0x00, 0x01, 0x00])
         .await

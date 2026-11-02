@@ -2,30 +2,9 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! WHAT A UNIT'S STATE LIVES FOR, AND WHAT A HOP THAT NEVER LEFT REPORTS, driven through the door's
-//! own table as the kernel's plane driver drives it (`arrive`, `on_piece`, `refusal`, `serve`,
-//! `cancel`), over a host whose services and connector are this file's:
-//!
-//! * a unit the door has finished with (its answer's last window written, its refusal rendered) no
-//!   longer holds a place among the [`MAX_UNITS`] the instance keeps, so it never pushes a live
-//!   unit out; a cancelled unit is the first to go when the instance is full, and an instance full
-//!   of live units refuses the next arrival, never evicting one;
-//! * a hop the kernel refused for the agent's credential before it dialled reports its fee unit at
-//!   `0` and no bytes on its refused piece, so the kernel's checkpoint refunds it
-//!   (`BUSBAR-1.6.0.md` l.1126: "a hop refused before the socket ledgers nothing");
-//! * a READY arrival on a warmed instance allocates an exact, pinned count: the route name an
-//!   arrival names is the instance's kept copy, never a fresh heap string (THE DESIGN, the plugin
-//!   ABI: "no allocation and no blocking on the hot path"), so the dropped-in twin, built from this
-//!   repo's pin, carries the SDK the linked build carries (compiled in or dropped in, "NOTHING
-//!   CHANGES about the plugin itself").
-
-// A door-driven test crate: it reaches the plane only through `door`, the crate's one public item,
-// and plays the kernel's plane driver and the host over the raw door table, so the `unsafe` the
-// host side needs lives here, outside the plugin crate (whose root keeps the literal
-// `#![forbid(unsafe_code)]`). The door's private constants it needs are `door_facts`, held to the
-// crate's own items by the crate's unit test `door_facts`.
 
 #[path = "support/door_facts.rs"]
-#[allow(dead_code)] // the both-ways script's line and need facts are read there, not here
+#[allow(dead_code)]
 mod door_facts;
 
 #[path = "support/task_door_lifecycle_cases.rs"]
@@ -70,15 +49,11 @@ use busbar_contract::abi::plane::{
 };
 use door_facts::{CLASS_BYTES_INDEX, CLASS_FEE_INDEX, DIALECT_DOCUMENT, MAX_UNITS};
 
-// ── the allocation count: busbar-test-kit's test-only counter, this test binary's allocator ──────
-
 use busbar_test_kit::alloc_counter::allocations_with as allocations_of;
 
 #[global_allocator]
 static A: busbar_test_kit::alloc_counter::Counting =
     busbar_test_kit::alloc_counter::Counting::new();
-
-// ── the host's services ─────────────────────────────────────────────────────────────────────────
 
 fn answer(out: *mut ServiceOut, outcome: Outcome, value: u64, len: u64) -> RawOutcome {
     // SAFETY: the SDK's `out`, live for the call.
@@ -118,9 +93,7 @@ extern "C" fn clock_now(_: HostCtx, input: *const c_void, out: *mut ServiceOut) 
 }
 
 /// EVERY HANDLE THE HOST WAS HANDED, `(ticket slot, ticket generation, seq)`, with the service it
-/// was handed to. busbar's host keeps each handle's first answer and hands it back to any later
-/// call on that handle, whatever service that call names; a handle handed to two services is one
-/// whose second call reads the first's answer.
+
 static HANDLES: Mutex<Vec<Handed>> = Mutex::new(Vec::new());
 
 /// One handle the host was handed, `(ticket slot, ticket generation, seq)`, and its service.
@@ -186,7 +159,7 @@ extern "C" fn judged(_: HostCtx, input: *const c_void, out: *mut ServiceOut) -> 
 }
 
 /// THE STORE the host keeps for the plane, across instances: what the plane's answers wrote, as
-/// `(kind, key, value)`, the last write of a key standing.
+
 static STORE: Mutex<Vec<(String, String, Vec<u8>)>> = Mutex::new(Vec::new());
 
 fn store() -> MutexGuard<'static, Vec<(String, String, Vec<u8>)>> {
@@ -194,8 +167,7 @@ fn store() -> MutexGuard<'static, Vec<(String, String, Vec<u8>)>> {
 }
 
 /// `records.list`: kind/prefix matching records in key order, strictly after the cursor.
-/// While set, `records.list` answers PENDING the first time it is handed a handle and the rows
-/// when that handle is issued again (a store read on the host's pool, completed before the replay).
+
 static LIST_PENDS: AtomicBool = AtomicBool::new(false);
 
 /// While set, `records.list` is refused (the store is unavailable): FAILED, nothing listed.
@@ -344,8 +316,6 @@ static HOST_SLOTS: HostSlots = HostSlots {
     ticket_take: None,
 };
 
-// ── the agent behind the connector: it serves its card to every exchange ───────────────────────
-
 /// The agent's card: unsigned (its registration is `unpinned`), one skill.
 const CARD: &[u8] = br#"{"protocolVersion":"0.3.0","name":"vendor","description":"a vendor agent","url":"https://vendor.example/agent","version":"1","capabilities":{},"defaultInputModes":["text/plain"],"defaultOutputModes":["text/plain"],"skills":[{"id":"quote","name":"quote","description":"quotes","tags":["quote"]}]}"#;
 
@@ -353,9 +323,7 @@ const CARD: &[u8] = br#"{"protocolVersion":"0.3.0","name":"vendor","description"
 static LONG_CARD: AtomicBool = AtomicBool::new(false);
 
 /// [`CARD`] with a description long enough that the card is past the host's record ceiling
-/// ([`busbar_contract::bounded::MAX_RECORD_BYTES`]), as an ordinary card with a few interfaces, a
-/// provider and signatures is, and a dozen skills, so the skills an operator approves of it
-/// (`id -> digest`) are past the ceiling too.
+
 fn long_card() -> Vec<u8> {
     let description = "a vendor agent ".repeat(48);
     let skills: Vec<String> = (0..12)
@@ -501,8 +469,6 @@ static TABLES: Tables = Tables(HostTables {
 /// One test at a time: the connector's wires are the process's.
 static SERIAL: Mutex<()> = Mutex::new(());
 
-// ── the door, op by op ──────────────────────────────────────────────────────────────────────────
-
 fn z<T>() -> T {
     // SAFETY: every `in`/`out` here is plain C data; all-zero is a valid value of each.
     unsafe { std::mem::zeroed() }
@@ -556,7 +522,7 @@ const SECTION: &[u8] =
     br#"{"vendor": {"url": "https://vendor.example/agent", "pin": {"mechanism": "unpinned"}}}"#;
 
 /// The same agent, its card verified against an out-of-band issuer key (the kernel's
-/// `trust.verify` here verifies every card), so `connect` sights a fingerprint `approve` can name.
+
 const SIGNED_SECTION: &[u8] =
     br#"{"vendor": {"url": "https://vendor.example/agent", "pin": {"mechanism": "jws_issuer_key", "key": "issuer"}}}"#;
 
@@ -750,7 +716,7 @@ impl Door {
     }
 
     /// Whether busbar's own card read under `unit` is admitted (`arrive` answers READY; a full
-    /// instance refuses it `429`).
+
     fn arrives_own_card(&self, unit: u64) -> bool {
         let route = ("GET", door_facts::WELL_KNOWN_CARD_PATH);
         let (outcome, _) = self.arrive(unit, route, door_facts::WELL_KNOWN_CARD_PATH, b"");
@@ -885,7 +851,7 @@ impl Door {
     }
 
     /// `serve` of the trust verb `approve` for `agent`, naming `fingerprint`: its outcome, status
-    /// and body.
+
     fn approve(&self, agent: &str, fingerprint: &str) -> (Outcome, u32, String) {
         let body = format!(r#"{{"fingerprint": "{fingerprint}"}}"#);
         let fields = [Field {
@@ -901,10 +867,7 @@ impl Door {
     }
 
     /// `serve` of the admin verb at `route` on `target`, with the head `fields` and `body`: its
-    /// outcome, status and body; the answer's record writes are written to the store as busbar
-    /// dev's kernel writes them (`plane_driver/serve.rs` `write_served_records`): in the plane's
-    /// order, and a record past [`busbar_contract::bounded::MAX_RECORD_BYTES`] is a write the
-    /// store refuses, so the verb answers `500` and no later write of the answer is made.
+
     fn verb(
         &self,
         route: u32,
@@ -963,7 +926,7 @@ impl Door {
                 std::ptr::from_mut(&mut o).cast(),
             )
         };
-        // The kernel writes the answer's record writes to the store, in order.
+
         let held = door_facts::HELD_KINDS;
         let mut status = o.status;
         for w in &records[..(o.records_written as usize).min(records.len())] {
@@ -1060,8 +1023,7 @@ impl Door {
     }
 
     /// The host's own cancel of `unit`, naming it by the key `arrive` kept it under as well as by
-    /// its ticket (`PlaneCancelIn::unit`): a unit cancelled before any piece of it carried its
-    /// ticket.
+
     fn cancel_unit(&self, unit: u64) -> Outcome {
         let mut i: PlaneCancelIn = z();
         i.cancel = CancelIn {
@@ -1081,7 +1043,7 @@ impl Door {
     }
 
     /// The host's own cancel of `unit` (by its key and its ticket): the disposition the door
-    /// answered.
+
     fn cancel_disposition(&self, unit: u64) -> u32 {
         let mut i: PlaneCancelIn = z();
         i.cancel = CancelIn {
@@ -1102,7 +1064,7 @@ impl Door {
     }
 
     /// Busbar's own card read on `unit`, its first window written into a reply buffer too small
-    /// for the card: the unit is LIVE, part way through its answer.
+
     fn begin_own_card(&self, unit: u64) {
         self.arrive_own_card(unit);
         let first = self.piece(unit, Given::caller(b""), 8);
@@ -1115,7 +1077,7 @@ impl Door {
     }
 
     /// Whether `unit`, begun by [`Self::begin_own_card`], is still held: its next window is
-    /// answered from what it owes, never refused.
+
     fn still_answers(&self, unit: u64) -> bool {
         self.piece(unit, Given::more(), 8).outcome == Some(Outcome::Ready)
     }
@@ -1130,12 +1092,8 @@ mod card_generation_custody_cases;
 #[path = "support/verification_custody_cases.rs"]
 mod verification_custody_cases;
 
-// ── (A2) a finished unit holds no place ─────────────────────────────────────────────────────────
-
 /// A UNIT WHOSE ANSWER IS WHOLLY WRITTEN IS FORGOTTEN: busbar's own card read, answered to its last
-/// window, no longer holds one of the instance's [`MAX_UNITS`] places. RED before the fix: only a
-/// finished relayed hop was ever removed, so [`MAX_UNITS`] finished card reads filled the instance
-/// and the next arrival evicted the oldest LIVE unit, whose next window was then refused.
+
 #[test]
 fn units_whose_answer_is_written_never_push_a_live_unit_out() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1158,8 +1116,7 @@ fn units_whose_answer_is_written_never_push_a_live_unit_out() {
 }
 
 /// A UNIT WHOSE REFUSAL IS RENDERED IS FORGOTTEN: the kernel refused it after `arrive` (a spent
-/// budget, a request limit, a hook's veto) and `refusal` rendered its answer, its last call. RED
-/// before the fix: a refused unit was never removed.
+
 #[test]
 fn units_whose_refusal_is_rendered_never_push_a_live_unit_out() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1181,8 +1138,7 @@ fn units_whose_refusal_is_rendered_never_push_a_live_unit_out() {
 }
 
 /// A CANCELLED UNIT GOES FIRST: when the instance is full, the cancelled units make room, never a
-/// live one. RED before the fix: `cancel` left the unit as it was and the instance evicted
-/// the oldest unit whatever it was.
+
 #[test]
 fn cancelled_units_make_room_before_a_live_unit_does() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1199,10 +1155,7 @@ fn cancelled_units_make_room_before_a_live_unit_does() {
 }
 
 /// AN INSTANCE FULL OF LIVE UNITS REFUSES THE NEXT ARRIVAL, AND EVICTS NONE (THE DESIGN section
-/// 1: admission bounds live work, nothing evicts it; a refusal is a fact the caller can act on, an
-/// eviction is not). [`MAX_UNITS`] units arrive and none ends; the next arrival is refused `429`,
-/// and the oldest live unit still answers its next window. RED before the fix: the arrival was
-/// admitted and the oldest live unit evicted, its next window refused.
+
 #[test]
 fn an_instance_full_of_live_units_refuses_the_next_arrival_and_evicts_none() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1225,9 +1178,7 @@ fn an_instance_full_of_live_units_refuses_the_next_arrival_and_evicts_none() {
 }
 
 /// A UNIT CANCELLED BEFORE ITS FIRST PIECE IS OVER: the host's cancel names it by the key `arrive`
-/// kept it under (no piece of it ever carried its ticket), so it makes room when the instance is
-/// full. RED before the fix: the cancel looked for the unit by its ticket alone, which the unit
-/// had not recorded, so the unit stayed live and the next arrival evicted the oldest live unit.
+
 #[test]
 fn a_unit_cancelled_before_its_first_piece_makes_room() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1254,10 +1205,7 @@ fn a_unit_cancelled_before_its_first_piece_makes_room() {
 }
 
 /// A FINISHED HOP'S UNIT IS STILL READ BY A REFUSAL OF ITS ANSWER: the hop's last piece wrote the
-/// caller's whole answer, and the kernel then refused that answer (a response hook's veto); the
-/// refusal still finds the unit, so its audit row names the agent the hop reached. RED before the
-/// fix: the finished hop's unit was dropped at once, so the refusal found nothing and wrote no
-/// row.
+
 #[test]
 fn a_refusal_after_a_finished_hop_still_reads_its_unit() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1297,9 +1245,7 @@ fn a_refusal_after_a_finished_hop_still_reads_its_unit() {
 }
 
 /// A CANCEL SAYS HOW FAR THE HOP GOT (owner billing rule R21: the ledger records what the dialect
-/// did): cut before the agent answered it is ABORTED (billed nothing); cut after the agent answered
-/// it is PARTIAL, so the units it reported bill when its answer was streamed, as the llm and
-/// decisions planes answer. RED before: both were ABORTED.
+
 #[test]
 fn a_cancel_after_the_agent_answered_is_partial() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1334,16 +1280,8 @@ fn a_cancel_after_the_agent_answered_is_partial() {
     );
 }
 
-// ── (A1) a hop the kernel never dialled ─────────────────────────────────────────────────────────
-
 /// A HOP REFUSED FOR THE AGENT'S CREDENTIAL BEFORE IT WAS DIALLED LEDGERS NOTHING
-/// (`BUSBAR-1.6.0.md` l.1126: "a hop refused before the socket ledgers nothing"; the fee class's
-/// own statement in `statement::BILLABLE_CLASSES`: "a unit refused before that has its
-/// `per_request` refunded"). The ATTEMPT left the plane (its fee unit `1`) and the caller's body went
-/// toward the agent, then the kernel's send found the agent's credential unavailable and dialled nothing: the
-/// refused piece reports every class at `0`, which the kernel's checkpoint takes as the unit's last
-/// counts, so its end refunds the fee and ledgers no bytes. RED before the fix: the refused piece
-/// reported no units at all, the kernel kept the ATTEMPT's counts, and the fee stood.
+
 #[test]
 fn a_hop_refused_for_its_credential_before_the_dial_reports_its_fee_and_bytes_at_zero() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1405,16 +1343,7 @@ fn a_hop_refused_for_its_credential_before_the_dial_reports_its_fee_and_bytes_at
 }
 
 /// AN EMPTY ENVELOPE FROM A REACHED AGENT IS CHARGED AS THE HOP THAT REACHED IT (coordinator
-/// ruling, parity principle: "charge exactly what v1.5.5 charged for it"). v1.5.5 had no A2A path
-/// to charge one: its tree holds no a2a crate or module (`git ls-tree -r --name-only v1.5.5`
-/// names no path matching `a2a`), no JSON-RPC reader (`git grep -il jsonrpc v1.5.5` matches no
-/// file), and names A2A only as work to come (v1.5.5 `qa/segments.toml:61` "a2a -> 1.5.6" and
-/// `:169-172`, the `a2a` segment `status = "reserved"`; `crates/busbar/src/config/named_map.rs:16`,
-/// "`agents:` (1.5.6 A2A)"). So the charge stands as this plane makes it, pinned here: the far
-/// end answered a JSON-RPC envelope with neither `result` nor `error`, the caller is answered the
-/// hop's refusal (`a2a.hop.reply_not_json`), and the unit reports the fee unit at `1` (the hop
-/// left the plane for its agent) and the bytes the hop moved both ways (the caller's request and
-/// the far end's envelope).
+
 #[test]
 fn an_empty_envelope_from_a_reached_agent_reports_the_hops_fee_and_bytes() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1460,17 +1389,8 @@ fn an_empty_envelope_from_a_reached_agent_reports_the_hops_fee_and_bytes() {
     );
 }
 
-// ── (B2) an approved agent's card outlives the instance ─────────────────────────────────────────
-
 /// A CARD PAST THE HOST'S RECORD CEILING IS HELD, NEVER WRITTEN AS A RECORD THE HOST CANNOT KEEP
-/// (`busbar_contract::bounded::MAX_RECORD_BYTES`, 512 bytes: busbar dev's store refuses a longer
-/// record, and the kernel answers the whole `serve` `500` for a record write it cannot make). An
-/// operator's `connect` to an agent whose card is longer answers its view, holds the card for the
-/// relay, and carries no record past the ceiling (since the split records, its `card` records are
-/// the card's parts and their head, each within the ceiling). RED before the fix: the answer carried the whole card as
-/// its `card` record (the busbar root cells `root::serve::plane_a2a_door::*` over the gRPC agent,
-/// whose signed card with its interface is past 512 bytes, at busbar-plane-a2a bcc9cff241 against
-/// busbar dev: every `connect` answered `500` `internal error`).
+
 #[test]
 fn a_card_past_the_hosts_record_ceiling_is_held_and_never_written_as_a_record() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1512,16 +1432,7 @@ fn a_card_past_the_hosts_record_ceiling_is_held_and_never_written_as_a_record() 
 }
 
 /// THE CARD WARM ON A UNIT'S TICKET NEVER SHARES A HANDLE WITH THE UNIT'S OWN CALLS
-/// (`abi::mechanism::ticket`: a handle's `seq` counts the services one ticket issued). An instance
-/// busbar never readied or ticked (busbar dev drives no plane `ready`) warms its held cards on the
-/// first unit's first piece, on that unit's ticket; the unit's admission then asks
-/// `entitlement.check` of its caller. busbar's host answers a handle once and hands that answer to
-/// every later call on it, so the check on a handle the warm's `records.list` was answered on reads
-/// a listing, never `ENTITLED`, and the caller is refused `401` `this key is not live`. RED before
-/// the fix: the warm counted from `seq` 0 and the unit's pieces counted from 0 again, so the
-/// listing of the `card` kind and the admission's check shared `seq` 0 (the busbar root cells
-/// `root::serve::plane_a2a_door::*`, at busbar-plane-a2a 7eeb7d8220 against busbar dev: every
-/// first served hop of an instance refused `401` `this key is not live`).
+
 #[test]
 fn the_card_warm_on_a_units_ticket_never_shares_a_handle_with_the_units_own_calls() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1574,12 +1485,7 @@ fn the_card_warm_on_a_units_ticket_never_shares_a_handle_with_the_units_own_call
 }
 
 /// A RESTART SERVES THE AGENTS APPROVED BEFORE IT (ARCHITECT ruling B2, as amended: the `connect`
-/// and `approve` answers write the agent's `card` host record, `BUSBAR-1.6.0.md` l.290 "record
-/// writes ride `on_piece`'s answer", and the first tick after `open` warms the held cards from
-/// those records). An operator's `connect` held the agent's card; the instance is opened again over
-/// the same store and ticked once, and a card read addressed to the agent is admitted, never refused
-/// for a card the instance does not hold. RED before the fix: the cards lived only in the first
-/// instance's memory, so the new one refused every agent until the operator looked again.
+
 #[test]
 fn a_restarted_instance_serves_an_agent_from_its_recorded_card() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1609,16 +1515,7 @@ fn a_restarted_instance_serves_an_agent_from_its_recorded_card() {
 }
 
 /// A TICK WHOSE CARD WARM PENDS ENDS PENDING, AND THE `drive` ITS WAKE RUNS LANDS THE WARM
-/// (`abi::mechanism::lifecycle`: a tick's PENDING answer ends it, what pended inside it goes on
-/// through `drive`, and the next tick's start forgets the cycle's answers). An instance opened again
-/// over a store whose `card` listing the host answers on its pool: the first tick's listing pends,
-/// so the tick answers PENDING, and the drives its completions run replay the listing on the same
-/// handles until the cards are held; an arrival addressed to the agent is then admitted. RED before
-/// the fix: the tick answered READY with the listing still in flight and asked for another tick a
-/// second later, whose start forgot the listing, so on busbar dev the warm landed through no tick,
-/// each completion ran another tick, and the driver ticket's schedule served the warm in place of
-/// the deliveries (the busbar root cells `root::serve::plane_a2a_door::*` that wait for a delivery,
-/// at busbar-plane-a2a bcc9cff241 against busbar dev: no delivery within the window).
+
 #[test]
 fn a_tick_whose_card_warm_pends_ends_pending_and_its_drive_lands_the_warm() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1660,13 +1557,7 @@ fn a_tick_whose_card_warm_pends_ends_pending_and_its_drive_lands_the_warm() {
 }
 
 /// A RESTART KEEPS THE SKILLS THE OPERATOR APPROVED (`BUSBAR-1.6.0.md` l.345-346: "what must
-/// survive a restart goes to its records through the store kind", F15 l.4633). The approval is
-/// the kernel's trust book's, which outlives the instance; the skills of the card it adopted are
-/// the plane's, held for the trust view's drift lists (coordinator ruling Q2). An operator
-/// connects, approves the fingerprint seen, and the view shows no drift; the instance is opened
-/// again over the same store and ticked once, and a `connect` to the unchanged card still shows
-/// none. RED before the fix: the approved skills lived only in the first instance's memory, so the
-/// instance opened again reported every skill of the approved, unchanged card as `added`.
+
 #[test]
 fn a_restarted_instance_keeps_the_skills_its_operator_approved() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1712,16 +1603,7 @@ fn a_restarted_instance_keeps_the_skills_its_operator_approved() {
 }
 
 /// A RESTART SERVES A CARD PAST THE HOST'S RECORD CEILING AND KEEPS ITS APPROVED SKILLS
-/// (ARCHITECT ruling B2, as amended; `BUSBAR-1.6.0.md` l.345-346: "what must survive a restart goes
-/// to its records through the store kind"): a host record is at most
-/// [`busbar_contract::bounded::MAX_RECORD_BYTES`] by design, and a card, or the skills approved of
-/// it, of any size outlives the instance all the same. An operator connects to an agent whose card
-/// is several records long and whose approved skills are past the ceiling too, and approves it;
-/// the instance is opened again over the same store and ticked once: a card read addressed to the
-/// agent is admitted from the recorded card, and a `connect` to the unchanged card shows no drift.
-/// RED before the fix (busbar-plane-a2a 1bba8a8): a card or an approval past the ceiling was held
-/// in plane memory only, so the instance opened again refused the agent for a card it does not
-/// hold, and judged its approved card against nothing.
+
 #[test]
 fn a_restarted_instance_serves_a_card_past_the_record_ceiling_and_keeps_its_approved_skills() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1790,9 +1672,7 @@ fn a_restarted_instance_serves_a_card_past_the_record_ceiling_and_keeps_its_appr
 }
 
 /// A KERNEL REFUSAL WITH NO UNIT ANSWERS THE BASELINE BYTES: the kernel refused the request before
-/// any unit was made (no credential, a body over the cap), so the plane renders the bytes v1.5.5
-/// answered on that route, a JSON-RPC error with no id, at the kernel's status. RED before the fix:
-/// the door rendered its own words for the kernel's text.
+
 #[test]
 fn a_kernel_refusal_with_no_unit_answers_the_baseline_json_rpc_bytes() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1820,10 +1700,7 @@ fn a_kernel_refusal_with_no_unit_answers_the_baseline_json_rpc_bytes() {
 }
 
 /// A CARD LISTING THE HOST REFUSED IS LISTED AGAIN: the cards are warmed only once both their
-/// listings land, so an instance opened again over a store that refused its first tick's listing
-/// warms them on a following tick and serves the agent. RED before the fix: a refused listing counted
-/// as warmed, no tick listed again, and every arrival addressed to the agent was refused for want
-/// of a card until an operator looked again.
+
 #[test]
 fn a_card_listing_the_host_refused_is_listed_again() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1847,7 +1724,7 @@ fn a_card_listing_the_host_refused_is_listed_again() {
     let (ticked, _) = after.tick();
     assert_eq!(ticked, Outcome::Ready, "a refused listing ends the tick");
     LIST_REFUSES.store(false, Ordering::SeqCst);
-    // The tick after a refused warm attempts the deliveries; the one after it warms again.
+
     for n in 0..2 {
         let (ticked, _) = after.tick();
         assert_eq!(ticked, Outcome::Ready, "tick {n} after the refused one");
@@ -1860,22 +1737,12 @@ fn a_card_listing_the_host_refused_is_listed_again() {
     );
 }
 
-// ── the READY path the dropped-in twin carries ──────────────────────────────────────────────────
-
 /// What one addressed READY arrival allocates on a warmed instance (the agent's card held, its
-/// route entry already named by earlier arrivals). The bound is exact (the plane's own unit state,
-/// task rows and relay set-up; the route name costs none): a change that moves it moves this
-/// constant in the same commit, with the reason. It came down from 64 to the measured 56 when the
-/// arrival's body was parsed once and its request handed to the hop rather than copied.
+
 const READY_ARRIVAL_ALLOCATIONS: u64 = 56;
 
 /// A WARMED READY ARRIVAL NAMES ITS ROUTE WITHOUT THE HEAP (THE DESIGN, the plugin ABI: "no
-/// allocation and no blocking on the hot path"; compiled in or dropped in, "NOTHING CHANGES about
-/// the plugin itself"). An arrival addressed to a held agent routes `ROUTE_DIRECT` to it through the SDK's
-/// `Out::route`; once the instance has named that entry, naming it again is a load of the kept
-/// copy. RED at a busbar-contract pin whose SDK kept a fresh `String` for every route name (under
-/// the instance-wide mutex): every arrival paid that allocation, so the count sat above the pin,
-/// and the dropped-in twin built from this repo's pin was a slower plane than the linked one.
+
 #[test]
 fn a_warmed_ready_arrival_allocates_its_pinned_count() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1904,10 +1771,7 @@ fn a_warmed_ready_arrival_allocates_its_pinned_count() {
 }
 
 /// EVERY REFUSED TRUST VERB IS AUDITED AS REJECTED (docs/a2a.md: both verbs audited, refusals as
-/// rejected): a `connect` or an `approve` naming an agent the section does not register, and an
-/// `approve` whose body is not the one-field `{"fingerprint": …}` document, are refused and
-/// audited `AUDIT_REJECTED`, as an approval whose fingerprint disagrees already is. RED before the
-/// fix: the 404s and the malformed body were audited nowhere (`AUDIT_NONE`).
+
 #[test]
 fn a_malformed_or_unknown_approval_is_audited_rejected() {
     use busbar_contract::abi::plane::AUDIT_REJECTED;

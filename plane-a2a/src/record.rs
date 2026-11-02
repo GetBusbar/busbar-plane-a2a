@@ -2,27 +2,17 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! THE A2A PLANE'S OWN DURABLE RECORD TYPES: the task row and the task-event row, each the JSON
-//! value of one host record of its kind ([`crate::records`]). The host stores the bytes the plane
-//! writes and names none of these types; the plane owns the schema and reads it back with
-//! `serde_json`.
 
 /// DIGEST FRAMING VERSION 1 — the LEGACY ambiguous pipe-join (`{prev_hash}|{task_id}|…|{state}`). The
-/// free-text fields (`context_id`, `principal`, `agent_id`) are NOT length-framed, so a value that
-/// itself contains `|` shifts the field boundaries: two distinct event tuples can hash the SAME
-/// preimage (field-injection forgery / ambiguous canonicalization). RETAINED only so a chain persisted
-/// before the fix — whose rows carry no `digest_version` and thus default to this — still verifies.
-/// NEVER emitted for a new event.
+
 pub const DIGEST_VERSION_LEGACY_PIPE: u8 = 1;
 
 /// DIGEST FRAMING VERSION 2 — the INJECTIVE length-prefixed framing every new event is sealed under:
-/// a fixed domain tag, then each string field as `<u64-le len><bytes>` and each integer field as its
-/// fixed 8-byte little-endian encoding. Because the length precedes the bytes, no field's content can
-/// ever be read as another field's — the boundary is unambiguous, so the pipe-injection collision is
-/// impossible.
+
 pub const DIGEST_VERSION_LEN_PREFIXED: u8 = 2;
 
 /// The framing a row that predates the versioned digest is read under: rows persisted before the fix
-/// carry no `digest_version` and serde defaults them to the legacy pipe-join so they keep verifying.
+
 fn default_digest_version() -> u8 {
     DIGEST_VERSION_LEGACY_PIPE
 }

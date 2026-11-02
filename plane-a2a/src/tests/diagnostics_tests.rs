@@ -2,9 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! Per-plane diagnostics-catalog invariants for the A2A plane: code/slug uniqueness, the
-//! class↔code thousands-digit contract, and the live-entry documentation floor. The committed
-//! markdown/JSON snapshot tests render through the host's renderers, which this crate does not
-//! link, so they run where those renderers are linked.
 
 use super::*;
 use busbar_contract::diagnostic::{Class, Severity};
@@ -471,8 +468,7 @@ const A2A_PUSH_REARM_FAILED: Diagnostic = Diagnostic {
 };
 
 /// THE CODES THE PLANE'S PREDECESSOR REGISTERED AND THE PLANE NO LONGER RAISES, ascending by code:
-/// never declared, held here so no code is reissued to another meaning (a test holds every code
-/// here and in [`DIAGNOSTICS`] unique).
+
 const RESERVED: &[&Diagnostic] = &[
     &A2A_EXTENDED_CARD_AGENT_OMITTED,
     &A2A_PUSH_CONFIG_UNRECORDED,
@@ -503,12 +499,7 @@ const RESERVED: &[&Diagnostic] = &[
 ];
 
 /// THE CATALOG IS NOT EMPTY, AND NOT ENTIRELY RETIRED.
-///
-/// Every other test in this file is a `for d in DIAGNOSTICS` loop whose assertions live INSIDE the
-/// loop, and `every_live_entry_documents_meaning_and_action` additionally `continue`s past every
-/// retired entry. A catalog that regressed to empty — a bad `cfg` gate, a botched merge — would
-/// therefore make all four of them pass green while every documented diagnostic silently
-/// disappeared. This is the floor that makes those loops mean something.
+
 #[test]
 fn the_catalog_is_not_empty() {
     assert!(
@@ -586,9 +577,7 @@ fn slugs_are_unique_and_kebab_case() {
 }
 
 /// THE PLANE'S `declares.json` STATES ITS CATALOGUE: the `diagnostics` the door's Statement carries
-/// (and the release signs into a dropped-in plane's manifest), from which the host installs the
-/// plane's codes in either build, are exactly the entries [`DIAGNOSTICS`] holds, field for field,
-/// beside the plane's breaker fact and its needs.
+
 #[test]
 fn the_declares_file_states_the_catalogue() {
     let declared: serde_json::Value =
@@ -607,8 +596,7 @@ fn the_declares_file_states_the_catalogue() {
             })
         })
         .collect();
-    // The breaker fact (ARCHITECT Q4): a transient failure below the trip threshold never benches
-    // an agent's cell; and the carriers the plane needs.
+
     let whole = serde_json::json!({
         "breaker": { "bench_below_trip_threshold": false },
         "diagnostics": want,

@@ -9,7 +9,6 @@ use busbar_contract::abi::host::service::DestJudgeIn;
 use busbar_contract::abi::mechanism::call::Span;
 use std::collections::VecDeque;
 
-// Existing host wire contract, deliberately usable by the dev.2 SDK baseline too.
 const WITHIN: &str = "busbar-dial-within";
 type JudgementCall = ((u32, u32, u32), u32, String);
 
@@ -212,7 +211,7 @@ fn changing_the_selected_member_and_url_cannot_reuse_a_previous_relay_pin() {
         pin(&door.piece(502, Given::attempt(b"vendor"), 4096)),
         "203.0.113.7"
     );
-    // Even a repeated attempt number cannot lend another member the previous endpoint's pin.
+
     let backup = Given::attempt(b"backup");
     let answered = door.piece(502, backup, 4096);
     assert_eq!(pin(&answered), "203.0.113.9");

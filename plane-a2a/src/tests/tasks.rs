@@ -2,10 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! The task store over host records, against [`Book`]: a map that answers `records.get/list/claim`
-//! as the kernel does (a tombstone reads as absent) and applies an answer's writes, the chained
-//! task-event kind as the host keeps a declared chain: an append sealed in the declared
-//! length-prefixed framing with its scope digested, a list that announces a chain that does not
-//! verify, an empty value that drops the chain.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -21,10 +17,7 @@ mod task_sweep_gate;
 mod task_conditional_publication;
 
 /// SUBMIT `row` for the caller: the task, and its chain's genesis event, stamped with the row's
-/// `created_at`. The row is the caller's (its `principal` is the caller's reference).
-///
-/// # Errors
-/// [`Halt`]; `Failed` when there is no caller or the task id is already taken.
+
 pub(crate) fn submit(
     rec: &mut dyn Records,
     at: &Stamp<'_>,
@@ -47,9 +40,7 @@ pub(crate) fn submit(
 }
 
 /// DISPATCH: record the agent the task went to, with a `task.delegated` event.
-///
-/// # Errors
-/// As [`change`].
+
 pub(crate) fn dispatch(
     rec: &mut dyn Records,
     at: &Stamp<'_>,
@@ -67,10 +58,7 @@ pub(crate) fn dispatch(
 }
 
 /// ADVANCE the artifact cursor to `cursor`, monotonic, with a `task.artifact` event; nothing when it
-/// would not move forward.
-///
-/// # Errors
-/// As [`change`].
+
 pub(crate) fn advance_cursor(
     rec: &mut dyn Records,
     at: &Stamp<'_>,
@@ -109,7 +97,7 @@ fn framed(out: &mut Vec<u8>, bytes: &[u8]) {
 }
 
 /// The host's digest of event `e` on the chain `scope`: the length-prefixed prelude
-/// (`prev_hash`, `scope`, `seq`) the host frames, then the door's own bytes ([`suffix`]).
+
 pub(crate) fn host_digest(scope: &str, e: &TaskEventRow) -> String {
     let mut input = Vec::new();
     framed(&mut input, e.prev_hash.as_bytes());
@@ -139,7 +127,7 @@ fn chain_of(key: &str) -> Option<(String, u64)> {
 
 impl Book {
     /// Apply an answer's writes: a put, or an empty value's tombstone; on the chained kind, an
-    /// append the host seals, or the chain dropped.
+
     pub(crate) fn apply(&mut self, writes: &[Write]) {
         for w in writes {
             if w.kind == KIND_TASK_EVENT {
@@ -156,8 +144,7 @@ impl Book {
     }
 
     /// THE HOST'S APPEND to the chain `scope` (`<caller>/<task>`): the next sequence, the tail's
-    /// digest as the link, the digest over the prelude and `own` bytes; kept, as a test reads it,
-    /// as the event row under its listed key. An empty `own` drops the chain.
+
     fn chain(&mut self, scope: &str, own: &[u8]) {
         let held: Vec<(String, String)> = self
             .rows
@@ -213,7 +200,7 @@ impl Book {
     }
 
     /// THE HOST'S VERIFIED READ of the chains under `prefix`: each chain's records, and ahead of
-    /// a chain that does not verify a span keyed by its scope, carrying the break.
+
     fn chains(&self, prefix: &str) -> Vec<(String, Vec<u8>)> {
         let mut by_chain: BTreeMap<String, Vec<(String, TaskEventRow)>> = BTreeMap::new();
         for at in self.rows.keys() {
@@ -394,11 +381,7 @@ fn event(book: &Book, caller: &str, task: &str, seq: u64) -> TaskEventRow {
 }
 
 /// A real inbound task leaves a chain that RECOMPUTES from the persisted rows: opening a relayed
-/// task writes `task.submitted` (the genesis, seq 1, no predecessor) then `task.delegated` (who it
-/// was delegated to), each event's hash is the digest of its own fields and links to its
-/// predecessor's, and every event is scoped to the task and its caller. The read-back is over the
-/// store's rows, never the writer's memory.
-/// Ported from busbar-a2a a2a/tests/front_door_chain_tests.rs::an_inbound_task_leaves_a_verifying_chain_in_the_store_the_front_door_wrote_it_to.
+
 #[test]
 fn an_inbound_task_leaves_a_verifying_chain_in_the_store_the_front_door_wrote_it_to() {
     let mut book = Book::default();
@@ -460,7 +443,7 @@ fn an_inbound_task_leaves_a_verifying_chain_in_the_store_the_front_door_wrote_it
 }
 
 /// A task is held under its caller's prefix: its caller reads it back, another caller reads the same
-/// nothing a missing id reads, and a list is the caller's own.
+
 #[test]
 fn a_task_is_read_back_by_its_caller_only() {
     let mut book = Book::default();
@@ -488,7 +471,7 @@ fn a_task_is_read_back_by_its_caller_only() {
 }
 
 /// A change chains its event onto the tail the task record carries, under the digest, and a second
-/// submit of the same id is refused.
+
 #[test]
 fn a_change_chains_its_event_onto_the_tail() {
     let mut book = Book::default();
@@ -537,7 +520,7 @@ fn a_change_chains_its_event_onto_the_tail() {
 }
 
 /// RACE-SAFE: a writer that loses its sequence to another writer re-reads and takes the next one,
-/// on top of the other's change rather than over it.
+
 #[test]
 fn a_change_that_loses_its_sequence_takes_the_next() {
     let mut book = Book::default();
@@ -635,9 +618,7 @@ fn a_terminal_task_past_its_window_reads_as_absent() {
 }
 
 /// THE SWEEP: an expired terminal task goes as tombstones (its row, its events, its push config),
-/// and a task whose id it prefixes stays, active and untouched however long it sat idle (amended
-/// to Q128 K2-H5, coordinator 2026-10-07; spec docs/design/BUSBAR-1.6.0.md :198-203: it pinned
-/// the abandon-cancel of idle active tasks).
+
 #[test]
 fn the_sweep_tombstones_the_expired_and_leaves_the_idle_active() {
     let mut book = Book::default();
@@ -687,10 +668,7 @@ fn the_sweep_tombstones_the_expired_and_leaves_the_idle_active() {
 }
 
 /// AN ACTIVE TASK IS NEVER EVICTED (Q128 K2-H5, coordinator 2026-10-07; spec docs/design/BUSBAR-1.6.0.md
-/// :198-203, "An active work handle is never evicted ... Retention bounds only settled handles"): an
-/// active task idle for far longer than the old 86_400 s abandon window is still live after a sweep,
-/// its state unchanged, readable through the get and the list, and its push token still validates.
-/// RED on the base: the sweep canceled it.
+
 #[test]
 fn an_idle_active_task_survives_the_sweep_with_its_push_token() {
     let mut book = Book::default();
@@ -719,8 +697,7 @@ fn an_idle_active_task_survives_the_sweep_with_its_push_token() {
 }
 
 /// THE CAP: while MAX_RETAINED or more TERMINAL tasks are held, the oldest go; active tasks are
-/// not counted against the cap and none goes (amended to Q128 K2-H5, coordinator 2026-10-07; spec
-/// :198-203: it counted active tasks toward the cap); the sweep touches no more than its budget.
+
 #[test]
 fn the_sweep_holds_the_cap_with_terminal_tasks_only() {
     let mut book = Book::default();
@@ -767,8 +744,7 @@ fn moved_to(book: &mut Book, task: &str, to: TaskState, now: u64) {
 }
 
 /// Ported from busbar-a2a a2a/tests/taskstore_tests.rs::an_interrupt_resumes_after_a_restart_and_its_chain_continues.
-/// The door keeps no task in memory: a "restart" is the same records read afresh, so the rehydrated
-/// interrupt is the held row, and the resume chains onto its stored tail.
+
 #[test]
 fn an_interrupt_resumes_after_a_restart_and_its_chain_continues() {
     let mut book = Book::default();
@@ -779,7 +755,6 @@ fn an_interrupt_resumes_after_a_restart_and_its_chain_continues() {
     assert_eq!(before.row.state, "auth-required");
     assert_eq!(before.next_seq, 4, "process 1 wrote a real chain");
 
-    // THE RESTART: nothing but the records survive.
     let mut after_restart = book.clone();
     moved_to(&mut after_restart, "t-paused", TaskState::Working, 200);
 
@@ -819,8 +794,7 @@ fn the_task_event_digest_covers_every_content_field_and_excludes_the_join_key() 
         hash: String::new(),
         digest_version: DIGEST_VERSION_LEN_PREFIXED,
     };
-    // Exhaustive by construction: a field added to `TaskEventRow` fails to compile here until
-    // somebody decides whether it belongs in the digest.
+
     {
         let TaskEventRow {
             task_id: _,
@@ -917,10 +891,8 @@ fn an_illegal_transition_writes_neither_a_row_nor_an_event() {
     assert_eq!(book.rows, rows_before, "the store is untouched");
 }
 
-// ── THE RESTORE (the engine's boot rehydrate, over the records the host verifies) ──────────────
-
 /// "Process 1" (the engine's `process_one`): ALICE's `t-work` taken to `working`; BOB's
-/// `t-paused` dispatched, working, its cursor at 7, then interrupted on `auth-required`.
+
 fn process_one() -> Book {
     let mut book = Book::default();
     submitted(&mut book, ALICE, "t-work", 100);
@@ -950,10 +922,7 @@ fn process_one() -> Book {
 }
 
 /// Ported from busbar-a2a a2a/tests/taskstore_tests.rs::the_ram_default_loses_every_in_flight_task_and_the_registry_says_so.
-/// The negative twin of the restore cells: the same sequence over a memory store, whose records die
-/// with the process, loses everything, and the restore REPORTS an empty store rather than pretending.
-/// Durability is a property of the configured backend, never of the plane. The twin runs on the same
-/// `process_one` the durable cells restore from, so a store that stopped dropping would turn it red.
+
 #[test]
 fn the_ram_default_loses_every_in_flight_task_and_the_registry_says_so() {
     let mut process_1 = process_one();
@@ -962,7 +931,7 @@ fn the_ram_default_loses_every_in_flight_task_and_the_registry_says_so() {
         2,
         "process 1 holds both tasks in its records"
     );
-    // THE RESTART over a memory store: a NEW, empty one. The map dies with the process.
+
     let mut process_2 = Book::default();
     assert_eq!(
         restore(&mut process_2).unwrap(),
@@ -976,8 +945,7 @@ fn the_ram_default_loses_every_in_flight_task_and_the_registry_says_so() {
 }
 
 /// Ported from busbar-a2a a2a/tests/taskstore_tests.rs::a_tampered_chain_is_reported_on_restore_and_the_task_is_still_restored.
-/// A chain the host reports broken at restore is named, and the task is still held: refusing it
-/// would let anyone who can write to the store delete a task by corrupting one event.
+
 #[test]
 fn a_tampered_chain_is_reported_on_restore_and_the_task_is_still_restored() {
     let mut book = process_one();
@@ -1003,11 +971,7 @@ fn a_tampered_chain_is_reported_on_restore_and_the_task_is_still_restored() {
 }
 
 /// ENTRIES CUT FROM THE END ARE CAUGHT. Dropping a chain's last events leaves every remaining link
-/// correct, so the host's verified read alone cannot see it (busbar's generic chain verifier pins
-/// that limit: `audit/tests/chain_tests.rs::truncating_the_tail_verifies_and_that_limit_is_deliberate`).
-/// The other half is the task row, which holds the sequence its chain's next event takes: a chain
-/// whose last event falls short of it was cut, and the restore reports that break, naming both
-/// sequences, while the task stays held. RED before the fix: the cut chain restored clean.
+
 #[test]
 fn dropping_the_last_event_is_a_reported_break() {
     let mut book = process_one();
@@ -1035,7 +999,7 @@ fn dropping_the_last_event_is_a_reported_break() {
 }
 
 /// An in-flight task whose WHOLE chain is gone is a cut chain too: its row committed events the
-/// store no longer holds. RED before the fix: it restored clean.
+
 #[test]
 fn dropping_every_event_of_an_in_flight_task_is_a_reported_break() {
     let mut book = process_one();
@@ -1056,8 +1020,7 @@ fn dropping_every_event_of_an_in_flight_task_is_a_reported_break() {
 }
 
 /// An untouched store still restores clean: a chain whose last event is the one its task row
-/// committed is no break, and another task's chain the scope's prefix also reaches (`t-work`
-/// reaches `t-work2`) is never counted as this one's.
+
 #[test]
 fn a_whole_chain_is_no_break_whatever_its_neighbours() {
     let mut book = process_one();
@@ -1070,8 +1033,7 @@ fn a_whole_chain_is_no_break_whatever_its_neighbours() {
 }
 
 /// Ported from busbar-a2a a2a/tests/taskstore_tests.rs::a_terminal_task_is_counted_on_restore_and_deliberately_not_loaded.
-/// A terminal task is counted, its chain not read: nothing resumes it. Its row is kept for the
-/// provenance window.
+
 #[test]
 fn a_terminal_task_is_counted_on_restore_and_deliberately_not_loaded() {
     let mut book = process_one();
@@ -1090,8 +1052,7 @@ fn a_terminal_task_is_counted_on_restore_and_deliberately_not_loaded() {
 }
 
 /// Ported from busbar-a2a a2a/tests/taskstore_tests.rs::an_unreadable_row_is_counted_rather_than_silently_dropped.
-/// A row this build cannot read back (a state it does not know) is counted, and the readable one
-/// still comes back.
+
 #[test]
 fn an_unreadable_row_is_counted_rather_than_silently_dropped() {
     let mut book = process_one();
@@ -1104,8 +1065,7 @@ fn an_unreadable_row_is_counted_rather_than_silently_dropped() {
 }
 
 /// Ported from busbar-a2a a2a/tests/chain_golden.rs::one_undecodable_record_does_not_drop_the_others_on_restore
-/// (the task-row half; the host skips an undecodable chain record itself).
-/// A task row that does not decode is counted and the good task still restored.
+
 #[test]
 fn one_undecodable_task_row_does_not_drop_the_others_on_restore() {
     let mut book = process_one();
@@ -1120,8 +1080,7 @@ fn one_undecodable_task_row_does_not_drop_the_others_on_restore() {
 }
 
 /// Ported from busbar-a2a a2a/tests/front_door_chain_tests.rs::editing_a_persisted_event_breaks_the_chain_the_front_door_wrote.
-/// The rows a real open wrote verify; the agent the task was delegated to, rewritten in the store,
-/// breaks the chain, and the break names the task's chain.
+
 #[test]
 fn editing_a_persisted_event_breaks_the_chain_the_front_door_wrote() {
     let mut book = Book::default();
@@ -1152,7 +1111,7 @@ fn editing_a_persisted_event_breaks_the_chain_the_front_door_wrote() {
 }
 
 /// The sweep drops an expired task's chain whole: one empty append on the chain's scope, never a
-/// listing of its events.
+
 #[test]
 fn the_sweep_drops_an_expired_tasks_chain_whole() {
     let mut book = Book::default();
@@ -1179,10 +1138,7 @@ fn the_sweep_drops_an_expired_tasks_chain_whole() {
 }
 
 /// B1 RULING 1 (coordinator 2026-10-07): MOVING BYTES BETWEEN CONTEXT, PRINCIPAL AND AGENT BREAKS
-/// THE CHAIN (predev's F-A2A2, the reason its v2 framing exists). Two tuples that differ only in
-/// where a `|` falls across those fields are two different records, and a store edit that moves
-/// the boundary is reported at restore. RED under the pipe-separated framing (shown on Latchkey
-/// before the switch): the moved tuple joins to the same bytes, digests the same, and verifies.
+
 #[test]
 fn moving_bytes_between_context_principal_and_agent_breaks_verification() {
     let at = |context: &str, principal: &str, agent: &str| TaskEventRow {
@@ -1228,18 +1184,12 @@ fn moving_bytes_between_context_principal_and_agent_breaks_verification() {
 }
 
 /// B1 RULING 3 (coordinator 2026-10-07; `BUSBAR-1.6.0.md` Part 3, the piece frame: "a plane never
-/// sees the raw principal"): the chain scope a unit writes is `<caller_ref>/<task>`, the kernel's
-/// opaque reference and the task, and nothing the door writes for it carries the principal or the
-/// key id. The door holds a task only under a reference shaped as the kernel mints it (lower-case
-/// hex), so a raw principal or key id is refused outright. (The kernel half, that the reference is
-/// the node's keyed digest and never the principal, is `busbar-kernel` `plane_driver` route tests'
-/// `the_caller_reference_is_never_the_principal`; `task_door::on_piece` holds tasks under the
-/// piece's `caller_ref`.)
+
 #[test]
 fn the_chain_scope_is_the_callers_opaque_reference_and_the_task() {
     const PRINCIPAL: &str = "acct:alice@example.com";
     const KEY_ID: &str = "vk_alice";
-    // A stand-in for the kernel's reference: 64 lower-case hex characters, as it mints them.
+
     let caller_ref = busbar_contract::redacted::sha256_hex(b"keyed digest of the principal");
     let mut book = Book::default();
     let mut out = Vec::new();
@@ -1286,12 +1236,7 @@ fn the_chain_scope_is_the_callers_opaque_reference_and_the_task() {
 }
 
 /// THE TASK KIND IS TERMINAL-ONLY, and the plane's records layer is what keeps it so. At f608d7d5
-/// the tail declared it (`PlaneTail::record_retentions`, `record_retention(0, TerminalOnly)`): a
-/// purge of the `task` kind drops only TERMINAL rows older than its cutoff and keeps an ACTIVE row
-/// however old, while every other held kind goes by age. busbar dev's tail states no retentions,
-/// so the rule is the plane's own: of the held kinds exactly `task` is
-/// [`crate::records::Retention::TerminalOnly`], the sweep purges through that rule, and a restart
-/// (the same records read afresh) restores the same retained set.
+
 #[test]
 fn the_records_layer_declares_the_task_kind_as_terminal_only() {
     use crate::records::{retention_of, Retention, HELD_KINDS};
@@ -1306,16 +1251,13 @@ fn the_records_layer_declares_the_task_kind_as_terminal_only() {
             (crate::records::KIND_CARD_APPROVAL, Retention::Age),
         ]
     );
-    // The rule as the contract stated it: a row at or after the cutoff always stays; before it, a
-    // terminal row goes under either rule and an active row only by age.
+
     assert!(Retention::TerminalOnly.drops(10, 11, true));
     assert!(!Retention::TerminalOnly.drops(10, 11, false));
     assert!(!Retention::TerminalOnly.drops(11, 11, true));
     assert!(Retention::Age.drops(10, 11, false));
     assert!(!Retention::Age.drops(11, 11, false));
 
-    // Through the records: an interrupted task waiting on a human for a year is exactly the old
-    // row that must survive; a completed one of the same age goes with its chain.
     let mut book = Book::default();
     submitted(&mut book, ALICE, "waiting", 100);
     moved_to(&mut book, "waiting", TaskState::Working, 100);
@@ -1338,7 +1280,6 @@ fn the_records_layer_declares_the_task_kind_as_terminal_only() {
         "and its chain with it"
     );
 
-    // THE RESTART: nothing but the records survive, and they restore the same retained set.
     let before = restore(&mut book).unwrap();
     let mut restarted = book.clone();
     assert_eq!(restore(&mut restarted).unwrap(), before);
@@ -1375,8 +1316,7 @@ impl Records for Listed<'_> {
 }
 
 /// THE RESTORE READS ONLY THE IN-FLIGHT TASKS' CHAINS: each one listed under its own scope, and a
-/// terminal task's chain never asked for. RED against a restore that listed every task event of
-/// every chain, terminal ones included.
+
 #[test]
 fn the_restore_reads_only_the_in_flight_tasks_chains() {
     let mut book = process_one();

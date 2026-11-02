@@ -16,7 +16,6 @@ static REFRESH_AT_ADMISSION: Mutex<Option<usize>> = Mutex::new(None);
 static REFRESH_AT_DECISION: Mutex<Option<usize>> = Mutex::new(None);
 
 pub(super) fn refresh_during_admission() {
-    // Release the fixture guard before entering any plugin code.
     let instance = REFRESH_AT_ADMISSION
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
@@ -354,7 +353,7 @@ fn a_refresh_inside_the_preview_verdict_cannot_publish_stale_card_records() {
 }
 
 /// G1-48: a wake only permits replay. The actual sighting answer must land successfully before
-/// the card can be published or approved, even when the trust book's old verdict still serves.
+
 #[test]
 fn a_failed_sighting_completion_cannot_publish_or_approve_the_card() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);

@@ -2,15 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! THE WELL-KNOWN TYPES the gRPC line's messages name (`google.protobuf.Struct`, `Value`,
-//! `ListValue`, `NullValue`, `Timestamp`), with their protobuf JSON mapping.
-//!
-//! Ported from `pbjson-types` 0.9.0 (MIT OR Apache-2.0), so the bytes are its bytes, but one: a
-//! timestamp is written Z-normalised,
-//! as the protobuf JSON mapping states, where `pbjson-types` wrote `+00:00`. The one thing not
-//! taken is `chrono`: the timestamp's RFC 3339 form is written and read here as `chrono` 0.4 wrote
-//! (`DateTime<Utc>::to_rfc3339`) and read (`DateTime::parse_from_rfc3339`) it for `pbjson-types`,
-//! because the calendar crate's clock half reaches the OS, and a plane's closure reaches nothing
-//! (the dependency wall).
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -152,8 +143,6 @@ impl crate::proto::custody::prost::MapValue for Value {
         prost::encoding::message::merge(wire, value, buf, ctx)
     }
 }
-
-// ── Struct, Value, ListValue: the JSON value they are ─────────────────────────────────────────
 
 impl Serialize for Struct {
     fn serialize<S: Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
@@ -382,8 +371,6 @@ impl<'de> Visitor<'de> for KindVisitor {
     }
 }
 
-// ── Timestamp: its RFC 3339 string ────────────────────────────────────────────────────────────
-
 const SECS_PER_DAY: i64 = 86_400;
 const NANOS_PER_SEC: u32 = 1_000_000_000;
 /// The calendar's first and last representable years (`chrono`'s `NaiveDate::MIN`/`MAX`).
@@ -437,7 +424,7 @@ fn date(year: i64, month: u32, day: u32) -> Option<i64> {
 }
 
 /// The UTC date and time of `(seconds, nanos)`, when the calendar holds it (`chrono`'s
-/// `DateTime::from_timestamp`): a leap second is a `nanos` of a second or more on the 59th second.
+
 fn civil(seconds: i64, nanos: i32) -> Option<(i64, u32, u32, u32, u32)> {
     let nanos = u32::try_from(nanos).ok()?;
     let days = seconds.div_euclid(SECS_PER_DAY);
@@ -460,7 +447,7 @@ pub fn representable(seconds: i64, nanos: i32) -> bool {
 
 impl Timestamp {
     /// Its protobuf JSON form: a four-digit year in 0001–9999, the fraction in 0, 3, 6 or 9
-    /// digits, and UTC's `Z` suffix. Values outside the protobuf range are refused.
+
     fn rfc3339(self) -> Result<String, &'static str> {
         if !representable(self.seconds, self.nanos) {
             return Err("timestamp is outside the protobuf seconds or nanoseconds range");
@@ -564,7 +551,7 @@ fn fraction(s: &str) -> Result<(&str, u32), ParseError> {
 }
 
 /// The offset (`Z`, or `±HH:MM`; `chrono`'s `timezone_offset` with zulu and the minus sign
-/// allowed and minutes required), in seconds east, and what follows it.
+
 fn offset(mut s: &str) -> Result<(&str, i32), ParseError> {
     if let Some(b'Z' | b'z') = s.as_bytes().first() {
         return Ok((&s[1..], 0));

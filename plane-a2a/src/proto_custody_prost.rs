@@ -2,9 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! The ordinary prost API with scoped replacements for owned string, bytes and map merge.
-//!
-//! The map entry delegates framing, recursion and field dispatch to prost::message::merge.
-//! No second protobuf parser is involved. Encoding remains prost's own implementation.
 
 pub(crate) use ::prost::*;
 
@@ -50,12 +47,10 @@ pub(crate) mod encoding {
             check_wire_type(WireType::LengthDelimited, wire)?;
             let len = decode_varint(buf)?;
             if len > buf.remaining() as u64 {
-                // Exact prost length-delimited underflow diagnostic.
                 const UNDERFLOW: &str = "buffer underflow";
                 return Err(::prost::DecodeError::new(UNDERFLOW));
             }
-            // Copy directly into initialized, exactly sized storage. Native bytes::merge's
-            // copy_to_bytes intermediate can itself own a temporary allocation of secret bytes.
+
             incoming.resize(len as usize, 0);
             buf.copy_to_slice(&mut incoming);
             value.wipe();
@@ -93,15 +88,14 @@ pub(crate) mod encoding {
             ctx: DecodeContext,
         ) -> Result<(), ::prost::DecodeError> {
             let mut incoming = Guard::new(Vec::new());
-            // Prost clears the destination String on every merge error. Wipe before matching that
-            // state transition, so an invalid length or UTF8 never hides its initialized old bytes.
+
             value.wipe();
             value.clear();
             super::bytes::merge(wire, &mut incoming, buf, ctx)?;
             if std::str::from_utf8(&incoming).is_err() {
                 return Err(::prost::DecodeError::new(INVALID_UTF8));
             }
-            // Validation leaves no owned FromUtf8Error on the error path.
+
             match String::from_utf8(incoming.take()) {
                 Ok(text) => {
                     *value = text;
@@ -137,8 +131,6 @@ pub(crate) mod encoding {
         };
         use std::collections::HashMap;
 
-        // All map keys in the vendored A2A schema are strings. Retain the callback types so prost's
-        // derives infer their ordinary generic Buf parameter, while the entry uses typed dispatch.
         pub(crate) fn merge<V, B, KM, VM>(
             key_merge: KM,
             val_merge: VM,
@@ -219,7 +211,6 @@ pub(crate) mod encoding {
                 buf: &mut impl ::prost::bytes::Buf,
                 ctx: DecodeContext,
             ) -> Result<(), ::prost::DecodeError> {
-                // Protobuf map entry tags, fixed by the protobuf wire format.
                 const KEY: u32 = 1;
                 const VALUE: u32 = 2;
                 match tag {

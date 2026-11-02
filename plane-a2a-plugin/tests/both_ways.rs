@@ -2,35 +2,19 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! THE DOOR, BOTH WAYS, OP BY OP: the logic crate's `door` linked and this crate's
-//! dropped-in image (the `busbar-plane-a2a-plugin` cdylib `cargo test` builds beside the test)
-//! loaded on one dispatcher through busbar's real loader, and one script driven through both. It
-//! moved here with the crate from busbar's crates/busbar-plane-a2a, where the dropped-in image was
-//! the crate's `a2a_door` example; here the image is this crate itself, the one a signed tarball
-//! carries.
 
 /// THE DOOR, BOTH WAYS (BUSBAR-1.6.0.md Part 2 #2 steps (4) and (5); Part 3 section 12 "Proven
-/// by": the plane conformance suite, compiled-in and dropped-in through one table). The plane's
-/// `door` is loaded LINKED (`load_linked`) and DROPPED (this crate's own
-/// cdylib, `load_dropped`) on one dispatcher, and ONE script drives every op through the loader's
-/// plane kind: the lifecycle (`validate` in the grammar's own sentence, `open` and `refresh` with
-/// their snapshots read through the loader's own copy, `retire`, `tick`, `drive`, `cancel`), the
-/// request path (`arrive` on the JSON-RPC and the HTTP+JSON lines, a refused arrival rendered by
-/// `refusal` in the plane's words, a kernel's and a gate's refusal at the kernel's status) and
-/// `project` (the `{tool, arguments}` view, its session, its prompt view and a request-stage
-/// rewrite applied and re-projected). The two transcripts must be identical.
-/// This plugin's own door, named for the loader.
+
 fn loaded_door() -> busbar_plugin_loader::dispatch::LoadedDoor {
-    // `busbar_plane_a2a::door` is a sealed door function (it answers a `&'static Door`), so the
-    // loader takes it as it is: no `unsafe` restatement.
     busbar_plugin_loader::dispatch::LoadedDoor::from(
         busbar_plane_a2a::door as busbar_contract::abi::mechanism::door::DoorFn,
     )
 }
 
 /// The door's private facts this script names, restated as data in the logic crate's
-/// `tests/support/door_facts.rs` and held there, item by item, by the crate's unit test `door_facts`.
+
 #[path = "../../plane-a2a/tests/support/door_facts.rs"]
-#[allow(dead_code)] // the unit-lifetime tests' constants are read there, not here
+#[allow(dead_code)]
 mod door_facts;
 
 mod both_ways {
@@ -55,10 +39,6 @@ mod both_ways {
     use busbar_test_kit::services_double::{Double, ServicesDouble, Unserved};
     use serde_json::{json, Value};
 
-    // THE PLANE'S WORDS THIS SCRIPT SPEAKS. The logic crate's only public item is its door
-    // (BUSBAR-1.6.0.md l.3567), so the values the script drives it with are the logic crate's
-    // `tests/support/door_facts.rs`, which the crate's own unit test `door_facts` holds, value by
-    // value, to the private item each restates: a drift is red in the crate, not a silent pass here.
     use super::door_facts::{
         claim, CLIENT_IDENTITY_FROM, DIALECT_DOCUMENT, DIALECT_FRAMED, DIALECT_TARGET,
         FRAMED_TRANSPORT, MEMBER_TARGET, MOUNT_PATH, NEED_AGENT, NEED_GRPC, NEED_OPEN_WEB,
@@ -104,8 +84,6 @@ mod both_ways {
         let start = s.ptr() as usize - arena.as_ptr() as usize;
         String::from_utf8_lossy(&arena[start..start + s.len()]).into_owned()
     }
-
-    // ── the fixtures ─────────────────────────────────────────────────────────────────────────────
 
     /// One fronted agent.
     const GOOD: &[u8] =
@@ -166,10 +144,8 @@ mod both_ways {
         out
     }
 
-    // ── one step of the script ───────────────────────────────────────────────────────────────────
-
     /// `arrive` of `body` at `target` on claim `(verb, route)` with `fields`: one line, and the
-    /// refused arrival's own words.
+
     fn arrive(
         p: &Plugin<Plane>,
         unit: u64,
@@ -182,7 +158,7 @@ mod both_ways {
     }
 
     /// `arrive` on the snapshot's claim `index`, which may be one past the route table (an agent's
-    /// trailing-separator claim, R-16).
+
     fn arrive_on(
         p: &Plugin<Plane>,
         unit: u64,
@@ -253,8 +229,7 @@ mod both_ways {
     }
 
     /// `project` of `body` at `target` on claim `(verb, route)`, with a request-stage `rewrite`:
-    /// one line of the view's scalars and strings, its session, the projected body, the prompt
-    /// view's turns and the rewritten body.
+
     fn project(
         p: &Plugin<Plane>,
         unit: u64,
@@ -408,7 +383,6 @@ mod both_ways {
             c.outcome, x.out.cancel.disposition
         ));
 
-        // THE REQUEST PATH.
         let document = ("POST", MOUNT_PATH);
         let agent_route = mounted("/agents/{agent_id}");
         let agent = ("POST", agent_route.as_str());
@@ -427,7 +401,7 @@ mod both_ways {
         let (line, rest_words) = arrive(p, 6, ("POST", task_route.as_str()), &bogus, b"", &[]);
         t.push(line);
         t.push(refuse(p, REFUSAL_ARRIVE, 0, DIALECT_TARGET, &rest_words));
-        // A media type the line does not read: refused in the plane's own words.
+
         let plain = [Field {
             name: abi_str("content-type"),
             value: abi_str("text/plain"),
@@ -450,7 +424,6 @@ mod both_ways {
             b"a gate said no",
         ));
 
-        // THE gRPC LINE: a call's one request message, the rpc its target names.
         let service = format!("{}/{{method}}", SERVICE_PATH);
         let grpc = ("POST", service.as_str());
         let rpc = |name: &str| format!("{}/{name}", SERVICE_PATH);
@@ -472,18 +445,14 @@ mod both_ways {
             DIALECT_FRAMED,
             b"this key is over its budget",
         ));
-        // A STREAMED ANSWER states `ROUTE_STREAM` beside `ROUTE_ONCE` (ARCHITECT ruling 2026-10-07,
-        // STREAM-CEILING): a message streamed, and a resubscribe to a task, on the plane's own endpoint.
+
         t.push(arrive(p, 11, document, MOUNT_PATH, STREAM, &[]).0);
         t.push(arrive(p, 12, document, MOUNT_PATH, RESUBSCRIBE, &[]).0);
-        // ONE FRONTED AGENT'S ENDPOINT IN ITS TRAILING-SEPARATOR SPELLING (architect ruling
-        // 2026-10-24, R-16): the snapshot's exact claim after the route table, served as the agent's
-        // JSON-RPC endpoint.
+
         let slash_claim = u32::try_from(ROUTES.len()).expect("a small table");
         let slash_target = mounted("/agents/vendor/");
         t.push(arrive_on(p, 16, slash_claim, "POST", &slash_target, SEND, &[]).0);
-        // ONE FRONTED AGENT'S OWN CARD (architect ruling 2026-10-23, R-15): at the protocol's
-        // discovery path under the agent's endpoint.
+
         let agent_card = mounted(ROUTE_AGENT_CARD);
         let card_target = mounted("/agents/vendor/.well-known/agent-card.json");
         t.push(arrive(p, 14, ("GET", agent_card.as_str()), &card_target, b"", &[]).0);
@@ -501,7 +470,6 @@ mod both_ways {
             .0,
         );
 
-        // THE HOOK VIEW.
         t.push(project(p, 2, agent, &agent_target, SEND, None));
         t.push(project(p, 4, rest_send, &send_route, REST_SEND, None));
         t.push(project(p, 2, agent, &agent_target, SEND, Some(REWRITE)));
@@ -527,8 +495,7 @@ mod both_ways {
     }
 
     /// A `SendMessage` call's request message, as a gRPC client encodes it: `SendMessageRequest {
-    /// message (2): Message { message_id (1): "m3", context_id (2): "ctx-11", role (4): ROLE_USER,
-    /// parts (5): [Part { text (1): "hi" }] } }` (the vendored `a2a.proto`), in field order.
+
     fn grpc_send() -> Vec<u8> {
         let mut bytes = vec![0x12, 0x14];
         bytes.extend_from_slice(&[0x0a, 0x02]);
@@ -541,8 +508,6 @@ mod both_ways {
         bytes
     }
 
-    // ── the doors ────────────────────────────────────────────────────────────────────────────────
-
     fn linked(d: &Dispatcher) -> Plugin<Plane> {
         let row = LinkedRow::of_loaded(crate::loaded_door())
             .expect("the linked door states its Statement");
@@ -550,8 +515,7 @@ mod both_ways {
     }
 
     /// This crate's dropped-in image, the `busbar_plane_a2a_plugin` cdylib `cargo test` builds
-    /// beside the test (uplifted to `target/<profile>`, or hashed in its `deps`). A missing
-    /// artifact is a failure, never a skip: this test IS the dropped-in door's proof.
+
     fn dropped(d: &Dispatcher) -> Plugin<Plane> {
         let exe = std::env::current_exe().expect("the test binary has a path");
         let deps = exe.parent().expect("target/<profile>/deps");
@@ -590,9 +554,7 @@ mod both_ways {
     }
 
     /// THE gRPC NEED, AS THE DOOR STATES IT (spec line 2026-09-30, the a2a door's third need): the
-    /// agents reached over grpc are the same member route as over http (each at its own `url`, an
-    /// upstream, its client identity the same anchors), only the transport differs. Read off the
-    /// door's own rendered Statement. RED: the door stated two needs and no grpc transport.
+
     #[test]
     fn the_door_states_its_agents_over_http_and_over_grpc_alike() {
         let rendered = LinkedRow::of_loaded(crate::loaded_door())
@@ -617,8 +579,7 @@ mod both_ways {
     }
 
     /// THE PUSH NEED'S TRUST, AS THE DOOR STATES IT (ARCHITECT ruling 2026-10-14): the open-web need a
-    /// delivery rides takes its trust anchor from the operator's optional `agent_push.ca`, in the
-    /// owned namespace, never from `agents:`; read off the door's own rendered Statement.
+
     #[test]
     fn the_door_states_its_push_need_trusting_the_owned_agent_push_ca() {
         let rendered = LinkedRow::of_loaded(crate::loaded_door())
@@ -636,8 +597,7 @@ mod both_ways {
     }
 
     /// `refresh` of [`GOOD`] to `generation`, the applied document's other owned sections `owned`
-    /// riding the head's extensions under `EXT_OWNED` as the loader's `refresh_door` lays them
-    /// (absent when empty): one line, the plane's own words on a refusal.
+
     fn refresh_owning(p: &Plugin<Plane>, generation: u64, owned: &[u8]) -> String {
         use busbar_contract::abi::mechanism::call::Blob;
         let extensions = if owned.is_empty() {
@@ -667,11 +627,7 @@ mod both_ways {
     }
 
     /// AN APPLY CARRYING A MALFORMED `agent_push:` IS REFUSED AT `refresh`, in the push section's
-    /// own words, linked and dropped in alike, and publishes nothing; the same apply with a
-    /// well-formed section refreshes. The applied section rides the refresh's extensions under
-    /// `EXT_OWNED` (the refresh-time twin of `PlaneOpenIn::owned`), judged as `open` judges it.
-    /// The root cell `an_apply_carrying_a_malformed_agent_push_ca_is_refused_and_deliveries_keep_the_anchor`
-    /// proves it through busbar's apply; this proves it in this repo's own `cargo test`.
+
     #[test]
     fn an_apply_carrying_a_malformed_agent_push_section_is_refused_at_refresh() {
         let d = Dispatcher::new(DispatchConfig::default());
@@ -733,9 +689,7 @@ mod both_ways {
             "{}",
             t[3]
         );
-        // THE STREAM CEILING'S STATEMENT (ARCHITECT ruling 2026-10-07, STREAM-CEILING): a relayed
-        // one-reply message states `ROUTE_ONCE` alone; a streamed one, and a resubscribe, state
-        // `ROUTE_STREAM` beside it, so the kernel stamps the tail's 600 s ceiling on the unit.
+
         let once = u32::from(busbar_contract::abi::plane::ROUTE_ONCE);
         let streamed = u32::from(
             busbar_contract::abi::plane::ROUTE_ONCE | busbar_contract::abi::plane::ROUTE_STREAM,
@@ -753,8 +707,7 @@ mod both_ways {
                 "{l}"
             );
         }
-        // R-15: the agent's own card is served at the protocol's discovery path under its
-        // endpoint, the same answer as the agent's card at its endpoint.
+
         let after = |l: &str, target: &str| {
             assert!(
                 l.contains(&format!("{:?}", Outcome::Ready)),
@@ -774,7 +727,7 @@ mod both_ways {
             "the agent's own card at its discovery path is the agent's card: {}",
             line(&t, "arrive 14 ")
         );
-        // R-16: the agent's endpoint with a trailing separator answers as the endpoint does (unit 2).
+
         assert_eq!(
             after(line(&t, "arrive 16 "), &mounted("/agents/vendor/")),
             after(line(&t, "arrive 2 "), &mounted("/agents/vendor")),
@@ -797,13 +750,7 @@ mod both_ways {
             "a gate's veto wears the hook's own words: {}",
             line(&t, "refusal cause=1 ")
         );
-        // THE gRPC LINE: a call arrives on the framed dialect; a method the service does not have
-        // is UNIMPLEMENTED with no message, a message that does not read INTERNAL, and a kernel
-        // budget refusal UNAVAILABLE with its words. The refusal's catch-all envelope code
-        // does not mean that the requested method is unimplemented. Each is the call's closing
-        // block (`grpc-status`, then the percent-encoded
-        // `grpc-message` where there is one) at the refusal's neutral status, with no media type:
-        // the stream's framer sends the block as the whole answer (SEAM-4l).
+
         let sent = line(&t, "arrive 8 ");
         assert!(
             sent.contains(&format!("{:?}", Outcome::Ready))
@@ -858,8 +805,7 @@ mod both_ways {
     }
 
     /// `project`: the `{tool, arguments}` view of the request (the envelope the HTTP+JSON line's
-    /// request spells), the plane's key as the dialect, the addressed agent as the pool, the
-    /// message's `contextId` as the session, and one `user` turn of the params as the prompt view.
+
     #[test]
     fn project_writes_the_hook_view_of_the_request() {
         let d = Dispatcher::new(DispatchConfig::default());
@@ -894,10 +840,7 @@ mod both_ways {
     }
 
     /// A REQUEST-STAGE HOOK'S REWRITE (BUSBAR-1.6.0.md Part 3 section 12, "Hooks"; the served
-    /// engine's invoke rewrite contract): the params are replaced, every other member of the
-    /// request is the caller's, the rewritten request is answered as the body the kernel keeps (the
-    /// envelope on the JSON-RPC line, the params on the HTTP+JSON line) and is the request
-    /// projected; a rewrite with no usable params object is not applied.
+
     #[test]
     fn a_rewrite_replaces_the_params_and_the_rewritten_request_is_projected() {
         let d = Dispatcher::new(DispatchConfig::default());
@@ -950,8 +893,6 @@ mod both_ways {
         );
     }
 
-    // ── the host log ────────────────────────────────────────────────────────────────────────────
-
     /// The host's envelope sink, keeping the text of every diagnostic and log record a call
     /// carried: what the host writes to the plugin's own log file.
     #[derive(Default)]
@@ -969,8 +910,7 @@ mod both_ways {
     }
 
     /// A HOST WHOSE STORE HOLDS ONE STRAY CARD PART: `records.list` of the `card` kind answers one
-    /// part record no whole card names (`vendor/<digest>/0`); every other kind lists empty, and
-    /// every other service is the shared double's unserved host.
+
     struct CardRecords;
 
     impl ServicesDouble for CardRecords {
@@ -1008,7 +948,7 @@ mod both_ways {
     }
 
     /// `open` over [`GOOD`] on `d`, then `ready` (the held cards warmed from the host's `card`
-    /// records), into a fresh host log: the log's lines.
+
     fn ready_lines(d: &Dispatcher, dropped_in: bool) -> Vec<String> {
         let log = Arc::new(HostLog::default());
         let bound = Bind {
@@ -1045,11 +985,7 @@ mod both_ways {
     }
 
     /// THE PLANE'S LOG REACHES THE HOST'S LOG, DROPPED IN AS LINKED (owner ruling 2026-10-27): the
-    /// line `ready` raises for a stray card part in the host's store (the plane's in-process
-    /// `tracing`) is carried by the door's call capture in the answer's envelope to the host's sink,
-    /// the one that writes the plugin's own log file, from the dropped-in image as from the linked
-    /// door. RED ARM, kept: over a host whose store serves nothing, no such line reaches the log,
-    /// so the line is the stray part's and the check can fail.
+
     #[test]
     fn a_stray_card_part_line_reaches_the_host_log_dropped_in_as_linked() {
         let stray = |l: &String| l.contains("part records that no whole record names were found");

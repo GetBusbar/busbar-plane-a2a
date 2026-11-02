@@ -2,28 +2,14 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! What relaying an unchanged envelope is allowed to allocate, on the door's relay.
-//!
-//! The caller's envelope goes to the agent unchanged unless a record leg came back naming the task
-//! differently. The unchanged case is the common one, and a copy made on the way to a second copy
-//! is work with no observable effect — invisible to every test that reads bytes, and invisible to a
-//! stopwatch on a shared runner. An allocation COUNT sees it, and is the same number on every
-//! machine, so it can be pinned (DoD item 6: a zero-allocation hot path).
-//!
-//! This is the pin the retired engine's relay carried (`encode_egress`, 2 allocations for the same
-//! request), restored on the door's relay after the engine's deletion took it away (ARCHITECT
-//! ruling on #787: a lost check, not deleted legacy). The bound is exact. The measured calls are
-//! pure synchronous functions over bytes: no I/O, no clock, no map iteration order. If an
-//! intentional change moves it, run with `--nocapture`, read the printed count, and move the
-//! constant in the same commit, with the reason.
 
 use crate::binding::Binding;
 use crate::relay::{From, HopRelay, Piece, PieceAnswer};
-// How many allocations one call made on this thread (the crate's one counter, busbar-test-kit's
-// `alloc_counter`).
+
 use busbar_test_kit::alloc_counter::allocations_of;
 
 /// One well-formed request of this protocol, carrying no task identifier to rewrite: the request
-/// the retired engine's pin measured.
+
 const BODY: &[u8] =
     br#"{"jsonrpc":"2.0","id":"1","method":"message/send","params":{"message":{"role":"user"}}}"#;
 
@@ -31,17 +17,11 @@ const BODY: &[u8] =
 const URL: &str = "https://agent.example/a2a";
 
 /// COMMITTED BASELINE — the exact allocation count of ONE hop that rewrites nothing: the attempt's
-/// head and the caller's body, through the door's relay.
-///
-/// Two, as the retired engine's relay: the attempt's field list, which takes its buffer on its
-/// first field, and its target (the agent url's path). Every field the plane spells is borrowed
-/// from its constant, the journal's url is the one the backend was named with, and the body is
-/// LENT ([`PieceAnswer::ToFarEndLent`]): the door writes the caller's own piece, so the envelope is never
-/// copied.
+
 const RELAY_ALLOCS: u64 = 2;
 
 /// A JSON-RPC hop for [`BODY`], bound and named as the door binds and names one before its first
-/// attempt (outside any measured window).
+
 fn hop() -> HopRelay {
     let envelope: serde_json::Value = serde_json::from_slice(BODY).expect("the request is JSON");
     let mut relay = HopRelay::new(serde_json::json!("1"), "0.3");
@@ -51,7 +31,7 @@ fn hop() -> HopRelay {
 }
 
 /// The relay's loop for one attempt: the kernel's ATTEMPT, then the caller's body, `plant` more
-/// allocations made in the loop (the RED arm's).
+
 fn relay_once(relay: &mut HopRelay, plant: usize) -> (PieceAnswer, PieceAnswer) {
     let attempt = relay.on_piece(Piece {
         from: From::Kernel(Some(URL)),
@@ -73,8 +53,6 @@ fn relay_once(relay: &mut HopRelay, plant: usize) -> (PieceAnswer, PieceAnswer) 
 
 #[test]
 fn an_unrewritten_envelope_is_relayed_without_a_copy() {
-    // One warm hop outside the window, so nothing a first call sets up for the process is charged
-    // to the measured one.
     let (warm, warm_body) = relay_once(&mut hop(), 0);
     assert!(matches!(warm, PieceAnswer::Attempt(_)), "{warm:?}");
     assert_eq!(
@@ -103,8 +81,6 @@ fn an_unrewritten_envelope_is_relayed_without_a_copy() {
          changes nothing about, or spelling a field it could borrow"
     );
 
-    // THE RED ARM: one allocation planted in the relay's loop is one the pin sees, so a relay that
-    // starts allocating per hop fails it.
     let mut relay = hop();
     let planted = allocations_of(|| {
         let _ = relay_once(&mut relay, 1);
@@ -118,7 +94,7 @@ fn an_unrewritten_envelope_is_relayed_without_a_copy() {
 }
 
 /// G1-52: THE HOOK VIEW READS THE REQUEST ONCE: its projection, its invocation and its session are
-/// taken from one parse of the envelope, never three parses each copying the params.
+
 #[test]
 fn the_hook_view_parses_the_envelope_once() {
     let parts: Vec<serde_json::Value> = (0..1000)
@@ -129,7 +105,7 @@ fn the_hook_view_parses_the_envelope_once() {
         "params": { "message": { "role": "user", "contextId": "ctx", "parts": parts } },
     }))
     .unwrap();
-    // Warm outside the window.
+
     assert!(crate::plane_door::hook_view(&envelope).is_some());
     let parse = allocations_of(|| {
         std::hint::black_box(serde_json::from_slice::<serde_json::Value>(&envelope).unwrap());
@@ -146,8 +122,7 @@ fn the_hook_view_parses_the_envelope_once() {
 }
 
 /// G1-10: reading a card's members borrows the card. A card carrying a large member busbar does
-/// not model costs the read nothing for that member; a deep copy of the card would allocate once
-/// per node of it.
+
 #[test]
 fn reading_a_card_does_not_copy_it() {
     let unmodelled: Vec<serde_json::Value> = (0..1000)
@@ -159,7 +134,7 @@ fn reading_a_card_does_not_copy_it() {
         "skills": [{ "id": "plan", "name": "Plan" }],
         "unmodelled": unmodelled,
     });
-    // Warm outside the window.
+
     assert!(crate::a2a::agent_card::parse(&card).is_some());
     let mut parsed = None;
     let count = allocations_of(|| parsed = crate::a2a::agent_card::parse(&card));
@@ -172,7 +147,7 @@ fn reading_a_card_does_not_copy_it() {
 }
 
 /// G1-16: A TASK HOP HOLDS ITS REQUEST ONCE: the envelope it opens the task from is the request it
-/// keeps, never a deep copy of it (a copy allocates once per node of the caller's message).
+
 #[test]
 fn a_task_hop_does_not_copy_its_envelope() {
     let parts: Vec<serde_json::Value> = (0..1000)
@@ -182,7 +157,7 @@ fn a_task_hop_does_not_copy_its_envelope() {
         "jsonrpc": "2.0", "id": 1, "method": "message/send",
         "params": { "message": { "role": "user", "parts": parts } },
     });
-    // Warm outside the window.
+
     drop(crate::plane_door::Hop::task(
         serde_json::json!(1),
         "1.0",

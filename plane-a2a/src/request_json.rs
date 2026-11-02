@@ -171,7 +171,7 @@ impl DerefMut for RequestJson {
 fn wipe_string(value: &mut String) {
     #[cfg(test)]
     crate::tests::request_custody_probe::observe(false, value);
-    // Keep the initialized prefix live for the safe witness, then wipe its allocation too.
+
     value.as_mut_str().zeroize();
     #[cfg(test)]
     crate::tests::request_custody_probe::observe(true, value);

@@ -1,6 +1,4 @@
 //! Tests for `ops.rs`. Lifted out of the implementation file so its line count
-//! measures implementation and nothing else; still a direct child module, so `use
-//! super::*` reaches the private items it always did.
 
 use super::{row_for, MethodRow, METHODS, OP_CLASSES};
 
@@ -30,9 +28,7 @@ fn no_method_name_is_repeated() {
 }
 
 /// Both spellings of one operation agree on its class and on whether it streams.
-///
-/// This is the property the module header claims: the wording is a fact, never a price. If the
-/// two spellings ever disagreed here, a caller's choice of vocabulary would move the money.
+
 #[test]
 fn the_two_spellings_of_an_operation_agree() {
     for row in METHODS {
@@ -63,16 +59,12 @@ fn the_lookup_answers_the_table_and_nothing_else() {
     }
     assert_eq!(row_for("tasks/incinerate"), None);
     assert_eq!(row_for(""), None);
-    // Case matters: the two spellings differ only in case for some operations, and a lookup
-    // that folded case would answer the wrong wording.
+
     assert_eq!(row_for("MESSAGE/SEND"), None);
 }
 
 /// Every multi-frame method is one of the two the codec's own multi-frame test recognises.
-///
-/// The codec decides "does this stream" by looking for a `/stream` suffix or one of two names.
-/// This asserts the same set from the other direction, so the two readings cannot drift apart
-/// without a red here.
+
 #[test]
 fn the_multi_frame_set_matches_the_codecs_own_rule() {
     for row in METHODS {

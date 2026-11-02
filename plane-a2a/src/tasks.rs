@@ -2,37 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! The task store, over host records. The plane holds no store: it reads through `records.get` /
-//! `records.list`, then conditionally publishes exact row comparisons and mutations through the
-//! host's atomic record exchange. [`Records`] is that reach; the door serves it through the SDK connector,
-//! a test through a map.
-//!
-//! * KEYS ARE PRINCIPAL-PREFIXED: `<caller>/<task>` for a task, `<caller>/<task>/<seq>` for one of
-//!   its events, `<caller>/<task>` again under the push-config kind. `<caller>` is the opaque
-//!   per-principal reference the kernel lends on every piece (lower-case hex, so it holds no `/`):
-//!   a key under another caller's prefix is one this caller can never name, which is how a foreign
-//!   task reads exactly as a missing one.
-//! * A change compares the exact task bytes it read and atomically publishes its new row and
-//!   event. A definitive condition conflict rereads on fresh service handles before replanning.
-//!   An uncertain result keeps the same immutable host attempt, without a replay-token claim.
-//! * The hash chain is the host's: the task-event kind is declared chained, length-prefixed with
-//!   its scope digested (`crate::statement`'s `RECORD_CHAINS`). An event is an append
-//!   to the chain keyed `<caller>/<task>` (`<caller>` the kernel's opaque caller reference, never
-//!   the principal) carrying only its own fields ([`suffix`]); the host frames `prev, scope, seq`
-//!   ahead of them,
-//!   seals, keeps and verifies the chain. The task record carries the chain's next sequence, which
-//!   a change advances with the same atomic publication.
-//! * Restore ([`restore`]) is the boot rehydrate over the records: the tasks counted
-//!   active, terminal or unreadable, and each active task's chain, and only those, read back
-//!   verified by the host, a break named so the door reports it.
-//! * A DELETE IS A TOMBSTONE: a put with an empty value, which the kernel's reads treat as absent;
-//!   on the chained kind it drops the whole chain.
-//! * Retention bounds only settled handles ([`TERMINAL_TTL_SECS`], [`MAX_RETAINED`]): a read never
-//!   answers a terminal task past its window, and [`retention_sweep`] tombstones it and holds the
-//!   cap over terminal tasks. The sweep runs from a submit, never from a read or a timer: the
-//!   task-opening write ([`crate::task_hop::open`]'s fresh task)
-//!   carries it, at most [`SWEEP_BUDGET`] tasks per submit, so the settled tasks a submit leaves
-//!   are retired faster than submits make them. An active task is never evicted however long it
-//!   sits idle; live tasks are bounded at admission by the kernel's `work.max_live`.
 
 use busbar_contract::vocab::{EV_ARTIFACT, EV_DELEGATED, EV_SUBMITTED};
 use serde::{Deserialize, Serialize};
@@ -45,21 +14,20 @@ use crate::{TaskEventRow, TaskRow};
 /// How long a terminal task stays readable after its terminal transition, in seconds.
 pub const TERMINAL_TTL_SECS: u64 = 300;
 /// The most terminal tasks kept; past it the oldest go first. An active task is never counted
-/// against it and never evicted.
+
 pub const MAX_RETAINED: usize = 4096;
 /// The existing replay-token TTL, retained for legacy claim callers. Task publication and
-/// retention do not acquire claims and do not interpret this TTL as an ownership lease.
+
 #[cfg(test)]
 pub const CLAIM_TTL_MS: u64 = 60_000;
 /// How many times a change rereads after a definitive atomic condition conflict.
 const TRIES: usize = 3;
 /// The most settled tasks one submit's [`retention_sweep`] retires: a submit opens one task, so a
-/// sweep that may retire this many keeps the settled tasks bounded under any mix of submits, the
-/// rest waiting for the next submit's.
+
 pub const SWEEP_BUDGET: usize = 32;
 
 /// How long a sweep that left nothing behind holds off the next one, in seconds: the sweep reads
-/// every caller's task rows, so it is not paid on every submit.
+
 pub const SWEEP_INTERVAL_SECS: u64 = 30;
 
 /// WHEN THE NEXT [`retention_sweep`] IS DUE, per instance: at once while the last one spent its
@@ -98,27 +66,20 @@ pub enum Halt {
 }
 
 /// The host records as the store reaches them. Every call is made in the same order on every entry
-/// of an op, so a re-run reads the answers the host stored for it (the replay rule).
+
 pub trait Records {
     /// The record of `kind` under `key`; `None` when absent or a tombstone.
-    ///
-    /// # Errors
-    /// [`Halt`].
+
     fn get(&mut self, kind: &str, key: &str) -> Result<Option<Vec<u8>>, Halt>;
     /// Every live record of `kind` whose key starts with `prefix`, in key order.
-    ///
-    /// # Errors
-    /// [`Halt`].
+
     fn list(&mut self, kind: &str, prefix: &str) -> Result<Vec<(String, Vec<u8>)>, Halt>;
     /// Put `key` of `kind` if absent, for `ttl_ms`: `true` when this call made the claim.
-    ///
-    /// # Errors
-    /// [`Halt`].
+
     fn claim(&mut self, kind: &str, key: &str, ttl_ms: u64) -> Result<bool, Halt>;
 
     /// Compare every predicate and publish all writes in one host transaction. `true` means
-    /// Applied; `false` means a definitive condition conflict with no effects. Pending and
-    /// uncertain outcomes retain the same immutable request and must never become `false`.
+
     fn publish(
         &mut self,
         _predicates: &[Predicate],
@@ -131,7 +92,7 @@ pub trait Records {
     }
 
     /// Observe the chain incarnation before reading the task for a mutation. Replayed reads
-    /// retain this exact answer; a definitive conflict starts a fresh observation and task read.
+
     fn observe_chain_life(&mut self, _kind: &str, _scope: &str) -> Result<Option<Vec<u8>>, Halt> {
         Err(Halt::Failed(
             "conditional chain observation unavailable".into(),
@@ -188,9 +149,7 @@ fn observe(rec: &mut dyn Records, key: &str) -> Result<ChainLife, Halt> {
 }
 
 /// THE RECORDS AS ONE PIECE SEES THEM ONCE IT HAS WRITTEN: a read of a record the piece already
-/// wrote answers that write, so several changes of one chain in one answer chain over each other
-/// (each claims the sequence the one before it left) rather than over the store's older value. Any
-/// other read and every claim go to the host.
+
 pub struct Staged<'r> {
     rec: &'r mut dyn Records,
     written: &'r [Write],
@@ -204,7 +163,7 @@ impl<'r> Staged<'r> {
 }
 
 /// Whether `kind` is the chained kind: its writes are appends the host seals once the store took
-/// them, so a read never answers them from the piece's writes.
+
 fn chained(kind: &str) -> bool {
     kind == KIND_TASK_EVENT
 }
@@ -317,8 +276,7 @@ pub fn task_key(caller: &str, task: &str) -> String {
 }
 
 /// The key of event `seq` of `caller`'s task `task`: the host's listed key of record `seq` of the
-/// chain `<caller>/<task>` (`busbar_contract::services::chain_key`), and the key a change claims
-/// the sequence under.
+
 #[must_use]
 #[cfg(test)]
 pub fn event_key(caller: &str, task: &str, seq: u64) -> String {
@@ -340,14 +298,13 @@ fn terminal(state: &str) -> bool {
 }
 
 /// The cutoff of the task kind's purge at `now`: a row unchanged since before it is past its
-/// window.
+
 fn cutoff(now: u64) -> u64 {
     now.saturating_sub(TERMINAL_TTL_SECS)
 }
 
 /// Whether a held task is past its window at `now`: the task kind's rule
-/// ([`retention_of`]`(KIND_TASK)`, terminal-only) drops it against the cutoff, so it is terminal and
-/// unchanged for longer than [`TERMINAL_TTL_SECS`]. An active task is never past its window.
+
 #[must_use]
 pub fn expired(row: &TaskRow, now: u64) -> bool {
     retention_of(KIND_TASK).drops(row.updated_at, cutoff(now), terminal(&row.state))
@@ -362,10 +319,7 @@ fn encode<T: Serialize>(v: &T) -> Result<Vec<u8>, Halt> {
 }
 
 /// One event's own bytes on its task's chain, in the declared length-prefixed framing: `ts` (its eight big-endian bytes), `kind`, `context_id`,
-/// `principal`, `agent_id`, `state`, each after its length as eight big-endian bytes. The host
-/// frames `prev_hash`, the chain's scope (`<caller>/<task>`) and `seq` the same way ahead of them,
-/// so the digest covers the fields in order and no byte can cross a field boundary unseen.
-/// `request_id` is serialized correlation metadata outside this digest suffix.
+
 #[must_use]
 pub fn suffix(ev: &TaskEventRow) -> Vec<u8> {
     let mut out = Vec::new();
@@ -387,7 +341,7 @@ pub fn suffix(ev: &TaskEventRow) -> Vec<u8> {
 }
 
 /// Event `kind` over `row` at `held`'s chain position, stamped `ts`; its chain fields are the
-/// host's.
+
 fn seal_event(
     held: &HeldTask,
     row: &TaskRow,
@@ -412,10 +366,7 @@ fn seal_event(
 }
 
 /// `caller`'s task `task` as held, or `None`: absent, another caller's, unreadable, or past its
-/// window at `now`. One answer for all of them, so a read is no existence oracle.
-///
-/// # Errors
-/// [`Halt`].
+
 pub fn get(
     rec: &mut dyn Records,
     caller: &str,
@@ -432,9 +383,7 @@ pub fn get(
 }
 
 /// Every task `caller` holds at `now`, by task id.
-///
-/// # Errors
-/// [`Halt`].
+
 pub fn list(rec: &mut dyn Records, caller: &str, now: u64) -> Result<Vec<TaskRow>, Halt> {
     if !is_caller(caller) {
         return Ok(Vec::new());
@@ -467,15 +416,7 @@ pub struct Restored {
 }
 
 /// The restore, over host records: every task row read and
-/// counted active, terminal or unreadable; then each in-flight task's chain, and no other, read
-/// back through the host, which verifies the chains it lists, and a break it announces on that
-/// task's chain is named. A chain the host verified is then held to its task row: the row holds
-/// the sequence the chain's next event takes, so a chain whose last event falls short of it had
-/// entries cut from its end (every remaining link still verifies, so the chain alone cannot show
-/// it), and that is named as its break too. Nothing is written.
-///
-/// # Errors
-/// [`Halt`].
+
 pub fn restore(rec: &mut dyn Records) -> Result<Restored, Halt> {
     let mut out = Restored::default();
     let mut active = Vec::new();
@@ -492,17 +433,13 @@ pub fn restore(rec: &mut dyn Records) -> Result<Restored, Halt> {
         }
     }
     for (chain_scope, next_seq) in active {
-        // The chain's own scope is its records' key prefix. A record's key ends in its sequence; a
-        // span keyed by the bare scope announces the chain's break. Another chain the prefix also
-        // reaches (`t1` reaches `t10`) is named on its own task's read, if it is in flight.
         let listed = rec.list(KIND_TASK_EVENT, &chain_scope)?;
         if let Some((_, words)) = listed.iter().find(|(key, _)| *key == chain_scope) {
             out.chain_breaks
                 .push((chain_scope, String::from_utf8_lossy(words).into_owned()));
             continue;
         }
-        // THE TAIL: the last sequence this chain's own records reach, held to the last one its
-        // task row committed.
+
         let reached = listed
             .iter()
             .filter_map(|(key, _)| busbar_contract::services::chain_key_parts(key.as_bytes()))
@@ -536,7 +473,7 @@ pub struct Stamp<'a> {
 }
 
 /// Compare the exact prior bytes and atomically publish the next task row and its event.
-/// `None` is a definitive conflict; no success is reported before the host acknowledges it.
+
 fn commit(
     rec: &mut dyn Records,
     at: &Stamp<'_>,
@@ -611,10 +548,7 @@ fn submit_held(
 }
 
 /// Open a relayed task with one atomic publication: the final row and the submitted/delegated
-/// events. The host frames both events in order. A rejected publication leaves no partial genesis.
-///
-/// # Errors
-/// [`Halt`]; a conflicting creation leaves all records unchanged.
+
 #[cfg(test)]
 pub fn open(
     rec: &mut dyn Records,
@@ -715,17 +649,14 @@ pub(crate) fn open_configured(
 }
 
 /// What a change does to one held row: the new row and its event, `None` for nothing to do, or the
-/// refusal's words.
+
 pub type Planned = Result<Option<(TaskRow, &'static str)>, String>;
 
 /// A change's plan over the held row.
 pub type Plan<'p> = dyn FnMut(&TaskRow) -> Planned + 'p;
 
 /// Change task `task` by `plan`: read exact bytes, plan and atomically compare/publish.
-/// A definitive conflict rereads and plans again. `None` means the plan had nothing to do.
-///
-/// # Errors
-/// [`Halt`]; `Failed` for no such task, a refused plan, or [`TRIES`] definitive conflicts.
+
 pub fn change(
     rec: &mut dyn Records,
     at: &Stamp<'_>,
@@ -781,9 +712,7 @@ pub(crate) fn change_configured(
 }
 
 /// TRANSITION task `task` to `to`, with the event the move names.
-///
-/// # Errors
-/// As [`change`]; an illegal move is `Failed` in the state machine's words.
+
 pub fn transition(
     rec: &mut dyn Records,
     at: &Stamp<'_>,
@@ -796,11 +725,7 @@ pub fn transition(
 }
 
 /// ADVANCE the artifact cursor by one chunk, with a `task.artifact` event, per
-/// relayed artifact event, counted on from where the task left off (a resumed stream does not count
-/// from zero).
-///
-/// # Errors
-/// As [`change`].
+
 pub fn bump_cursor(
     rec: &mut dyn Records,
     at: &Stamp<'_>,
@@ -817,9 +742,7 @@ pub fn bump_cursor(
 }
 
 /// RECORD one push delivery outcome `kind` on the task's chain; the row itself is unchanged.
-///
-/// # Errors
-/// As [`change`].
+
 pub fn record_push_delivery(
     rec: &mut dyn Records,
     at: &Stamp<'_>,
@@ -832,17 +755,7 @@ pub fn record_push_delivery(
 }
 
 /// THE RETENTION SWEEP at `now`, the plane's own purge of the task kind under its rule
-/// ([`retention_of`]`(KIND_TASK)`, [`crate::records::Retention::TerminalOnly`]: busbar dev's tail
-/// declares no retention, so the plane holds it), over the TERMINAL tasks this instance holds and
-/// no others: one past its window is tombstoned with its events and its push config; while
-/// [`MAX_RETAINED`] or more terminal ones are held, the oldest go too. An active task is never
-/// touched, however long it has been idle. At
-/// most `budget` tasks are touched; the rest wait for the next sweep. Its one caller is a submit
-/// ([`crate::task_hop::open`]) the [`SweepGate`] finds due, never a read or a timer. Answers how
-/// many tasks it retired.
-///
-/// # Errors
-/// [`Halt`].
+
 pub fn retention_sweep(
     rec: &mut dyn Records,
     now: u64,
@@ -870,8 +783,7 @@ pub fn retention_sweep(
         let row = &candidate.row;
         if touched < budget && (kept >= MAX_RETAINED || expired(row, now)) {
             let chain = observe(rec, key)?;
-            // The listing selected a candidate only. Observe its life before this fresh read,
-            // then refuse to retire a replacement or a row updated since the listing.
+
             let current = rec.get(KIND_TASK, key)?;
             if current.as_ref() != Some(expected) || !forget(rec, key, expected, chain)? {
                 continue;
@@ -907,8 +819,7 @@ fn forget(
 }
 
 /// Atomically replace or delete a config only while its task still has the exact observed row.
-/// `expected` is the raw config read by the caller when validating replacement semantics. The
-/// caller must read and validate again after a definitive conflict. Empty `value` means delete.
+
 pub(crate) fn write_config(
     rec: &mut dyn Records,
     at: &Stamp<'_>,

@@ -2,8 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! Custody regressions over the same generated messages and WKT source the framed codec uses.
-//! No replacement wire model is defined here. The observer reads only a registered initialized
-//! prefix before its live allocation is released; it never scans unknown or freed memory.
 
 use prost::encoding::{encode_key, encode_varint, WireType};
 use prost::Message;
@@ -13,8 +11,6 @@ use serde::{Deserialize, Deserializer};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
-// The generated product source names this private owner path. On the old generator these
-// modules are unused by the wire models; the probes still exercise the original real API.
 #[allow(dead_code, unused_imports)]
 #[path = "../src/proto_custody.rs"]
 pub(crate) mod custody_impl;
@@ -140,7 +136,7 @@ fn prost_merge_error_wipes_credential_even_after_invalid_utf8_clears_length() {
         credentials: "old-private-credential".into(),
     };
     watch(message.credentials.as_bytes());
-    // AuthenticationInfo.credentials in the vendored a2a.proto has field number 2.
+
     const AUTHENTICATION_CREDENTIALS_FIELD: u32 = 2;
     const INVALID_UTF8_LEADING_BYTE: u8 = 0xff;
     let payload = [INVALID_UTF8_LEADING_BYTE];

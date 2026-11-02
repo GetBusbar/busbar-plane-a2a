@@ -2,8 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! One JSON-RPC arrival decided in the served order, and its refusal rendered in the line's
-//! dialect. The byte-for-byte pins against the engine's own answers live on the engine's side
-//! (`busbar-a2a` `door_pin_tests`); these pin the order and the words.
 
 use super::*;
 
@@ -122,8 +120,6 @@ fn shape_validation_preserves_notifications_and_generic_namespace_requests() {
 
 #[test]
 fn the_media_type_is_judged_before_the_body_and_the_version() {
-    // A wrong media type over a body that is not JSON and an unspoken version: the header is the
-    // thing to fix, so the header is what is said.
     let r = refused(decide_arrival(
         b"not json",
         head(Some("text/plain"), Some("9.9")),
@@ -154,7 +150,7 @@ fn a_json_media_type_in_any_spelling_is_read() {
             "{ct}"
         );
     }
-    // No media type at all is not a wrong one.
+
     assert!(matches!(
         decide_arrival(SEND, head(None, None)),
         AgentDisposition::Request { .. }
@@ -313,7 +309,7 @@ fn the_json_rpc_rendering_is_the_one_envelope_with_error_info_for_an_a2a_code() 
             },
         })
     );
-    // A JSON-RPC code of its own carries no ErrorInfo.
+
     let parse = refused(decide_arrival(b"{", head(None, None)));
     let doc: serde_json::Value =
         serde_json::from_slice(&render(Dialect::JsonRpc, &parse, true).body).expect("json");
@@ -343,7 +339,7 @@ fn the_rest_rendering_is_the_aip193_document() {
             }],
         }})
     );
-    // A code with no status of its own takes the HTTP status's name.
+
     let odd = AgentRefusal {
         status: 429,
         id: None,
@@ -366,8 +362,7 @@ fn a_kernel_refusal_keeps_the_kernels_status_and_is_worded_as_an_unsupported_ope
 }
 
 /// THE WORDS NEVER OVERFLOW THE ABI CAP (spec ruling log 2026-09-30, new-plane refusals follow
-/// predev bytes): a refusal that echoes a field line of the largest size a transport admits, made
-/// of the characters JSON escapes, still fits `MAX_REFUSAL_TEXT`, and reads back whole.
+
 #[test]
 fn the_words_of_a_head_refusal_echoing_the_largest_admitted_field_line_fit_the_abi_cap() {
     use busbar_contract::abi::plane::{LARGEST_ADMITTED_FIELD_LINE, MAX_REFUSAL_TEXT};
@@ -391,8 +386,7 @@ fn the_words_of_a_head_refusal_echoing_the_largest_admitted_field_line_fit_the_a
 }
 
 /// AN `Origin` IS JUDGED FIRST, as the engine's sequence judged it before every request-line rule:
-/// a non-loopback origin over a wrong media type, an unspoken version and a body that is not JSON
-/// is refused for its origin, `403` + `-32004`, no id.
+
 #[test]
 fn an_origin_that_is_not_loopback_is_refused_before_every_other_rule() {
     for origin in [
@@ -432,7 +426,7 @@ fn an_origin_that_is_not_loopback_is_refused_before_every_other_rule() {
 }
 
 /// A METHOD THE VOCABULARY DOES NOT LIST IS RELAYED, NEVER REFUSED: classed as the hop the engine
-/// relays it on, a request or a notification alike.
+
 #[test]
 fn an_unlisted_method_is_classed_as_the_hop_the_engine_relays_it_on() {
     use crate::ops::{OP_MESSAGE_SEND, OP_MESSAGE_STREAM, OP_TASK_GET};
@@ -459,7 +453,7 @@ fn an_unlisted_method_is_classed_as_the_hop_the_engine_relays_it_on() {
 }
 
 /// THE gRPC LINE'S RENDERING is the JSON-RPC envelope at the refusal's neutral status, the bytes
-/// the grpc transport maps to `grpc-status`; a kernel refusal keeps the kernel's status.
+
 #[test]
 fn the_grpc_rendering_is_the_envelope_at_the_neutral_status() {
     let own = refused(decide_arrival(b"", head(Some("text/plain"), None)));
@@ -475,7 +469,7 @@ fn the_grpc_rendering_is_the_envelope_at_the_neutral_status() {
 }
 
 /// THE OPEN BREAKER'S REFUSAL is 1.5.5's `BreakerOpen` client text: `503`, `-32004`, the agent
-/// named, the request id echoed, and the seconds the `Retry-After` field repeats.
+
 #[test]
 fn an_open_breaker_refusal_names_the_agent_and_the_seconds_to_wait() {
     let refusal = breaker_refusal("probe", Some(serde_json::json!(7)), 12);
@@ -495,9 +489,7 @@ fn an_open_breaker_refusal_names_the_agent_and_the_seconds_to_wait() {
 }
 
 /// A BREAKER REFUSAL NAMING ITS REJECTED TASK is the plain refusal plus the task's `ResourceInfo`
-/// (`a2a.busbar/task`) after its `ErrorInfo`: in `error.data` on the JSON-RPC and gRPC lines, in
-/// `error.details` on the HTTP+JSON line, at the plain refusal's status (predev
-/// `rpcerror::about_task`, R-REJECTED). RED arm: the plain render names no task.
+
 #[test]
 fn a_breaker_refusal_names_the_task_it_rejected_on_every_line() {
     let refusal = breaker_refusal("probe", Some(serde_json::json!(7)), 12);
@@ -536,13 +528,7 @@ fn an_ungranted_caller_is_told_the_scope_it_does_not_hold() {
 }
 
 /// A KEY THAT IS NOT LIVE IS REFUSED `401`, HOWEVER IT IS NOT LIVE (1.5.5's `KeyNotLive`). Which
-/// keys are not live (disabled, tombstoned, past its row's `expires_at`, reaching the expiry being
-/// expired) is the kernel's identity step, pinned there
-/// (`host_services_tests::a_dead_or_expired_key_sees_nothing`), which the door asks at the attempt
-/// (`plane_door::caller_stands`); this pins what the door answers: `401`, `-32004`, no id, its sentence
-/// naming `this key` (a plane never sees the raw principal, BUSBAR-1.6.0.md l.2639-2641; ruling
-/// (B), coordinator 2026-10-07).
-/// Ported from busbar-a2a a2a/tests/inbound_tests.rs::a_key_that_is_not_live_is_refused_401_however_it_is_not_live.
+
 #[test]
 fn a_key_that_is_not_live_is_refused_401_however_it_is_not_live() {
     let refusal = not_live();
@@ -555,8 +541,7 @@ fn a_key_that_is_not_live_is_refused_401_however_it_is_not_live() {
 }
 
 /// AN AGENT THIS DEPLOYMENT DOES NOT FRONT is a `404` in 1.5.5's words (`NoSuchAgent`), never an
-/// out-of-scope one.
-/// Ported from busbar-a2a a2a/tests/inbound_tests.rs::an_unknown_agent_is_a_404_and_an_out_of_scope_one_says_so.
+
 #[test]
 fn an_unknown_agent_is_a_404_in_1_5_5_words() {
     let rendered = render(Dialect::JsonRpc, &no_such_agent("nonexistent"), true);
@@ -568,9 +553,7 @@ fn an_unknown_agent_is_a_404_in_1_5_5_words() {
 }
 
 /// A request with `"id": null` is never answered with a success: it is an Invalid Request (`-32600`)
-/// refused at the arrival, BEFORE any hop (a refused arrival has no operation class and no unit is
-/// routed), and its refusal carries `"id": null` (JSON-RPC 2.0 section 5). Rendered on each line.
-/// Ported from busbar-a2a a2a/tests/envelope_id_tests.rs::a_null_id_is_never_answered_with_a_success_result.
+
 #[test]
 fn a_null_id_is_never_answered_with_a_success_result() {
     let body = br#"{"jsonrpc":"2.0","id":null,"method":"SendMessage","params":{}}"#;
@@ -597,8 +580,7 @@ fn a_null_id_is_never_answered_with_a_success_result() {
 }
 
 /// A request method with no `id` member is a notification: acknowledged, never answered (JSON-RPC
-/// 2.0 section 4.1), and a notification is not a request, so it names no id and carries no refusal.
-/// Ported from busbar-a2a a2a/tests/envelope_id_tests.rs::a_request_method_with_no_id_is_a_notification_and_gets_no_response_body.
+
 #[test]
 fn a_request_method_with_no_id_is_a_notification_and_gets_no_response_body() {
     let d = decide_arrival(
@@ -622,14 +604,7 @@ fn a_request_method_with_no_id_is_a_notification_and_gets_no_response_body() {
 }
 
 /// A tripped agent rejects a fresh submission on each line with 503 and `-32004`, naming the agent
-/// and the seconds to wait, before any dial. The JSON-RPC line answers the error envelope, the
-/// HTTP+JSON line the AIP-193 document, and the gRPC line retryable UNAVAILABLE.
-/// PARTIAL PORT: predev also answered a `rejected` task with an id to poll; HEAD refuses before any
-/// task row exists, so that half is dropped. The `Retry-After` field is asserted in the root cell
-/// `a_tripped_agent_refuses_a_fresh_submission_with_503_and_retry_after`.
-/// Ported from busbar-a2a a2a/tests/breaker_fastfail_tests.rs::a_tripped_agent_rejects_fresh_submissions_on_the_jsonrpc_binding,
-/// ::a_tripped_agent_rejects_fresh_submissions_on_the_httpjson_binding and
-/// ::a_tripped_agent_rejects_fresh_submissions_on_the_grpc_binding.
+
 #[test]
 fn a_tripped_agent_rejects_fresh_submissions_on_every_binding() {
     let refusal = breaker_refusal("planner", Some(serde_json::json!(1)), 30);
@@ -663,13 +638,7 @@ fn a_tripped_agent_rejects_fresh_submissions_on_every_binding() {
 }
 
 /// P-ITEM: REFUSAL-REASON COLLAPSE (spec DONE item 2, "All P-item behaviours match 1.5.5"; drive
-/// log P1, commit 470351a480; TODO L-ENG9). 1.5.5's one surface gave every limit reason its own
-/// status and kind and answered none of them as an internal error (v1.5.5
-/// `crates/busbar/src/ingress/mod.rs:237-305`). On this plane: a kernel refusal renders as the
-/// internal code exactly when its class is a node fault, and every reason of one class renders the
-/// same answer on every line, so the reason-to-family decision is the one classification's
-/// (`busbar_contract::abi::plane::RefusalCode::class`) and never this plane's own. RED before the
-/// fix: the door rendered every kernel refusal under `-32004`, a node fault included.
+
 #[test]
 fn p_item_refusal_reason_collapse_only_a_node_fault_is_internal_and_one_class_one_answer() {
     use busbar_contract::abi::plane::{RefusalClass, RefusalCode};
@@ -711,7 +680,7 @@ fn p_item_refusal_reason_collapse_only_a_node_fault_is_internal_and_one_class_on
         RefusalClass::ALL.len(),
         "every class is some reason's"
     );
-    // A number the wire table does not hold is the engine's admission refusal, never internal.
+
     assert_eq!(
         kernel_refusal_of(u32::MAX, 500, words),
         kernel_refusal(500, words)

@@ -238,7 +238,6 @@ impl VisitMut for Guards {
                 return;
             }
             Expr::MethodCall(call) if call.method == "next_value" => {
-                // Use the generator's exact explicit type, or let the final field infer it.
                 let ty: Type = call
                     .turbofish
                     .as_ref()
@@ -272,7 +271,7 @@ impl VisitMut for Guards {
                 ty.path = parse_quote! { crate::proto::custody::#member };
             }
         }
-        // Nested Option/Vec/map type arguments also need their scalar adapters replaced.
+
         for segment in &mut ty.path.segments {
             if let PathArguments::AngleBracketed(arguments) = &mut segment.arguments {
                 for argument in &mut arguments.args {

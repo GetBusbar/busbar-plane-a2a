@@ -2,41 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! The task a relayed hop is for: opened at the unit's first ATTEMPT over the task store's host
-//! records, and settled on the far end's answer.
-//!
-//! * ADDRESSED: the request's `params`, or its message's `taskId` (a second turn), name a task the
-//!   caller holds ([`task_identity::translatable`]): the hop reuses its identity and opens nothing.
-//! * UNNAMED: a task verb (`GetTask`, `CancelTask` or `SubscribeToTask`, either spelling) is always
-//!   ADDRESSED to a task, and one whose `params` name none as a string is refused `400`, invalid
-//!   params (`-32602`, the gRPC line's `INVALID_ARGUMENT`) before anything is read or opened: a task
-//!   verb never opens a task.
-//! * NOT HELD: a request ADDRESSED to a task (a task verb, or a message whose `taskId` names one)
-//!   that the caller does not hold is refused `404`,
-//!   A2A's `TaskNotFoundError` (`-32001`) in the local verbs' words ([`local::NO_SUCH_TASK`]):
-//!   nothing is opened and nothing is relayed. Another caller's task, a retired one and one that
-//!   never was read alike, so the refusal is no existence oracle.
-//! * HELD AS TERMINAL: a `CancelTask` of a task the caller holds as terminal is refused `409`, A2A's
-//!   `TaskNotCancelableError` (`-32002`, [`TASK_NOT_CANCELABLE`]): busbar's own row answers it, as
-//!   a subscribe to a terminal task is answered, and nothing is relayed.
-//! * RESUMED: the caller's message names a `contextId` under which one of its tasks on this agent
-//!   is interrupted: the newest moves back to `working` (refused `503` on storage failure).
-//! * FRESH: busbar mints the id from eight random bytes ([`task_identity::mint`]), the `contextId` is the
-//!   caller's or the id, and the task is submitted and dispatched to the agent before the hop
-//!   (refused `503` when it cannot be recorded). The submit carries the task store's RETENTION
-//!   SWEEP ([`tasks::retention_sweep`], at most [`tasks::SWEEP_BUDGET`] settled tasks retired in
-//!   its own writes): the sweep runs from a submit, never from a read or a timer, and one that
-//!   fails retires nothing and fails no submit.
-//!
-//! Task ids the caller holds and whose far-end id busbar learnt are sent on as the far end's
-//! ([`task_identity::translate_request`]). On the answer, the reported state is recorded (nothing for
-//! `submitted`), and a failed hop ends a task it opened as `failed`.
-//!
-//! A push callback the request carries INLINE (its `configuration`, in any of the three spellings
-//! [`CALLBACK_CONFIG_POINTERS`] names) is judged before anything is opened, by the same floor the
-//! push-config verbs use ([`local::judge_callback`]), and a callback or a credential busbar cannot
-//! honour refuses the request `400`. Every accepted inline callback uses the same durable
-//! `push_config` record as CRUD registration, including fresh and resumed tasks. The later set
-//! wins; deletion removes this sole authority. A queued delivery owns its captured credential.
 
 use std::collections::BTreeMap;
 
@@ -59,7 +24,7 @@ use crate::agent_arrival::{
     CODE_INTERNAL, CODE_INVALID_PARAMS, CODE_TASK_NOT_CANCELABLE, CODE_TASK_NOT_FOUND,
 };
 /// The status a callback busbar cannot honour, or a task verb naming no task, answers with: the
-/// caller's fault.
+
 const STATUS_BAD_REQUEST: u32 = 400;
 /// The plane's words for a task verb whose `params` name no task id as a string.
 pub const TASK_UNNAMED: &str = "a task verb must name its task: `params.id` is required, a string";
@@ -70,7 +35,7 @@ const STATUS_CONFLICT: u32 = 409;
 /// The words for a task that could not be recorded.
 pub const TASK_UNRECORDED: &str = "the task could not be recorded";
 /// The plane's words for a cancel of a task it holds as terminal (in the style of the subscribe
-/// refusal, `local::subscribe_refusal`).
+
 pub const TASK_NOT_CANCELABLE: &str =
     "this task has reached a terminal state, so it cannot be canceled";
 /// The words for an interrupted task that could not be moved back to `working`.
@@ -86,12 +51,10 @@ pub fn conflicting_tasks(envelope: &Value) -> bool {
 }
 
 /// The host's reach opening a task needs beyond the records and the destination judge: the
-/// kernel's random bytes.
+
 pub trait Mint: Reach {
     /// `random.fill` into `buf`.
-    ///
-    /// # Errors
-    /// [`Halt`].
+
     fn random(&mut self, buf: &mut [u8]) -> Result<(), Halt>;
 }
 
@@ -182,13 +145,7 @@ fn resumable(rows: Vec<TaskRow>, context_id: &str, member: &str) -> Option<TaskR
 }
 
 /// The member holding the task a request to a failover pool is about, read off the caller's task records: the `agent_id` of the task
-/// the request names (in its `params` or its message) and the caller holds, else of the newest of the caller's interrupted tasks
-/// under the `contextId` it names held by ANY of the pool's `members` (it resumes AT that member).
-/// `None` = the request is a fresh submission, which the pool's walk places. Failed reads
-/// propagate so an existing task cannot migrate to a different member during a store outage.
-///
-/// # Errors
-/// [`Halt::Pending`] when a host call pends: the piece runs again from the top.
+
 pub fn holder(
     reach: &mut dyn Records,
     envelope: &Value,
@@ -221,10 +178,7 @@ pub fn holder(
 }
 
 /// OPEN the task request `req` is for; its record writes go to `out`. `backends` answers the far
-/// end's id busbar learnt for one of the caller's task ids.
-///
-/// # Errors
-/// [`Halt::Pending`] when a host call pends: the piece runs again from the top.
+
 pub fn open(
     reach: &mut dyn Mint,
     req: &Request<'_>,
@@ -261,7 +215,7 @@ pub fn open(
         }
     };
     let url = callback.as_ref().map(|c| c.url.as_str());
-    // The version the callback is registered under: the one the request's method is spelled in.
+
     let version = local::Dialect::of_method(
         req.envelope
             .get("method")
@@ -306,9 +260,6 @@ pub fn open(
             ));
         }
         (Some(row), _) => {
-            // An addressed task's callback is a PUSH-CONFIG SET, replace semantics, last writer
-            // wins: a put of the task's push_config record, never a write of its row, so no other
-            // writer's move of the task is undone.
             put_config(reach, req, callback.as_ref(), version, &row.task_id)?;
             let task = TaskHop {
                 task_id: row.task_id,
@@ -383,7 +334,6 @@ pub fn open(
             )
             .map_err(|e| Halt::Failed(e.to_string()))
             .and_then(|mut t| {
-                // The inline config is written durably beside the task below.
                 t.push_callback = None;
                 tasks::open_configured(
                     reach,
@@ -405,8 +355,7 @@ pub fn open(
                 }
                 Ok(_) => {}
             }
-            // A sweep failure is reported but fails no submit. Retirements committed before a
-            // later failure remain committed; the next due sweep can finish the remaining work.
+
             if req.sweep {
                 match tasks::retention_sweep(reach, req.now, tasks::SWEEP_BUDGET, out) {
                     Err(Halt::Pending) => return Err(Halt::Pending),
@@ -435,8 +384,7 @@ pub fn open(
     Ok(Opened::Hop {
         task: Box::new(TaskHop { references, ..task }),
         instead,
-        // The existing push_config record owns every accepted inline credential, including
-        // fresh and resumed tasks; no terminal/idle task retains a separate in-memory copy.
+
         callback: None,
         swept,
         unrecorded,
@@ -494,13 +442,13 @@ fn config_value(
 }
 
 /// Whether `envelope` is ADDRESSED to a task, so that a task the caller does not hold refuses it:
-/// every task verb ([`is_task_verb`]), or a message naming one in its `taskId`.
+
 fn addresses_a_task(envelope: &Value) -> bool {
     is_task_verb(envelope) || !task_identity::message_tasks(envelope).is_empty()
 }
 
 /// Whether `envelope` is a task verb (`GetTask`, `CancelTask`, `SubscribeToTask`, either
-/// spelling): a request about one task, which it must name.
+
 fn is_task_verb(envelope: &Value) -> bool {
     use crate::ops::{row_for, OP_TASK_CANCEL, OP_TASK_GET, OP_TASK_SUBSCRIBE};
     envelope
@@ -520,7 +468,7 @@ fn is_cancel(envelope: &Value) -> bool {
 }
 
 /// THE INLINE CONFIG OBJECT whose `url` is the callback: the first supported spelling that
-/// carries a non-empty one, so the credential is read out of the same object as the URL.
+
 fn inline_config(envelope: &Value) -> Option<&Value> {
     CALLBACK_CONFIG_POINTERS.into_iter().find_map(|p| {
         envelope.pointer(p).filter(|cfg| {
@@ -532,10 +480,7 @@ fn inline_config(envelope: &Value) -> Option<&Value> {
 }
 
 /// THE PUSH CALLBACK `envelope` carries inline, judged: `Ok(None)` for none, the callback as it
-/// passed, or the refusal's words (a credential busbar cannot present, or a URL the floor refuses).
-///
-/// # Errors
-/// [`Halt`] from the destination judge.
+
 fn inline_callback(
     reach: &mut dyn Reach,
     envelope: &Value,
@@ -559,7 +504,7 @@ fn inline_callback(
 }
 
 /// The request with every task id the caller holds, and whose far-end id busbar learnt, sent on as
-/// the far end's; `None` when none is.
+
 fn translated(
     reach: &mut dyn Mint,
     req: &Request<'_>,
@@ -602,7 +547,7 @@ fn translated(
 }
 
 /// What [`translated`] answers: the request to send in place of the caller's bytes, when an id was
-/// translated, and each translated task as the far end's id then busbar's, for the answer.
+
 type Translated = (Option<Vec<u8>>, Vec<(String, String)>);
 
 /// The error-once latches of the refused record writes, one per condition: a store outage persists across
@@ -632,7 +577,7 @@ macro_rules! latched {
 }
 
 /// A record write the store refused, reported and never fatal: the hop SUCCEEDED, the caller is
-/// owed its answer, and the stream keeps flowing.
+
 pub(crate) enum WriteRefused {
     /// The unary hop's reported state.
     Relayed,
@@ -682,15 +627,7 @@ impl WriteRefused {
 }
 
 /// SETTLE `task` on what its answer said; the record writes go to `out`. A write the store refuses
-/// is not the caller's failure: the answer stands. A relayed event settles as it passes: the state
-/// it reported, then the artifact it carried (the resume cursor, one chunk on), each chained over
-/// the writes `out` already holds. Answers the row as it moved (what a push notification about the
-/// move carries), or `None` when nothing moved.
-///
-/// A write the store refuses is journaled through `latches` (warning once per kind, debug after).
-///
-/// # Errors
-/// [`Halt::Pending`] when a records call pends.
+
 pub fn settle_on_answer(
     rec: &mut dyn Records,
     task: &TaskHop,

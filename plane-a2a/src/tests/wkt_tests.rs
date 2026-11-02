@@ -10,7 +10,7 @@ fn ts(seconds: i64, nanos: i32) -> Timestamp {
 }
 
 /// A UTC time is written as `to_rfc3339` wrote it, the fraction in 0, 3, 6 or 9 digits, and
-/// Z-normalised as the protobuf JSON mapping writes a `Timestamp`.
+
 #[test]
 fn a_timestamp_is_written_as_rfc3339() {
     let cases = [

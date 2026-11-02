@@ -2,13 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! The agent cards the plane holds, in plugin-owned memory: the
-//! mirror of the `card` host records ([`crate::records::KIND_CARD`], keyed by agent id, operator
-//! scope). The `connect` and `approve` answers write a card their look verified (record
-//! writes ride an answer, never a tick), and the first tick after `open` warms this
-//! mirror from those records (`records.list`), so an instance opened again holds the cards its
-//! operator approved before. A held card is valid to the
-//! refresh generation it was held under: `arrive` reads cards from this memory and consults host trust for admission; a
-//! card held under another generation is not read.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -75,7 +68,7 @@ impl Cards {
     }
 
     /// The card held for `agent` under `generation`; `None` when none is, or it was held under
-    /// another generation.
+
     #[must_use]
     pub fn at(&self, agent: &str, generation: u64) -> Option<Arc<Value>> {
         self.by_agent.with(&agent.to_string(), |held| {

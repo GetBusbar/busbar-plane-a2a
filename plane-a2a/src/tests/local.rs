@@ -2,7 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! The verbs the plane answers itself, over the test's host records: the engine's bytes, and a
-//! config that is a record.
 
 use busbar_contract::abi::host::service::{
     DEST_ALLOWED, DEST_INTERNAL, DEST_NO_HOST, DEST_OBFUSCATED, DEST_PLAINTEXT, DEST_SCHEME,
@@ -91,7 +90,7 @@ fn error_of(body: &Value) -> (i64, String) {
 }
 
 /// `ListTasks` answers the caller's own rows, newest first, one page at a time, with the engine's
-/// members.
+
 #[test]
 fn list_tasks_answers_the_callers_own_rows_a_page_at_a_time() {
     let mut desk = desk();
@@ -129,7 +128,7 @@ fn list_tasks_answers_the_callers_own_rows_a_page_at_a_time() {
 }
 
 /// A PAGE HOLDS AT MOST 100 TASKS, the protocol's maximum (`ListTasksRequest.page_size`, a2a.proto:
-/// "The maximum value is 100"): a caller asking for more gets 100 and the token to the rest.
+
 #[test]
 fn list_tasks_pages_at_most_the_protocols_hundred() {
     let mut desk = desk();
@@ -144,7 +143,7 @@ fn list_tasks_pages_at_most_the_protocols_hundred() {
 }
 
 /// A config is created, read, listed and deleted as a record of its task, in each dialect's shape,
-/// and its credential is never echoed.
+
 #[test]
 fn a_push_config_lives_as_a_record_of_its_task() {
     let mut desk = desk();
@@ -271,7 +270,7 @@ fn the_stored_credential_rides_the_record_and_never_an_answer() {
 }
 
 /// A record written before the field existed still reads, and a config without a credential
-/// writes none.
+
 #[test]
 fn a_record_without_the_credential_field_reads_as_none() {
     let old: PushConfig =
@@ -311,7 +310,7 @@ fn another_callers_task_is_not_found() {
 }
 
 /// Refused callback configurations retain their error status/code and create no config record.
-/// The sentence prefix is checked here; this is not an assertion of exact refusal wording.
+
 #[test]
 fn refused_callback_configurations_are_not_persisted() {
     let cases: [(Value, u64, i64, &str); 7] = [
@@ -339,7 +338,7 @@ fn refused_callback_configurations_are_not_persisted() {
 }
 
 /// A subscribe to a task busbar did not issue to this caller is not found, to one it holds as
-/// terminal is unsupported, and to a live one is the backend's to answer.
+
 #[test]
 fn a_subscribe_is_refused_only_where_busbar_knows_better() {
     let mut desk = desk();
@@ -370,10 +369,8 @@ fn a_subscribe_is_refused_only_where_busbar_knows_better() {
     assert_eq!(refused(&mut desk, "t1"), None);
 }
 
-// ── the engine's local-verb cells (`busbar-a2a` `local_tests.rs`), on the door ──────────────────
-
 /// Exactly the task-store verbs are answered here; the submission and read verbs are the
-/// backend's work and are relayed.
+
 #[test]
 fn exactly_these_methods_are_answered_locally() {
     for m in [
@@ -440,7 +437,7 @@ fn the_push_verbs_carry_the_dialect_that_named_them() {
 }
 
 /// A config cannot be attached to another caller's task: the create is the absent-task refusal,
-/// and no record is written under either caller.
+
 #[test]
 fn a_push_config_cannot_be_attached_to_another_principals_task() {
     let mut desk = desk();
@@ -460,7 +457,7 @@ fn a_push_config_cannot_be_attached_to_another_principals_task() {
 }
 
 /// The list is answered for the owner; for anybody else it is the absent-task refusal, byte for
-/// byte the one an id that never existed gets, and never an empty list.
+
 #[test]
 fn list_push_configs_is_answered_for_the_owner_and_is_an_absent_task_for_everybody_else() {
     let mut desk = desk();
@@ -483,7 +480,7 @@ fn list_push_configs_is_answered_for_the_owner_and_is_an_absent_task_for_everybo
 }
 
 /// Another caller's delete cannot disarm the owner's callback: it answers as for an absent task and
-/// the owner's record stays, and the owner can still delete it.
+
 #[test]
 fn delete_push_config_cannot_disarm_another_principals_callback() {
     let mut desk = desk();
@@ -515,7 +512,7 @@ fn delete_push_config_cannot_disarm_another_principals_callback() {
 }
 
 /// A subscribe is relayed for the owner of a live task (no local refusal); for anybody else it is
-/// refused exactly as an id that never existed is.
+
 #[test]
 fn subscribe_is_relayed_for_the_owner_and_is_an_absent_task_for_everybody_else() {
     let mut desk = desk();
@@ -538,7 +535,7 @@ fn subscribe_is_relayed_for_the_owner_and_is_an_absent_task_for_everybody_else()
 }
 
 /// The v0.3 spelling is answered in the v0.3 shape: the config nested under
-/// `pushNotificationConfig`, and no flattened `url`.
+
 #[test]
 fn the_v0_3_spelling_is_answered_in_the_v0_3_shape() {
     let mut desk = desk();
@@ -559,10 +556,9 @@ fn the_v0_3_spelling_is_answered_in_the_v0_3_shape() {
 }
 
 /// Every A2A method of the inventory is read the same way under its v1.0 and its v0.3 JSON-RPC
-/// name: the local verb it is, the class it is relayed as, and whether its answer is events.
+
 #[test]
 fn every_a2a_method_is_read_identically_under_both_of_its_live_json_rpc_names() {
-    // The inventory, read by `build.rs` from `tests/data/` and included as generated source.
     let doc: Value = serde_json::from_str(METHOD_INVENTORY).expect("the inventory parses");
     let methods = doc["methods"].as_array().expect("a methods array");
     fn how_busbar_reads(method: &str) -> (Option<&'static str>, String, Option<bool>) {
@@ -597,7 +593,7 @@ fn every_a2a_method_is_read_identically_under_both_of_its_live_json_rpc_names() 
 }
 
 /// A v0.3 set then a v0.3 delete naming the config by `pushNotificationConfigId` (the task by `id`)
-/// actually clears the record, not only answers success.
+
 #[test]
 fn v03_delete_reads_pushnotificationconfigid_and_actually_clears() {
     let mut desk = desk();
@@ -628,12 +624,8 @@ fn v03_delete_reads_pushnotificationconfigid_and_actually_clears() {
     );
 }
 
-// ── the callback floor: the host's verdict, the engine's words (`pushnotify_tests.rs`) ──────────
-
 /// THE DESTINATION IS THE HOST'S TO JUDGE (`BUSBAR-1.6.0.md`, the ONE destination guard): an
-/// internal literal is refused because the host's judge refused it, and the judge was asked for it;
-/// a judge that admits it (an operator's allow-list) is not second-guessed by a check of the
-/// plane's own. RED before the guard moved: the plane refused the literal itself and never asked.
+
 #[test]
 fn an_internal_callback_is_refused_on_the_hosts_verdict_and_the_host_is_asked() {
     let url = "https://10.0.0.1/cb";
@@ -673,7 +665,7 @@ fn an_internal_callback_is_refused_on_the_hosts_verdict_and_the_host_is_asked() 
 }
 
 /// The callback consumes the host's DEST_OBFUSCATED verdict. Detection of the
-/// alternate IPv4 spelling belongs to the host and is not performed by this fixture.
+
 #[test]
 fn the_hosts_obfuscated_address_verdict_is_refused() {
     for host in [
@@ -704,7 +696,7 @@ fn the_hosts_obfuscated_address_verdict_is_refused() {
 }
 
 /// A URL whose authority names a user is malformed, refused rather than normalised, before the
-/// host is asked anything, and the refusal never repeats the userinfo it carried.
+
 #[test]
 fn a_url_with_userinfo_is_refused_rather_than_normalised() {
     for (url, shown) in [
@@ -730,14 +722,13 @@ fn a_url_with_userinfo_is_refused_rather_than_normalised() {
 }
 
 /// A v1.0 PUSH-CONFIG VERB READS ITS TASK FROM `taskId` ALONE: `id` is the config's id, so a
-/// request naming a task the caller does not hold is the absent-task refusal even when its config
-/// id happens to be one of the caller's own task ids; on v0.3 `id` is the task.
+
 #[test]
 fn a_v10_push_config_verb_never_reads_its_config_id_as_the_task() {
     let mut desk = desk();
     let cfg = json!({ "taskId": "t1", "id": "c1", "url": "https://hooks.example/cb" });
     call(&mut desk, "CreateTaskPushNotificationConfig", cfg, ALICE);
-    // `t2` is Alice's other task; `nope` is no task of hers.
+
     let (status, body) = call(
         &mut desk,
         "CreateTaskPushNotificationConfig",
@@ -782,7 +773,7 @@ fn a_v10_push_config_verb_never_reads_its_config_id_as_the_task() {
 }
 
 /// A string that is not a URL is refused, and a scheme the host does not admit is refused in the
-/// engine's scheme words.
+
 #[test]
 fn malformed_urls_are_refused() {
     let words = |shown: &str| format!("push callback URL is malformed: `{shown}`");
@@ -825,12 +816,7 @@ fn malformed_urls_are_refused() {
 }
 
 /// THE ENGINE'S ANSWER SHOULD THE STORE REFUSE A PUSH-CONFIG VERB'S OWN WRITE (the kernel then ends
-/// the unit `durability_unavailable`, and the door's `refusal` renders this in place of the kernel's
-/// words): predev's internal error, `500` (`rpcerror.rs:296`) with `-32603` and no `data`, echoing
-/// the request id. A registration the store would not take: "the push notification config could
-/// not be recorded" (`busbar-a2a` `local.rs:592-607`); a removal: "the push notification config
-/// could not be deleted; retry the delete" (`local.rs:729-745`). Every other local verb's answer the
-/// engine never made depend on a write: none.
+
 #[test]
 fn a_push_config_write_the_store_refuses_answers_the_engines_internal_error() {
     let id = json!(7);

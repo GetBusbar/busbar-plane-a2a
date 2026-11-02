@@ -2,7 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! Actual host callbacks preserve the retained body across a byte window, metadata SHORT,
-//! cancellation and an upstream error. Owner wiping is observed separately inside RawBytes.
 
 use super::*;
 

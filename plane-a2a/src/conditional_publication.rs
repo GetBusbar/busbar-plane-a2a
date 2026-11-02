@@ -2,7 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! One callback's replay journal for read-bound observations and atomic publication. The host
-//! owns a submitted attempt; a wake neither acknowledges it nor permits a replacement candidate.
 
 use std::sync::{Arc, Weak};
 
@@ -254,8 +253,8 @@ impl Journal {
                     Action::Publish { answer, .. } => matches!(answer, Some(Err(error)) if !matches!(error, wire::ConditionalFailure::Refused(_))),
                 };
                 if refused {
-                    // Indeterminate retains the original request too. No new read or candidate
-                    // may follow any terminal failure of this exact exchange.
+
+
                     s.broken = true;
                     return Err(failed());
                 }
@@ -602,7 +601,7 @@ impl Journal {
     }
 
     /// An emitted later observation replaced the prior definitive commit at the host. Its
-    /// cancellation has no commit receipt to acknowledge; only the retained local effects remain.
+
     pub(crate) fn cancelled_without_receipt(&self) -> bool {
         self.0.with(&(), |state| {
             state.is_some_and(|state| {
@@ -727,7 +726,7 @@ impl Journal {
                 return false;
             }
             s.ack_offered = None;
-            // ACK releases the host's receipt custody, never an indeterminate local obligation.
+
             s.quarantined = s.steps.iter().any(|step| {
                 step.submitted
                     && matches!(
@@ -756,7 +755,7 @@ impl Journal {
     }
 
     /// Complete only the batch this caller owns, after every outside-Book obligation returns.
-    /// An unwound or watchdog-retired caller never turns a reserved effect into completion.
+
     pub(crate) fn effects_finished(&self, owner: Option<Arc<()>>) {
         let Some(owner) = owner else {
             return;

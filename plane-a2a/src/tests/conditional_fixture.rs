@@ -2,7 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! The listing unit fixture's kernel model. It answers the original journal intent through the
-//! real receipt codec; linked/dropped integration tests cover emission over the raw ABI itself.
 
 use super::*;
 

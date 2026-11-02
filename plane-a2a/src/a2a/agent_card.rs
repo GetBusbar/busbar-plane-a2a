@@ -2,13 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! THE AGENT CARD, as the plane reads it: busbar's own structs, transcribed from the A2A
-//! specification. Card publication and rewriting live in [`crate::served_card`].
-//!
-//! `#[serde(default)]` throughout, and unknown members are IGNORED rather than refused: an upstream
-//! on a newer protocol revision must not become unreadable the moment it adds a member. A JSON
-//! `null` member reads as absent ([`nullable`]), as the gRPC line's generated messages read a `null`
-//! (build.rs's patch), so a card an SDK serialised with explicit nulls stays readable. These
-//! structs are for READING a card; every hash is taken over the document as received.
 
 use std::collections::BTreeMap;
 
@@ -165,7 +158,7 @@ where
 }
 
 /// Read the members busbar acts on; `None` when the document is not a card (not an object, or a
-/// member present with the wrong type; a `null` member is absent). Unknown members are ignored.
+
 #[must_use]
 pub fn parse(card: &Value) -> Option<AgentCard> {
     if !card.is_object() {

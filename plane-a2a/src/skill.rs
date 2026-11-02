@@ -2,19 +2,13 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! The skill a request matches on an agent's card: busbar's own namespaced annotation,
-//! `metadata["busbar/skill"]` on the answer.
-//!
-//! The fit is STRUCTURAL, never a score: an agent either can accept this shape of task or it
-//! cannot. A request that names a skill matches the card's skill of that id under the skill's own
-//! modes (the card's defaults where it declares none); one that names none matches no skill.
 
 use serde_json::Value;
 
 use crate::a2a::agent_card::AgentCard;
 
 /// EVERY PLACE A2A SPELLS the push-callback config object, in both revisions: v0.3's
-/// `pushNotificationConfig`, v1.0's `taskPushNotificationConfig`, flat or nested. The URL and the
-/// credential beside it are read out of ONE object.
+
 pub const CALLBACK_CONFIG_POINTERS: [&str; 8] = [
     "/params/configuration/pushNotificationConfig",
     "/params/configuration/push_notification_config",
@@ -27,7 +21,7 @@ pub const CALLBACK_CONFIG_POINTERS: [&str; 8] = [
 ];
 
 /// DOES THIS METHOD NAME ASK FOR A STREAM? Both eras of the name: v0.3's `message/stream` and
-/// `tasks/resubscribe`, v1.0's `SendStreamingMessage` and `SubscribeToTask`.
+
 #[must_use]
 pub fn reads_as_stream(method: &str) -> bool {
     method.ends_with("/stream")
@@ -52,7 +46,7 @@ pub struct TaskShape {
 
 impl TaskShape {
     /// The shape an inbound envelope asks for. Send requests have their field types checked at
-    /// arrival by [`validate_fields`]. An envelope that names nothing constrains nothing.
+
     #[must_use]
     pub fn of(envelope: &Value) -> Self {
         let params = envelope.get("params");
@@ -90,8 +84,7 @@ fn requested_output_modes(envelope: &Value) -> Option<&Value> {
 }
 
 /// Validate the request fields that structural fit reads, before a send request is routed.
-/// Null keeps its existing absent-field meaning; malformed explicit constraints must not be
-/// silently discarded by the shape reader. Unlisted methods retain their opaque parameters.
+
 pub(crate) fn validate_fields(envelope: &Value) -> Result<(), &'static str> {
     if envelope
         .pointer("/params/metadata/skill")
@@ -158,9 +151,7 @@ pub enum Unreadable {
 }
 
 /// THE FIT of a held card DOCUMENT to `shape`: [`judge`] over the card read.
-///
-/// # Errors
-/// [`Unfit`]; [`Unfit::Unreadable`] for a document that is not a card.
+
 pub fn fit(card: &Value, shape: &TaskShape) -> Result<Option<String>, Unfit> {
     let card =
         crate::a2a::agent_card::parse(card).ok_or(Unfit::Unreadable(Unreadable::NotAnObject))?;
@@ -171,7 +162,7 @@ pub fn fit(card: &Value, shape: &TaskShape) -> Result<Option<String>, Unfit> {
 pub const STATUS_UNFIT: u32 = 400;
 
 /// The refusal of a request an agent's held card does not fit:
-/// `400`, `-32004`, no id, the exclusion's sentence ([`Unfit::words`]) as the message.
+
 #[must_use]
 pub fn refusal(unfit: &Unfit) -> crate::agent_arrival::AgentRefusal {
     crate::agent_arrival::AgentRefusal::new(
@@ -183,10 +174,7 @@ pub fn refusal(unfit: &Unfit) -> crate::agent_arrival::AgentRefusal {
 }
 
 /// JUDGE WHETHER AN AGENT CARD FITS A TASK SHAPE: the matched skill id (`None` when the shape
-/// names none), or why it does not fit.
-///
-/// # Errors
-/// [`Unfit`].
+
 pub fn judge(card: &AgentCard, shape: &TaskShape) -> Result<Option<String>, Unfit> {
     if shape.requires_stream && !card.capabilities.is_stream {
         return Err(Unfit::CapabilityNotDeclared("streaming"));
@@ -200,7 +188,7 @@ pub fn judge(card: &AgentCard, shape: &TaskShape) -> Result<Option<String>, Unfi
             .iter()
             .find(|s| &s.id == wanted)
             .ok_or_else(|| Unfit::SkillNotDeclared(wanted.clone()))?;
-        // A skill's own modes OVERRIDE the card defaults where it declares them.
+
         check_modes(shape, pick(&skill.output_modes, &card.default_output_modes))?;
         return Ok(Some(skill.id.clone()));
     }
@@ -217,7 +205,7 @@ fn pick<'a>(specific: &'a [String], fallback: &'a [String]) -> &'a [String] {
 }
 
 /// The caller must be able to RECEIVE something the agent produces; a side that names no modes
-/// constrains nothing.
+
 fn check_modes(shape: &TaskShape, agent_outputs: &[String]) -> Result<(), Unfit> {
     let wanted = &shape.output_modes;
     if wanted.is_empty()
@@ -235,7 +223,7 @@ fn check_modes(shape: &TaskShape, agent_outputs: &[String]) -> Result<(), Unfit>
 }
 
 /// MIME type and subtype are case-insensitive; parameters do not change the structural mode.
-/// This comparison does not add wildcard negotiation.
+
 fn media_type(mode: &str) -> &str {
     mode.split(';').next().unwrap_or_default().trim()
 }

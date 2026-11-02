@@ -2,7 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! Push delivery in plane memory: the retry schedule and what it retries, the per-task order, the
-//! bounded queue and its count, the credential's path, and busbar's own callback tokens.
 
 use super::*;
 
@@ -21,7 +20,7 @@ impl Deliveries {
     }
 
     /// The deliveries to attempt now: each task's head, when its time has come and no attempt on
-    /// it is open. Each is marked open until [`Deliveries::settle`].
+
     #[must_use]
     pub(crate) fn due(&self, now_ns: u64) -> Vec<Delivery> {
         self.with(|b| {
@@ -54,7 +53,7 @@ use busbar_contract::abi::sdk::test_support::chip::{cred, framed_head};
 const MS: u64 = 1_000_000;
 
 /// The bytes `seal` puts on the wire: the value of the one sealed field an exchange frames for it
-/// (`x: <value>\r\n`, nothing else in the head).
+
 pub(crate) fn sealed_bytes(seal: Seal) -> Vec<u8> {
     let head = framed_head(
         &Exchange::request_sealed(Request::default(), vec![(0, b"x".to_vec(), seal)])
@@ -122,7 +121,7 @@ fn a_failing_receiver_gets_three_attempts_at_250_then_500_ms_and_no_fourth() {
     let d = Deliveries::default();
     d.enqueue(delivery("t1"), 0);
     assert_eq!(d.due(0).len(), 1);
-    // The low end of the first wait (250 - 20 %), then the high end of the second (500 + 20 %).
+
     assert_eq!(
         d.settle("t1", Attempted::Status(503), 0, 0),
         DeliverySettled::Retry(200 * MS)
@@ -196,7 +195,7 @@ fn a_tasks_notifications_go_out_in_order_one_at_a_time() {
         0,
         "no tick is wanted while every head is open"
     );
-    // A retry holds the task's later notifications behind it.
+
     d.settle("t1", Attempted::Status(500), 0, 0);
     assert!(d.due(199 * MS).is_empty());
     assert_eq!(d.due(200 * MS)[0].body, b"first");
@@ -218,7 +217,7 @@ fn a_full_queue_drops_its_oldest_waiting_notification_and_counts_it() {
     assert!(d.enqueue(newest, 0));
     assert_eq!((d.depth("t1"), d.dropped()), (QUEUE_CAPACITY, 1));
     assert_eq!(d.due(0)[0].body, b"1", "the oldest was the one dropped");
-    // The head is now open: the next drop takes the oldest WAITING one, never the attempt.
+
     assert!(d.enqueue(delivery("t1"), 0));
     assert_eq!(d.dropped(), 2);
     assert_eq!(
@@ -235,7 +234,7 @@ fn a_full_queue_drops_its_oldest_waiting_notification_and_counts_it() {
 }
 
 /// THE REQUEST AS IT WAS BEFORE THE CHIP (plane-a2a dev at 28bd001, `push::request` and
-/// `DeliveryAuth::header_value`), kept verbatim as the oracle the sealed request is held to.
+
 fn legacy_request(delivery: &Delivery, auth: Option<(&str, &str)>) -> Request {
     let target = url::Url::parse(&delivery.url).map_or_else(
         |_| "/".to_string(),
@@ -299,10 +298,7 @@ fn the_request_is_a_post_to_the_callbacks_path_with_the_credential_only_once_hel
 }
 
 /// THE WIRE IS THE ONE THE PLANE SENT BEFORE THE CHIP: for every shape of credential a caller
-/// registers (a scheme and a credential, a bare scheme, a credential with inner spaces, none), and
-/// a callback with and without a query, the sealed request frames exactly the head the plain
-/// request framed: the field order, the separator, every byte. RED against a sealed field placed
-/// anywhere but after the content type, or a recipe that writes the scheme its own way.
+
 #[test]
 fn the_sealed_request_frames_the_bytes_the_plain_one_did() {
     let shapes: [Option<(&str, &str)>; 5] = [
@@ -399,9 +395,7 @@ fn the_notification_is_the_task_nested_under_task_with_an_rfc3339_timestamp() {
 }
 
 /// THE NOTIFICATION TAKES THE SHAPE OF THE VERSION ITS CALLBACK WAS REGISTERED UNDER (Q128 a2a M13,
-/// ruled version-consistent). v1.0: a `StreamResponse` carrying the task, its state a ProtoJSON
-/// `TASK_STATE_*` token and no `kind`. v0.3: the `Task` object itself, `kind: "task"` and the
-/// lower-case state word. RED before the fix: one mixed body, the v1.0 wrapper around v0.3 words.
+
 #[test]
 fn the_notification_is_the_registered_versions_shape() {
     let mut t = task("t1", TaskState::Completed);
@@ -419,7 +413,7 @@ fn the_notification_is_the_registered_versions_shape() {
         serde_json::json!({"id": "t1", "contextId": "ctx", "kind": "task",
             "status": {"state": "completed", "timestamp": "1970-01-01T00:00:02Z"}})
     );
-    // A row written before the version was kept reads as v1.0.
+
     t.push_version = String::new();
     let old: serde_json::Value = serde_json::from_slice(&notification_body(&t)).expect("JSON");
     assert_eq!(old, v10);
@@ -483,7 +477,7 @@ fn tokens_are_bounded() {
 }
 
 /// 1.5.5's push-volume bound: 60 per task per fixed 60 s window, other tasks untouched, a fresh
-/// window refills, and a clock that steps back cannot reopen a spent window.
+
 #[test]
 fn the_push_volume_bound_is_one_point_five_point_fives() {
     let limiter = PushLimiter::default();
@@ -511,9 +505,9 @@ fn the_statement_declares_its_open_web_need_and_its_agent_member_need() {
     use busbar_test_kit::test_support::DoorView;
     let st = &crate::plane_door::STATEMENT;
     assert!(!st.needs_ptr().is_null());
-    // The open web, the agents over http, the agents over grpc.
+
     assert_eq!((st.needs_len(), NEEDS.len()), (3, 3));
-    // The relayed calls' need: each registered agent reached at its own `url`, as an upstream.
+
     let agent = NEEDS[NEED_AGENT as usize];
     assert_eq!(
         (agent.direction, agent.egress_class),
@@ -551,8 +545,7 @@ fn the_statement_declares_its_open_web_need_and_its_agent_member_need() {
 }
 
 /// THE PUSH NEED'S TRUST IS THE PLANE'S OWN `agent_push.ca`, in the owned namespace (ARCHITECT ruling
-/// 2026-10-14): the path names the section the Statement owns beside `agents:` and its one key, and
-/// the section is stated as the plane's own (not declaring, not consumed).
+
 #[test]
 fn the_push_trust_path_names_the_owned_agent_push_section() {
     use crate::statement::{PUSH_CA_KEY, PUSH_SECTION, PUSH_TRUST_FROM, SECTIONS};
@@ -574,8 +567,7 @@ fn the_push_trust_path_names_the_owned_agent_push_section() {
 }
 
 /// THE `agent_push:` SECTION'S SHAPE, as the plane judges it at `open` and `refresh`: absent (or
-/// null) is off; present, a mapping holding `ca` alone, non-empty text. Whether the text is a
-/// usable trust anchor is the host's to judge.
+
 #[test]
 fn the_agent_push_section_holds_its_ca_alone() {
     use crate::statement::read_push_section;
@@ -621,7 +613,7 @@ fn predev_shaped(token: &str, task_id: &str) -> bool {
 #[test]
 fn a_callback_token_has_predevs_wire_shape_and_rides_its_bearer_scheme() {
     let tokens = Tokens::default();
-    // predev's own HMAC token for task `t-1` (hex of a 32-byte MAC) is the shape the check holds.
+
     let predev = "t-1.5d41402abc4b2a76b9719d911017c5925d41402abc4b2a76b9719d911017c592";
     assert!(predev_shaped(predev, "t-1"));
     for (task, sig) in [("t-1", [0u8; 64]), ("a.b", [0xffu8; 64])] {
@@ -663,7 +655,7 @@ fn the_credential_round_trips_through_the_record_and_stays_redacted() {
 }
 
 /// A `serde_json` line of the credential (a log line, an assert message) is refused and quotes
-/// nothing: only the SDK's record encoder writes it.
+
 #[test]
 fn the_credential_serializes_into_the_record_and_nowhere_else() {
     let a = auth("Bearer", "s3cret");
@@ -673,7 +665,7 @@ fn the_credential_serializes_into_the_record_and_nowhere_else() {
 }
 
 /// One `tick` op attempts one notification: the next task's head in turn (task-id order), marked
-/// open so the next op takes another; a task's later notification waits behind its open head.
+
 #[test]
 fn the_next_due_is_one_head_at_a_time_each_task_in_turn() {
     let d = Deliveries::default();
@@ -703,7 +695,7 @@ fn a_delivery_names_the_caller_holding_its_task() {
 }
 
 /// What an attempt owes its chain is taken by its caller only, at most one per task and never for
-/// the task the taking piece changes itself; the rest stay owed.
+
 #[test]
 fn owed_outcomes_are_taken_per_caller_one_per_task() {
     let d = Deliveries::default();
@@ -755,9 +747,7 @@ fn the_owed_book_is_bounded_and_counts_what_it_drops() {
 }
 
 /// `the_callback_mac_is_compared_in_constant_time` (the engine's source-shape guard, ported): the
-/// presented MAC on the push callback is compared through the tree's one constant-time primitive,
-/// and no variable-time compare of it sits beside that one. A presence-only check would pass a fix
-/// that added the helper next to a leftover fast-path `==`.
+
 #[test]
 fn the_callback_mac_is_compared_in_constant_time() {
     let source = include_str!("../push.rs");
@@ -779,11 +769,7 @@ fn the_callback_mac_is_compared_in_constant_time() {
 }
 
 /// RED (BUSBAR-1.6.0.md Locked Decision #54: logs, audit records, metrics and error text never
-/// carry a credential's value): the caller's webhook credential is caller payload the plane holds
-/// as a `Cred`, and its bytes reach the sealed `Authorization` field and nothing else. A
-/// registered config's `Debug` and the refusal of a credential busbar cannot present (the
-/// registration's error path) leave the bytes out (a `Cred` has no `Debug` at all). A refusal that
-/// quoted the value back fails here.
+
 #[test]
 fn the_push_credential_reaches_the_authorization_field_and_no_debug_or_error_text() {
     let secret = "s3cret-webhook-tok";
@@ -811,10 +797,7 @@ fn the_push_credential_reaches_the_authorization_field_and_no_debug_or_error_tex
 }
 
 /// EACH ATTEMPT IS BOUNDED BY THE REQUEST DEADLINE (ARCHITECT ruling on a slow push receiver): a
-/// webhook has no pool, so the bound is the connector's default, ten seconds, and the request
-/// names it rather than `0` ("the op's deadline", which a driver ticket's op does not bound). A
-/// receiver that never answers then ends its attempt as a transport error, under the
-/// three-attempt rule. RED against an unbounded request.
+
 #[test]
 fn a_delivery_attempt_is_bounded_by_the_request_deadline() {
     assert_eq!(
@@ -825,9 +808,7 @@ fn a_delivery_attempt_is_bounded_by_the_request_deadline() {
 }
 
 /// THE PUMP SERVES THE TASKS' QUEUES IN TURN, one attempt per task per turn (ARCHITECT ruling on a
-/// slow push receiver): a task with several notifications waiting never keeps another task's
-/// waiting behind all of them. RED against the longest-waiting-then-lowest-id pick, which serves
-/// every notification of `a` before `b`'s one.
+
 #[test]
 fn the_pump_serves_each_tasks_queue_in_turn() {
     let d = Deliveries::default();
@@ -847,11 +828,7 @@ fn the_pump_serves_each_tasks_queue_in_turn() {
 }
 
 /// AN AGENT'S PUSH MOVES ITS TASK ONLY TO A STATE IT REPORTS, AND ONLY WHEN THE TASK IS NOT ALREADY
-/// IN IT (`POST /a2a/push`, step 6): an artifact update, a message or any document with no
-/// readable `status.state` moves nothing (`202`, nothing recorded, no notification), and a retried
-/// push of the state already held queues no second notification. RED: a push with no readable state
-/// read as `working`, moving a submitted or input-required task, and a re-reported state queued a
-/// notification each time.
+
 #[test]
 fn a_push_moves_its_task_only_to_a_new_state_it_reports() {
     use crate::push_serve::push_move;

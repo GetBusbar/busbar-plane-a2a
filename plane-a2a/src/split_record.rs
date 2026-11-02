@@ -2,26 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! A VALUE OF ANY SIZE AS HOST RECORDS OF AT MOST [`MAX_RECORD_BYTES`] EACH.
-//!
-//! A host record is at most [`MAX_RECORD_BYTES`] by design (`busbar_contract::kinds::RecordBytes`:
-//! a journal of fixed-size records replays by arithmetic), and an agent's card or the skills its
-//! operator approved are routinely longer. What must survive a restart goes to its records,
-//! so a value past the ceiling is kept as several records of its
-//! kind:
-//!
-//! * a value that fits is ONE record under its key, as it always was;
-//! * a longer one is its PARTS, each at most the ceiling, under the derived keys
-//!   `<key>/<digest>/<n>` (`<digest>` the first [`PART_DIGEST_HEX`] hex digits of the whole
-//!   value's SHA-256, so a new value never writes over the parts an older head names), then its
-//!   HEAD under `<key>`: [`HEAD_TAG`], the part count, the whole length and the whole SHA-256 in
-//!   hex. The parts go first and the head last, so a head is only ever read over parts that were
-//!   written before it;
-//! * a read ([`rejoin`]) reassembles each head's parts and checks the length and the digest: a set
-//!   that is partial or does not verify is refused (never read as whole), and a part no whole value
-//!   names is stray. A later write of the key tombstones the parts it no longer names.
-//!
-//! A key the plane keeps this way never holds a `/` (an agent id is one path segment), so a key
-//! with one is a part.
 
 use busbar_contract::abi::sdk::digest::{lower_hex, sha256};
 use busbar_contract::bounded::MAX_RECORD_BYTES;
@@ -29,7 +9,7 @@ use busbar_contract::bounded::MAX_RECORD_BYTES;
 use crate::tasks::Write;
 
 /// What a head record's value starts with: a split value's head, never a value the plane writes
-/// whole (those are JSON objects).
+
 pub const HEAD_TAG: &str = "split/1 ";
 
 /// How many hex digits of the whole value's digest a part key carries.
@@ -53,7 +33,7 @@ fn part_key(key: &str, hex: &str, n: usize) -> String {
 }
 
 /// The records that keep `value` under `key` of `kind`, in the order they are to be written: the
-/// one record when it fits the ceiling; otherwise every part, then the head.
+
 #[must_use]
 pub fn split_value(kind: &'static str, key: &str, value: &[u8]) -> Vec<Write> {
     if value.len() <= MAX_RECORD_BYTES {
@@ -94,7 +74,7 @@ pub struct Joined {
 }
 
 /// One kind's `rows` (`(key, value)`, as `records.list` answers them) read back: each value
-/// written whole, and each split value reassembled from its parts and verified.
+
 #[must_use]
 pub fn rejoin(rows: Vec<(String, Vec<u8>)>) -> Joined {
     let (parts, heads): (Vec<_>, Vec<_>) = rows.into_iter().partition(|(key, _)| is_part(key));
@@ -115,8 +95,7 @@ pub fn rejoin(rows: Vec<(String, Vec<u8>)>) -> Joined {
 }
 
 /// The value the head `head` (past its tag) of `key` names, its parts taken out of `parts` once it
-/// verifies; why not when the head is unreadable, a part is missing, or the whole does not verify
-/// (its parts are then left in `parts`, stray).
+
 fn assemble(
     key: &str,
     head: &[u8],
@@ -133,14 +112,12 @@ fn assemble(
     let (Ok(count), Ok(len)) = (count.parse::<usize>(), len.parse::<usize>()) else {
         return Err(UNREADABLE);
     };
-    // Heads carry the full SHA-256 digest; PART_DIGEST_HEX is only the shorter part-key prefix.
+
     let digest = hex.len() == 64 && hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
     if !digest || len <= MAX_RECORD_BYTES || count != len.div_ceil(MAX_RECORD_BYTES) {
         return Err(UNREADABLE);
     }
-    // A STORED HEAD NAMES NO MORE PARTS THAN WERE READ: its count is bounded by the rows the read
-    // answered before any key list is built or any byte is joined, so a corrupt head cannot size
-    // an allocation of its own choosing.
+
     if count > parts.len() {
         return Err("a part is missing");
     }

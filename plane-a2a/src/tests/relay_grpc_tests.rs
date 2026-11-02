@@ -2,10 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! BUSBAR AS AN A2A CLIENT OVER gRPC (the engine's `client_leg_tests.rs` `grpc_client_issues_*`,
-//! ported to the door's hop): what each attempt asks to have sent (the rpc's path, its request
-//! message) and the caller's answer read off the grpc transport's pieces (its head, each message
-//! length-prefixed, its trailers). The oracle is the generated `pb` messages, decoded and encoded
-//! with `prost` directly, never the code under test.
 
 use super::tests::{body, caller, far, kernel, part};
 use super::*;
@@ -56,7 +52,7 @@ fn stream_event(state: pb::TaskState) -> Vec<u8> {
 }
 
 /// The v1.0 submission a caller reaching a gRPC agent sends: its params ARE the request message's
-/// ProtoJSON.
+
 fn submission(method: &str) -> serde_json::Value {
     json!({
         "jsonrpc": "2.0", "id": 7, "method": method,
@@ -66,8 +62,7 @@ fn submission(method: &str) -> serde_json::Value {
 }
 
 /// A hop bound to the gRPC binding for `envelope` (`translated`: the envelope with the far end's
-/// own task id, as the door hands it over), through its attempt and the caller's body: the request
-/// and the message it sends.
+
 fn dialled(
     envelope: &serde_json::Value,
     translated: Option<&serde_json::Value>,
@@ -85,8 +80,7 @@ fn dialled(
         panic!("no attempt on the gRPC binding");
     };
     let bytes = serde_json::to_vec(envelope).expect("json");
-    // A request message whose every field is its default is zero bytes: nothing to send beside the
-    // head (the grpc transport frames the empty message).
+
     let message = match r.on_piece(caller(&bytes)) {
         PieceAnswer::ToFarEnd(message) => message.into_vec(),
         PieceAnswer::Nothing => Vec::new(),
@@ -96,7 +90,7 @@ fn dialled(
 }
 
 /// The far end's answer, piece by piece as the grpc transport hands it: its head (no status of
-/// its own: `0`), `messages`, its trailers (stating `code`), then the end.
+
 fn answer(r: &mut HopRelay, messages: &[Vec<u8>], code: Option<u32>) -> Vec<PieceAnswer> {
     let mut answers = vec![r.on_piece(far(Some(0), &[], false))];
     for m in messages {
@@ -118,8 +112,7 @@ fn whole(answers: Vec<PieceAnswer>) -> RelayReply {
 }
 
 /// `grpc_client_issues_send_message`: the rpc's own path under the service (never the operator's
-/// path), a POST, the gRPC media type, and the caller's content surviving the transcode into the
-/// request message; the far end's message reaches the caller as the JSON-RPC result it is.
+
 #[test]
 fn grpc_client_issues_send_message() {
     let (mut r, attempt, message) = dialled(&submission("SendMessage"), None, false);
@@ -155,7 +148,7 @@ fn grpc_client_issues_send_message() {
 }
 
 /// A task hop's answer leaves under busbar's identity and settles the task on what the far end
-/// reported, as on the other bindings.
+
 #[test]
 fn a_grpc_answer_about_a_task_leaves_under_busbars_identity() {
     let (mut r, _, _) = dialled(&submission("SendMessage"), None, false);
@@ -216,7 +209,7 @@ fn grpc_client_issues_cancel_task() {
 }
 
 /// `grpc_client_issues_send_stream_message`: the streaming rpc, and each length-prefixed message
-/// of its answer reaching the caller as one JSON-RPC response in an event-stream frame.
+
 #[test]
 fn grpc_client_issues_send_stream_message() {
     let (mut r, attempt, message) = dialled(&submission("SendStreamingMessage"), None, true);
@@ -284,7 +277,7 @@ fn grpc_client_issues_subscribe_to_task() {
 }
 
 /// `grpc_client_issues_get_extended_agent_card`: a task-less hop; the card the far end answers is
-/// the caller's result.
+
 #[test]
 fn grpc_client_issues_get_extended_agent_card() {
     let asked =
@@ -302,8 +295,7 @@ fn grpc_client_issues_get_extended_agent_card() {
 }
 
 /// THE STATUS THE TRAILERS STATE IS READ: a call that ends with an error is the backend refusing
-/// the request (its A2A code where the status binds one, the task's own refusal on a task hop),
-/// never a reply busbar cannot read.
+
 #[test]
 fn a_grpc_error_status_is_the_backends_refusal_with_its_a2a_code() {
     let asked =
@@ -327,7 +319,7 @@ fn a_grpc_error_status_is_the_backends_refusal_with_its_a2a_code() {
         r.take_settled().is_empty(),
         "an addressed task is never failed"
     );
-    // Task-less: the backend's refusal in the engine's fixed words.
+
     let asked =
         json!({ "jsonrpc": "2.0", "id": 7, "method": "GetExtendedAgentCard", "params": {} });
     let (mut r, _, _) = dialled(&asked, None, false);
@@ -336,9 +328,7 @@ fn a_grpc_error_status_is_the_backends_refusal_with_its_a2a_code() {
 }
 
 /// A gRPC agent refusing busbar at the HTTP layer (`401`/`403`, no gRPC answer) refuses busbar
-/// itself, as on every binding (predev `relay.rs:1583`: `RelayRefusal::Status`, read by the one
-/// status table, an auth status hard): the hop's reading is hard, so the kernel takes the member
-/// out of its pool's walk. RED: no reading at all, and the member stayed in the walk.
+
 #[test]
 fn a_grpc_agent_refusing_busbar_at_the_http_layer_reads_hard() {
     let asked = submission("SendMessage");
@@ -365,7 +355,7 @@ fn a_grpc_answer_with_no_message_is_refused_by_name() {
 }
 
 /// A request whose params are not the rpc's request message (a v0.3 document) cannot be framed:
-/// refused by name before anything is sent.
+
 #[test]
 fn params_that_are_not_the_request_message_are_refused_before_the_hop() {
     let v03 = json!({
@@ -382,7 +372,7 @@ fn params_that_are_not_the_request_message_are_refused_before_the_hop() {
 }
 
 /// THE TRAILERS ARE NEVER BYTES OF THE ANSWER: on the JSON-RPC binding a field block after the
-/// body is ignored. RED: the trailers were appended to the body, which then was not JSON.
+
 #[test]
 fn trailers_after_a_json_rpc_answer_are_not_read_as_its_body() {
     let mut r = HopRelay::new(json!(7), "1.0");
@@ -404,7 +394,7 @@ fn trailers_after_a_json_rpc_answer_are_not_read_as_its_body() {
 }
 
 /// THE NEED AN ATTEMPT RIDES: the gRPC binding names the door's gRPC need; the others name none
-/// (the member's own).
+
 #[test]
 fn a_grpc_attempt_rides_the_doors_grpc_need() {
     use crate::plane_door::attempt_need;
@@ -414,12 +404,7 @@ fn a_grpc_attempt_rides_the_doors_grpc_need() {
 }
 
 /// THE CALL'S END AS THE KERNEL HANDS IT ON (`BUSBAR-1.6.0.md` l.394, l.747): a call that ends
-/// with an error status reaches the plane as its trailers, the answer's LAST piece, with the status
-/// the transport read off them beside them. The caller is answered the A2A error the status binds,
-/// and the breaker reads the gRPC status (transient failures, authorization refusals, or a
-/// healthy work refusal); UNAUTHENTICATED refuses busbar itself, as a 401 does.
-/// Trailers handed on with NO status state no code, whatever their details
-/// carry (RED: the details' own `google.rpc.Status` code was read as the call's status).
+
 #[test]
 fn a_status_handed_on_with_the_last_trailers_ends_the_call() {
     use crate::framed::{CallStatus, Code, ErrorInfo, DETAILS_FIELD};
@@ -443,17 +428,17 @@ fn a_status_handed_on_with_the_last_trailers_ends_the_call() {
         PieceAnswer::ToCaller(reply) => reply,
         other => panic!("the last trailers answer the caller: {other:?}"),
     };
-    // NOT_FOUND: TaskNotFound, the destination answering.
+
     let mut r = hop();
     let reply = answered(r.on_far_fields(&[], Some(Code::NotFound as u32), true));
     assert_eq!(body(&reply)["error"]["code"], -32001, "{:?}", body(&reply));
     assert_eq!(reply.status, 404);
     assert_eq!(r.take_reading(), Some(Reading::Healthy));
-    // UNAUTHENTICATED: busbar itself refused.
+
     let mut r = hop();
     let _ = answered(r.on_far_fields(&[], Some(Code::Unauthenticated as u32), true));
     assert_eq!(r.take_reading(), Some(Reading::Hard));
-    // Details naming NOT_FOUND, handed on with no status: no code is read off them.
+
     let details = CallStatus::with_error_info(
         Code::NotFound,
         "no such task",
@@ -480,18 +465,7 @@ fn a_status_handed_on_with_the_last_trailers_ends_the_call() {
 }
 
 /// MONEY (this cell touches money: it reads the count the door reports as the hop's billed
-/// `bytes` class, `relay::moved`). A RELAYED gRPC CALL BILLS THE BODIES PREDEV BILLED, BOTH WAYS,
-/// AND NEVER ITS TRAILERS. Predev's hop counted the request body it handed the transport and the
-/// response body the transport handed back (origin/predev `crates/busbar-a2a/src/a2a/relay.rs:1795-1802`,
-/// `add_sent(request.body.len())` + `add_received(resp.body.len())`), where on the gRPC binding the
-/// request body was the length-prefixed message (`relay.rs:1319-1341` `grpc_frame`; the billing
-/// rule, `relay_billing.rs:15-18`) and every header in both directions was excluded
-/// (`relay_billing.rs:23-24`). The lane's grpc transport frames the plane's message itself (one
-/// prefix, even for an empty message), so the hop bills `prefix + message` sent and the prefixed
-/// answer received; the trailers' field block is no payload.
-///
-/// RED before the fix: the hop billed the bare message (5 bytes short) and added the trailers'
-/// field block to the received bytes.
+
 #[test]
 fn a_grpc_hop_bills_its_framed_request_and_answer_and_never_its_trailers() {
     use busbar_contract::abi::transport::fields::{LINE_END, SEPARATOR};
@@ -516,8 +490,7 @@ fn a_grpc_hop_bills_its_framed_request_and_answer_and_never_its_trailers() {
         (crate::framed::MESSAGE_PREFIX + message + answer.len()) as u64,
         "the prefixed request message plus the prefixed answer, and not one trailer byte"
     );
-    // An rpc whose request message is all defaults is zero bytes; the wire still carries its
-    // prefix, as predev's `grpc_frame` wrote it.
+
     let card = framed(&crate::proto::custody::initialized::<pb::AgentCard>(
         |__custody_message| {
             __custody_message.name = "planner-extended".into();
@@ -582,9 +555,7 @@ fn a_cut_grpc_stream_ends_with_an_error_even_after_complete_messages() {
 }
 
 /// A STREAM WHOSE TRAILERS END IT WITH AN ERROR STATUS AFTER ITS EVENTS BEGAN (THE DESIGN section 2
-/// a2a: a gRPC binding reads `grpc-status` from the trailers): the far end's error goes to the
-/// caller as the last event, under the caller's id and its A2A code, and the task fails. RED: the
-/// stream closed cleanly on the last piece and the task was left as the last event said.
+
 #[test]
 fn a_grpc_stream_ending_with_an_error_status_fails_its_task() {
     use crate::framed::Code;
@@ -609,7 +580,7 @@ fn a_grpc_stream_ending_with_an_error_status_fails_its_task() {
         PieceAnswer::Nothing,
         "it ends once"
     );
-    // A call that ends `OK` closes the stream as it is.
+
     let mut ok = streaming();
     let _ = ok.on_piece(far(None, &stream_event(pb::TaskState::Working), false));
     let _ = ok.take_settled();
@@ -620,9 +591,7 @@ fn a_grpc_stream_ending_with_an_error_status_fails_its_task() {
 }
 
 /// A STREAM MESSAGE THE PLANE CANNOT READ REFUSES THE HOP, never stepped over or waited on: a
-/// compressed message before any event refuses it outright, its task failed; an undecodable one
-/// after the events began ends the answer there, its task failed. RED: the compressed message
-/// stalled the reading silently and the undecodable one was dropped, the stream going on.
+
 #[test]
 fn an_unreadable_grpc_stream_message_refuses_the_hop() {
     let mut compressed = stream_event(pb::TaskState::Working);
@@ -714,8 +683,6 @@ fn grpc_trailer_error_info_cannot_borrow_an_a2a_reason_from_another_domain() {
             "other.example",
             Code::Internal,
             "TASK_NOT_FOUND",
-            // A foreign reason is ignored. This ambiguous gRPC status falls back to the
-            // relay's existing JSON-RPC internal error, without borrowing TASK_NOT_FOUND.
             500,
             -32603,
             Reading::Transient,

@@ -2,17 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! The far end's answer, spliced, never re-serialised (a relay sends the client's bytes with
-//! governed byte-level splices). The relay reads off an answer's bytes
-//! what it is (its `result` or `error`; the task's state and the far end's ids from its `result`
-//! alone, as a value), and then
-//! sends the far end's own `result` bytes on, with busbar's identity members spliced in at their
-//! byte spans ([`rewrite_identity`], the byte twin of `task_identity::rewrite_identity`). Member
-//! order, number spellings (an integer past 64 bits included) and every member busbar does not
-//! govern reach the caller as the far end wrote them.
-//!
-//! A number past `f64`'s range is valid JSON that `serde_json` refuses to read; the reading copy
-//! ([`readable`]) spells each such number `0` so the answer is still read, while the bytes the
-//! caller receives keep the far end's spelling.
 
 use std::borrow::Cow;
 use std::ops::Range;
@@ -51,9 +40,7 @@ fn past_blank(b: &[u8], mut i: usize) -> usize {
 }
 
 /// The span of the JSON value at `i` (whitespace before it allowed), read by the contract's one
-/// span grammar (`busbar_contract::spans`), never a plane-local copy of it. A number that runs to
-/// the end of `b` ends there: the grammar answers `NeedMore` for it, as a later chunk could add
-/// digits, and the bytes here are the whole answer.
+
 fn value_at(b: &[u8], i: usize) -> Option<Range<usize>> {
     let rest = b.get(i..)?;
     match resolve_pointer(rest, "") {
@@ -118,11 +105,9 @@ fn last<'m>(members: &'m [ObjectMember], key: &str) -> Option<&'m ObjectMember> 
 }
 
 /// THE READING COPY of `b`: `b` itself, unless a number in it lies past `f64`'s range, which is
-/// then spelled `0` (the reading never decides on a number's value; the caller's bytes keep it).
+
 #[must_use]
 pub fn readable(b: &[u8]) -> Cow<'_, [u8]> {
-    // Built in ONE pass: the run since the last replacement, then `0` (a far end's answer is
-    // untrusted, so no per-number shift of the whole tail).
     let mut out: Option<RawBytes> = None;
     let mut copied = 0;
     let mut i = 0;
@@ -179,7 +164,7 @@ pub fn member_span(doc: &[u8], key: &str) -> Option<Range<usize>> {
 }
 
 /// WHETHER `b` IS THE JSON A PARSE TO A VALUE READS (every token, every string, the parse's depth
-/// bound), read through and dropped: no value is built.
+
 #[must_use]
 pub fn is_json(b: &[u8]) -> bool {
     serde_json::from_slice::<Shape>(b).is_ok()
@@ -228,9 +213,7 @@ impl<'de> serde::de::Visitor<'de> for Shape {
 }
 
 /// THE JSON-RPC ANSWER `envelope` AS THE CONTRACT'S READER JUDGES IT, read off its bytes: its
-/// `jsonrpc` and `id` as values (through the reading copy), its `error` as present (`null` kept
-/// `null`) and its `result` as present, and the span of its `result`. Nothing else is read into a
-/// value. `None` when `envelope` is no JSON object.
+
 #[must_use]
 pub fn envelope_reading(envelope: &[u8]) -> Option<(Value, Option<Range<usize>>)> {
     let members = object_members(envelope, &document(envelope)?)?;
@@ -244,7 +227,6 @@ pub fn envelope_reading(envelope: &[u8]) -> Option<(Value, Option<Range<usize>>)
         }
     }
     if let Some(m) = last(&members, "error") {
-        // A JSON value spelled from `n` is `null`.
         let error = if envelope[m.value.start] == b'n' {
             Value::Null
         } else {
@@ -276,10 +258,7 @@ pub fn result_reply(id: &Value, result: &[u8]) -> Vec<u8> {
 }
 
 /// An HTTP+JSON answer `body` re-framed as the JSON-RPC envelope answering `id`, its `result` the
-/// body's own bytes (an empty body is `null`). `Err` when the body is not one JSON value.
-///
-/// # Errors
-/// The body is not JSON.
+
 pub fn rewrap(body: &[u8], id: &Value) -> Result<Vec<u8>, String> {
     if body.iter().all(u8::is_ascii_whitespace) {
         return Ok(result_reply(id, b"null"));
@@ -304,7 +283,7 @@ impl Edits {
     }
 
     /// Set `key` of the object `obj` (its members `ms`) to `value`: every occurrence replaced, or
-    /// the member appended.
+
     fn put(
         &mut self,
         b: &[u8],
@@ -327,7 +306,7 @@ impl Edits {
     fn append(&mut self, b: &[u8], obj: &Range<usize>, empty: bool, key: &str, value: &[u8]) {
         let close = obj.end - 1;
         debug_assert_eq!(b[close], b'}');
-        // Several appends to one empty object: only the first goes without a comma.
+
         let earlier = self
             .replace
             .iter()
@@ -403,11 +382,11 @@ fn translate_list(
 }
 
 /// The members a message names the tasks it refers to under (A2A `Message.reference_task_ids`,
-/// `Message.reference_task_ids` in the vendored proto, in either JSON spelling).
+
 pub const REFERENCE_MEMBERS: [&str; 2] = ["referenceTaskIds", "reference_task_ids"];
 
 /// A message's identity: its `taskId` and `contextId`, where it names them, are busbar's, and every
-/// task it refers to that `refer` knows is named by busbar's id.
+
 fn message_identity(
     b: &[u8],
     msg: &Range<usize>,
@@ -429,16 +408,11 @@ fn message_identity(
 }
 
 /// A table of `(name, identity member)` pairs: [`crate::task_identity::WRAPPERS`] (a wrapper and
-/// the member naming the task inside it) or [`crate::task_identity::KINDS`] (a `kind` and the
-/// member naming its task).
+
 pub type IdMembers<'a> = &'a [(&'a str, &'a str)];
 
 /// THE BYTE TWIN OF `task_identity::rewrite_identity`: the far end's `result` bytes with busbar's
-/// task and context ids (and the matched skill) spliced in, every other byte as the far end wrote
-/// it. The task's identity member is the one its wrapper names (`wrappers`), or, unwrapped, the one
-/// its `kind` names (`kinds`), else `id`. A task a message refers to is named by busbar's id where
-/// the far end's is this task's own or one of `references` (each the far end's id, then busbar's).
-/// `None` when `result` is not an object.
+
 #[must_use]
 pub fn rewrite_identity(
     result: &[u8],
@@ -472,7 +446,7 @@ pub fn rewrite_identity(
         None => kind.as_deref() == Some("message"),
     };
     let ms = object_members(b, &payload)?;
-    // The far end's own id for this task, read before busbar's replaces it.
+
     let own = last(&ms, id_member).and_then(|m| string_at(b, &m.value));
     let refer = |far: &str| {
         if own.as_deref() == Some(far) {
@@ -484,7 +458,7 @@ pub fn rewrite_identity(
             .map(|(_, ours)| ours.clone())
     };
     let mut e = Edits::default();
-    // A standalone message names no task: `taskId` is added only to one that belongs to a task.
+
     if !message || last(&ms, "taskId").is_some() {
         e.put(b, &payload, &ms, id_member, json_str(task_id));
     }
@@ -542,9 +516,7 @@ pub fn rewrite_identity(
 }
 
 /// THE CALLER'S REQUEST `envelope` WITH THE TASK IDS `to` ANSWERS FOR SPLICED IN, every other byte
-/// as the caller wrote it: each string member of `params` named in `top`, each of its `message`'s
-/// named in `message`, and each id in the message's [`REFERENCE_MEMBERS`] lists. `None` when
-/// nothing was translated (or `envelope` is not an object whose `params` is one).
+
 #[must_use]
 pub fn translate_ids(
     envelope: &[u8],

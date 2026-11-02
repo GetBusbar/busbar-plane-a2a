@@ -2,7 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! Raw callback fixture host: atomic logical mutations and exact operation replay. This models
-//! the bridge exchange and its store decision, not chain sealing or a real backend.
 
 use super::*;
 use busbar_contract::abi::sdk::plane::conditional as wire;
@@ -216,7 +215,6 @@ impl Host {
                     Err(wire::ConditionalFailure::Refused("fixture store refusal"))
                 } else {
                     if std::mem::take(&mut self.conflict_once) {
-                        // A real competing row mutation makes the exact predicate fail.
                         let p = request
                             .candidate
                             .predicates
@@ -246,7 +244,7 @@ impl Host {
                 if decision == Ok(Decision::Applied) && std::mem::take(&mut self.lose_applied_once)
                 {
                     self.decisions.insert((epoch, correlation), receipt);
-                    // Keep the original intent. A wake without the result forces exact replay.
+
                     self.cycles.get_mut(&key).unwrap().receipt.clear();
                     return true;
                 }

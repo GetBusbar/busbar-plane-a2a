@@ -2,7 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! One relayed event, read as the served engine reads it: busbar's identity on it, its id
-//! correlated, its state and artifact read through either shape, anything else passed through.
 
 use super::*;
 use serde_json::json;
@@ -21,7 +20,7 @@ fn data_of(sse: &[u8]) -> Value {
 }
 
 /// An event leaves under busbar's identity, with the matched skill; the far end's own ids are read
-/// first and never reach the caller.
+
 #[test]
 fn an_event_leaves_under_busbars_identity() {
     let ev = read_event(
@@ -114,7 +113,7 @@ fn malformed_or_nonresponse_event_data_refuses_the_hop() {
 }
 
 /// A frame answering another request refuses the hop; an `error` frame is relayed under the
-/// caller's id as it stands.
+
 #[test]
 fn an_uncorrelated_frame_is_refused_and_an_error_frame_relayed() {
     let other = "data: {\"jsonrpc\":\"2.0\",\"id\":99,\"result\":{}}\n\n";
@@ -130,7 +129,7 @@ fn an_uncorrelated_frame_is_refused_and_an_error_frame_relayed() {
 }
 
 /// An HTTP+JSON far end's frame carries the bare event: it is wrapped as the result of the caller's
-/// request so the one reader reads it; a frame with no JSON payload passes as it is.
+
 #[test]
 fn a_bare_event_is_wrapped_as_the_result_of_the_request() {
     let wrapped = rewrap("data: {\"kind\":\"status-update\"}\n\n", &json!("rest"));
@@ -143,7 +142,7 @@ fn a_bare_event_is_wrapped_as_the_result_of_the_request() {
 }
 
 /// The HTTP+JSON line answers each event's bare result; an error frame and a keep-alive pass, and
-/// each line keeps its own terminator.
+
 #[test]
 fn the_target_line_answers_each_events_bare_result() {
     let events = b"data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"a\":1}}\r\n\r\n: ping\n\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":1}}\n\n";
@@ -154,8 +153,7 @@ fn the_target_line_answers_each_events_bare_result() {
 }
 
 /// Ported from busbar-a2a a2a/tests/rest_tests.rs::non_response_frames_are_passed_through.
-/// Keep-alives, comments and a backend's own frames are passed through: content busbar does not
-/// read is content busbar does not rewrite.
+
 #[test]
 fn non_response_frames_are_passed_through() {
     for frame in [
@@ -173,7 +171,7 @@ fn non_response_frames_are_passed_through() {
 }
 
 /// A `result` that is no object is no event about a task: the hop is refused as one whose answer
-/// the plane cannot read, never relayed as an invented task. RED: it became `{"kind":"task"}`.
+
 #[test]
 fn an_event_whose_result_is_no_object_refuses_the_hop() {
     for result in [json!("done"), json!([1]), json!(3), json!(null)] {
@@ -186,8 +184,7 @@ fn an_event_whose_result_is_no_object_refuses_the_hop() {
 }
 
 /// THE FAR END'S EVENT BYTES, KEPT: member order, an integer past 64 bits and a number past
-/// `f64`'s range reach the caller as written, busbar's identity spliced in, and a payload the far
-/// end broke over lines stays one event, each of its lines a `data:` line.
+
 #[test]
 fn an_event_keeps_the_far_ends_bytes_and_its_lines() {
     let frame = "data: {\"jsonrpc\":\"2.0\",\"id\":11,\"result\":{\"taskId\":\"far\",\ndata:  \"n\":123456789012345678901234567890,\"kind\":\"status-update\",\"big\":1e400}}\n\n";
@@ -200,8 +197,7 @@ fn an_event_keeps_the_far_ends_bytes_and_its_lines() {
 }
 
 /// AN HTTP+JSON FAR END'S BARE EVENT IS WRAPPED AROUND ITS OWN BYTES. RED: it was re-serialised
-/// (members re-sorted, the long integer rounded) and a number past `f64`'s range passed the frame
-/// on unread, the far end's ids with it.
+
 #[test]
 fn a_bare_event_is_wrapped_around_its_own_bytes() {
     let bare = "data: {\"z\":1,\"kind\":\"status-update\",\"n\":123456789012345678901234567890,\"big\":1e400}\n\n";
@@ -213,8 +209,7 @@ fn a_bare_event_is_wrapped_around_its_own_bytes() {
 }
 
 /// THE HTTP+JSON LINE'S EVENT IS THE RESULT'S OWN BYTES, cut out of the JSON-RPC event, over as
-/// many `data:` lines as the result has lines. RED: the result was re-serialised (members
-/// re-sorted, the long integer rounded), and an event over several `data:` lines passed whole.
+
 #[test]
 fn the_target_lines_event_is_the_results_own_bytes() {
     let events = b"data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"z\":1,\"a\":123456789012345678901234567890,\"big\":1e400}}\n\nid: 4\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"z\":1,\ndata: \"a\":2}}\n\n";

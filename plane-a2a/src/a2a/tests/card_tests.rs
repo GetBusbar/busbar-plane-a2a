@@ -2,15 +2,12 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! The two hashes taken over a card, and the per-skill digests.
-//!
-//! The tests that matter here are the ones about what is hashed and what is NOT, because those are
-//! the ones an attacker gets a say in.
 
 use super::*;
 use serde_json::json;
 
 /// A card with the members busbar actually acts on, plus one member busbar does not model. The
-/// unmodelled member is deliberate and load-bearing for the first test below.
+
 fn a_card() -> Value {
     json!({
         "protocolVersion": "0.3.0",
@@ -55,9 +52,7 @@ fn a_card() -> Value {
 }
 
 /// THE LOAD-BEARING ONE. The fingerprint is taken over the RECEIVED document, so a change to a
-/// member busbar does not model is still drift. If the fingerprint were taken over the busbar-owned
-/// projection, an upstream could rewrite everything busbar cannot read and stay `approved`, which is
-/// exactly the silent rug-pull the pin exists to catch.
+
 #[test]
 fn the_fingerprint_covers_members_busbar_does_not_model() {
     let plain = a_card();
@@ -67,8 +62,6 @@ fn the_fingerprint_covers_members_busbar_does_not_model() {
         json!({ "mode": "aggressive" }),
     );
 
-    // busbar's reader does not model the extension (busbar-a2a's card_tests pins that); the
-    // fingerprint still tells the two apart.
     assert_ne!(
         fingerprint(&plain).expect("fingerprint"),
         fingerprint(&extended).expect("fingerprint")
@@ -76,7 +69,7 @@ fn the_fingerprint_covers_members_busbar_does_not_model() {
 }
 
 /// The other half of the same property: a card that was merely RE-SERIALIZED is the same card. A
-/// proxy that re-indents a document must not manufacture a drift alarm, or the alarm gets ignored.
+
 #[test]
 fn two_spellings_of_one_card_have_one_fingerprint() {
     let terse = a_card();
@@ -90,7 +83,7 @@ fn two_spellings_of_one_card_have_one_fingerprint() {
 }
 
 /// A signature cannot cover itself, so the JWS payload excludes `signatures`. The pinned fingerprint
-/// INCLUDES them, because which key signed a card is part of what the operator approved.
+
 #[test]
 fn the_signing_payload_excludes_signatures_and_the_fingerprint_does_not() {
     let card = a_card();
@@ -105,9 +98,9 @@ fn the_signing_payload_excludes_signatures_and_the_fingerprint_does_not() {
         "signatures".to_string(),
         json!([{ "protected": "eyJhbGciOiJFZERTQSJ9", "signature": "DIFFERENT", "header": {} }]),
     );
-    // The same document under a different signature signs the same payload...
+
     assert_eq!(payload, signing_payload(&resigned).expect("payload"));
-    // ...and is a different pinned card.
+
     assert_ne!(
         fingerprint(&card).expect("fingerprint"),
         fingerprint(&resigned).expect("fingerprint")
@@ -115,8 +108,7 @@ fn the_signing_payload_excludes_signatures_and_the_fingerprint_does_not() {
 }
 
 /// REMOVING a member is not EMPTYING it. A signer that hashed `"signatures":[]` and a verifier that
-/// hashed an absent member would disagree on every signed card ever issued, and the disagreement
-/// would present as "this vendor's signatures never verify" rather than as a bug here.
+
 #[test]
 fn removing_signatures_is_not_the_same_as_emptying_them() {
     let mut emptied = a_card();
@@ -138,8 +130,7 @@ fn removing_signatures_is_not_the_same_as_emptying_them() {
 }
 
 /// Digests are PER SKILL, keyed by the id an operator approves by, so editing one skill moves one
-/// row of the changes queue. A single set-wide hash would make one edited description look identical
-/// to a wholesale replacement, and the only available response would be to re-approve everything.
+
 #[test]
 fn one_edited_skill_moves_exactly_one_digest() {
     let before = skill_digests(&a_card()).expect("digests");
@@ -178,7 +169,7 @@ fn one_edited_skill_moves_exactly_one_digest() {
 }
 
 /// Approval is keyed by the skill ID, so re-ordering the array moves nothing. Keying by array index
-/// would silently transfer every approval to a different skill on a cosmetic reorder.
+
 #[test]
 fn reordering_the_skills_array_moves_no_digest() {
     let mut reordered = a_card();
@@ -188,9 +179,7 @@ fn reordering_the_skills_array_moves_no_digest() {
         skill_digests(&a_card()).expect("digests"),
         skill_digests(&reordered).expect("digests")
     );
-    // The whole-card fingerprint DOES move, because array order is data and the canonical form
-    // preserves it. That is the honest behaviour: a reorder is a new card, so it is a pin change the
-    // operator settles with `approve`, and no skill approval is disturbed by it.
+
     assert_ne!(
         fingerprint(&a_card()).expect("fingerprint"),
         fingerprint(&reordered).expect("fingerprint")
@@ -198,7 +187,7 @@ fn reordering_the_skills_array_moves_no_digest() {
 }
 
 /// A skill with no `id` has nothing for an operator to approve it BY, and falling back to its array
-/// position would mean a reorder silently moved every approval. So it is refused.
+
 #[test]
 fn a_skill_with_no_id_is_refused_rather_than_indexed() {
     let mut card = a_card();
@@ -214,7 +203,7 @@ fn a_skill_with_no_id_is_refused_rather_than_indexed() {
 }
 
 /// Two skills under one id make "approved `plan` at this digest" ambiguous. Silently keeping the
-/// last one would let an upstream shadow an approved skill with a second declaration of it.
+
 #[test]
 fn a_duplicate_skill_id_is_refused_rather_than_resolved() {
     let mut card = a_card();
@@ -236,9 +225,7 @@ fn a_document_that_is_not_an_object_has_no_hash() {
 }
 
 /// The reader maps the protocol's camelCase wire names onto busbar's own field names, and an absent
-/// member is a default rather than a parse failure: an upstream on an older revision must stay
-/// readable.
-/// Ported from busbar-a2a a2a/tests/card_tests.rs::the_reader_mirrors_the_wire_names_and_tolerates_absent_members.
+
 #[test]
 fn the_reader_mirrors_the_wire_names_and_tolerates_absent_members() {
     use crate::a2a::agent_card::parse as read;
@@ -261,9 +248,7 @@ fn the_reader_mirrors_the_wire_names_and_tolerates_absent_members() {
 }
 
 /// An unknown member does not make a card unreadable. An upstream that adds one on a newer protocol
-/// revision must not become un-fetchable, because the fingerprint is what notices the change and it
-/// cannot notice anything about a document that was refused.
-/// Ported from busbar-a2a a2a/tests/card_tests.rs::an_unknown_member_does_not_make_a_card_unreadable.
+
 #[test]
 fn an_unknown_member_does_not_make_a_card_unreadable() {
     let mut card = a_card();
@@ -284,10 +269,7 @@ fn unsigned_card() -> Value {
 }
 
 /// SIGNATURE TRANSPLANT. A signature that is genuinely the operator's, over a DIFFERENT card, moved
-/// onto this one, fails because the signed payload is the canonical card: the signing input for one
-/// card is not the signing input for another. The kernel verifies those bytes; this plane owns
-/// which bytes they are.
-/// Ported from busbar-a2a a2a/tests/jws_tests.rs::a_valid_signature_lifted_from_another_card_does_not_verify.
+
 #[test]
 fn a_valid_signature_lifted_from_another_card_does_not_verify() {
     let mut other = unsigned_card();
@@ -298,7 +280,7 @@ fn a_valid_signature_lifted_from_another_card_does_not_verify() {
         signing_payload(&other).expect("payload"),
         "two different cards must never share a signing payload"
     );
-    // And the payload is a pure function of the card: the same card signs the same bytes.
+
     assert_eq!(
         signing_payload(&other).expect("payload"),
         signing_payload(&other.clone()).expect("payload")
@@ -306,8 +288,7 @@ fn a_valid_signature_lifted_from_another_card_does_not_verify() {
 }
 
 /// THE RUG PULL, at the signature layer. One field edited after signing moves the signed payload,
-/// so the signature, untouched, no longer covers this document.
-/// Ported from busbar-a2a a2a/tests/jws_tests.rs::editing_a_signed_card_invalidates_its_signature.
+
 #[test]
 fn editing_a_signed_card_invalidates_its_signature() {
     let signed = a_card();
@@ -321,8 +302,7 @@ fn editing_a_signed_card_invalidates_its_signature() {
 }
 
 /// Adding a member busbar does not even model still moves the signed payload, because it is the
-/// canonical card AS RECEIVED. A signature over a projection would not have noticed.
-/// Ported from busbar-a2a a2a/tests/jws_tests.rs::adding_an_unmodelled_member_to_a_signed_card_invalidates_its_signature.
+
 #[test]
 fn adding_an_unmodelled_member_to_a_signed_card_invalidates_its_signature() {
     let signed = a_card();
@@ -338,8 +318,7 @@ fn adding_an_unmodelled_member_to_a_signed_card_invalidates_its_signature() {
 }
 
 /// G1-3: A2A v1.0 §8.4.1 (rule 1, field presence per §5.7) and §8.4.3 (verifier steps 3-5): the
-/// JWS payload omits every member that holds its proto default unless the field is `REQUIRED` or
-/// `optional`. This is the specification's own worked example (main, §8.4.1), byte for byte.
+
 #[test]
 fn the_signing_payload_omits_default_valued_members_as_the_v1_specification_shows() {
     let card = serde_json::json!({
@@ -363,8 +342,7 @@ fn the_signing_payload_omits_default_valued_members_as_the_v1_specification_show
 }
 
 /// G1-3: a `REQUIRED` member is kept even at its default (the v1.0.0 tag's example: `""` and
-/// `[]` stay), an `optional` one is kept when present, and the defaults omitted at every depth the
-/// card's messages reach (skills, interfaces, extensions, security requirements and schemes).
+
 #[test]
 fn the_signing_payload_keeps_required_and_optional_members_at_their_defaults() {
     let card = serde_json::json!({
@@ -393,7 +371,7 @@ fn the_signing_payload_keeps_required_and_optional_members_at_their_defaults() {
 }
 
 /// G1-3: a v0.3 card (no `supportedInterfaces`) keeps today's payload: v0.3 states no
-/// canonicalization beyond RFC 7515, so only `signatures` is removed.
+
 #[test]
 fn a_v03_cards_signing_payload_removes_only_its_signatures() {
     let card = serde_json::json!({

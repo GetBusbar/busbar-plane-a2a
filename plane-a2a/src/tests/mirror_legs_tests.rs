@@ -2,11 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! THE REQUESTS BUSBAR ORIGINATES, ON EACH BINDING (the engine's `pushback_tests.rs`
-//! `*_client_issues_*_task_push_notification_config(s)` and `client_leg_tests.rs`
-//! `*_client_issues_list_tasks`, ported): busbar's own registration mirrored onto the agent, and
-//! the `ListTasks` that refreshes busbar's rows, as each binding puts them on the wire, and the
-//! agent's answer read back. The gRPC oracle is the generated `pb` messages, decoded and encoded
-//! with `prost` directly.
 
 use super::*;
 use crate::proto::pb;
@@ -53,11 +48,8 @@ fn config() -> pb::TaskPushNotificationConfig {
     })
 }
 
-// ── gRPC ────────────────────────────────────────────────────────────────────────────────────────
-
 /// `grpc_client_issues_create_task_push_notification_config`: busbar's own registration, as the
-/// rpc's message: the agent's task, busbar's config id, busbar's callback and the capability busbar
-/// minted for that task.
+
 #[test]
 fn grpc_client_issues_create_task_push_notification_config() {
     let r = issued(Binding::Grpc, method::CREATE_PUSH_CONFIG);
@@ -78,7 +70,7 @@ fn grpc_client_issues_create_task_push_notification_config() {
 }
 
 /// `grpc_client_issues_get_task_push_notification_config`, and its answer read back: the
-/// registration found is no drift.
+
 #[test]
 fn grpc_client_issues_get_task_push_notification_config() {
     let r = issued(Binding::Grpc, method::GET_PUSH_CONFIG);
@@ -103,7 +95,7 @@ fn grpc_client_issues_get_task_push_notification_config() {
 }
 
 /// `grpc_client_issues_list_task_push_notification_configs`, and a listing that does not hold
-/// busbar's registration drifted.
+
 #[test]
 fn grpc_client_issues_list_task_push_notification_configs() {
     let r = issued(Binding::Grpc, method::LIST_PUSH_CONFIGS);
@@ -131,12 +123,12 @@ fn grpc_client_issues_list_task_push_notification_configs() {
         read(gone).as_ref().map(|(s, b)| (*s, b.as_slice())),
         &id
     ));
-    // An answer with no message to read is no answer: drifted.
+
     assert_eq!(read(Vec::new()), None);
 }
 
 /// `grpc_client_issues_delete_task_push_notification_config`: the withdrawal's `Empty` answer (a
-/// complete, zero-length message) reads as `null`.
+
 #[test]
 fn grpc_client_issues_delete_task_push_notification_config() {
     let r = issued(Binding::Grpc, method::DELETE_PUSH_CONFIG);
@@ -161,7 +153,7 @@ fn grpc_client_issues_delete_task_push_notification_config() {
 }
 
 /// `grpc_client_issues_list_tasks`: the refresh's `ListTasks` as the rpc, and the agent's listing
-/// moving only the rows busbar can match.
+
 #[test]
 fn grpc_client_issues_list_tasks() {
     let r = request(Binding::Grpc, URL, "1.0", LIST_TASKS, &json!({})).expect("framed");
@@ -211,10 +203,8 @@ fn an_answer_on_another_binding_is_read_as_it_came() {
     }
 }
 
-// ── JSON-RPC and HTTP+JSON ──────────────────────────────────────────────────────────────────────
-
 /// `jsonrpc_client_issues_list_tasks`: the refresh is a POST of the JSON-RPC envelope naming
-/// `ListTasks` at the operator's own path.
+
 #[test]
 fn jsonrpc_client_issues_list_tasks() {
     let r = request(Binding::JsonRpc, URL, "1.0", LIST_TASKS, &json!({})).expect("framed");
@@ -238,7 +228,7 @@ fn http_json_client_issues_list_tasks() {
 }
 
 /// `http_json_client_issues_create_task_push_notification_config`: a POST to the task's config
-/// collection, its body busbar's own url and config id, and no JSON-RPC envelope member.
+
 #[test]
 fn http_json_client_issues_create_task_push_notification_config() {
     let r = issued(Binding::HttpJson, method::CREATE_PUSH_CONFIG);
@@ -257,7 +247,7 @@ fn http_json_client_issues_create_task_push_notification_config() {
 }
 
 /// `http_json_client_issues_get_task_push_notification_config`: a GET of busbar's own config on
-/// the task, no body.
+
 #[test]
 fn http_json_client_issues_get_task_push_notification_config() {
     let r = issued(Binding::HttpJson, method::GET_PUSH_CONFIG);
@@ -273,7 +263,7 @@ fn http_json_client_issues_get_task_push_notification_config() {
 }
 
 /// `http_json_client_issues_list_task_push_notification_configs`: a GET of the collection, not of
-/// a member.
+
 #[test]
 fn http_json_client_issues_list_task_push_notification_configs() {
     let r = issued(Binding::HttpJson, method::LIST_PUSH_CONFIGS);

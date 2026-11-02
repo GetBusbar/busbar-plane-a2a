@@ -2,37 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! The cards busbar serves: busbar's
-//! own card at the well-known path, and a fronted agent's card with every URL rewritten through
-//! busbar. Pure: the document is built here and signed by the caller's [`Signer`], which reaches the
-//! host's `sign` service (the plane holds no signing key).
-//!
-//! ## The backend URL is the one thing that must not be published
-//!
-//! A caller reaching a fronted agent talks to busbar, and busbar authenticates, authorises, meters
-//! and provenances the task. Publishing the backend endpoint publishes the way around all of that.
-//! So [`rewrite_card`] rewrites every endpoint member, sweeps every URL-shaped string at every depth
-//! whose host is the backend's, and REFUSES a card that still names the backend authority after the
-//! sweep.
-//!
-//! ## The card describes BUSBAR, so it advertises only the bindings busbar serves AT ITS ADDRESS
-//!
-//! Busbar's own card points at the plane's mount, where the JSON-RPC envelope, the HTTP+JSON paths
-//! and (at the gRPC service path) the gRPC binding answer ([`SERVABLE_BINDINGS`]). A fronted agent's
-//! card points at `/a2a/agents/{id}`, where only the JSON-RPC envelope is mounted
-//! ([`AGENT_ADDRESS_BINDINGS`]); an entry whose binding busbar cannot serve there is dropped (in
-//! `supportedInterfaces` and in v0.3's `additionalInterfaces`, whose `preferredTransport` becomes
-//! the JSON-RPC envelope), each kept entry is published once, and a card that offers no binding
-//! busbar serves there is refused, in either version: a v1.0 card none of whose
-//! `supportedInterfaces` busbar serves, and a v0.3 card whose `preferredTransport` (JSON-RPC when
-//! unstated) and `additionalInterfaces` name none.
-//!
-//! ## The vendor's signature is REMOVED, and BUSBAR'S REPLACES IT; its schemes are REPLACED
-//!
-//! A rewritten card is no longer the document the vendor signed, so its signature is dropped and
-//! busbar signs the document it publishes, over the same canonicalisation it demands of every card it
-//! verifies. The backend's security schemes describe how to reach the BACKEND; the served card
-//! advertises exactly busbar's own inbound credential, in the normative proto spelling (a v0.3
-//! card in v0.3's own: `{type: "http", ...}` required under `security`).
 
 use serde_json::{json, Map, Value};
 
@@ -49,12 +18,11 @@ pub const INBOUND_AUTH_SCHEME: &str = "Bearer";
 pub const CREDENTIAL_KIND_A2A_INBOUND: &str = "a2a_inbound";
 
 /// THE BINDINGS BUSBAR SERVES AT THE PLANE'S OWN MOUNT, in the card's spelling (the plane's
-/// wire-format names upper-cased, the canonical one first).
+
 pub const SERVABLE_BINDINGS: &[&str] = &["JSONRPC", "HTTP+JSON", "GRPC"];
 
 /// THE BINDINGS BUSBAR SERVES AT ONE FRONTED AGENT'S ADDRESS (`/a2a/agents/{id}`): the JSON-RPC
-/// envelope alone. The gRPC binding answers for the plane, never for one agent, and the HTTP+JSON
-/// binding spells its operation in a request line no per-agent path carries.
+
 pub const AGENT_ADDRESS_BINDINGS: &[&str] = &["JSONRPC"];
 
 use crate::binding::BINDING_GRPC as GRPC_BINDING;
@@ -84,12 +52,7 @@ pub fn b64url(bytes: &[u8]) -> String {
 }
 
 /// SIGN `card` with busbar's key: the card with busbar's signature under `signatures`, any earlier
-/// one replaced. A deployment with no signing key serves the card unsigned (`Ok(card)`); a key that
-/// would not sign refuses (`Err`), so a served card's missing signature always means "no key".
-///
-/// # Errors
-///
-/// The card cannot be canonicalised, or the key would not sign.
+
 pub fn sign_card(card: &Value, signer: &mut dyn Signer) -> Result<Value, String> {
     let Some(kid) = signer.kid() else {
         return Ok(card.clone());
@@ -127,7 +90,7 @@ pub fn grpc_endpoint(public_url: &str) -> Option<String> {
 }
 
 /// The URL a served card publishes for one binding: gRPC takes the authority, every other binding
-/// the busbar address `http_endpoint` its HTTP bindings answer at.
+
 fn binding_url(binding: &str, public_url: &str, http_endpoint: &str) -> Option<String> {
     if binding.eq_ignore_ascii_case(GRPC_BINDING) {
         return grpc_endpoint(public_url);
@@ -154,7 +117,7 @@ fn inbound_description() -> String {
 }
 
 /// THE ONE DESCRIPTION of how a caller authenticates to this plane (proto `SecurityScheme`, a
-/// oneof whose variant key names the mechanism).
+
 fn inbound_security_schemes() -> Map<String, Value> {
     let mut schemes = Map::new();
     schemes.insert(
@@ -170,7 +133,7 @@ fn inbound_security_schemes() -> Map<String, Value> {
 }
 
 /// The same scheme in v0.3's spelling (v0.3.0 `types.ts` `HTTPAuthSecurityScheme`:
-/// `{type: "http", scheme, description}`), for a fronted v0.3 card.
+
 fn inbound_security_schemes_v03() -> Map<String, Value> {
     let mut schemes = Map::new();
     schemes.insert(
@@ -190,7 +153,7 @@ fn inbound_security_requirement() -> Value {
 }
 
 /// THE INTERFACES BUSBAR PUBLISHES: every binding it serves, at every protocol version it admits,
-/// newest version first.
+
 fn published_interfaces(public_url: &str) -> Option<Vec<Value>> {
     let http_endpoint = crate::a2a::public::absolute(public_url, crate::MOUNT_PATH)?;
     let mut versions: Vec<&str> = crate::agent_arrival::SUPPORTED_VERSIONS.to_vec();
@@ -210,8 +173,7 @@ fn published_interfaces(public_url: &str) -> Option<Vec<Value>> {
 }
 
 /// BUSBAR'S OWN CARD AS A DOCUMENT, before signing, with `skills`: the public card carries none
-/// (no fronted agent is enumerated from an unauthenticated path), the extended card the caller's.
-/// `None` when `public_url` is not a URL.
+
 #[must_use]
 pub fn self_card_document(public_url: &str, skills: Vec<Value>) -> Option<Value> {
     Some(json!({
@@ -248,7 +210,7 @@ pub enum ServeError {
 }
 
 /// Keep each interface entry once, in the order first offered: two entries a rewrite pointed at the
-/// same address on the same binding are one interface.
+
 fn dedup(interfaces: &mut Vec<Value>) {
     let mut kept: Vec<Value> = Vec::with_capacity(interfaces.len());
     for iface in interfaces.drain(..) {
@@ -260,11 +222,7 @@ fn dedup(interfaces: &mut Vec<Value>) {
 }
 
 /// REWRITE a fronted agent's backend card into the card busbar serves (before signing).
-///
-/// # Errors
-///
-/// [`ServeError`]: a card that is no object, a public base that is no URL, a card with no binding
-/// busbar serves at the agent's address, or a backend authority the sweep could not remove.
+
 pub fn rewrite_card(
     backend_card: &Value,
     backend_url: &str,
@@ -287,12 +245,7 @@ pub fn rewrite_card(
     };
 
     let mut out = obj.clone();
-    // ONE SERVABLE-BINDING RULE FOR BOTH VERSIONS: the bindings a card offers are its v1.0
-    // `supportedInterfaces` entries, or its v0.3 `preferredTransport` (the binding of its `url`,
-    // JSON-RPC when unstated) and `additionalInterfaces` entries. An entry busbar cannot serve at
-    // the agent's address is dropped; a card that offered bindings and is left with none busbar
-    // serves there is refused; what is kept points at busbar, each entry once. A card that states
-    // `supportedInterfaces` is judged on that list alone.
+
     let v10 = out.get("supportedInterfaces").is_some_and(Value::is_array);
     let mut offered = false;
     let mut servable = false;
@@ -322,8 +275,7 @@ pub fn rewrite_card(
         }
         dedup(interfaces);
     }
-    // THE v0.3 SPELLING of the same list (`additionalInterfaces`, `{url, transport}`) and of the
-    // binding its `url` speaks (`preferredTransport`).
+
     if let Some(Value::Array(interfaces)) = out.get_mut("additionalInterfaces") {
         offered |= !v10 && !interfaces.is_empty();
         interfaces.retain(|iface| match iface.get("transport") {
@@ -361,9 +313,7 @@ pub fn rewrite_card(
     out.remove("signatures");
     out.remove("security");
     out.remove("securityRequirements");
-    // IN THE CARD'S OWN VERSION'S SPELLING: a v0.3 card (no `supportedInterfaces`, its `url` or
-    // `preferredTransport` stated) names the scheme as v0.3 does and requires it under `security`;
-    // every other card in the normative proto spelling.
+
     if !v10 && (out.contains_key("url") || out.contains_key("preferredTransport")) {
         out.insert(
             "securitySchemes".to_string(),
@@ -380,10 +330,7 @@ pub fn rewrite_card(
             inbound_security_requirement(),
         );
     }
-    // THE AGENT'S OWN CAPABILITIES, as it states them: busbar relays a fronted agent's extended
-    // card read to the agent itself, so the served card may promise one only where the agent's
-    // card does. A card stating none is served with an empty `capabilities` (the member the card
-    // shape requires), claiming nothing on the agent's behalf.
+
     if !matches!(out.get("capabilities"), Some(Value::Object(_))) {
         out.insert("capabilities".to_string(), json!({}));
     }
@@ -410,8 +357,7 @@ pub struct EntitledAgent<'a> {
 }
 
 /// BUSBAR'S EXTENDED CARD (before signing): busbar's own card with one skill per agent the caller
-/// is entitled to, each identified by busbar's agent id; an agent whose card names its backend in
-/// text busbar cannot rewrite is omitted.
+
 #[must_use]
 pub fn extended_card_document(public_url: &str, entitled: &[EntitledAgent<'_>]) -> Option<Value> {
     let skills = entitled.iter().filter_map(agent_skill).collect();
@@ -441,7 +387,7 @@ fn agent_skill(agent: &EntitledAgent<'_>) -> Option<Value> {
 }
 
 /// Replace every URL-shaped string whose host is the backend's with busbar's endpoint, at every
-/// depth (member names are never rewritten).
+
 fn rewrite_backend_urls(v: &mut Value, backend_host: &str, endpoint: &str) {
     match v {
         Value::String(s) => {
@@ -464,9 +410,7 @@ fn rewrite_backend_urls(v: &mut Value, backend_host: &str, endpoint: &str) {
 }
 
 /// Whether `text` names the backend `host` (lowercase): an occurrence bounded by characters no
-/// hostname continues with (so `notexample.com`, `example.community` and `10.0.0.15` do not name
-/// `example.com` or `10.0.0.1`). A one-label host (`travel`) is also an ordinary word, so it names
-/// the backend only as an authority: after `//` or `@`, or followed by `:` and a port.
+
 fn names_host(text: &str, host: &str) -> bool {
     let text = text.to_lowercase();
     let b = text.as_bytes();
@@ -476,7 +420,7 @@ fn names_host(text: &str, host: &str) -> bool {
         let end = at + host.len();
         let before = at.checked_sub(1).map(|i| b[i]);
         let after = b.get(end).copied();
-        // A longer name around it: a label character, or a dot joined to another label.
+
         let longer_before =
             before.is_some_and(|c| label(c) || (c == b'.' && at >= 2 && label(b[at - 2])));
         let longer_after = after
@@ -494,7 +438,7 @@ fn names_host(text: &str, host: &str) -> bool {
 }
 
 /// Every remaining mention of the backend host ([`names_host`]), with its JSON path; busbar's own
-/// endpoint (`ours`, exact) is never a mention.
+
 fn collect_mentions(v: &Value, backend_host: &str, ours: &str, out: &mut Vec<String>) {
     fn walk(v: &Value, host: &str, ours: &str, path: &str, out: &mut Vec<String>) {
         match v {

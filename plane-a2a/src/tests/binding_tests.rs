@@ -2,7 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! The outbound binding off a held card, and the HTTP+JSON framing, against the served engine's
-//! own cases (`busbar-a2a` `relay::binding_of`, `HttpJsonFraming`).
 
 use serde_json::{json, Map};
 
@@ -37,8 +36,7 @@ fn the_first_binding_the_plane_frames_is_taken_in_the_cards_order() {
 }
 
 /// gRPC IS SPOKEN (the engine's `relay::framing_for` answered all three words): a card that lists
-/// it first is reached on it; a card listing only bindings the plane does not frame names its first,
-/// and is refused by name. RED: `speakable("GRPC")` answered `None` and a gRPC-only card was refused.
+
 #[test]
 fn grpc_is_framed_so_a_card_that_lists_it_first_is_reached_on_it() {
     assert_eq!(speakable(BINDING_GRPC), Some(Binding::Grpc));
@@ -47,7 +45,7 @@ fn grpc_is_framed_so_a_card_that_lists_it_first_is_reached_on_it() {
     assert_eq!(binding_of(Some(&card(&["GRPC", "HTTP+JSON"]))), "GRPC");
     assert_eq!(binding_of(Some(&card(&["GRPC"]))), "GRPC");
     assert_eq!(binding_of(Some(&card(&["SOAP", "GRPC"]))), "GRPC");
-    // A card that lists only bindings the plane does not frame names its first: refused by name.
+
     let only = binding_of(Some(&card(&["SOAP", "CORBA"])));
     assert_eq!(only, "SOAP");
     assert_eq!(speakable(&only), None);
@@ -120,7 +118,7 @@ fn what_the_binding_cannot_carry_is_refused_not_dropped() {
 }
 
 /// Legacy metadata has no field in the vendored v1.0 GET request messages. Do not invent a
-/// query encoding or silently discard it while accepting the legacy operation spelling.
+
 #[test]
 fn legacy_get_metadata_is_explicitly_unrepresentable_on_the_pinned_http_binding() {
     for method in [
@@ -165,7 +163,7 @@ fn a_success_body_is_rewrapped_as_the_result_and_an_empty_one_is_null() {
 const AGENT: &str = "https://backend.agent.test/a2a";
 
 /// `http_json_client_issues_send_stream_message`: the stream submission is a POST to
-/// `/message:stream`, its body the params with no JSON-RPC envelope member.
+
 #[test]
 fn http_json_client_issues_send_stream_message() {
     let f = compose(
@@ -181,8 +179,7 @@ fn http_json_client_issues_send_stream_message() {
 }
 
 /// `http_json_client_issues_cancel_task`: a POST to the task's `:cancel`, naming the id it was
-/// handed (the far end's own, once the door translated it), the rest of the request as the body
-/// (proto `CancelTask`: `body: "*"`), here the empty object.
+
 #[test]
 fn http_json_client_issues_cancel_task() {
     let f = compose(
@@ -200,7 +197,7 @@ fn http_json_client_issues_cancel_task() {
 }
 
 /// `http_json_client_issues_subscribe_to_task` (and its v1.0 spelling, `task_id`): a GET of the
-/// task's `:subscribe` (proto `SubscribeToTask`: `get: "/tasks/{id=*}:subscribe"`).
+
 #[test]
 fn http_json_client_issues_subscribe_to_task() {
     for (method, member) in [("tasks/resubscribe", "id"), ("SubscribeToTask", "task_id")] {
@@ -216,7 +213,7 @@ fn http_json_client_issues_subscribe_to_task() {
 }
 
 /// `http_json_client_issues_list_tasks`: a GET of the collection, its options on the query, no
-/// body.
+
 #[test]
 fn http_json_client_issues_list_tasks() {
     let f = compose(AGENT, "ListTasks", &json!({})).unwrap();
@@ -238,9 +235,7 @@ fn http_json_client_issues_get_extended_agent_card() {
 }
 
 /// `the_cards_interface_url_never_moves_the_hop`: a card says HOW, never WHERE. A card naming its
-/// interface at another host is read for its binding word alone, and the request is composed under
-/// the operator's own URL (the door hands the kernel a path; the kernel joins it onto the agent's
-/// sealed origin).
+
 #[test]
 fn the_cards_interface_url_never_moves_the_hop() {
     let card = json!({ "supportedInterfaces": [{
@@ -258,7 +253,7 @@ fn the_cards_interface_url_never_moves_the_hop() {
 }
 
 /// SUBSCRIBE IS A GET on the HTTP+JSON binding (proto `SubscribeToTask`:
-/// `get: "/tasks/{id=*}:subscribe"`), with no body, in both dialects' spellings.
+
 #[test]
 fn http_json_client_subscribes_with_a_get() {
     for (method, member) in [("tasks/resubscribe", "id"), ("SubscribeToTask", "id")] {
@@ -273,8 +268,7 @@ fn http_json_client_subscribes_with_a_get() {
 }
 
 /// A CANCEL CARRIES ITS METADATA in the body (proto `CancelTask`:
-/// `post: "/tasks/{id=*}:cancel" body: "*"`; `CancelTaskRequest.metadata`), never refused as
-/// unframable.
+
 #[test]
 fn http_json_client_cancel_carries_its_metadata_in_the_body() {
     let f = compose(
@@ -295,7 +289,7 @@ fn http_json_client_cancel_carries_its_metadata_in_the_body() {
 }
 
 /// AN ID CANNOT RE-POINT THE REQUEST LINE: a dot segment (`.`, `..`), the one value the
-/// percent-encoding allowlist passes that still moves a path, is refused rather than composed.
+
 #[test]
 fn a_dot_segment_id_is_refused_rather_than_composed() {
     for id in [".", ".."] {
@@ -404,7 +398,7 @@ fn endpoint_selection_keeps_the_operator_target_and_uses_only_matching_interface
         "https://operator-alias.example/pinned?key=K"
     );
     assert_eq!(alias.word, BINDING_HTTP_JSON);
-    // Different query order or percent spelling does not become an endpoint match.
+
     let card = json!({"url":"https://public.example/rest", "preferredTransport":"HTTP+JSON",
         "additionalInterfaces":[{"url":"https://private.example/a%2Fb?x=1&y=2", "transport":"JSONRPC"}]});
     for target in [

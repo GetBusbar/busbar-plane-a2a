@@ -2,7 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! The byte splice of a far end's answer: busbar's identity at the members' own spans, every other
-//! byte as the far end wrote it, and the same identity the value path gives.
 
 use serde_json::{json, Value};
 
@@ -10,8 +9,6 @@ use super::*;
 
 #[test]
 fn malformed_member_wipes_the_decoded_pending_key() {
-    // The unescaped key is borrowed by serde_json's reader and copied into the actual key
-    // String. The retirement hook sees that owner, independently of escaped parser scratch.
     const MALFORMED_MEMBER_ENDINGS: [&str; 2] = ["}", ":}"];
     let key = std::str::from_utf8(crate::tests::raw_custody_probe::SECRET).unwrap();
     for ending in MALFORMED_MEMBER_ENDINGS {
@@ -125,8 +122,7 @@ fn a_result_that_is_no_object_takes_no_identity() {
 }
 
 /// AN UNWRAPPED v0.3 UPDATE takes busbar's id in the `taskId` its `kind` names it by, at that
-/// member's own span, and gains no `id`. RED: busbar's id was appended as a new `id` and the far
-/// end's `taskId` reached the caller.
+
 #[test]
 fn an_unwrapped_update_takes_busbars_id_where_its_kind_names_its_task() {
     assert_eq!(
@@ -175,7 +171,7 @@ fn the_result_span_and_the_rewrap_keep_the_far_ends_bytes() {
 }
 
 /// THE CALLER'S REQUEST, TRANSLATED BY SPLICE: only the ids `to` answers for change, at their own
-/// spans; nothing translated is `None`.
+
 #[test]
 fn a_request_is_translated_at_its_ids_spans_only() {
     let to = |id: &str| (id == "busbar-t").then(|| "far-t".to_string());

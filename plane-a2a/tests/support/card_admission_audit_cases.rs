@@ -70,8 +70,7 @@ extern "C" fn signed_card(_: HostCtx, input: *const c_void, out: *mut ServiceOut
             return answer(out, Outcome::Failed, 0, 0);
         }
     }
-    // The key-id probe succeeds even when the subsequent real signature is refused: a missing
-    // key's existing unsigned-card behavior is a different case.
+
     let key = b"card-audit-test";
     let signature = [7u8; 64];
     assert!(input.into.cap >= key.len() + signature.len() && input.into.spans_cap >= 1);
@@ -204,7 +203,7 @@ fn extended_card_audits_signature_failure_as_rejected_and_the_success_control_as
                 door.arrive(1, ("POST", "/a2a"), "/a2a", request)
             };
             assert_eq!(arrival, (Outcome::Ready, 0));
-            // The first serialization is short; its retry must retain the same audit outcome.
+
             let (short, output, _, audit) = card_answer_with_audit(&door, 1, 0);
             assert_eq!(short, Outcome::Failed);
             assert!(output.fields_needed > 0);

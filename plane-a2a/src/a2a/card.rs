@@ -2,14 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! The two hashes taken over an agent card, and the per-skill digests. The plane computes them and
-//! reports them to the kernel's `trust.*`, which judges them.
-//!
-//! [`signing_payload`] is what a card's JWS signature covers: the canonical card with the
-//! `signatures` member removed, because a signature cannot cover itself.
-//!
-//! [`fingerprint`] is what an operator APPROVES and what drift is measured against: the canonical
-//! WHOLE card, signatures included, over the document AS RECEIVED, so a member busbar does not model
-//! still registers as drift.
 
 use std::collections::BTreeMap;
 
@@ -64,9 +56,7 @@ impl From<CanonicalError> for CardError {
 }
 
 /// THE PINNED FINGERPRINT: a hash of the canonical WHOLE card, signatures included.
-///
-/// Over the received document, never over a busbar-owned projection of it. A member busbar does not model is still a
-/// member of the thing the operator approved, and a change to it is still a change.
+
 pub fn fingerprint(card: &Value) -> Result<String, CardError> {
     if !card.is_object() {
         return Err(CardError::NotAnObject);
@@ -75,16 +65,7 @@ pub fn fingerprint(card: &Value) -> Result<String, CardError> {
 }
 
 /// THE JWS PAYLOAD: the canonical card with `signatures` removed, because a signature cannot cover
-/// itself. Removing the member is not the same as emptying it, and the distinction is load-bearing:
-/// a signer that hashed `"signatures":[]` and a verifier that hashed an absent member would disagree
-/// on every signed card in existence.
-///
-/// A v1.0 card (one stating `supportedInterfaces`) also has every default-valued member omitted
-/// first, as A2A v1.0 §8.4.1 rule 1 and §8.4.3 steps 3-5 require: a member that holds its proto
-/// default is left out unless its field is `REQUIRED` or `optional` (§5.7), at every depth the
-/// card's messages reach ([`CARD`]). A member the vendored `a2a.proto` does not declare is kept as
-/// received, and a `null` is kept as received. A v0.3 card states no canonicalization beyond RFC
-/// 7515, so it has only its `signatures` removed.
+
 pub fn signing_payload(card: &Value) -> Result<String, CardError> {
     let mut stripped = card.clone();
     let obj = stripped.as_object_mut().ok_or(CardError::NotAnObject)?;
@@ -153,7 +134,7 @@ const SCHEME: Message = &[
     ("mtlsSecurityScheme", Member::Of(DESCRIBED)),
 ];
 /// `APIKeySecurityScheme`, `OpenIdConnectSecurityScheme`, `MutualTlsSecurityScheme`: only
-/// `description` is implicit.
+
 const DESCRIBED: Message = &[("description", Member::Implicit)];
 /// `HTTPAuthSecurityScheme`.
 const HTTP_AUTH: Message = &[
@@ -241,11 +222,7 @@ fn omit_defaults(v: &mut Value, message: Message) {
 }
 
 /// The capability set the plane-neutral machine compares: skill id to a digest of that skill's
-/// canonical form.
-///
-/// PER SKILL, not one hash for the whole set, because the changes queue an operator works is a row
-/// at a time. A single set-wide hash would make one edited description look identical to a wholesale
-/// replacement, and the only available response would be to re-approve everything.
+
 pub fn skill_digests(card: &Value) -> Result<BTreeMap<String, String>, CardError> {
     let skills = match card
         .as_object()

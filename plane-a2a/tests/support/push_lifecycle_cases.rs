@@ -823,7 +823,7 @@ fn callback_pending_and_short_refusals_preserve_one_budget_charge_and_one_warnin
     );
     script(|s| s.read_pending = false);
     assert_eq!(recall(&door, 700, &auth, WORKING, 4096).status, 202);
-    // 58 further operations leave exactly one of the existing 60-per-minute slots.
+
     for ticket in 701..759 {
         assert_eq!(serve(&door, ticket, &auth, WORKING, 4096).status, 202);
     }
@@ -1147,7 +1147,7 @@ fn cancel_starts_no_publication_and_does_not_replace_a_submitted_attempt() {
     let original = script(|s| s.conditional.emitted.last().unwrap().clone());
     script(|s| {
         s.conditional.pause_commit = false;
-        // After submission the host owns this exact attempt, even after the plugin is cancelled.
+
         s.conditional.begin(ticket(1141), true, false);
         assert_eq!(s.conditional.requests.last(), Some(&original));
         assert_eq!(s.conditional.applied, 1);
@@ -1165,7 +1165,7 @@ fn canceled_raw_callback_settles_late_applied_once_across_lost_driver_ack() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
     let (_reset, door) = open_scripted();
     let auth = registered(&door);
-    // Drain any registration notification before measuring this callback's own obligation.
+
     assert_eq!(door.tick().0, Outcome::Ready);
     assert_eq!(door.tick().0, Outcome::Ready);
     let notifications = script(|s| s.notifications);
@@ -1186,7 +1186,7 @@ fn canceled_raw_callback_settles_late_applied_once_across_lost_driver_ack() {
     );
     assert_eq!(script(|s| s.conditional.applied), applied + 1);
     assert_eq!(script(|s| s.notifications), notifications);
-    // No operation re-entry, including the same host ticket, may resume this canceled callback.
+
     assert_eq!(
         recall(&door, 1200, &auth, COMPLETED, 4096).outcome,
         Outcome::Failed
@@ -1202,7 +1202,7 @@ fn canceled_raw_callback_settles_late_applied_once_across_lost_driver_ack() {
         .unwrap()
         .matches(&original)
         .unwrap());
-    // Drop the copied ACK before host consumption, exactly as a lost driver reply.
+
     assert_eq!(
         script(|s| s.conditional.retained_settlement()),
         Some(receipt.clone())
@@ -1239,7 +1239,7 @@ fn canceled_raw_callback_settles_late_applied_once_across_lost_driver_ack() {
         notifications + 1,
         "repeated receipt consumption queues exactly one notification"
     );
-    // An adversarial replay after host custody ended no longer names a retained guest owner.
+
     let stale = settlement_driver(&door, &receipt, false);
     assert_eq!(stale.outcome, Outcome::Failed);
     assert!(wire::read_settlement_ack(&stale.extensions)

@@ -2,7 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! The `agents:` section's grammar, and the value rules that make the object pin worth having,
-//! read as the door reads them: through [`crate::statement::read_agents_section`] over the section's JSON.
 
 use super::*;
 use crate::statement::read_agents_section;
@@ -11,8 +10,7 @@ use busbar_contract::secret_ref::SecretRef;
 use serde_json::json;
 
 /// The reference config's sugar `{ word: value }` reads as, through the contract's own reading, so
-/// the expectation is whatever shape the pinned contract gives it (busbar step 2c reads sugar
-/// context-free).
+
 fn sugar(word: &str, value: &str) -> SecretRef {
     serde_json::from_value(serde_json::json!({ word: value })).expect("a sugar reference")
 }
@@ -64,7 +62,7 @@ fn serialized_pin_tokens_round_trip() {
 }
 
 /// The shape the design specifies parses, field for field.
-/// Ported from busbar-a2a a2a/tests/config_tests.rs::the_designed_entry_parses_as_written.
+
 #[test]
 fn the_designed_entry_parses_as_written() {
     let cfg = parse(&json!({
@@ -114,7 +112,7 @@ fn registrations_require_explicit_pin_mechanisms_and_private_reach_is_opt_in() {
 }
 
 /// A typo'd key fails the parse rather than silently un-pinning an agent.
-/// Ported from busbar-a2a a2a/tests/config_tests.rs::an_unknown_key_is_refused_rather_than_ignored.
+
 #[test]
 fn an_unknown_key_is_refused_rather_than_ignored() {
     let err = parse(&json!({
@@ -132,7 +130,7 @@ fn an_unknown_key_is_refused_rather_than_ignored() {
 }
 
 /// A URL with no scheme, or an empty one, fails at parse rather than at a delegation later.
-/// Ported from busbar-a2a a2a/tests/config_tests.rs::a_url_without_a_scheme_fails_at_parse.
+
 #[test]
 fn a_url_without_a_scheme_fails_at_parse() {
     for url in ["", "   ", "a2a.vendor/planner", "ftp://a2a.vendor/"] {
@@ -160,7 +158,7 @@ fn a_url_without_a_scheme_fails_at_parse() {
 }
 
 /// THE REGISTRATION URL IS PARSED, NOT PREFIX-TESTED: one with no host is refused, and one whose
-/// authority carries a userinfo is refused without the refusal repeating it.
+
 #[test]
 fn a_registration_url_is_parsed_and_its_userinfo_never_repeated() {
     let d = def("https://", PinMechanism::Unpinned);
@@ -192,7 +190,7 @@ fn a_registration_url_is_parsed_and_its_userinfo_never_repeated() {
 }
 
 /// An agent may not be NAMED by a reserved word: every word in the one declaration is refused here.
-/// Ported from busbar-a2a a2a/tests/config_tests.rs::an_agent_may_not_be_named_by_a_reserved_word.
+
 #[test]
 fn an_agent_may_not_be_named_by_a_reserved_word() {
     for reserved in busbar_contract::section::RESERVED_SECTION_KEYS {
@@ -210,7 +208,7 @@ fn an_agent_may_not_be_named_by_a_reserved_word() {
 }
 
 /// The section-level reserved keys still WORK as knobs, and are not agents.
-/// Ported from busbar-a2a a2a/tests/config_tests.rs::the_reserved_words_still_function_as_section_knobs.
+
 #[test]
 fn the_reserved_words_still_function_as_section_knobs() {
     let cfg = parse(&json!({
@@ -225,8 +223,7 @@ fn the_reserved_words_still_function_as_section_knobs() {
 }
 
 /// THE CALLER'S CREDENTIAL IS NEVER FORWARDED TO A DELEGATE: refused per entry and at the section
-/// level, in this plane's own sentence; `own` is accepted in both places.
-/// Ported from busbar-a2a a2a/tests/config_tests.rs::passthrough_is_refused_at_the_section_level_as_well_as_per_entry.
+
 #[test]
 fn passthrough_is_refused_at_the_section_level_as_well_as_per_entry() {
     let err = parse(&json!({
@@ -264,8 +261,7 @@ fn passthrough_is_refused_at_the_section_level_as_well_as_per_entry() {
 }
 
 /// An entry round-trips to a document and back unchanged, which is what the overlay's per-entry
-/// PATCH merge needs: patching one field must not rewrite the rest of the entry.
-/// Ported from busbar-a2a a2a/tests/config_tests.rs::an_entry_round_trips_through_its_document_form.
+
 #[test]
 fn an_entry_round_trips_through_its_document_form() {
     let d = AgentDefCfg {
@@ -286,8 +282,7 @@ fn an_entry_round_trips_through_its_document_form() {
             lease_ttl_ms: 60_000,
         }),
         egress_scopes: vec!["orchestrator".to_string()],
-        // BOTH HALVES OF THE CLIENT IDENTITY: a `client_identity:` an admin PATCH silently dropped
-        // would leave a registration unable to complete a handshake it completed a moment earlier.
+
         client_identity: Some(ClientIdentityCfg {
             cert: sugar("env", "BUSBAR_CLIENT_CERT"),
             key: sugar("env", "BUSBAR_CLIENT_KEY"),
@@ -301,8 +296,7 @@ fn an_entry_round_trips_through_its_document_form() {
 }
 
 /// The registration an operator writes for a peer behind mutual TLS, parsed field for field: the
-/// client certificate is named by REFERENCE (`file:` sugar), never by key material.
-/// Ported from busbar-a2a a2a/tests/config_tests.rs::a_mutual_tls_registration_names_its_client_certificate_by_reference.
+
 #[test]
 fn a_mutual_tls_registration_names_its_client_certificate_by_reference() {
     let cfg = parse(&json!({
@@ -324,13 +318,12 @@ fn a_mutual_tls_registration_names_its_client_certificate_by_reference() {
         .expect("the client identity is carried through");
     assert_eq!(identity.cert.module, "file");
     assert_eq!(identity.key.module, "file");
-    // The REFERENCE is what the config holds; nothing here is key material.
+
     assert!(!format!("{identity:?}").contains("BEGIN"));
 }
 
 /// `mtls` with nothing to present is refused at parse, naming the missing key and what the peer
-/// would have answered.
-/// Ported from busbar-a2a a2a/tests/config_tests.rs::mutual_tls_without_a_client_identity_is_refused_at_parse.
+
 #[test]
 fn mutual_tls_without_a_client_identity_is_refused_at_parse() {
     let err = parse(&json!({
@@ -348,7 +341,7 @@ fn mutual_tls_without_a_client_identity_is_refused_at_parse() {
 }
 
 /// A client certificate over `http://` has no handshake to be presented in.
-/// Ported from busbar-a2a a2a/tests/config_tests.rs::a_client_identity_on_a_plaintext_endpoint_is_refused.
+
 #[test]
 fn a_client_identity_on_a_plaintext_endpoint_is_refused() {
     let err = parse(&json!({
@@ -369,7 +362,7 @@ fn a_client_identity_on_a_plaintext_endpoint_is_refused() {
 }
 
 /// A client certificate is legal under the OTHER mechanisms: only `mtls` REQUIRES it.
-/// Ported from busbar-a2a a2a/tests/config_tests.rs::a_client_identity_is_legal_alongside_a_signed_card.
+
 #[test]
 fn a_client_identity_is_legal_alongside_a_signed_card() {
     parse(&json!({
@@ -386,7 +379,7 @@ fn a_client_identity_is_legal_alongside_a_signed_card() {
 }
 
 /// The admin write path runs the SAME rule: `validate_agent` is the one function both call.
-/// Ported from busbar-a2a a2a/tests/config_tests.rs::the_admin_write_path_refuses_mutual_tls_without_a_client_identity_too.
+
 #[test]
 fn the_admin_write_path_refuses_mutual_tls_without_a_client_identity_too() {
     let mut d = def("https://a2a.vendor/planner", PinMechanism::MutualTls);
@@ -397,9 +390,7 @@ fn the_admin_write_path_refuses_mutual_tls_without_a_client_identity_too() {
 }
 
 /// The LEASE is a field rather than an adjective, so a lease that could never be presented is
-/// refused where the operator wrote it: a zero `lease_ttl_ms` is refused at parse, naming the key,
-/// and a positive one parses field for field.
-/// Ported from busbar-a2a a2a/tests/config_tests.rs::a_zero_lease_ttl_is_refused_at_parse.
+
 #[test]
 fn a_zero_lease_ttl_is_refused_at_parse() {
     let err = parse(&json!({
@@ -428,8 +419,7 @@ fn a_zero_lease_ttl_is_refused_at_parse() {
 }
 
 /// An empty egress scope grants nothing and READS as though it grants something, so a blank name
-/// in `egress_scopes` is refused at parse, naming the key.
-/// Ported from busbar-a2a a2a/tests/config_tests.rs::an_empty_egress_scope_is_refused.
+
 #[test]
 fn an_empty_egress_scope_is_refused() {
     let err = parse(&json!({

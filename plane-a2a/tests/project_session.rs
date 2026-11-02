@@ -2,17 +2,9 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! THE SESSION ON THE DOOR PATH (ARCHITECT RULING 2026-10-03, Q-FOLD-A2A-2-PROJECT-POOL session
-//! half): the door's `project`, entered as the dispatcher enters it and checked as the loader checks
-//! every answer, writes the caller's `contextId` into the hook view's opaque session.
-
-// A door-driven test crate: it reaches the plane only through `door`, the crate's one public item,
-// and enters `project` through the door's own table as the dispatcher does, so reading that raw
-// table happens here, outside the plugin crate (whose root keeps the literal
-// `#![forbid(unsafe_code)]`). The claim it names is `door_facts`', held to the crate's own route
-// table by the crate's unit test `door_facts`.
 
 #[path = "support/door_facts.rs"]
-#[allow(dead_code)] // this test reads the route table alone
+#[allow(dead_code)]
 mod door_facts;
 
 use busbar_contract::abi::mechanism::call::{InHead, OutHead, Outcome};
@@ -27,8 +19,7 @@ fn ops() -> &'static Ops {
 }
 
 /// One `project` of `body` arriving on claim `claim` at `target`, through the door's own entry,
-/// checked as the loader checks every answer (`check_project`): the outcome and the session the
-/// view names, as text (`None` = absent).
+
 fn project_session(claim: usize, target: &str, body: &[u8]) -> (Outcome, Option<String>) {
     let (outcome, session, _) = project_view(claim, target, body);
     (outcome, session)
@@ -77,8 +68,7 @@ fn project_view(
         size: std::mem::size_of::<ProjectOut>() as u32,
         ..blank_out()
     };
-    // `input`'s pointers name the live buffers above for the call; the door's `project` reads no
-    // instance.
+
     let project = ops().project.expect("the door states project");
     let outcome = project(
         std::ptr::null_mut(),
@@ -149,9 +139,7 @@ fn claim_of(verb: &str, target: &str) -> usize {
 }
 
 /// THE SESSION ON THE DOOR PATH (ARCHITECT RULING 2026-10-03, Q-FOLD-A2A-2-PROJECT-POOL session
-/// half): `project` writes the `contextId` the caller's message names into the hook view's opaque
-/// session, on the JSON-RPC line and the HTTP+JSON line alike; a message that names none leaves it
-/// absent, so the request is screened whole.
+
 #[test]
 fn project_writes_the_messages_context_id_as_the_session() {
     let document = claim_of("POST", "/a2a/agents/{agent_id}");

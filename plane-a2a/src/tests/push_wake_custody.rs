@@ -11,7 +11,7 @@ fn withdrawing_a_config_wakes_outside_the_callback_registry_lock() {
     deliveries.arm(|| {
         Box::new(move || {
             let deliveries = weak.upgrade().expect("the withdrawing owner is live");
-            // A host callback may inspect/re-arm its existing registration synchronously.
+
             deliveries.arm(|| panic!("the existing registration must be retained"));
             sent.send(()).unwrap();
         })

@@ -2,12 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! THE gRPC LINE'S MESSAGES, generated from the a2aproject's own `a2a.proto` (vendored verbatim in
-//! `proto/`, with the minimal `google.api` option stubs it imports, from the `a2a-pb` 0.2.0 crate,
-//! Apache-2.0), as `a2a-pb` generated them: the prost messages with the well-known types mapped to
-//! the plane's own (`crate::wkt`, `pbjson-types`' mapping without its calendar crate), and pbjson's
-//! ProtoJSON serde for the `lf.a2a.v1` package, patched as `a2a-pb`
-//! patched it so a JSON `null` for a repeated or map member reads as empty (ARCHITECT ruling Q1 (C),
-//! 2026-10-04: the plane generates its messages; no gRPC server stack in a plane's closure).
 
 use std::error::Error;
 use std::path::PathBuf;
@@ -52,9 +46,7 @@ const NULL_MAP_FIELDS: usize = 7;
 
 fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=proto");
-    // THE METHOD INVENTORY a unit test holds the plane's JSON-RPC names to:
-    // `tests/data/method-inventory.json`, read HERE, at build time, and included by the test as
-    // generated source, so no test of the plane reads a file at run time.
+
     let path = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR")?)
         .join("tests/data/method-inventory.json");
     println!("cargo:rerun-if-changed={}", path.display());
@@ -66,16 +58,14 @@ fn main() -> Result<(), Box<dyn Error>> {
              pub(crate) const METHOD_INVENTORY: &str = {text:?};\n"
         ),
     )?;
-    // THE ROOT CELLS' ADDRESS (this crate's `links` row): the composition root compiles this
-    // plane's own root cells from here, reading it as `DEP_BUSBAR_DOOR_CELLS_<CRATE>_CELLS`.
+
     println!(
         "cargo::metadata=cells={}",
         PathBuf::from(std::env::var("CARGO_MANIFEST_DIR")?)
             .join("tests/root/mod.rs")
             .display()
     );
-    // THE BLACK-BOX CASES' ADDRESS (the same `links` row): the root's black-box runner boots the
-    // real binary against every case file here, reading it as `DEP_BUSBAR_DOOR_CELLS_<CRATE>_BLACKBOX`.
+
     println!(
         "cargo::metadata=blackbox={}",
         PathBuf::from(std::env::var("CARGO_MANIFEST_DIR")?)
@@ -103,11 +93,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let serde_path = out_dir.join("lf.a2a.v1.serde.rs");
     let mut generated = std::fs::read_to_string(&serde_path)?;
-    // COUNTED, so a change in pbjson's output shape fails the build instead of silently matching
-    // nothing (a null map or list would then be refused): every map field's line is patched, and
-    // each listed repeated member is patched exactly as many times as the vendored proto declares a
-    // repeated field of that name (`extensions` is three fields, `parts` two), so a generator
-    // change that alters the line of one of them fails too.
+
     let proto = std::fs::read_to_string(PROTO_FILES[0])?;
     let maps = generated.matches(NULL_MAP.0).count();
     if maps != NULL_MAP_FIELDS {
@@ -140,7 +126,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 }
 
 /// How many fields named `name` the proto source `proto` declares `repeated`: every line
-/// `repeated <type> <name> = <tag>;`.
+
 fn repeated_fields(proto: &str, name: &str) -> usize {
     proto
         .lines()
@@ -156,9 +142,7 @@ fn repeated_fields(proto: &str, name: &str) -> usize {
 }
 
 /// `text` with every `needle` that starts a whole identifier replaced by `with`, and how many were:
-/// `output_modes__ = …` must not match inside `accepted_output_modes__ = …`, which is its own
-/// member's line (a substring match patched it under the shorter name, and the longer name's own
-/// patch then matched nothing).
+
 fn replace_whole(text: &str, needle: &str, with: &str) -> (String, usize) {
     let mut out = String::with_capacity(text.len());
     let (mut at, mut hits) = (0, 0);

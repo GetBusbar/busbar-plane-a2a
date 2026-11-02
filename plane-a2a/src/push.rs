@@ -2,38 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! Push delivery, in plane memory: push delivery makes
-//! three attempts, two delays of 250/500 ms ±20 %, on a transport error, 5xx or 429 only, on an
-//! async timer, holding no slot, re-running the destination judge on every attempt; event-stream
-//! sink delivery through a per-task ordered bounded queue, 64, drop-oldest, counted).
-//!
-//! Everything here is sans I/O. The instance holds one [`Deliveries`] and one [`Tokens`]:
-//!
-//! * [`Deliveries::enqueue`] files a notification behind its task's earlier ones; past
-//!   [`QUEUE_CAPACITY`] the oldest waiting one is dropped and counted.
-//! * [`Deliveries::next_due`] hands out the ONE delivery the door's `tick` attempts on one op: only
-//!   the HEAD of a task's queue, once its time has come and while no attempt on it is open (so a
-//!   task's notifications reach the receiver in the order its state changed), the tasks served in
-//!   turn.
-//! * Each attempt re-runs the destination judge, then dials the plane's outbound `open-web` need
-//!   ([`crate::statement::NEED_OPEN_WEB`]) with [`request`]; its end is [`Attempted`].
-//! * [`Deliveries::settle`] pops the head, or puts it back with its next time when the end is
-//!   retryable and attempts remain. [`Deliveries::next_tick_ns`] is the lifecycle tick's
-//!   `next_tick_ns` while no attempt is held: nothing waits on a slot or a thread between attempts.
-//! * Every attempt's end is OWED to its task's chain ([`Deliveries::owe`]): a `tick` answer carries
-//!   no record write, so the outcome waits in plane memory, bounded, until a piece of its caller's
-//!   files it ([`Deliveries::take_owed`]).
-//!
-//! The caller's webhook credential ([`DeliveryAuth`], a [`Cred`]) has its home in the push_config
-//! host record (`PushConfig::authentication`, written only through [`record_value`]). Each queued
-//! [`Delivery`] carries the credential registered WITH ITS URL, taken when it is queued, so a
-//! delivery waiting or retrying when the caller re-registers never presents the new credential to
-//! the old URL. Inline callbacks use that same durable config record; there is no separate
-//! task-wide credential map. Config deletion withdraws its waiting and pending deliveries.
-//! Credentials are never logged and join the request sealed only after the destination judge
-//! passes. busbar's own callback token ([`Tokens`]) is a capability for one task,
-//! `<task-id>.<signature>`, minted through the host's signing service (the plane never holds the
-//! key) and verified by signing again and comparing in constant time; it is never logged or
-//! audited. [`PushLimiter`] bounds how often one task's token may be spent.
 
 use busbar_contract::abi::mechanism::ticket::Ticket;
 use std::collections::{BTreeMap, VecDeque};
@@ -59,11 +27,11 @@ pub const JITTER_PERCENT: u64 = 20;
 pub const QUEUE_CAPACITY: usize = 64;
 
 /// The most callback tokens one instance holds; past it, no token is minted (and busbar registers
-/// no callback of its own with that backend).
+
 pub const MAX_TOKENS: usize = 4096;
 
 /// The domain a callback token's signature is made in: what the host signs is this, then the task
-/// id, so no other signature the instance asks for verifies as a token.
+
 pub const TOKEN_DOMAIN: &[u8] = b"busbar-a2a-push-token\0";
 
 /// The fixed push-rate window, seconds.
@@ -73,19 +41,15 @@ pub const PUSH_RATE_WINDOW_SECS: u64 = 60;
 pub const PUSH_RATE_LIMIT: u32 = 60;
 
 /// The scheme busbar's callback token rides on: registered as the config's
-/// `authentication.scheme` (its `credentials` = the token), presented back as
-/// `Authorization: Bearer <token>`.
+
 pub const TOKEN_SCHEME: &str = "Bearer";
 
 /// The most attempt outcomes held for their chains at once; past it, the oldest is dropped and
-/// counted.
+
 pub const MAX_OWED: usize = 4096;
 
 /// The bound on one attempt's request, milliseconds (each
-/// attempt is bounded by the destination's request deadline, the connector's default when none is
-/// set). A webhook names no pool, so it is the connector's default bound, ten seconds
-/// (`busbar-core-connector` `DEFAULT_OPEN_TIMEOUT`). A receiver that has not answered by then ends
-/// the attempt as a transport error, under the three-attempt rule.
+
 pub const ATTEMPT_TIMEOUT_MS: u64 = 10_000;
 
 /// The field every delivery carries, and its value.
@@ -95,13 +59,7 @@ pub const CONTENT_TYPE: (&str, &str) = ("content-type", "application/json");
 pub const AUTHORIZATION: &str = "authorization";
 
 /// The A2A push notification body, in the shape of the version its callback was registered under
-/// ([`Task::push_version`]), under busbar's ids. Not a
-/// JSON-RPC envelope: the receiver is not a JSON-RPC peer and correlates on the task id.
-/// `status.timestamp` is RFC 3339, as every revision types it.
-///
-/// * v1.0 (and a row written before the version was kept): a `StreamResponse` with the task nested
-///   under `"task"` (A2A 4.3.3), its state the ProtoJSON `TASK_STATE_*` token, no `kind`.
-/// * v0.3: the `Task` object itself, `kind: "task"` and the lower-case state word.
+
 #[must_use]
 pub fn notification_body(task: &Task) -> Vec<u8> {
     let timestamp = busbar_contract::civil::rfc3339_from_secs(task.updated_at);
@@ -147,7 +105,7 @@ pub struct DeliveryAuth {
 
 impl DeliveryAuth {
     /// The sealed `Authorization` value for a delivery to `url`: `<scheme> <credentials>`, or the
-    /// bare scheme when there are none; required to go out secured when `url` is `https`.
+
     #[must_use]
     pub fn authorization(&self, url: &str) -> Seal {
         self.credentials
@@ -158,10 +116,7 @@ impl DeliveryAuth {
 }
 
 /// A push_config record's value, through the SDK's record encoder: the one place a
-/// [`DeliveryAuth`]'s credential is written out. Serialized anywhere else (a log line) it refuses.
-///
-/// # Errors
-/// What the encoder answers; no error quotes the credential.
+
 pub fn record_value<T: serde::Serialize>(value: &T) -> Result<Vec<u8>, serde_json::Error> {
     busbar_contract::abi::sdk::cred::record::to_vec(value).map(|mut v| std::mem::take(&mut *v))
 }
@@ -201,7 +156,7 @@ impl Attempted {
     }
 
     /// Worth another attempt: a transport error, a 5xx or a 429. A judge refusal or any other 4xx
-    /// would answer the same "no" again.
+
     #[must_use]
     pub const fn retryable(self) -> bool {
         match self {
@@ -212,7 +167,7 @@ impl Attempted {
     }
 
     /// The task-chain record kind the attempt files: delivered, refused before anything went out,
-    /// or failed at the receiver.
+
     #[must_use]
     pub const fn record_kind(self) -> &'static str {
         match self {
@@ -224,7 +179,7 @@ impl Attempted {
 }
 
 /// `base_ms` moved by up to ±[`JITTER_PERCENT`], `byte` (a random byte) choosing where: `0` is the
-/// low end, `255` the high end.
+
 #[must_use]
 pub fn jittered_ms(base_ms: u64, byte: u8) -> u64 {
     let span = 2 * JITTER_PERCENT;
@@ -375,7 +330,7 @@ pub struct Deliveries {
 }
 
 /// The way to wake the instance's driver ticket (R-PUSH): armed by the first `tick`, which is the
-/// op that carries the ticket.
+
 pub(crate) type Wakeup = Keyed<(), Arc<dyn Fn() + Send + Sync>>;
 
 impl Deliveries {
@@ -407,7 +362,7 @@ impl Deliveries {
     }
 
     /// Deletion and retained-notification enqueue share this existing book lock. A late receipt
-    /// cannot restore delivery authority after another callback withdrew the configuration.
+
     pub(crate) fn apply_publication(
         &self,
         journal: &crate::conditional_publication::Journal,
@@ -468,7 +423,7 @@ impl Deliveries {
     }
 
     /// Ordinary replay still authenticates before notification/token effects. Deletion custody
-    /// alone can be drained early, atomically with retained-journal suppression.
+
     pub(crate) fn apply_deletions(&self, journal: &crate::conditional_publication::Journal) {
         let deleted = self.with(|book| {
             let mut deleted = false;
@@ -499,7 +454,7 @@ impl Deliveries {
     }
 
     /// Whether this is still the open head. Deleting its config withdraws it before a pending
-    /// attempt resumes; another waiting delivery cannot be mistaken for an open attempt.
+
     pub(crate) fn current(&self, delivery: &Delivery) -> bool {
         self.with(|b| {
             b.queues
@@ -544,7 +499,7 @@ impl Deliveries {
     }
 
     /// Arm the wake of the instance's driver ticket, once: a queued delivery is attempted on that
-    /// wake, not at the next scheduled `tick` (R-PUSH: a wake runs `drive`, then re-polls `tick`).
+
     pub fn arm(&self, wake: impl FnOnce() -> Box<dyn Fn() + Send + Sync>) {
         self.wake.with_all(|armed| {
             armed.entry(()).or_insert_with(|| Arc::from(wake()));
@@ -552,11 +507,7 @@ impl Deliveries {
     }
 
     /// Wake the driver ticket so the kernel ticks now; a no-op until armed (the first `tick` runs
-    /// at boot and finds what is queued), and a no-op while an attempt is HELD
-    /// ([`Deliveries::holding`]): the tick a wake causes starts the driver ticket's next cycle,
-    /// which forgets the held attempt's pending exchange, so what is queued meanwhile waits for the
-    /// held attempt's own completion wake (its `drive`, then the tick after it). The host's wake
-    /// never blocks and never reaches back here.
+
     pub fn wake(&self) {
         if self.with(|b| b.holding) {
             return;
@@ -568,22 +519,19 @@ impl Deliveries {
     }
 
     /// Whether an attempt is held across `drive` entries (set while its exchange pends, cleared when
-    /// it ends or is abandoned).
+
     pub fn holding(&self, held: bool) {
         self.with(|b| b.holding = held);
     }
 
     /// File `delivery` behind its task's earlier ones. Answers whether the oldest waiting one was
-    /// dropped (and counted) to make room. An attempt in progress is never the one dropped.
+
     pub fn enqueue(&self, delivery: Delivery, now_ns: u64) -> bool {
         self.with(|book| book.enqueue(delivery, now_ns))
     }
 
     /// The one delivery to attempt now, for one `tick` op: the tasks' queues are served in turn,
-    /// one attempt per task per turn, so a slow receiver
-    /// delays another task's delivery by at most one attempt's deadline: of the heads whose time
-    /// has come and no attempt is open on, the first after the task attempted last, in task-id
-    /// order, wrapping round. Marked open until [`Deliveries::settle`]; `None` when none is due.
+
     #[must_use]
     pub fn next_due(&self, now_ns: u64) -> Option<Delivery> {
         self.with(|b| {
@@ -608,7 +556,7 @@ impl Deliveries {
     }
 
     /// OWE `end`'s record kind to `delivery`'s task chain. Past [`MAX_OWED`] the oldest owed is
-    /// dropped and counted ([`Deliveries::unfiled`]).
+
     pub fn owe(&self, delivery: &Delivery, end: Attempted) {
         self.with(|b| {
             let Some(id) = b.next_owed.checked_add(1) else {
@@ -682,8 +630,7 @@ impl Deliveries {
     }
 
     /// TAKE what `caller`'s chains are owed, oldest first: at most one per task (each is one
-    /// change of that task's chain, and one piece makes one change of a chain), and none for
-    /// `except` (the task the piece itself changes). The rest stay owed.
+
     #[must_use]
     #[cfg(test)]
     pub fn take_owed(&self, caller: &str, except: Option<&str>) -> Vec<Owed> {
@@ -708,8 +655,7 @@ impl Deliveries {
     }
 
     /// The notifications dropped and the outcomes dropped unfiled SINCE THE LAST CALL: the
-    /// increments the door reports on its counters
-    /// ([`crate::statement::FAMILY_PUSH_DROPPED`], [`crate::statement::FAMILY_PUSH_UNFILED`]).
+
     pub fn take_counted(&self) -> (u64, u64) {
         self.with(|b| {
             let counted = (
@@ -722,8 +668,7 @@ impl Deliveries {
     }
 
     /// Settle the open attempt on `task_id`'s head, the attempt having ENDED at `now_ns`: done, or
-    /// back in the queue for its next attempt, its wait counted from `now_ns` (`jitter` is a
-    /// random byte, [`jittered_ms`]).
+
     pub fn settle(
         &self,
         task_id: &str,
@@ -735,14 +680,13 @@ impl Deliveries {
     }
 
     /// [`Deliveries::settle`] for an attempt that ended where no clock is read (`drive`): a retry's
-    /// wait is counted from the next [`Deliveries::anchor`] (the `tick` the kernel runs after the
-    /// wake), never from when the attempt began. Its `Retry` time is `u64::MAX` until then.
+
     pub fn settle_ended(&self, task_id: &str, end: Attempted, jitter: u8) -> DeliverySettled {
         self.settle_at(task_id, end, None, jitter)
     }
 
     /// COUNT every wait [`Deliveries::settle_ended`] left from `now_ns`, the clock of the `tick`
-    /// that follows the attempt's end.
+
     pub fn anchor(&self, now_ns: u64) {
         self.with(|b| {
             for w in b.queues.values_mut().filter_map(VecDeque::front_mut) {
@@ -789,7 +733,7 @@ impl Deliveries {
     }
 
     /// When the lifecycle tick is next wanted: the earliest head no attempt is open on (at once
-    /// for a wait not yet counted, so a tick counts it); `0` when none waits.
+
     #[must_use]
     pub fn next_tick_ns(&self) -> u64 {
         self.with(|b| {
@@ -810,9 +754,7 @@ impl Deliveries {
     }
 
     /// FORGET what `task_id`'s deleted push config was queued for: every waiting delivery queued for
-    /// the config ([`Delivery::from_config`]) is dropped, credential and all, and one in flight is
-    /// not retried. Inline and CRUD registrations share this same durable config. A pending
-    /// exchange is abandoned on its next driver entry; bytes already transmitted cannot be undone.
+
     pub fn forget_task(&self, task_id: &str) {
         self.with(|b| {
             let Some(queue) = b.queues.get_mut(task_id) else {
@@ -823,16 +765,13 @@ impl Deliveries {
                 b.queues.remove(task_id);
             }
         });
-        // Wake even a held attempt: drive abandons its now-withdrawn exchange before continuing.
+
         self.wake_unconditionally();
     }
 }
 
 /// The POST one delivery sends: the callback's path and query as the target, the content type,
-/// the credential registered with its URL when the caller gave one ([`Delivery::auth`]), and the
-/// body. The credential is the SEALED field after the content type (`Exchange::request_sealed`):
-/// the plane never holds its value. Call it only once the destination judge has passed: no refused
-/// destination ever sees the credential.
+
 #[must_use]
 pub fn request(delivery: &Delivery) -> (Request, Vec<SealedField>) {
     let auth = delivery.auth.as_ref();
@@ -876,7 +815,7 @@ pub fn token_input(task_id: &str) -> Vec<u8> {
 }
 
 /// The signature bytes a token carries: its first [`TOKEN_MAC_BYTES`], so the token keeps
-/// the wire shape (`<task-id>.` and 64 lower-case hex digits).
+
 pub const TOKEN_MAC_BYTES: usize = 32;
 
 /// A signature, as the lower-case hex a token carries it in (its first [`TOKEN_MAC_BYTES`]).
@@ -896,7 +835,7 @@ pub struct Tokens {
 
 impl Tokens {
     /// The token for `caller`'s task `task_id` over the host's `signature` of [`token_input`];
-    /// `None` past [`MAX_TOKENS`] or for an empty id or signature.
+
     #[must_use]
     pub fn mint(&self, caller: &str, task_id: &str, signature: &[u8]) -> Option<String> {
         if task_id.is_empty() || signature.is_empty() {
@@ -916,8 +855,7 @@ impl Tokens {
     }
 
     /// The task a presented token CLAIMS, its caller, and its signature as presented: `None` for a
-    /// token this instance never minted for that task. Not yet a verdict: the claim holds only when
-    /// [`verified`] says the host's signature of [`token_input`] is the one presented.
+
     #[must_use]
     pub fn claim<'t>(&self, presented: &'t str) -> Option<(String, String, &'t str)> {
         let (task_id, signature) = presented.rsplit_once('.')?;
@@ -929,7 +867,7 @@ impl Tokens {
     }
 
     /// The claim an `Authorization` value (`Bearer <token>`, the scheme case-insensitive) makes
-    /// ([`Tokens::claim`]).
+
     #[must_use]
     pub fn claim_of_authorization<'t>(
         &self,
@@ -949,7 +887,7 @@ impl Tokens {
 }
 
 /// Whether `presented` is the host's `signature` of the claimed task's [`token_input`], compared in
-/// constant time.
+
 #[must_use]
 pub fn verified(signature: &[u8], presented: &str) -> bool {
     busbar_contract::constant_time_eq(&hex(signature), presented)
@@ -967,7 +905,7 @@ pub struct PushLimiter {
 
 impl PushLimiter {
     /// Spend one push from `task_id`'s budget at `now` (unix seconds): `false` once the window's
-    /// budget is spent.
+
     pub fn admit(&self, task_id: &str, now: u64) -> bool {
         let arrived_in = now - (now % PUSH_RATE_WINDOW_SECS);
         let window = self.latest.with_all(|m| {

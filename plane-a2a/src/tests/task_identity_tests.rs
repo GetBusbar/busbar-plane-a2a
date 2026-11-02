@@ -2,7 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! busbar's task identity on a relayed hop, against the served engine's own cases
-//! (`busbar-a2a` `relay::rewrite_identity`, `idmap::translate_request`, `rpcerror::about_task`).
 
 use super::*;
 use serde_json::json;
@@ -82,8 +81,7 @@ fn the_matched_skill_is_namespaced_metadata_and_a_non_object_result_is_refused()
         json!({ "id": "t", "contextId": "c",
             "metadata": { "theirs": 1, "busbar/skill": "summarize" } })
     );
-    // A far end's string, array or number is no task: the plane cannot read it, and invents none
-    // (Law 11). RED: it was replaced with `{"kind":"task"}` under busbar's identity.
+
     for far in [json!("done"), json!([1]), json!(7), json!(null)] {
         let mut result = far.clone();
         assert!(!rewrite_identity(&mut result, "t", "c", None, &[]), "{far}");
@@ -110,7 +108,7 @@ fn the_far_ends_id_and_state_are_read_in_both_vocabularies() {
         reported_task_state(&json!({ "task": { "status": { "state": "TASK_STATE_COMPLETED" } } })),
         Some(TaskState::Completed)
     );
-    // No state this build can read is no state: never a guessed `working`.
+
     for none in [
         json!({ "status": { "state": "pondering" } }),
         json!({ "artifactUpdate": { "taskId": "b", "artifact": {} } }),
@@ -187,8 +185,7 @@ fn the_codes_a_far_end_may_answer_keep_section_5_4s_statuses() {
 }
 
 /// The verbs that are ABOUT a task name it `taskId` (and A2A v1.0's JSON-RPC binding also accepts
-/// `task_id`; `GetTask` and `CancelTask` say `id`). All three spellings translate.
-/// Ported from busbar-a2a a2a/tests/idmap_tests.rs::every_spelling_of_the_task_member_is_translated.
+
 #[test]
 fn every_spelling_of_the_task_member_is_translated() {
     let back = |id: &str| (id == "busbar-t").then(|| "backend-t".to_string());
@@ -203,15 +200,14 @@ fn every_spelling_of_the_task_member_is_translated() {
         .unwrap_or_else(|| panic!("`{member}` must translate"));
         let doc: Value = serde_json::from_slice(&out).expect("json");
         assert_eq!(doc["params"][member], "backend-t", "{member}");
-        // Everything else survives: the translation is about identity and about nothing else.
+
         assert_eq!(doc["params"]["keep"], 3, "{member}");
         assert_eq!(doc["method"], "GetTask", "{member}");
     }
 }
 
 /// Nothing degenerate is recorded: a far end that named no task id (an empty one) leaves nothing to
-/// map, so the id the door would record is absent, and an empty pair is never an identity.
-/// Ported from busbar-a2a a2a/tests/idmap_tests.rs::a_degenerate_pair_is_not_recorded.
+
 #[test]
 fn a_degenerate_pair_is_not_recorded() {
     for result in [
@@ -229,8 +225,7 @@ fn a_degenerate_pair_is_not_recorded() {
 }
 
 /// A MESSAGE'S OWN `id` IS NOT A TASK ID and must never be rewritten as one: a translation that
-/// reached for every member called `id` would corrupt an identity this map knows nothing about.
-/// Ported from busbar-a2a a2a/tests/idmap_tests.rs::a_messages_own_id_member_is_left_alone.
+
 #[test]
 fn a_messages_own_id_member_is_left_alone() {
     let back = |id: &str| (id == "busbar-not-a-message-id").then(|| "backend-x".to_string());
@@ -248,8 +243,6 @@ fn a_messages_own_id_member_is_left_alone() {
 /// Ported from busbar-a2a a2a/tests/rpcerror_tests.rs::the_codes_and_statuses_are_the_specifications_own.
 #[test]
 fn the_codes_a_far_end_may_answer_keep_section_5_4s_status_table_row_for_row() {
-    // Transcribed from A2A section 5.4. Written out rather than derived, so a future edit that
-    // changes a status has to change this table too.
     for (code, status) in [
         (-32001, 404),
         (-32002, 400),
@@ -268,15 +261,14 @@ fn the_codes_a_far_end_may_answer_keep_section_5_4s_status_table_row_for_row() {
     ] {
         assert_eq!(status_of_code(code), Some(status), "{code}");
     }
-    // The A2A-specific band is the table the plane publishes: every code in it has a status.
+
     for (code, _) in crate::ERRORS {
         assert!(status_of_code(*code).is_some(), "{code}");
     }
 }
 
 /// Ported from busbar-a2a a2a/tests/rpcerror_tests.rs::push_notification_not_supported_and_extension_support_required_round_trip.
-/// `-32003` and `-32008` are defined codes (HTTP 400, each with its reason): a code table that
-/// skipped from `-32002` to `-32004` collapsed a relayed backend's refusal to a gateway fault.
+
 #[test]
 fn push_notification_not_supported_and_extension_support_required_round_trip() {
     for (code, reason) in [
@@ -306,8 +298,7 @@ fn push_notification_not_supported_and_extension_support_required_round_trip() {
 }
 
 /// A TASK'S HISTORY leaves under busbar's identity too: every message in `history` that names the
-/// far end's task or context names busbar's, so no backend id reaches the caller; a message that
-/// names neither is left alone.
+
 #[test]
 fn a_tasks_history_messages_take_busbars_identity() {
     let mut task = json!({ "task": { "id": "far-1", "contextId": "far-c",
@@ -336,8 +327,7 @@ fn a_tasks_history_messages_take_busbars_identity() {
 }
 
 /// A v1.0 PUSH-CONFIG VERB'S `id` IS THE CONFIG, NOT THE TASK (a2a.proto:716-733: `task_id = 2`,
-/// `id = 3`): it is neither a task the request names nor one translated, even when it equals a
-/// held task's id. v0.3's `id` is the task.
+
 #[test]
 fn a_push_config_verbs_config_id_is_not_a_task() {
     for method in [
@@ -364,9 +354,7 @@ fn a_push_config_verbs_config_id_is_not_a_task() {
 }
 
 /// A TRANSLATED REQUEST IS THE CALLER'S OWN BYTES with only the translated ids spliced (Law 5):
-/// member order, an integer past 64 bits and a number past `f64`'s range go on as the caller wrote
-/// them. RED: the whole envelope was re-serialised through a JSON value (members re-sorted, the
-/// long integer rounded), and a number past `f64`'s range dropped the translation.
+
 #[test]
 fn a_translated_request_keeps_the_callers_bytes_but_the_ids() {
     let back = |id: &str| (id == "a2a-p-1").then(|| "b-1".to_string());
@@ -384,9 +372,7 @@ fn a_translated_request_keeps_the_callers_bytes_but_the_ids() {
 }
 
 /// AN UNWRAPPED v0.3 RESULT NAMES ITS TASK BY THE MEMBER ITS `kind` SAYS: a task its `id`; a
-/// message, a status update and an artifact update their `taskId`. busbar's id replaces the far
-/// end's there, no stray `id` is added, and the far end's own id is read from there. RED: an
-/// unwrapped update kept the far end's `taskId`, gained an `id`, and its far-end id was never read.
+
 #[test]
 fn an_unwrapped_v0_3_result_names_its_task_by_the_member_its_kind_says() {
     for kind in ["status-update", "artifact-update"] {
@@ -421,9 +407,7 @@ fn an_unwrapped_v0_3_result_names_its_task_by_the_member_its_kind_says() {
 }
 
 /// A MESSAGE'S REFERENCED TASKS ARE TRANSLATED BOTH WAYS (`Message.reference_task_ids`,
-/// a2a.proto:276): on the way out busbar's ids the caller holds become the far end's; on the way
-/// back the far end's id for this task, or for a task the request referred to, becomes busbar's,
-/// and an id busbar does not know is left as it is. RED: no code read `referenceTaskIds`.
+
 #[test]
 fn a_messages_referenced_tasks_are_translated_both_ways() {
     let back = |id: &str| (id == "a2a-p-1").then(|| "b-1".to_string());

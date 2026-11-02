@@ -199,9 +199,7 @@ fn a_listing_moves_only_what_busbar_can_match() {
 }
 
 /// BUSBAR'S OWN CALLBACK IS READ FROM `public_url` THE ONE WAY every published URL is
-/// ([`crate::a2a::public::absolute`]): the path is replaced, query and fragment dropped, so the
-/// callback the agent is told is the `/a2a/push` route busbar serves. RED against an append, which
-/// keeps `public_url`'s own path (or query) in front of the route.
+
 #[test]
 fn busbars_callback_replaces_the_public_urls_path_as_every_published_url_does() {
     assert_eq!(
@@ -219,8 +217,7 @@ fn busbars_callback_replaces_the_public_urls_path_as_every_published_url_does() 
 }
 
 /// A READ FINDS BUSBAR'S REGISTRATION BY ITS WHOLE `id`, never by a substring: `busbar-t10` is not
-/// `busbar-t1`, and a member that only mentions the id (a url) is no config. The v0.3 nesting and
-/// both listing shapes are read the same way. RED against a substring test of the whole result.
+
 #[test]
 fn a_read_names_busbars_config_by_its_whole_id() {
     let read = |result: Value| {

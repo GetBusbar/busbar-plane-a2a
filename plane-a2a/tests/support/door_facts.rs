@@ -2,12 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! THE DOOR'S FACTS THE DOOR-DRIVEN TESTS NAME (`tests/unit_lifetime.rs`, `tests/project_session.rs`,
-//! and the plugin crate's both-ways script `plane-a2a-plugin/tests/both_ways.rs`). Those tests drive
-//! the plane only through [`door`](busbar_plane_a2a::door), the crate's one public item, and need a
-//! few of its private constants to build their inputs and read its answers. They are restated here,
-//! plain data, and the crate's own unit test `door_facts` (`src/tests/door_facts.rs`) includes this
-//! same file and asserts every value equals the private item it restates, so a drift is red in the
-//! crate before a door-driven test reads a stale value.
 
 /// `plane_door::MAX_UNITS`: the most units the instance keeps state for at once.
 pub const MAX_UNITS: usize = 4096;
@@ -76,7 +70,7 @@ pub const PUSH_TRUST_FROM: &str = "owned.agent_push.ca";
 pub const HELD_KINDS: &[&str] = &["task", "task_event", "push_config", "card", "card_approval"];
 
 /// `statement::ROUTES` as `(verb, target)`, in order: a route's index is the claim an arrival
-/// carries.
+
 pub const ROUTES: &[(&str, &str)] = &[
     ("POST", "/a2a/message:send"),
     ("POST", "/a2a/message:stream"),
@@ -102,10 +96,7 @@ pub const ROUTES: &[(&str, &str)] = &[
 ];
 
 /// The claim (route index) of `(verb, target)`.
-///
-/// # Panics
-///
-/// When the door states no such route.
+
 #[must_use]
 pub fn claim(verb: &str, target: &str) -> u32 {
     let i = ROUTES

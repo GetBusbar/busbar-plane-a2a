@@ -22,7 +22,7 @@ enum Answer {
 }
 
 /// A callback's replayed host handles and its explicitly driven conditional exchange. Keeping
-/// the candidate and host receipt separate lets a test lose a commit reply without redoing it.
+
 struct Call {
     host: Rc<RefCell<Book>>,
     answers: Vec<Answer>,
@@ -495,8 +495,7 @@ fn incarnation_is_observed_before_the_fresh_task_read_not_at_submission() {
         assert!(forget(&mut *book, &key, &raw, chain).unwrap());
         submitted(&mut book, ALICE, "task", 100);
     }
-    // Replay the original observation, then take the first fresh GET. The original life must
-    // still refuse this candidate even though its row bytes exactly match the replacement.
+
     call.replay();
     assert_eq!(bump(&mut call), Err(Halt::Pending));
     assert_eq!(call.offered().chains[0].expected, None);
