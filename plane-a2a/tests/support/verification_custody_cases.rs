@@ -4,7 +4,7 @@
 use super::*;
 use busbar_contract::abi::plane::EMIT_TO_FAR_END;
 
-static FAIL_CLOCK: AtomicU64 = AtomicU64::new(0);
+static FAIL_CLOCK: AtomicBool = AtomicBool::new(false);
 static PEND_SIGHTING: AtomicU64 = AtomicU64::new(0);
 static RECORD_WAKES: AtomicBool = AtomicBool::new(false);
 static WOKEN: Mutex<Vec<Ticket>> = Mutex::new(Vec::new());
@@ -12,8 +12,11 @@ static APPROVE_AT_VERDICT: Mutex<Option<(usize, String)>> = Mutex::new(None);
 static APPROVED: Mutex<Option<(Outcome, u32, String)>> = Mutex::new(None);
 
 pub(super) fn clock_refuses(ticket: Ticket) -> bool {
-    let failing = FAIL_CLOCK.load(Ordering::SeqCst);
-    failing != 0 && u64::from(ticket.slot) == failing
+    assert!(
+        ticket.is_none(),
+        "clock.now is a synchronous no-ticket service"
+    );
+    FAIL_CLOCK.load(Ordering::SeqCst)
 }
 
 pub(super) fn pend_sighting(input: *const c_void) -> bool {
@@ -53,7 +56,7 @@ struct Reset;
 
 impl Drop for Reset {
     fn drop(&mut self) {
-        FAIL_CLOCK.store(0, Ordering::SeqCst);
+        FAIL_CLOCK.store(false, Ordering::SeqCst);
         PEND_SIGHTING.store(0, Ordering::SeqCst);
         RECORD_WAKES.store(false, Ordering::SeqCst);
         WOKEN.lock().unwrap_or_else(PoisonError::into_inner).clear();
@@ -98,7 +101,7 @@ fn an_unreadable_clock_releases_the_holder_and_removes_refused_waiters() {
             assert_eq!(pending.outcome, Some(Outcome::Pending), "{pending:?}");
         }
         if fail_clock {
-            FAIL_CLOCK.store(761, Ordering::SeqCst);
+            FAIL_CLOCK.store(true, Ordering::SeqCst);
             let refused = door.piece(761, Given::attempt(b"vendor"), 4096);
             assert_eq!(refused.outcome, Some(Outcome::Ready), "{refused:?}");
             assert_eq!(refused.flags & EMIT_TO_FAR_END, 0, "{refused:?}");
@@ -107,7 +110,7 @@ fn an_unreadable_clock_releases_the_holder_and_removes_refused_waiters() {
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .is_empty());
-            FAIL_CLOCK.store(760, Ordering::SeqCst);
+            FAIL_CLOCK.store(true, Ordering::SeqCst);
         }
         let holder = door.piece(760, Given::attempt(b"vendor"), 4096);
         assert_eq!(holder.outcome, Some(Outcome::Ready), "{holder:?}");
@@ -116,7 +119,7 @@ fn an_unreadable_clock_releases_the_holder_and_removes_refused_waiters() {
             !fail_clock,
             "{holder:?}"
         );
-        FAIL_CLOCK.store(0, Ordering::SeqCst);
+        FAIL_CLOCK.store(false, Ordering::SeqCst);
         let expected = if fail_clock {
             vec![ticket(762)]
         } else {

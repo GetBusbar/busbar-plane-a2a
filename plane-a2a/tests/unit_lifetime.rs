@@ -501,6 +501,50 @@ fn ops() -> &'static Ops {
     unsafe { &*(*busbar_plane_a2a::door()).ops().cast::<Ops>() }
 }
 
+/// The host reads actual ABI diagnostics before another crossing retires their reply.
+fn forward_diagnostics(head: &OutHead) {
+    use busbar_contract::abi::mechanism::call::{
+        DIAG_LOG, DIAG_LOG_DROPPED, SEVERITY_DEBUG, SEVERITY_ERROR, SEVERITY_INFO, SEVERITY_TRACE,
+        SEVERITY_WARN,
+    };
+    if head.envelope.diags_len == 0 {
+        return;
+    }
+    assert!(!head.envelope.diags.is_null());
+    // SAFETY: the linked macro's Statement and id list are static; this call's diagnostic
+    // array and strings remain live until the next crossing, which has not started.
+    let statement = unsafe { &*(*busbar_plane_a2a::door()).statement() };
+    let diags = unsafe { std::slice::from_raw_parts(head.envelope.diags, head.envelope.diags_len) };
+    let copy = |text: AbiStr| {
+        if text.is_absent() {
+            String::new()
+        } else {
+            // SAFETY: the text belongs to the static Statement or this live diagnostic reply.
+            String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(text.ptr(), text.len()) })
+                .into_owned()
+        }
+    };
+    for diag in diags {
+        let id = if matches!(diag.id_idx, DIAG_LOG | DIAG_LOG_DROPPED) {
+            String::from("log")
+        } else {
+            assert!((diag.id_idx as usize) < statement.diag_ids_len);
+            assert!(!statement.diag_ids.is_null());
+            // SAFETY: the index is within the linked Statement's live static id list.
+            copy(unsafe { statement.diag_ids.add(diag.id_idx as usize).read() })
+        };
+        let text = copy(diag.text);
+        match diag.severity {
+            SEVERITY_ERROR => tracing::error!(diagnostic = %id, message = %text),
+            SEVERITY_WARN => tracing::warn!(diagnostic = %id, message = %text),
+            SEVERITY_INFO => tracing::info!(diagnostic = %id, message = %text),
+            SEVERITY_DEBUG => tracing::debug!(diagnostic = %id, message = %text),
+            SEVERITY_TRACE => tracing::trace!(diagnostic = %id, message = %text),
+            _ => panic!("the linked door returned an unknown diagnostic severity"),
+        }
+    }
+}
+
 fn lifecycle() -> &'static OpsHead {
     &ops().head
 }
@@ -919,6 +963,7 @@ impl Door {
             )
         };
 
+        forward_diagnostics(&o.head);
         let held = door_facts::HELD_KINDS;
         let mut status = o.status;
         for w in &records[..(o.records_written as usize).min(records.len())] {
@@ -961,6 +1006,7 @@ impl Door {
                 std::ptr::from_mut(&mut o).cast(),
             )
         };
+        forward_diagnostics(&o.head);
         (ret.outcome(), o.next_tick_ns)
     }
 
