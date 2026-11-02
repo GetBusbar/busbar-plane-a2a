@@ -6,7 +6,7 @@ use crate::tests::raw_custody_probe::{Probe, SECRET};
 use busbar_contract::abi::host::service::{HostSlots, SERVICES};
 use busbar_contract::abi::mechanism::ticket::{HostCtx, HostTables};
 use busbar_contract::abi::sdk::conn::Host;
-use busbar_contract::abi::sdk::test_support::{lend, zeroed};
+use busbar_contract::abi::sdk::test_support::zeroed;
 
 /// `Via::issue` requires services, but these tests answer through its closure alone.
 #[allow(unsafe_code)]
@@ -26,11 +26,11 @@ fn unused_scratch_services() -> Services {
         io: std::ptr::null(),
     };
     // SAFETY: both complete, aligned tables remain initialized and unchanged throughout this
-    // loan. The sealed zeroed HostSlots has only None callbacks; every other nested pointer is
-    // NULL. Services::of copies the table before these locals expire, so no borrowed pointer or
-    // callback survives the loan. The test closures perform the read, Pending and unwind directly.
-    let lent = unsafe { lend(&tables) };
-    Services::of(lent).expect("the complete service table is present, with every slot unsupported")
+    // call. The sealed zeroed HostSlots has only None callbacks; every other nested pointer is
+    // NULL. Services::from_raw copies the table before these locals expire, so no borrowed pointer or
+    // callback survives the call. The test closures perform the read, Pending and unwind directly.
+    unsafe { Services::from_raw(&tables) }
+        .expect("the complete service table is present, with every slot unsupported")
 }
 
 #[test]
