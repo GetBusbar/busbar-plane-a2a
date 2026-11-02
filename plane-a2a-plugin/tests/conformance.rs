@@ -511,10 +511,9 @@ mod actual_admission {
                 load_linked::<Plane>(&row, bound)
             }
             .unwrap();
-            let held = product.inner.clone();
             let first = || {
-                let resumes = held.resumes.load(Ordering::SeqCst);
-                held.crossings.load(Ordering::SeqCst) - resumes
+                let resumes = product.inner.resumes.load(Ordering::SeqCst);
+                product.inner.crossings.load(Ordering::SeqCst) - resumes
             };
             let mut emitted = Vec::new();
             let mut reason = vec![0_u8; expected.len() + 64];
@@ -567,12 +566,21 @@ mod actual_admission {
             emitted.push(answer.error.unwrap());
             emitted.push(reason);
             let before = first();
-            drop(product);
+            let mut close = Frame::new(in_head(), out_head());
+            let closed = product.call(slot::CLOSE, &mut close);
+            assert_eq!(
+                closed.outcome,
+                Outcome::Refused,
+                "the host refuses CLOSE of a never-opened instance"
+            );
+            assert_eq!(closed.lease, 0);
             assert_eq!(
                 first(),
                 before,
-                "an instance that never opened owes no cleanup CLOSE"
+                "CLOSE of a never-opened instance makes no product crossing"
             );
+            emitted.extend(closed.error);
+            drop(product);
             assert!(
                 !sink.dropped.load(Ordering::SeqCst),
                 "all real diagnostic and metric bytes must be captured"
