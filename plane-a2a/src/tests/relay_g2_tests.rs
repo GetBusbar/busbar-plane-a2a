@@ -163,3 +163,63 @@ fn valid_http_json_and_attempt_time_framing_keep_their_existing_outcomes() {
     assert_eq!(impossible.take_reading(), None);
     assert_eq!(impossible.moved(), 0);
 }
+
+#[test]
+fn a_correlated_json_rpc_client_error_keeps_its_status_without_trusting_foreign_answers() {
+    for (status, wire, expected, reading) in [
+        (
+            400,
+            br#"{"jsonrpc":"2.0","id":7,"error":{"code":-32602,"message":"PRIVATE params"}}"#
+                .as_slice(),
+            400,
+            Reading::Caller,
+        ),
+        (
+            400,
+            br#"{"jsonrpc":"2.0","id":8,"error":{"code":-32602,"message":"PRIVATE params"}}"#
+                .as_slice(),
+            502,
+            Reading::Caller,
+        ),
+        (
+            400,
+            br#"{"jsonrpc":"1.0","id":7,"error":{"code":-32602,"message":"PRIVATE params"}}"#
+                .as_slice(),
+            502,
+            Reading::Caller,
+        ),
+        (400, b"denied".as_slice(), 502, Reading::Caller),
+        (
+            400,
+            br#"{"jsonrpc":"2.0","id":7,"error":{"code":-32001,"message":"PRIVATE missing"}}"#
+                .as_slice(),
+            502,
+            Reading::Caller,
+        ),
+        (
+            401,
+            br#"{"jsonrpc":"2.0","id":7,"error":{"code":-32602,"message":"PRIVATE params"}}"#
+                .as_slice(),
+            502,
+            Reading::Hard,
+        ),
+    ] {
+        for addressed in [false, true] {
+            let mut relay = task_sent(addressed);
+            let reply = answered(&mut relay, status, wire);
+            assert_eq!(reply.status, expected, "{status} {wire:?}");
+            let got = body(&reply);
+            assert_eq!(got["id"], 7);
+            assert_eq!(
+                got["error"]["code"],
+                if expected == 400 { -32602 } else { -32006 }
+            );
+            assert_eq!(relay.take_reading(), Some(reading));
+            assert_eq!(relay.take_reading(), None);
+            assert!(!String::from_utf8(reply.body.clone())
+                .unwrap()
+                .contains("PRIVATE"));
+            assert_eq!(relay.take_settled().is_empty(), addressed);
+        }
+    }
+}
