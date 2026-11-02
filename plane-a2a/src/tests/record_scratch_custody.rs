@@ -3,20 +3,45 @@
 
 use super::*;
 use crate::tests::raw_custody_probe::{Probe, SECRET};
+use busbar_contract::abi::host::service::{HostSlots, SERVICES};
+use busbar_contract::abi::mechanism::ticket::{HostCtx, HostTables};
 use busbar_contract::abi::sdk::conn::Host;
-use busbar_test_kit::test_support::fake::FakeHost;
+use busbar_contract::abi::sdk::test_support::{lend, zeroed};
+
+/// `Via::issue` requires services, but these tests answer through its closure alone.
+#[allow(unsafe_code)]
+fn unused_scratch_services() -> Services {
+    let slots = HostSlots {
+        size: std::mem::size_of::<HostSlots>() as u32,
+        slots: SERVICES,
+        ..zeroed()
+    };
+    let tables = HostTables {
+        size: std::mem::size_of::<HostTables>() as u32,
+        _reserved: 0,
+        ctx: HostCtx::NONE,
+        wake: None,
+        conns: std::ptr::null(),
+        services: &slots,
+        io: std::ptr::null(),
+    };
+    // SAFETY: both complete, aligned tables remain initialized and unchanged throughout this
+    // loan. The sealed zeroed HostSlots has only None callbacks; every other nested pointer is
+    // NULL. Services::of copies the table before these locals expire, so no borrowed pointer or
+    // callback survives the loan. The test closures perform the read, Pending and unwind directly.
+    let lent = unsafe { lend(&tables) };
+    Services::of(lent).expect("the complete service table is present, with every slot unsupported")
+}
 
 #[test]
 fn records_scratch_growth_and_pending_release_retire_each_initialized_owner() {
-    let fake: &'static FakeHost = Box::leak(Box::new(FakeHost::new()));
-    let tables = fake.lent();
-    let host = Host::of(tables);
+    let host = Host::NONE;
     let grown = Keyed::new();
     let ticket = Ticket {
         slot: 7,
         generation: 1,
     };
-    let mut via = Via::new(&host, Services::of(tables), ticket, 0, &grown);
+    let mut via = Via::new(&host, Some(unused_scratch_services()), ticket, 0, &grown);
     let read: Result<(), Halt> = via.issue((SECRET.len(), 0), |_, _, bytes, _| {
         bytes.copy_from_slice(SECRET);
         Poll::Ready(Ok(()))
@@ -49,15 +74,13 @@ fn records_scratch_growth_and_pending_release_retire_each_initialized_owner() {
 
 #[test]
 fn records_scratch_is_wiped_when_a_host_read_unwinds() {
-    let fake: &'static FakeHost = Box::leak(Box::new(FakeHost::new()));
-    let tables = fake.lent();
-    let host = Host::of(tables);
+    let host = Host::NONE;
     let grown = Keyed::new();
     let probe = Probe::start();
     let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut via = Via::new(
             &host,
-            Services::of(tables),
+            Some(unused_scratch_services()),
             Ticket {
                 slot: 8,
                 generation: 1,
