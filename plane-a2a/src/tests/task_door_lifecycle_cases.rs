@@ -161,6 +161,36 @@ impl FakeService for Claim {
 
 mod listing_probe {
     use super::*;
+    // The synthetic export door only opens and drives the real listing state. Its remaining
+    // lifecycle slots are explicitly typed; close lets the SDK retire that same state.
+    macro_rules! fixture_slot {
+        ($name:ident, $input:ty, $output:ty, $outcome:expr) => {
+            pub struct $name;
+            impl SafeSlot for $name {
+                type In = $input;
+                type Out = $output;
+                type State = A2aDoor;
+                fn call(
+                    _: Instance<'_, A2aDoor>,
+                    _: Lent<'_, Self::In>,
+                    _: Out<'_, Self::Out>,
+                ) -> Outcome {
+                    $outcome
+                }
+            }
+        };
+    }
+    use busbar_contract::abi::mechanism::call::InHead;
+    use busbar_contract::abi::mechanism::lifecycle::{
+        CancelIn, CancelOut, GenIn, RefreshIn, ReleaseIn, TickIn, TickOut, ValidateIn,
+    };
+    fixture_slot!(Validate, ValidateIn, OutHead, Outcome::Refused);
+    fixture_slot!(Refresh, RefreshIn, OpenOut, Outcome::Refused);
+    fixture_slot!(Retire, GenIn, OutHead, Outcome::Refused);
+    fixture_slot!(Tick, TickIn, TickOut, Outcome::Refused);
+    fixture_slot!(Cancel, CancelIn, CancelOut, Outcome::Refused);
+    fixture_slot!(Release, ReleaseIn, OutHead, Outcome::Refused);
+    fixture_slot!(Close, InHead, OutHead, Outcome::Ready);
     pub struct Open;
     impl SafeSlot for Open {
         type In = OpenIn;
@@ -320,7 +350,17 @@ mod listing_probe {
     busbar_contract::plugin_door! {
         ops: busbar_contract::abi::export::Ops,
         statement: busbar_contract::abi::sdk::door::statement("task-listing-probe", "0", 4),
-        lifecycle: { open: Safe<Open>, drive: Safe<Drive> },
+        lifecycle: {
+            validate: Safe<Validate>,
+            open: Safe<Open>,
+            refresh: Safe<Refresh>,
+            retire: Safe<Retire>,
+            tick: Safe<Tick>,
+            drive: Safe<Drive>,
+            cancel: Safe<Cancel>,
+            release: Safe<Release>,
+            close: Safe<Close>,
+        },
     }
 }
 
@@ -360,6 +400,22 @@ fn listing_fixture(fail_second_config: bool, fail_task: bool) {
     });
 }
 fn drive_listing() {
+    struct Opened<'h> {
+        instance: Option<reply::Instance<'h>>,
+        close: busbar_test_kit::test_support::ViewOp,
+    }
+    impl Drop for Opened<'_> {
+        fn drop(&mut self) {
+            if let Some(instance) = self.instance.take() {
+                let _ = reply::close_in(
+                    self.close,
+                    instance,
+                    &TestIn::<busbar_contract::abi::mechanism::call::InHead>::new(),
+                    zeroed::<OutHead>(),
+                );
+            }
+        }
+    }
     let fake = FakeHost::new()
         .serve(fake::host::RECORDS_GET, Get)
         .serve(fake::host::RECORDS_LIST, List)
@@ -374,13 +430,19 @@ fn drive_listing() {
         zeroed::<OpenOut>(),
     );
     assert_eq!(opened.outcome, Outcome::Ready);
-    let instance = opened.take_instance().unwrap();
+    let instance = Opened {
+        instance: opened.take_instance(),
+        close: view
+            .op::<busbar_contract::abi::export::Ops>(|t| &t.head.close)
+            .unwrap(),
+    };
+    assert!(instance.instance.is_some());
     let input = TestIn::<DriveIn>::new().set(|i| &i.head.ticket, TICKET);
     for _ in 0..10 {
         let result = reply::call_in(
             view.op::<busbar_contract::abi::export::Ops>(|t| &t.head.drive)
                 .unwrap(),
-            Some(&instance),
+            instance.instance.as_ref(),
             &input,
             zeroed::<OutHead>(),
         );
