@@ -4,7 +4,7 @@
 //! The outbound binding off a held card, and the HTTP+JSON framing, against the served engine's
 //! own cases (`busbar-a2a` `relay::binding_of`, `HttpJsonFraming`).
 
-use serde_json::json;
+use serde_json::{json, Map};
 
 use super::*;
 use crate::answer_bytes::rewrap;

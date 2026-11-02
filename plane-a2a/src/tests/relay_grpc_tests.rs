@@ -570,7 +570,7 @@ fn a_cut_grpc_stream_ends_with_an_error_even_after_complete_messages() {
             .filter_map(crate::framed::event)
             .find_map(Result::err)
             .expect("a gRPC caller must receive a non-OK final status");
-        assert_eq!(error.code, crate::framed::Code::Internal);
+        assert_eq!(error.code(), crate::framed::Code::Internal);
         assert_eq!(relay.take_settled().last(), Some(&TaskSettled::Failed));
         assert_eq!(relay.take_reading(), Some(Reading::Transient));
         assert_eq!(relay.moved(), before + event.len() as u64);

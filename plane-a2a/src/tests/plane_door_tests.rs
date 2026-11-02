@@ -145,7 +145,7 @@ fn a_request_whose_answer_is_events_gets_an_events_hop() {
     let hop =
         hop_of(&unlisted, false, &mut vendor_request).expect("a vendor unary method is relayed");
     assert!(hop.opening && !hop.subscribe && !hop.streams());
-    assert_eq!(hop.request, Some(envelope("vendor/frob")));
+    assert_eq!(hop.request.as_deref(), Some(&envelope("vendor/frob")));
     assert!(
         vendor_request.is_none(),
         "the unary hop owns the supplied request"

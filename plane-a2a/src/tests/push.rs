@@ -508,7 +508,7 @@ fn the_statement_declares_its_open_web_need_and_its_agent_member_need() {
     use busbar_contract::abi::host::conn::connector::{
         DIRECTION_OUTBOUND, EGRESS_OPEN_WEB, EGRESS_PROVIDER,
     };
-    use busbar_contract::abi::mechanism::check::check_needs;
+    use busbar_test_kit::test_support::DoorView;
     let st = &crate::plane_door::STATEMENT;
     assert!(!st.needs_ptr().is_null());
     // The open web, the agents over http, the agents over grpc.
@@ -524,7 +524,9 @@ fn the_statement_declares_its_open_web_need_and_its_agent_member_need() {
         MEMBER_TARGET.len(),
         "settings.*.url"
     );
-    assert!(check_needs(NEEDS).is_ok());
+    assert!(DoorView::of(crate::plane_door::MACRO_DOOR)
+        .check_needs()
+        .is_ok());
     let need = NEEDS[NEED_OPEN_WEB as usize];
     assert_eq!(
         (need.direction, need.egress_class),

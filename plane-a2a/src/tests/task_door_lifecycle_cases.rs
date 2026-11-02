@@ -185,7 +185,7 @@ mod listing_probe {
         CancelIn, CancelOut, GenIn, RefreshIn, ReleaseIn, TickIn, TickOut, ValidateIn,
     };
     fixture_slot!(Validate, ValidateIn, OutHead, Outcome::Refused);
-    fixture_slot!(Refresh, RefreshIn, OpenOut, Outcome::Refused);
+    fixture_slot!(Refresh, RefreshIn, OutHead, Outcome::Refused);
     fixture_slot!(Retire, GenIn, OutHead, Outcome::Refused);
     fixture_slot!(Tick, TickIn, TickOut, Outcome::Refused);
     fixture_slot!(Cancel, CancelIn, CancelOut, Outcome::Refused);
