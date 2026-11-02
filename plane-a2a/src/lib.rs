@@ -61,6 +61,7 @@ mod push;
 mod push_door;
 mod push_serve;
 mod record;
+mod record_custody;
 mod records;
 mod relay;
 mod request_json;

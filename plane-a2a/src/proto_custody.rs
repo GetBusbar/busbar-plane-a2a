@@ -78,7 +78,21 @@ impl<K: Wipe + Ord, V: Wipe> Wipe for BTreeMap<K, V> {
 }
 
 /// A partial field, collection or pending map key retains custody until transfer.
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Guard<T: Wipe>(T);
+
+impl<T: Wipe> std::fmt::Debug for Guard<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Guard([REDACTED])")
+    }
+}
+
+impl<A: Wipe, B: Wipe> Wipe for (A, B) {
+    fn wipe(&mut self) {
+        self.0.wipe();
+        self.1.wipe();
+    }
+}
 
 impl<T: Wipe> Guard<T> {
     pub(crate) fn new(value: T) -> Self {

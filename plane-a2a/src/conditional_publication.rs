@@ -14,6 +14,7 @@ use busbar_contract::abi::sdk::plane::conditional as wire;
 use busbar_contract::abi::sdk::store::conditional::{Decision, Expected};
 use busbar_contract::abi::sdk::{Keyed, Out};
 
+use crate::proto::custody::{Guard, Wipe};
 use crate::records::{HELD_KINDS, KIND_TASK_EVENT};
 use crate::tasks::{ChainLife, Halt, Predicate, Write};
 
@@ -84,7 +85,6 @@ struct Step {
     action: Action,
 }
 
-#[derive(Debug)]
 enum Action {
     Observe {
         request: wire::Observation,
@@ -97,6 +97,26 @@ enum Action {
         metadata_taken: bool,
         after: After,
     },
+}
+
+impl std::fmt::Debug for Action {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Action([REDACTED])")
+    }
+}
+
+impl Drop for Action {
+    fn drop(&mut self) {
+        match self {
+            Self::Publish { request, .. } => request.wipe(),
+            Self::Observe { request, answer } => {
+                crate::record_custody::bytes(&mut request.scope);
+                if let Some(Ok(expected)) = answer {
+                    expected.wipe();
+                }
+            }
+        }
+    }
 }
 
 fn failed() -> Halt {
@@ -395,7 +415,7 @@ impl Journal {
                     seq,
                     submitted: false,
                     action: Action::Publish {
-                        request: request.clone(),
+                        request: (*request).clone(),
                         writes: writes.to_vec(),
                         answer: None,
                         metadata_taken: false,
@@ -422,7 +442,7 @@ impl Journal {
             else {
                 return Err(failed());
             };
-            if step.seq != seq || original != &request || after.draft != *draft {
+            if step.seq != seq || original != &*request || after.draft != *draft {
                 s.broken = true;
                 return Err(failed());
             }
@@ -850,19 +870,17 @@ fn candidate(
     predicates: &[Predicate],
     lives: &[ChainLife],
     writes: &[Write],
-) -> Result<wire::Request, Halt> {
-    let predicates = predicates
-        .iter()
-        .map(|p| {
-            Ok(wire::RecordPredicate {
-                kind: kind(p.kind)?,
-                key: p.key.as_bytes().to_vec(),
-                expected: expected(&p.expected),
-            })
-        })
-        .collect::<Result<Vec<_>, Halt>>()?;
-    let mut mutations = Vec::new();
-    let mut chains = Vec::new();
+) -> Result<Guard<wire::Request>, Halt> {
+    let mut guarded_predicates = Guard::new(Vec::new());
+    for p in predicates {
+        guarded_predicates.push(wire::RecordPredicate {
+            kind: kind(p.kind)?,
+            key: p.key.as_bytes().to_vec(),
+            expected: expected(&p.expected),
+        });
+    }
+    let mut mutations = Guard::new(Vec::new());
+    let mut chains = Guard::new(Vec::new());
     for life in lives {
         if life.expected.as_ref().is_some_and(|b| b.len() != 8) {
             return Err(failed());
@@ -912,17 +930,21 @@ fn candidate(
             });
         }
     }
-    Ok(wire::Request {
+    Ok(Guard::new(wire::Request {
         capability,
         candidate: wire::ConditionalCandidate {
             correlation,
-            predicates,
-            mutations,
-            chains,
+            predicates: guarded_predicates.take(),
+            mutations: mutations.take(),
+            chains: chains.take(),
         },
-    })
+    }))
 }
 
 #[cfg(test)]
 #[path = "tests/conditional_callback_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/conditional_raw_custody.rs"]
+mod raw_custody_tests;

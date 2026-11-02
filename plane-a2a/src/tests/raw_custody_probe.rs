@@ -70,6 +70,10 @@ impl Probe {
             );
         });
     }
+
+    pub(crate) fn retirements(&self) -> usize {
+        SCOPE.with(|scope| scope.borrow().payloads.len())
+    }
 }
 
 impl Drop for Probe {

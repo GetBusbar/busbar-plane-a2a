@@ -460,13 +460,25 @@ impl RawBytes {
 
     pub(crate) fn extend_from_slice(&mut self, bytes: &[u8]) {
         let needed = self.0.len().saturating_add(bytes.len());
+        self.reserve_for(needed);
+        self.0.extend_from_slice(bytes);
+    }
+
+    fn reserve_for(&mut self, needed: usize) {
         if needed > self.0.capacity() {
             let mut next = Vec::with_capacity(needed.max(self.0.capacity().saturating_mul(2)));
             next.extend_from_slice(&self.0);
             self.clear();
             self.0 = next;
         }
-        self.0.extend_from_slice(bytes);
+    }
+
+    /// Grow initialized scratch without freeing an unwiped old allocation.
+    pub(crate) fn grow_zeroed(&mut self, len: usize) {
+        if len > self.0.len() {
+            self.reserve_for(len);
+            self.0.resize(len, 0);
+        }
     }
 
     fn discard_prefix(&mut self, count: usize) {

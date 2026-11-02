@@ -126,7 +126,7 @@ pub struct Via<'h> {
     /// The bytes every records call of the piece is answered into, grown to the largest asked for
     /// and never cleared: the host writes what it answers and the wrapper reads only that, so no
     /// call allocates or zeroes a buffer of its own.
-    scratch: Vec<u8>,
+    scratch: crate::relay::RawBytes,
     /// The item spans every records call of the piece is answered into, grown as [`Via::scratch`].
     spans: Vec<ItemSpan>,
     publication: Option<crate::conditional_publication::Journal>,
@@ -156,7 +156,7 @@ impl<'h> Via<'h> {
             ticket,
             conn: host.connector_from(ticket, issued),
             grown,
-            scratch: Vec::new(),
+            scratch: crate::relay::RawBytes::default(),
             spans: Vec::new(),
             publication: None,
             effects: crate::conditional_publication::Draft::default(),
@@ -360,12 +360,15 @@ impl Via<'_> {
     /// they hold.
     fn buffers(&mut self, bytes: usize, items: usize) -> (&mut [u8], &mut [ItemSpan]) {
         if self.scratch.len() < bytes {
-            self.scratch.resize(bytes, 0);
+            self.scratch.grow_zeroed(bytes);
         }
         if self.spans.len() < items {
             self.spans.resize(items, ABSENT_SPAN);
         }
-        (&mut self.scratch[..bytes], &mut self.spans[..items])
+        (
+            &mut self.scratch.as_mut_slice()[..bytes],
+            &mut self.spans[..items],
+        )
     }
 
     /// One records call under this piece's next handle, issued at `(bytes, items)` (or the size a
@@ -450,6 +453,7 @@ impl Records for Via<'_> {
                 Err(Halt::Pending) => return Err(Halt::Pending),
                 Err(Halt::Failed(_)) => effects.config = Some(Err(())),
                 Ok(raw) => {
+                    let raw = raw.map(crate::relay::RawBytes::from);
                     let config = match writes.iter().rev().find(|write| {
                         write.kind == crate::records::KIND_PUSH_CONFIG && write.key == key
                     }) {
@@ -463,14 +467,14 @@ impl Records for Via<'_> {
                     if let Some(existing) = predicates.iter().find(|predicate| {
                         predicate.kind == crate::records::KIND_PUSH_CONFIG && predicate.key == key
                     }) {
-                        if existing.expected != raw {
+                        if existing.expected.as_deref() != raw.as_deref() {
                             return Err(Halt::Failed("notification configuration changed".into()));
                         }
                     } else {
                         predicates.push(tasks::Predicate {
                             kind: crate::records::KIND_PUSH_CONFIG,
                             key,
-                            expected: raw,
+                            expected: raw.map(crate::relay::RawBytes::into_vec),
                         });
                     }
                 }
@@ -489,7 +493,7 @@ impl Records for Via<'_> {
     }
 
     fn list(&mut self, kind: &str, prefix: &str) -> Result<Vec<(String, Vec<u8>)>, Halt> {
-        let mut rows: Vec<(String, Vec<u8>)> = Vec::new();
+        let mut rows = crate::proto::custody::Guard::new(Vec::<(String, Vec<u8>)>::new());
         loop {
             let after = rows.last().map(|(k, _)| k.clone());
             let page = self.issue(
@@ -506,13 +510,13 @@ impl Records for Via<'_> {
                         )
                         .map(|r| {
                             r.and_then(|page| {
-                                page.records()
-                                    .map(|(k, v)| {
-                                        std::str::from_utf8(k)
-                                            .map(|k| (k.to_owned(), v.to_vec()))
-                                            .map_err(|_| ServiceError::Broken)
-                                    })
-                                    .collect::<Result<Vec<_>, _>>()
+                                let mut rows = crate::proto::custody::Guard::new(Vec::new());
+                                for (k, v) in page.records() {
+                                    let key =
+                                        std::str::from_utf8(k).map_err(|_| ServiceError::Broken)?;
+                                    rows.push((key.to_owned(), v.to_vec()));
+                                }
+                                Ok(rows.take())
                             })
                         })
                 },
@@ -520,7 +524,7 @@ impl Records for Via<'_> {
             let full = page.len() >= PAGE_RECORDS as usize;
             rows.extend(page);
             if !full {
-                return Ok(rows);
+                return Ok(rows.take());
             }
         }
     }
@@ -1911,3 +1915,7 @@ pub fn card_piece(
 #[cfg(test)]
 #[path = "tests/task_door.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/record_scratch_custody.rs"]
+mod scratch_custody_tests;

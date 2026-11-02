@@ -709,14 +709,18 @@ fn create_push_config(
         authentication,
         version: dialect.version().to_string(),
     };
-    let value = crate::push::record_value(&stored).map_err(|e| Halt::Failed(e.to_string()))?;
+    let value = crate::relay::RawBytes::from(
+        crate::push::record_value(&stored).map_err(|e| Halt::Failed(e.to_string()))?,
+    );
     let at = tasks::Stamp {
         caller,
         request_id: &task.task_id,
         now,
     };
     for _ in tasks::attempts() {
-        let expected = reach.get(KIND_PUSH_CONFIG, &task_key(caller, &task.task_id))?;
+        let expected = reach
+            .get(KIND_PUSH_CONFIG, &task_key(caller, &task.task_id))?
+            .map(crate::relay::RawBytes::from);
         let current = expected
             .as_deref()
             .and_then(|bytes| serde_json::from_slice::<PushConfig>(bytes).ok());
@@ -732,7 +736,13 @@ fn create_push_config(
         if let Err(message) = judge_callback(reach, url)? {
             return Ok(err(rpc_id, INVALID_PARAMS, message));
         }
-        if tasks::write_config(reach, &at, &task.task_id, expected, value.clone())? {
+        if tasks::write_config(
+            reach,
+            &at,
+            &task.task_id,
+            expected.map(crate::relay::RawBytes::into_vec),
+            value.clone().into_vec(),
+        )? {
             return Ok(ok(rpc_id, config_json(dialect, &task.task_id, &stored)));
         }
     }
@@ -825,7 +835,9 @@ fn delete_push_config(
         now,
     };
     for _ in tasks::attempts() {
-        let expected = rec.get(KIND_PUSH_CONFIG, &task_key(caller, &task.task_id))?;
+        let expected = rec
+            .get(KIND_PUSH_CONFIG, &task_key(caller, &task.task_id))?
+            .map(crate::relay::RawBytes::from);
         let current = expected
             .as_deref()
             .and_then(|bytes| serde_json::from_slice::<PushConfig>(bytes).ok());
@@ -836,7 +848,14 @@ fn delete_push_config(
                 "no push notification config with that id is registered for this task",
             ));
         }
-        if current.is_none() || tasks::write_config(rec, &at, &task.task_id, expected, Vec::new())?
+        if current.is_none()
+            || tasks::write_config(
+                rec,
+                &at,
+                &task.task_id,
+                expected.map(crate::relay::RawBytes::into_vec),
+                Vec::new(),
+            )?
         {
             // v0.3 answers `null`; v1.0's `google.protobuf.Empty` is `{}`.
             return Ok(match dialect {

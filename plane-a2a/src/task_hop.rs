@@ -334,7 +334,8 @@ pub fn open(
                     Some((next, kind))
                 })
             };
-            let config = config_value(req, callback.as_ref(), version)?;
+            let config =
+                config_value(req, callback.as_ref(), version)?.map(crate::relay::RawBytes::from);
             match tasks::change_configured(reach, &at, &row.task_id, &mut plan, config.as_deref()) {
                 Err(Halt::Pending) => return Err(Halt::Pending),
                 Err(Halt::Failed(_)) => {
@@ -371,7 +372,8 @@ pub fn open(
                 request_id: &task_id,
                 now: req.now,
             };
-            let config = config_value(req, callback.as_ref(), version)?;
+            let config =
+                config_value(req, callback.as_ref(), version)?.map(crate::relay::RawBytes::from);
             let opened = Task::submitted(
                 task_id.as_str(),
                 context_id.as_str(),
@@ -383,7 +385,13 @@ pub fn open(
             .and_then(|mut t| {
                 // The inline config is written durably beside the task below.
                 t.push_callback = None;
-                tasks::open_configured(reach, &at, t.to_row(), req.member, config)
+                tasks::open_configured(
+                    reach,
+                    &at,
+                    t.to_row(),
+                    req.member,
+                    config.map(crate::relay::RawBytes::into_vec),
+                )
             });
             match opened {
                 Err(Halt::Pending) => return Err(Halt::Pending),
@@ -445,6 +453,7 @@ fn put_config(
     let Some(value) = config_value(req, callback, version)? else {
         return Ok(());
     };
+    let value = crate::relay::RawBytes::from(value);
     let at = Stamp {
         caller: req.caller,
         request_id: task_id,
@@ -452,7 +461,7 @@ fn put_config(
     };
     for _ in tasks::attempts() {
         let expected = reach.get(KIND_PUSH_CONFIG, &tasks::task_key(req.caller, task_id))?;
-        if tasks::write_config(reach, &at, task_id, expected, value.clone())? {
+        if tasks::write_config(reach, &at, task_id, expected, value.clone().into_vec())? {
             return Ok(());
         }
     }
@@ -578,7 +587,9 @@ fn translated(
     let bytes = match req.relayed_bytes {
         Some(bytes) => bytes,
         None => {
-            printed = serde_json::to_vec(relayed).map_err(|e| Halt::Failed(e.to_string()))?;
+            printed = crate::relay::RawBytes::from(
+                crate::relay::json_bytes(relayed).map_err(|e| Halt::Failed(e.to_string()))?,
+            );
             printed.as_slice()
         }
     };

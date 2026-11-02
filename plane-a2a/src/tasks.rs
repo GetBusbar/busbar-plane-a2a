@@ -140,7 +140,7 @@ pub trait Records {
 }
 
 /// An exact pre-state comparison. Bytes come directly from the host, without reserialization.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Predicate {
     /// The declared record kind.
     pub kind: &'static str,
@@ -148,6 +148,24 @@ pub struct Predicate {
     pub key: String,
     /// Exact existing bytes, or absence.
     pub expected: Option<Vec<u8>>,
+}
+
+impl Drop for Predicate {
+    fn drop(&mut self) {
+        if let Some(bytes) = &mut self.expected {
+            crate::record_custody::bytes(bytes);
+        }
+    }
+}
+
+impl std::fmt::Debug for Predicate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Predicate")
+            .field("kind", &self.kind)
+            .field("key", &self.key)
+            .field("expected", &"[REDACTED]")
+            .finish()
+    }
 }
 
 /// The original incarnation of a chain, observed before the task bytes used by a plan.
@@ -206,20 +224,28 @@ impl Records for Staged<'_> {
     }
 
     fn list(&mut self, kind: &str, prefix: &str) -> Result<Vec<(String, Vec<u8>)>, Halt> {
-        let mut listed: std::collections::BTreeMap<String, Vec<u8>> =
-            self.rec.list(kind, prefix)?.into_iter().collect();
+        let mut listed = crate::proto::custody::Guard::new(
+            self.rec
+                .list(kind, prefix)?
+                .into_iter()
+                .collect::<std::collections::BTreeMap<String, Vec<u8>>>(),
+        );
         for w in self
             .written
             .iter()
             .filter(|w| !chained(w.kind) && w.kind == kind && w.key.starts_with(prefix))
         {
             if w.value.is_empty() {
-                listed.remove(&w.key);
+                drop(listed.remove(&w.key).map(crate::relay::RawBytes::from));
             } else {
-                listed.insert(w.key.clone(), w.value.clone());
+                drop(
+                    listed
+                        .insert(w.key.clone(), w.value.clone())
+                        .map(crate::relay::RawBytes::from),
+                );
             }
         }
-        Ok(listed.into_iter().collect())
+        Ok(listed.take().into_iter().collect())
     }
 
     fn claim(&mut self, kind: &str, key: &str, ttl_ms: u64) -> Result<bool, Halt> {
@@ -242,7 +268,7 @@ impl Records for Staged<'_> {
 
 /// One record write the answer carries out: a `RECORD_PUT`; an empty value is a tombstone. On the
 /// chained kind it is an append to the chain `key` names (an empty value drops the chain).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Write {
     /// The record kind.
     pub kind: &'static str,
@@ -250,6 +276,22 @@ pub struct Write {
     pub key: String,
     /// The value; empty = tombstone.
     pub value: Vec<u8>,
+}
+
+impl Drop for Write {
+    fn drop(&mut self) {
+        crate::record_custody::bytes(&mut self.value);
+    }
+}
+
+impl std::fmt::Debug for Write {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Write")
+            .field("kind", &self.kind)
+            .field("key", &self.key)
+            .field("value", &"[REDACTED]")
+            .finish()
+    }
 }
 
 /// A TASK AS IT IS HELD: the row, and the sequence its chain's next event takes (the host holds the
@@ -504,7 +546,9 @@ fn commit(
     kind: &str,
     config: Option<(Option<Vec<u8>>, Vec<u8>)>,
 ) -> Result<Option<HeldTask>, Halt> {
+    let mut config = crate::proto::custody::Guard::new(config);
     let (expected, chain) = observed;
+    let expected = expected.map(crate::relay::RawBytes::from);
     let ev = seal_event(held, &row, kind, at.request_id, at.now);
     let next = HeldTask {
         next_seq: held
@@ -529,9 +573,9 @@ fn commit(
     let mut predicates = vec![Predicate {
         kind: KIND_TASK,
         key: key.clone(),
-        expected,
+        expected: expected.map(crate::relay::RawBytes::into_vec),
     }];
-    if let Some((expected, value)) = config {
+    if let Some((expected, value)) = config.take() {
         predicates.push(Predicate {
             kind: KIND_PUSH_CONFIG,
             key: key.clone(),
@@ -590,6 +634,7 @@ pub(crate) fn open_configured(
     agent_id: &str,
     config: Option<Vec<u8>>,
 ) -> Result<TaskRow, Halt> {
+    let config = config.map(crate::relay::RawBytes::from);
     if !is_caller(at.caller) {
         return Err(Halt::Failed("no caller to hold the task under".into()));
     }
@@ -656,7 +701,7 @@ pub(crate) fn open_configured(
         writes.push(Write {
             kind: KIND_PUSH_CONFIG,
             key,
-            value,
+            value: value.into_vec(),
         });
     }
     if rec.publish(&predicates, &[chain], &writes)? {
@@ -871,6 +916,8 @@ pub(crate) fn write_config(
     expected: Option<Vec<u8>>,
     value: Vec<u8>,
 ) -> Result<bool, Halt> {
+    let expected = expected.map(crate::relay::RawBytes::from);
+    let value = crate::relay::RawBytes::from(value);
     if !is_caller(at.caller) {
         return Err(Halt::Failed("no caller to hold the task under".into()));
     }
@@ -895,14 +942,14 @@ pub(crate) fn write_config(
             Predicate {
                 kind: KIND_PUSH_CONFIG,
                 key: key.clone(),
-                expected,
+                expected: expected.map(crate::relay::RawBytes::into_vec),
             },
         ],
         &[chain],
         &[Write {
             kind: KIND_PUSH_CONFIG,
             key,
-            value,
+            value: value.into_vec(),
         }],
     )
 }
@@ -915,3 +962,7 @@ pub(crate) const fn attempts() -> std::ops::Range<usize> {
 #[cfg(test)]
 #[path = "tests/tasks.rs"]
 pub(crate) mod tests;
+
+#[cfg(test)]
+#[path = "tests/record_raw_custody.rs"]
+mod raw_custody_tests;
