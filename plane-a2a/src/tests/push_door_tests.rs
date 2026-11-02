@@ -71,10 +71,10 @@ fn a_moved_task_with_a_registered_config_queues_its_notification_to_that_config(
             && crate::push::tests::sealed_bytes(v) == b"Bearer tok"));
 }
 
-/// With no config held, the callback on the row (an inline config's) is the destination; with
-/// neither, nothing is queued.
+/// A legacy row URL supplies no durable credential authority; neither it nor an absent callback
+/// queues a notification.
 #[test]
-fn the_rows_own_callback_is_the_destination_and_no_callback_queues_nothing() {
+fn a_legacy_row_callback_without_durable_authority_queues_nothing() {
     let mut book = Book::default();
     let row = moved(&mut book, "https://inline.example/cb");
     let d = Deliveries::default();
@@ -462,11 +462,10 @@ fn the_guard_is_re_run_on_the_retry() {
     assert_eq!(host.sent.len(), 1, "the retry sent nothing");
 }
 
-/// A DELETED CONFIG TAKES ITS WEBHOOK CREDENTIAL OUT OF PLANE MEMORY (the engine's delete called
-/// `pushdeliver::forget`): the tombstone a delete writes for the caller's task drops the credential
-/// the delivery would present; another caller's tombstone, or a config written, drops nothing.
+/// A deleted config withdraws the queued attempt. An already borrowed delivery keeps its immutable
+/// URL/auth snapshot, so the pump must check current() before using it.
 #[test]
-fn a_deleted_config_takes_its_credential_out_of_memory() {
+fn a_deleted_config_withdraws_the_captured_delivery_before_it_can_be_sent() {
     let callback = "https://hook.caller.test/notify";
     let d = queued(callback);
     let due = d.next_due(0).expect("due");
@@ -488,8 +487,17 @@ fn a_deleted_config_takes_its_credential_out_of_memory() {
     };
     forget_deleted(&d, &[tombstone(BOB), written]);
     assert!(presented(&d), "nothing of Alice's was deleted");
+    assert!(d.current(&due));
     forget_deleted(&d, &[tombstone(ALICE)]);
-    assert!(!presented(&d), "the deleted config's credential is gone");
+    assert!(
+        !d.current(&due),
+        "the pump must abandon the withdrawn snapshot"
+    );
+    assert!(d.next_due(0).is_none(), "no queued delivery remains");
+    assert!(
+        presented(&d),
+        "a borrowed snapshot is immutable until its owner drops it"
+    );
 }
 
 /// A queued notification wakes the instance's driver ticket (R-PUSH), so the kernel ticks and
@@ -498,9 +506,13 @@ fn a_deleted_config_takes_its_credential_out_of_memory() {
 fn a_queued_notification_wakes_the_driver_ticket() {
     let mut book = Book::default();
     let row = moved(&mut book, "https://inline.example/cb");
+    let authority = config("https://inline.example/cb", None);
     let (told, woken) = std::sync::mpsc::channel::<()>();
     let d = Deliveries::default();
-    assert!(queue(&d, &row, None), "unarmed: queued, no wake to make");
+    assert!(
+        queue(&d, &row, Some(&authority)),
+        "unarmed: queued, no wake to make"
+    );
     d.arm(|| {
         Box::new(move || {
             let _ = told.send(());
@@ -508,7 +520,7 @@ fn a_queued_notification_wakes_the_driver_ticket() {
     });
     d.arm(|| panic!("armed once"));
     assert_eq!(woken.try_iter().count(), 0, "arming wakes nothing");
-    assert!(queue(&d, &row, None));
+    assert!(queue(&d, &row, Some(&authority)));
     assert_eq!(woken.try_iter().count(), 1, "queue wakes the ticket");
     let silent = moved(&mut Book::default(), "");
     assert!(!queue(&d, &silent, None));
@@ -521,6 +533,11 @@ fn a_queued_notification_wakes_the_driver_ticket() {
 fn queue_moved_wakes_the_driver_ticket() {
     let mut book = Book::default();
     let row = moved(&mut book, "https://inline.example/cb");
+    book.apply(&[Write {
+        kind: KIND_PUSH_CONFIG,
+        key: task_key(ALICE, &row.task_id),
+        value: serde_json::to_vec(&config("https://inline.example/cb", None)).unwrap(),
+    }]);
     let (told, woken) = std::sync::mpsc::channel::<()>();
     let d = Deliveries::default();
     d.arm(|| {
@@ -774,6 +791,7 @@ fn a_notification_queued_during_a_held_attempt_waits_for_that_attempts_own_wake(
     let callback = "https://hook.caller.test/notify";
     let mut book = Book::default();
     let row = moved(&mut book, callback);
+    let authority = config(callback, None);
     let d = Deliveries::default();
     let (told, woken) = std::sync::mpsc::channel::<()>();
     d.arm(|| {
@@ -781,7 +799,7 @@ fn a_notification_queued_during_a_held_attempt_waits_for_that_attempts_own_wake(
             let _ = told.send(());
         })
     });
-    assert!(queue(&d, &row, None));
+    assert!(queue(&d, &row, Some(&authority)));
     assert_eq!(woken.try_iter().count(), 1, "nothing held: the queue wakes");
     let attempting = Attempting::default();
     let mut host = TestHost::answering(vec![Some((DEST_ALLOWED, &[AT_REGISTRATION][..]))], 200);
@@ -789,7 +807,10 @@ fn a_notification_queued_during_a_held_attempt_waits_for_that_attempts_own_wake(
     assert_eq!(tick_over(&mut host, &d, &attempting, 0), Outcome::Pending);
     let mut other = row.clone();
     other.task_id = "t2".into();
-    assert!(queue(&d, &other, None), "the notification is recorded");
+    assert!(
+        queue(&d, &other, Some(&authority)),
+        "the notification is recorded"
+    );
     assert_eq!(
         woken.try_iter().count(),
         0,
