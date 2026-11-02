@@ -1523,7 +1523,20 @@ slot!(
         let mut scope_local = false;
         match &agent {
             Some(agent) => {
-                out.route(ROUTE_DIRECT, agent);
+                scope_local = hop.is_none()
+                    && matches!(
+                        &disposition,
+                        AgentDisposition::Request { row, .. }
+                            if row.op == crate::ops::OP_TASK_LIST
+                    );
+                out.route(
+                    if scope_local {
+                        ROUTE_SCOPE_LOCAL
+                    } else {
+                        ROUTE_DIRECT
+                    },
+                    agent,
+                );
                 // An agent this deployment does not front:
                 // a refusal about the entry it names, so the kernel judges the caller's identity
                 // and grant first and nothing is charged; `404`, never a `503`.
