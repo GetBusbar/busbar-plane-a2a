@@ -2686,6 +2686,21 @@ fn hop_piece(
         }
     }
 
+    pass.response_only |= pass.publication.response_only();
+    let response_only = pass.response_only;
+    if response_only
+        && (hop.outbox.to_far
+            || matches!(hop.outbox.head, Some(AnswerHead::Attempt(_)))
+            || !hop.outbox.writes.is_empty())
+    {
+        return (
+            out.fail(Refusal::failed(
+                "a refused conditional publication may only answer its caller",
+            )),
+            false,
+        );
+    }
+
     if matches!(hop.outbox.head, Some(AnswerHead::Attempt(_))) {
         hop.left = true;
     }
@@ -2714,7 +2729,11 @@ fn hop_piece(
         input.units_buf(),
     );
 
-    let moved = if refused { 0 } else { hop.relay.moved() };
+    let moved = if refused || response_only {
+        0
+    } else {
+        hop.relay.moved()
+    };
     if moved != 0 {
         units.push(UnitCount {
             class: statement::CLASS_BYTES_INDEX,
@@ -2722,14 +2741,14 @@ fn hop_piece(
             amount: moved,
         });
     }
-    if left && !refused {
+    if left && !refused && !response_only {
         units.push(UnitCount {
             class: statement::CLASS_FEE_INDEX,
             source: UNITS_REPORTED,
             amount: 1,
         });
     }
-    if undialled {
+    if undialled && !response_only {
         for class in [statement::CLASS_BYTES_INDEX, statement::CLASS_FEE_INDEX] {
             units.push(UnitCount {
                 class,
@@ -2787,7 +2806,7 @@ fn hop_piece(
         ob.head,
         Some(AnswerHead::Reply(..) | AnswerHead::Events | AnswerHead::Framed)
     );
-    if caller_head && admitted && !member.is_empty() {
+    if caller_head && admitted && !member.is_empty() && !response_only {
         records.push(statement::audit_write(
             &mut arena,
             &statement::agent_resource(member),
@@ -2795,17 +2814,20 @@ fn hop_piece(
         ));
     }
 
-    let lane =
-        (!member.is_empty()).then(|| arena.span(statement::agent_resource(member).as_bytes()));
-    let wait_member = wait_member.map(|h| arena.span(h.as_bytes()));
+    let lane = (!member.is_empty() && !response_only)
+        .then(|| arena.span(statement::agent_resource(member).as_bytes()));
+    let wait_member = wait_member
+        .filter(|_| !response_only)
+        .map(|h| arena.span(h.as_bytes()));
 
     let metric =
-        (matches!(ob.head, Some(AnswerHead::Attempt(_))) && !member.is_empty()).then(|| {
-            (
-                arena.span(member.as_bytes()),
-                arena.span(binding_word.as_bytes()),
-            )
-        });
+        (matches!(ob.head, Some(AnswerHead::Attempt(_))) && !member.is_empty() && !response_only)
+            .then(|| {
+                (
+                    arena.span(member.as_bytes()),
+                    arena.span(binding_word.as_bytes()),
+                )
+            });
 
     let closing_final = ob
         .final_status
@@ -2903,7 +2925,8 @@ fn hop_piece(
     out.set(|o| &o.flags, flags);
     out.set(|o| &o.reply_status, status);
 
-    out.set(|o| &o.fault, std::mem::replace(&mut ob.fault, FAULT_NONE));
+    let fault = std::mem::replace(&mut ob.fault, FAULT_NONE);
+    out.set(|o| &o.fault, if response_only { FAULT_NONE } else { fault });
     (Outcome::Ready, done)
 }
 
