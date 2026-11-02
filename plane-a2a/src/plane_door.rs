@@ -3450,7 +3450,55 @@ struct CardHop {
     url: String,
     issued: u32,
     /// The canonical path's refusal, retained while its legacy fallback is in flight.
-    canonical: Option<String>,
+    canonical: Option<CardRefusal>,
+}
+
+#[derive(Debug, Clone)]
+struct CardRefusal {
+    message: String,
+    transport: Option<CardTransportRefusal>,
+}
+
+#[derive(Clone)]
+struct CardTransportRefusal {
+    url: String,
+    redirects: u8,
+    cause: u64,
+    failure: busbar_contract::abi::sdk::conn::ConnFailure,
+}
+
+impl std::fmt::Debug for CardTransportRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CardTransportRefusal")
+            .field("url", &self.url)
+            .field("redirects", &self.redirects)
+            .field("cause", &self.cause)
+            .finish_non_exhaustive()
+    }
+}
+
+fn card_refusals(canonical: CardRefusal, legacy: CardRefusal, urls: &[String; 2]) -> String {
+    let equivalent = match (&canonical.transport, &legacy.transport) {
+        (None, None) => canonical.message == legacy.message,
+        (Some(first), Some(second)) => {
+            first.redirects == 0
+                && second.redirects == 0
+                && first.url == urls[0]
+                && second.url == urls[1]
+                && url::Url::parse(&first.url)
+                    .ok()
+                    .zip(url::Url::parse(&second.url).ok())
+                    .is_some_and(|(first, second)| first.origin() == second.origin())
+                && first.cause == second.cause
+                && first.failure == second.failure
+        }
+        _ => false,
+    };
+    if equivalent {
+        legacy.message
+    } else {
+        format!("{}; the legacy path: {}", canonical.message, legacy.message)
+    }
 }
 
 /// The most addresses one card host's judgement is read for.
@@ -3597,6 +3645,7 @@ fn fetch_card(
     loop {
         let url = hop.url.clone();
         let mut seen = crate::card_trust::Handshake::default();
+        let mut transport_refusal = None;
         let got: Result<Option<serde_json::Value>, String> = 'hop: {
             let (start, state) = match parked.take() {
                 Some((start, state)) => (start, Ok(*state)),
@@ -3670,7 +3719,17 @@ fn fetch_card(
                                     client_identity_offered: observed.client_identity,
                                 };
                             }
-                            answer.map_err(|e| crate::card_trust::transport_err(conn.cause(), &e))
+                            answer.map_err(|failure| {
+                                let cause = conn.cause();
+                                let message = crate::card_trust::transport_err(cause, &failure);
+                                transport_refusal = Some(CardTransportRefusal {
+                                    url: url.clone(),
+                                    redirects: hop.redirects,
+                                    cause,
+                                    failure,
+                                });
+                                message
+                            })
                         }
                     }
                 }
@@ -3706,12 +3765,22 @@ fn fetch_card(
                     redirects: 0,
                     url: urls[1].clone(),
                     issued: hop.issued,
-                    canonical: Some(refusal),
+                    canonical: Some(CardRefusal {
+                        message: refusal,
+                        transport: transport_refusal,
+                    }),
                 };
             }
             Err(refusal) => {
                 let refusal = match hop.canonical.take() {
-                    Some(canonical) => format!("{canonical}; the legacy path: {refusal}"),
+                    Some(canonical) => card_refusals(
+                        canonical,
+                        CardRefusal {
+                            message: refusal,
+                            transport: transport_refusal,
+                        },
+                        &urls,
+                    ),
                     None => refusal,
                 };
                 return Ok((Err(refusal), seen, hop.issued));
@@ -4687,6 +4756,10 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/card_precheck_tests.rs"]
 mod card_precheck_tests;
+
+#[cfg(test)]
+#[path = "tests/card_refusal_equivalence_tests.rs"]
+mod card_refusal_equivalence_tests;
 
 #[cfg(test)]
 #[path = "tests/originated_trust_tests.rs"]
