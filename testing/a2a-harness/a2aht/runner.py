@@ -95,7 +95,9 @@ def asserted_row_shortfall(results):
 # If the battery ever shrinks below this, something has stopped being
 # registered and the suite is quietly testing less than it claims. A count
 # that only ever goes up is not a safeguard; a floor that refuses to run is.
-MIN_EXPECTED_TESTS = 85
+# The JWS verifier self-check belongs to protocol-regressions.py, not to a
+# target's verdict. Its removal leaves 84 registered target scenarios.
+MIN_EXPECTED_TESTS = 84
 
 
 def load_tests():
