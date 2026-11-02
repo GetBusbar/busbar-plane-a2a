@@ -78,12 +78,13 @@ fn long_record(
 #[allow(unsafe_code)]
 fn a_short_records_answer_is_re_called_once_on_its_handle_at_the_named_size() {
     let tables = no_task_services();
-    // SAFETY: this immutable local table and every pointer it advertises (all NULL here)
-    // remain valid until every Host/Services/Via value below has been dropped.
-    let t = unsafe { busbar_contract::abi::sdk::test_support::lend(&tables) };
-    let host = Host::of(t);
+    // SAFETY: this immutable complete table advertises only NULL nested tables. The SDK
+    // snapshots it immediately; no callback or context points at borrowed state.
+    let host = unsafe { Host::from_raw(&tables) };
+    // SAFETY: same complete table and NULL service prefix; no callback can outlive this scope.
+    let services = unsafe { Services::from_raw(&tables) };
     let grown = Keyed::new();
-    let mut via = Via::new(&host, Services::of(t), TICKET, 0, &grown);
+    let mut via = Via::new(&host, services, TICKET, 0, &grown);
     let mut log = Vec::new();
     let got = via.issue((RECORD_BYTES, 1), |_, h, buf, _| {
         long_record(&mut log, h, buf)
@@ -98,15 +99,16 @@ fn a_short_records_answer_is_re_called_once_on_its_handle_at_the_named_size() {
 #[allow(unsafe_code)]
 fn a_piece_run_again_issues_a_short_handle_at_the_size_already_named() {
     let tables = no_task_services();
-    // SAFETY: this immutable local table and every pointer it advertises (all NULL here)
-    // remain valid until every Host/Services/Via value below has been dropped.
-    let t = unsafe { busbar_contract::abi::sdk::test_support::lend(&tables) };
-    let host = Host::of(t);
+    // SAFETY: this immutable complete table advertises only NULL nested tables. The SDK
+    // snapshots it immediately; no callback or context points at borrowed state.
+    let host = unsafe { Host::from_raw(&tables) };
+    // SAFETY: same complete table and NULL service prefix; no callback can outlive this scope.
+    let services = unsafe { Services::from_raw(&tables) };
     let grown = Keyed::new();
     let mut log = Vec::new();
 
     {
-        let mut via = Via::new(&host, Services::of(t), TICKET, 0, &grown);
+        let mut via = Via::new(&host, services, TICKET, 0, &grown);
         assert!(via
             .issue((RECORD_BYTES, 1), |_, h, buf, _| long_record(
                 &mut log, h, buf
@@ -120,7 +122,7 @@ fn a_piece_run_again_issues_a_short_handle_at_the_size_already_named() {
     }
     log.clear();
 
-    let mut via = Via::new(&host, Services::of(t), TICKET, 0, &grown);
+    let mut via = Via::new(&host, services, TICKET, 0, &grown);
     assert!(via
         .issue((RECORD_BYTES, 1), |_, h, buf, _| long_record(
             &mut log, h, buf
@@ -134,12 +136,13 @@ fn a_piece_run_again_issues_a_short_handle_at_the_size_already_named() {
 #[allow(unsafe_code)]
 fn a_second_short_answer_on_one_handle_is_a_broken_host() {
     let tables = no_task_services();
-    // SAFETY: this immutable local table and every pointer it advertises (all NULL here)
-    // remain valid until every Host/Services/Via value below has been dropped.
-    let t = unsafe { busbar_contract::abi::sdk::test_support::lend(&tables) };
-    let host = Host::of(t);
+    // SAFETY: this immutable complete table advertises only NULL nested tables. The SDK
+    // snapshots it immediately; no callback or context points at borrowed state.
+    let host = unsafe { Host::from_raw(&tables) };
+    // SAFETY: same complete table and NULL service prefix; no callback can outlive this scope.
+    let services = unsafe { Services::from_raw(&tables) };
     let grown = Keyed::new();
-    let mut via = Via::new(&host, Services::of(t), TICKET, 0, &grown);
+    let mut via = Via::new(&host, services, TICKET, 0, &grown);
     let got: Result<(), Halt> = via.issue((RECORD_BYTES, 1), |_, _, _, _| {
         Poll::Ready(Err(ServiceError::Short {
             bytes: LONG,
@@ -154,10 +157,9 @@ fn a_second_short_answer_on_one_handle_is_a_broken_host() {
 #[allow(unsafe_code)]
 fn a_door_opened_with_no_services_reads_no_record() {
     let tables = no_task_services();
-    // SAFETY: this immutable local table and every pointer it advertises (all NULL here)
-    // remain valid until every Host/Services/Via value below has been dropped.
-    let t = unsafe { busbar_contract::abi::sdk::test_support::lend(&tables) };
-    let host = Host::of(t);
+    // SAFETY: this immutable complete table advertises only NULL nested tables. The SDK
+    // snapshots it immediately; no callback or context points at borrowed state.
+    let host = unsafe { Host::from_raw(&tables) };
     let grown = Keyed::new();
     let mut via = Via::new(&host, None, TICKET, 0, &grown);
     assert!(matches!(via.get("task", "k"), Err(Halt::Failed(w)) if w == "Unserved"));
@@ -170,12 +172,13 @@ fn a_door_opened_with_no_services_reads_no_record() {
 #[allow(unsafe_code)]
 fn the_sizes_book_is_bounded() {
     let tables = no_task_services();
-    // SAFETY: this immutable local table and every pointer it advertises (all NULL here)
-    // remain valid until every Host/Services/Via value below has been dropped.
-    let t = unsafe { busbar_contract::abi::sdk::test_support::lend(&tables) };
-    let host = Host::of(t);
+    // SAFETY: this immutable complete table advertises only NULL nested tables. The SDK
+    // snapshots it immediately; no callback or context points at borrowed state.
+    let host = unsafe { Host::from_raw(&tables) };
+    // SAFETY: same complete table and NULL service prefix; no callback can outlive this scope.
+    let services = unsafe { Services::from_raw(&tables) };
     let grown = Keyed::new();
-    let via = Via::new(&host, Services::of(t), TICKET, 0, &grown);
+    let via = Via::new(&host, services, TICKET, 0, &grown);
     for seq in 0..GROWN_MAX as u32 {
         via.grow(
             CompletionHandle {

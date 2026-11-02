@@ -122,12 +122,14 @@ fn a_real_failed_mirror_dial_is_visible_without_changing_best_effort_completion(
         services: &slots,
         io: std::ptr::null(),
     };
-    // SAFETY: the immutable tables/slot arrays remain live until plane and its mirror call
-    // finish; all callbacks are static functions, and no pointer escapes the test.
-    let loan = unsafe { busbar_contract::abi::sdk::test_support::lend(&tables) };
+    // SAFETY: complete table and both advertised slot prefixes are readable during snapshots.
+    // Callbacks are static and use only the current thread's DIALS value, never a raw context.
+    let host = unsafe { Host::from_raw(&tables) };
+    // SAFETY: same readable service prefix and static callbacks as above.
+    let services = unsafe { Services::from_raw(&tables) };
     let plane = A2aDoor {
-        host: Some(Host::of(loan)),
-        services: Services::of(loan),
+        host: Some(host),
+        services,
         ..A2aDoor::default()
     };
     let mut flight = crate::mirror::Flight {

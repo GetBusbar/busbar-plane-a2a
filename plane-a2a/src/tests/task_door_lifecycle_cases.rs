@@ -14,12 +14,13 @@ fn ticket(slot: u32) -> Ticket {
 #[allow(unsafe_code)]
 fn a_full_sizes_book_never_forgets_a_pending_tickets_short_answer() {
     let unserved = no_task_services();
-    // SAFETY: immutable local tables advertise no nested pointers and outlive all adapters.
-    let tables = unsafe { busbar_contract::abi::sdk::test_support::lend(&unserved) };
-    let host = Host::of(tables);
+    // SAFETY: complete immutable table has only NULL nested tables; SDK snapshots immediately.
+    let host = unsafe { Host::from_raw(&unserved) };
+    // SAFETY: the same table has no services or borrowed callback state.
+    let services = unsafe { Services::from_raw(&unserved) };
     let grown = Keyed::new();
     let first = ticket(1);
-    let mut via = Via::new(&host, Services::of(tables), first, 0, &grown);
+    let mut via = Via::new(&host, services, first, 0, &grown);
     let mut calls = 0;
     let result: Result<(), Halt> = via.issue((1, 0), |_, _, _, _| {
         calls += 1;
@@ -30,11 +31,11 @@ fn a_full_sizes_book_never_forgets_a_pending_tickets_short_answer() {
         }
     });
     assert_eq!(result, Err(Halt::Pending));
-    let other = Via::new(&host, Services::of(tables), ticket(2), 0, &grown);
+    let other = Via::new(&host, services, ticket(2), 0, &grown);
     for seq in 0..GROWN_MAX as u32 {
         let _ = other.grow(handle(ticket(2), seq), 1, 0);
     }
-    let mut resumed = Via::new(&host, Services::of(tables), first, 0, &grown);
+    let mut resumed = Via::new(&host, services, first, 0, &grown);
     let result = resumed.issue((1, 0), |_, _, buf, _| {
         assert_eq!(
             buf.len(),
@@ -367,10 +368,12 @@ fn drive_listing() -> Vec<(tracing::Level, String)> {
         services: &slots,
         ..no_task_services()
     };
-    // SAFETY: the immutable table and its immutable slots stay in this scope until plane and
-    // every adapter are dropped. Callbacks are static functions and borrow no external storage.
-    let loan = unsafe { busbar_contract::abi::sdk::test_support::lend(&tables) };
-    let plane = A2aDoor::listing_lifecycle_fixture(Host::of(loan), Services::of(loan).unwrap());
+    // SAFETY: the complete table and advertised immutable slot prefix are readable here. SDK
+    // snapshots copy the slots; static callbacks use only the current thread's LISTING state.
+    let host = unsafe { Host::from_raw(&tables) };
+    // SAFETY: same advertised readable prefix and static domain callbacks as above.
+    let services = unsafe { Services::from_raw(&tables) }.unwrap();
+    let plane = A2aDoor::listing_lifecycle_fixture(host, services);
     let doc = serde_json::json!({"jsonrpc":"2.0","id":"busbar-originated","result":{"tasks":[
         {"id":"backend-t1","status":{"state":"TASK_STATE_COMPLETED"}},
         {"id":"backend-t2","status":{"state":"TASK_STATE_COMPLETED"}}]}});
@@ -464,18 +467,19 @@ fn a_real_mirror_setup_read_failure_is_reported_without_exposing_request_materia
 #[allow(unsafe_code)]
 fn a_full_book_refuses_an_untracked_handle_before_any_host_issue_even_on_reentry() {
     let unserved = no_task_services();
-    // SAFETY: immutable local tables advertise no nested pointers and outlive all adapters.
-    let tables = unsafe { busbar_contract::abi::sdk::test_support::lend(&unserved) };
-    let host = Host::of(tables);
+    // SAFETY: complete immutable table has only NULL nested tables; SDK snapshots immediately.
+    let host = unsafe { Host::from_raw(&unserved) };
+    // SAFETY: the same table has no services or borrowed callback state.
+    let services = unsafe { Services::from_raw(&unserved) };
     let grown = Keyed::new();
-    let held = Via::new(&host, Services::of(tables), ticket(2), 0, &grown);
+    let held = Via::new(&host, services, ticket(2), 0, &grown);
     for seq in 0..GROWN_MAX as u32 {
         let _ = held.grow(handle(ticket(2), seq), 2, 0);
     }
     let mut host_calls = 0;
 
     for _ in 0..2 {
-        let mut via = Via::new(&host, Services::of(tables), ticket(1), 0, &grown);
+        let mut via = Via::new(&host, services, ticket(1), 0, &grown);
         let result = via.issue((1, 0), |_, _, buf, _| {
             host_calls += 1;
             if buf.len() < 2 {
@@ -498,11 +502,12 @@ fn a_full_book_refuses_an_untracked_handle_before_any_host_issue_even_on_reentry
 #[allow(unsafe_code)]
 fn completed_records_calls_release_reservations_instead_of_consuming_the_growth_bound() {
     let unserved = no_task_services();
-    // SAFETY: immutable local tables advertise no nested pointers and outlive all adapters.
-    let tables = unsafe { busbar_contract::abi::sdk::test_support::lend(&unserved) };
-    let host = Host::of(tables);
+    // SAFETY: complete immutable table has only NULL nested tables; SDK snapshots immediately.
+    let host = unsafe { Host::from_raw(&unserved) };
+    // SAFETY: the same table has no services or borrowed callback state.
+    let services = unsafe { Services::from_raw(&unserved) };
     let grown = Keyed::new();
-    let mut via = Via::new(&host, Services::of(tables), ticket(1), 0, &grown);
+    let mut via = Via::new(&host, services, ticket(1), 0, &grown);
     for _ in 0..GROWN_MAX * 2 {
         assert_eq!(via.issue((1, 0), |_, _, _, _| Poll::Ready(Ok(()))), Ok(()));
     }
@@ -517,20 +522,21 @@ fn completed_records_calls_release_reservations_instead_of_consuming_the_growth_
 #[allow(unsafe_code)]
 fn an_already_pending_handle_can_grow_at_capacity_without_forgetting_another_ticket() {
     let unserved = no_task_services();
-    // SAFETY: immutable local tables advertise no nested pointers and outlive all adapters.
-    let tables = unsafe { busbar_contract::abi::sdk::test_support::lend(&unserved) };
-    let host = Host::of(tables);
+    // SAFETY: complete immutable table has only NULL nested tables; SDK snapshots immediately.
+    let host = unsafe { Host::from_raw(&unserved) };
+    // SAFETY: the same table has no services or borrowed callback state.
+    let services = unsafe { Services::from_raw(&unserved) };
     let grown = Keyed::new();
-    let mut first = Via::new(&host, Services::of(tables), ticket(1), 0, &grown);
+    let mut first = Via::new(&host, services, ticket(1), 0, &grown);
     let pending: Result<(), Halt> = first.issue((1, 0), |_, _, _, _| Poll::Pending);
     assert_eq!(pending, Err(Halt::Pending));
-    let other = Via::new(&host, Services::of(tables), ticket(3), 0, &grown);
+    let other = Via::new(&host, services, ticket(3), 0, &grown);
     let _ = other.grow(handle(ticket(3), 0), 2, 0);
-    let filling = Via::new(&host, Services::of(tables), ticket(2), 0, &grown);
+    let filling = Via::new(&host, services, ticket(2), 0, &grown);
     for seq in 0..(GROWN_MAX - 1) as u32 {
         let _ = filling.grow(handle(ticket(2), seq), 1, 0);
     }
-    let mut resumed = Via::new(&host, Services::of(tables), ticket(1), 0, &grown);
+    let mut resumed = Via::new(&host, services, ticket(1), 0, &grown);
     assert_eq!(
         resumed.issue((1, 0), |_, _, buf, _| {
             if buf.len() < 2 {
@@ -541,7 +547,7 @@ fn an_already_pending_handle_can_grow_at_capacity_without_forgetting_another_tic
         }),
         Ok(())
     );
-    let mut other = Via::new(&host, Services::of(tables), ticket(3), 0, &grown);
+    let mut other = Via::new(&host, services, ticket(3), 0, &grown);
     assert_eq!(
         other.issue((1, 0), |_, _, buf, _| {
             assert_eq!(
