@@ -3,12 +3,10 @@
 
 //! Configuration judgments through the existing raw door, including its actual route snapshot.
 
-#[path = "../src/tests/capture.rs"]
-mod capture;
-
 use busbar_contract::abi::mechanism::call::{AbiStr, Blob, InHead, OutHead, Outcome, BLOB_JSON};
-use busbar_contract::abi::mechanism::lifecycle::{slot, ValidateIn};
+use busbar_contract::abi::mechanism::lifecycle::{slot, ReleaseIn, ValidateIn};
 use busbar_contract::abi::plane::{Ops, PlaneOpenIn, PlaneOpenOut};
+use busbar_test_kit::test_support::reply::{self, DiagCopy};
 use serde_json::{json, Value};
 use std::ffi::c_void;
 
@@ -55,7 +53,7 @@ impl Drop for Instance {
     }
 }
 
-fn open(section: &Value) -> (Outcome, String, Vec<String>) {
+fn open(section: &Value) -> (Outcome, String, Vec<String>, Vec<DiagCopy>) {
     let bytes = serde_json::to_vec(section).unwrap();
     let mut reason = [0u8; 2048];
     let mut input: PlaneOpenIn = zero();
@@ -76,40 +74,55 @@ fn open(section: &Value) -> (Outcome, String, Vec<String>) {
     output.open.head.size = std::mem::size_of::<PlaneOpenOut>() as u32;
     // SAFETY: OPEN receives complete PlaneOpenIn/Out frames, live settings and static URL
     // bytes, and an exclusive reason buffer. Instance below owns the returned pointer.
-    let outcome = unsafe {
-        ops().head.open.unwrap()(
+    let called = unsafe {
+        reply::call(
+            ops().head.open.unwrap(),
             std::ptr::null_mut(),
-            std::ptr::from_ref(&input).cast(),
-            std::ptr::from_mut(&mut output).cast(),
+            &input,
+            output,
         )
-    }
-    .outcome();
+    };
+    let outcome = called.outcome;
+    let output = called.out;
     let _instance = Instance(output.open.instance);
     assert!(output.open.err_len <= reason.len());
     let reason = String::from_utf8(reason[..output.open.err_len].to_vec()).unwrap();
     let claims = if outcome == Outcome::Ready {
-        assert!(!output.snapshot.is_null());
-        // SAFETY: READY publishes a snapshot that remains live until this instance closes.
-        let snapshot = unsafe { &*output.snapshot };
-        if snapshot.claims_len == 0 {
-            Vec::new()
-        } else {
-            // SAFETY: the snapshot owns claims_len entries and each target string while live.
-            unsafe { std::slice::from_raw_parts(snapshot.claims, snapshot.claims_len) }
-                .iter()
-                .map(|claim| {
-                    // SAFETY: each target belongs to the live generation's snapshot above.
-                    unsafe { claim.target.as_str() }.unwrap().to_owned()
-                })
-                .collect()
-        }
+        called
+            .owned
+            .expect("READY publishes a snapshot")
+            .claims
+            .into_iter()
+            .map(|claim| claim.target)
+            .collect()
     } else {
         Vec::new()
     };
-    (outcome, reason, claims)
+    let mut diagnostics = called.envelope.diags;
+    if output.open.head.lease != 0 {
+        let input = ReleaseIn {
+            head: InHead {
+                size: std::mem::size_of::<ReleaseIn>() as u32,
+                op: slot::RELEASE,
+                ..zero()
+            },
+            lease: output.open.head.lease,
+        };
+        let output = OutHead {
+            size: std::mem::size_of::<OutHead>() as u32,
+            ..zero()
+        };
+        // SAFETY: the same live instance owns this reply's lease. Complete RELEASE frames
+        // remain live, and reply::call already copied the snapshot and diagnostics.
+        let released =
+            unsafe { reply::call(ops().head.release.unwrap(), _instance.0, &input, output) };
+        assert_eq!(released.outcome, Outcome::Ready);
+        diagnostics.extend(released.envelope.diags);
+    }
+    (outcome, reason, claims, diagnostics)
 }
 
-fn validate(section: &Value) -> Outcome {
+fn validate(section: &Value) -> (Outcome, Vec<DiagCopy>) {
     let bytes = serde_json::to_vec(section).unwrap();
     let mut reason = [0u8; 2048];
     let input = ValidateIn {
@@ -122,20 +135,48 @@ fn validate(section: &Value) -> Outcome {
         err_buf: reason.as_mut_ptr(),
         err_cap: reason.len(),
     };
-    let mut output = OutHead {
+    let output = OutHead {
         size: std::mem::size_of::<OutHead>() as u32,
         ..zero()
     };
     // SAFETY: stateless VALIDATE receives its complete frames, live settings bytes and an
     // exclusive reason buffer for this synchronous call; it retains no instance.
-    unsafe {
-        ops().head.validate.unwrap()(
+    let called = unsafe {
+        reply::call(
+            ops().head.validate.unwrap(),
             std::ptr::null_mut(),
-            std::ptr::from_ref(&input).cast(),
-            std::ptr::from_mut(&mut output).cast(),
+            &input,
+            output,
         )
+    };
+    let mut diagnostics = called.envelope.diags;
+    if called.out.lease != 0 {
+        let input = ReleaseIn {
+            head: InHead {
+                size: std::mem::size_of::<ReleaseIn>() as u32,
+                op: slot::RELEASE,
+                ..zero()
+            },
+            lease: called.out.lease,
+        };
+        let output = OutHead {
+            size: std::mem::size_of::<OutHead>() as u32,
+            ..zero()
+        };
+        // SAFETY: stateless VALIDATE's returned lease belongs to the same door's unbound
+        // call. Its exact RELEASE frames remain live after reply::call copied the payload.
+        let released = unsafe {
+            reply::call(
+                ops().head.release.unwrap(),
+                std::ptr::null_mut(),
+                &input,
+                output,
+            )
+        };
+        assert_eq!(released.outcome, Outcome::Ready);
+        diagnostics.extend(released.envelope.diags);
     }
-    .outcome()
+    (called.outcome, diagnostics)
 }
 
 fn section(name: &str, url: &str) -> Value {
@@ -151,20 +192,20 @@ fn section(name: &str, url: &str) -> Value {
 fn open_refuses_inert_policy_and_unroutable_names_but_publishes_valid_agent_claims() {
     let mut stated = section("planner", "https://agent.example/a2a");
     stated["planner"]["egress_scopes"] = json!(["billing"]);
-    let (outcome, reason, _) = open(&stated);
+    let (outcome, reason, _, _) = open(&stated);
     assert_ne!(outcome, Outcome::Ready);
     assert!(
         reason.contains("egress_scopes") && reason.contains("not enforced"),
         "{reason}"
     );
     for name in ["a/b", "legal+eu", "..", "with space"] {
-        let (outcome, reason, _) = open(&section(name, "https://agent.example/a2a"));
+        let (outcome, reason, _, _) = open(&section(name, "https://agent.example/a2a"));
         assert_ne!(outcome, Outcome::Ready, "unroutable name {name}");
         assert!(reason.contains("path segment"), "{reason}");
     }
     let mut good = section("legal-eu_2.v~1", "https://agent.example/a2a");
     good["legal-eu_2.v~1"]["egress_scopes"] = json!([]);
-    let (outcome, reason, claims) = open(&good);
+    let (outcome, reason, claims, _) = open(&good);
     assert_eq!(outcome, Outcome::Ready, "{reason}");
     assert!(
         claims
@@ -183,35 +224,37 @@ fn open_malformed_url_refusals_omit_all_raw_credential_fragments() {
         "https://USER_CANARY:SECRET_CANARY/TAIL_CANARY@host/a2a",
         "https://USER_CANARY:SECRET_CANARY@host:99999/a2a",
     ];
-    let (sent, events) = std::sync::mpsc::channel();
-    tracing::subscriber::with_default(capture::Capture(sent), || {
-        for url in cases {
-            let (outcome, reason, _) = open(&section("planner", url));
-            assert_ne!(outcome, Outcome::Ready);
-            assert!(reason.contains("malformed"), "{reason}");
-            for canary in ["USER_CANARY", "SECRET_CANARY", "TAIL_CANARY"] {
-                assert!(!reason.contains(canary), "credential in refusal: {reason}");
-            }
-        }
-    });
-    for (_, event) in events.try_iter() {
+    let mut events = Vec::new();
+    for url in cases {
+        let (outcome, reason, _, diagnostics) = open(&section("planner", url));
+        events.extend(diagnostics);
+        assert_ne!(outcome, Outcome::Ready);
+        assert!(reason.contains("malformed"), "{reason}");
         for canary in ["USER_CANARY", "SECRET_CANARY", "TAIL_CANARY"] {
-            assert!(!event.contains(canary), "credential in diagnostic: {event}");
+            assert!(!reason.contains(canary), "credential in refusal: {reason}");
         }
     }
-    let (outcome, reason, _) = open(&section("planner", "https://agent.example:99999/a2a"));
+    for event in events {
+        for canary in ["USER_CANARY", "SECRET_CANARY", "TAIL_CANARY"] {
+            assert!(
+                !event.text.contains(canary),
+                "credential in diagnostic: {event:?}"
+            );
+        }
+    }
+    let (outcome, reason, _, _) = open(&section("planner", "https://agent.example:99999/a2a"));
     assert_ne!(outcome, Outcome::Ready);
     assert!(
         reason.contains("malformed") && reason.contains("port"),
         "{reason}"
     );
-    let (outcome, reason, _) = open(&section("planner", "ftp://agent.example/a2a"));
+    let (outcome, reason, _, _) = open(&section("planner", "ftp://agent.example/a2a"));
     assert_ne!(outcome, Outcome::Ready);
     assert!(
         reason.contains("must be an http:// or https:// endpoint"),
         "{reason}"
     );
-    let (outcome, reason, _) = open(&section(
+    let (outcome, reason, _, _) = open(&section(
         "planner",
         "https://alice:SECRET_CANARY@agent.example/a2a",
     ));
@@ -227,51 +270,55 @@ fn ignored_protocol_version_warns_once_at_open_without_echoing_its_value() {
     let mut stated = section("planner", "https://agent.example/a2a");
     stated["planner"]["protocol_version"] = json!("VERSION_VALUE_CANARY");
     stated["worker"] = json!({"url": "https://worker.example/a2a", "pin": {"mechanism": "unpinned"}, "protocol_version": "OTHER_VERSION_CANARY"});
-    let (sent, events) = std::sync::mpsc::channel();
-    tracing::subscriber::with_default(capture::Capture(sent), || {
-        assert_eq!(validate(&stated), Outcome::Ready);
-        let (outcome, reason, claims) = open(&stated);
-        assert_eq!(outcome, Outcome::Ready, "{reason}");
-        assert!(claims.iter().any(|claim| claim == "/a2a/agents/planner/"));
-        assert_eq!(validate(&stated), Outcome::Ready);
-        assert_eq!(validate(&stated), Outcome::Ready);
-    });
-    let events: Vec<_> = events.try_iter().collect();
+    let (outcome, mut events) = validate(&stated);
+    assert_eq!(outcome, Outcome::Ready);
+    let (outcome, reason, claims, diagnostics) = open(&stated);
+    events.extend(diagnostics);
+    assert_eq!(outcome, Outcome::Ready, "{reason}");
+    assert!(claims.iter().any(|claim| claim == "/a2a/agents/planner/"));
+    for _ in 0..2 {
+        let (outcome, diagnostics) = validate(&stated);
+        events.extend(diagnostics);
+        assert_eq!(outcome, Outcome::Ready);
+    }
     let warnings: Vec<_> = events
         .iter()
-        .filter(|(_, text)| text.contains("BUSBAR-7051"))
+        .filter(|event| event.text.contains("BUSBAR-7051"))
         .collect();
     assert_eq!(
         warnings.len(),
         1,
         "one warning per successful section OPEN: {events:?}"
     );
-    assert_eq!(warnings[0].0, tracing::Level::WARN);
-    assert!(warnings[0].1.contains("protocol_version") && warnings[0].1.contains("ignored"));
-    for (_, text) in events {
+    assert_eq!(
+        warnings[0].severity,
+        busbar_contract::abi::mechanism::call::SEVERITY_WARN
+    );
+    assert!(warnings[0].text.contains("protocol_version") && warnings[0].text.contains("ignored"));
+    for event in events {
+        let text = event.text;
         assert!(
             !text.contains("VERSION_VALUE_CANARY") && !text.contains("OTHER_VERSION_CANARY"),
             "{text}"
         );
     }
 
-    let (sent, events) = std::sync::mpsc::channel();
-    tracing::subscriber::with_default(capture::Capture(sent), || {
-        assert_eq!(
-            open(&section("planner", "https://agent.example/a2a")).0,
-            Outcome::Ready
-        );
-        let mut nonstring = section("planner", "https://agent.example/a2a");
-        nonstring["planner"]["protocol_version"] = json!(7);
-        assert_ne!(open(&nonstring).0, Outcome::Ready);
-        let mut invalid = stated;
-        invalid["planner"]["egress_scopes"] = json!(["billing"]);
-        assert_ne!(open(&invalid).0, Outcome::Ready);
-    });
+    let (outcome, _, _, mut events) = open(&section("planner", "https://agent.example/a2a"));
+    assert_eq!(outcome, Outcome::Ready);
+    let mut nonstring = section("planner", "https://agent.example/a2a");
+    nonstring["planner"]["protocol_version"] = json!(7);
+    let (outcome, _, _, diagnostics) = open(&nonstring);
+    events.extend(diagnostics);
+    assert_ne!(outcome, Outcome::Ready);
+    let mut invalid = stated;
+    invalid["planner"]["egress_scopes"] = json!(["billing"]);
+    let (outcome, _, _, diagnostics) = open(&invalid);
+    events.extend(diagnostics);
+    assert_ne!(outcome, Outcome::Ready);
     assert!(
         events
-            .try_iter()
-            .all(|(_, text)| !text.contains("BUSBAR-7051")),
+            .iter()
+            .all(|event| !event.text.contains("BUSBAR-7051")),
         "failed/unstated configurations must not warn as if opened"
     );
 }
