@@ -252,6 +252,14 @@ class ProbeRegressions(unittest.TestCase):
             here = root / "testing/a2a-supplement"
             here.mkdir(parents=True)
             shutil.copyfile(Path(__file__).with_name("run-supplement.sh"), here / "run-supplement.sh")
+            # Exercise the real wrapper with its real sourced dependency, as
+            # the installed testing tree does; an absent source exits before
+            # the fake suite can supply the exit class being tested.
+            scripts = root / "testing/a2a-harness/scripts"
+            scripts.mkdir(parents=True)
+            shutil.copyfile(Path(__file__).resolve().parents[1] /
+                            "a2a-harness/scripts/process-fixture.sh",
+                            scripts / "process-fixture.sh")
             tck = root / "testing/a2a-tck"
             tck.mkdir()
             interpreter = root / "suite-python"
