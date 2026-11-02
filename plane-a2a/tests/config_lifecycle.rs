@@ -84,7 +84,7 @@ fn open(section: &Value) -> (Outcome, String, Vec<String>, Vec<DiagCopy>) {
     };
     let outcome = called.outcome;
     let output = called.out;
-    let _instance = Instance(output.open.instance);
+    let instance = Instance(output.open.instance);
     assert!(output.open.err_len <= reason.len());
     let reason = String::from_utf8(reason[..output.open.err_len].to_vec()).unwrap();
     let claims = if outcome == Outcome::Ready {
@@ -115,7 +115,7 @@ fn open(section: &Value) -> (Outcome, String, Vec<String>, Vec<DiagCopy>) {
         // SAFETY: the same live instance owns this reply's lease. Complete RELEASE frames
         // remain live, and reply::call already copied the snapshot and diagnostics.
         let released =
-            unsafe { reply::call(ops().head.release.unwrap(), _instance.0, &input, output) };
+            unsafe { reply::call(ops().head.release.unwrap(), instance.0, &input, output) };
         assert_eq!(released.outcome, Outcome::Ready);
         diagnostics.extend(released.envelope.diags);
     }
