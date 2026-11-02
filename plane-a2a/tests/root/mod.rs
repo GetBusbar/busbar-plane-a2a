@@ -3342,6 +3342,23 @@ async fn a_config_apply_keeps_the_operators_approval() {
     assert!(replacement.relayed());
 
     let rotated = ed25519_dalek::SigningKey::from_bytes(&[9u8; 32]);
+    let invalid = format!(
+        "planner: {{url: 'http://127.0.0.1:{}/planner', allow_private: true, reverify_ttl: '1h', \
+         pin: {{mechanism: jws_issuer_key, key: '{}'}}}}\nwork: {{max_live: 0}}",
+        replacement.port,
+        key_info(&rotated),
+    );
+    apply(&invalid);
+    let (status, body) = answered(&s.router, send()).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "a failed apply keeps the approved prior issuer and serving generation: {body}"
+    );
+    assert!(
+        replacement.relayed(),
+        "the prior approved generation still dispatches"
+    );
     replacement.resign_with(rotated.clone());
     let section = format!(
         "planner: {{url: 'http://127.0.0.1:{}/planner', allow_private: true, reverify_ttl: '1h', \
