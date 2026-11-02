@@ -909,3 +909,57 @@ fn malformed_list_cursor_is_refused_instead_of_restarting_the_page() {
         assert!(answer.get("result").is_none());
     }
 }
+
+#[test]
+fn refused_config_replacement_and_deletion_wipe_their_exact_raw_record_copies() {
+    use crate::tests::raw_custody_probe::{Probe, SECRET};
+    let credential = std::str::from_utf8(SECRET).unwrap();
+    let config = |id: &str| {
+        json!({
+            "taskId":"t1", "id":id, "url":"https://hooks.example/cb",
+            "authentication":{"scheme":"Bearer", "credentials":credential},
+        })
+    };
+    let mut desk = desk();
+    assert_eq!(
+        call(
+            &mut desk,
+            "CreateTaskPushNotificationConfig",
+            config("kept"),
+            ALICE
+        )
+        .0,
+        200
+    );
+    for (method, params, retired) in [
+        ("CreateTaskPushNotificationConfig", config("different"), 2),
+        (
+            "DeleteTaskPushNotificationConfig",
+            json!({"taskId":"t1","id":"different"}),
+            1,
+        ),
+    ] {
+        let probe = Probe::start();
+        assert!(call(&mut desk, method, params, ALICE).0 >= 400);
+        assert_eq!(probe.retirements(), retired);
+        probe.checkpoint();
+    }
+    desk.verdict = DEST_INTERNAL;
+    let probe = Probe::start();
+    assert_eq!(
+        call(
+            &mut desk,
+            "CreateTaskPushNotificationConfig",
+            config("kept"),
+            ALICE
+        )
+        .0,
+        400
+    );
+    assert_eq!(probe.retirements(), 2);
+    probe.checkpoint();
+    assert_eq!(
+        held_config(&mut desk, ALICE, "t1").unwrap().unwrap().id,
+        "kept"
+    );
+}
