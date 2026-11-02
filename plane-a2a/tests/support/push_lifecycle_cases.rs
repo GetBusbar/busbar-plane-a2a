@@ -436,7 +436,7 @@ struct Served {
     writes: usize,
 }
 
-fn copied_extensions(door: &Door, answer_head: &OutHead) -> Vec<u8> {
+pub(super) fn copied_extensions(door: &Door, answer_head: &OutHead) -> Vec<u8> {
     let ext = answer_head.extensions;
     if ext.len == 0 {
         return Vec::new();
@@ -516,6 +516,8 @@ fn settlement_driver(door: &Door, receipt: &[u8], tick: bool) -> Driven {
         output.head = out_head::<TickOut>();
         // SAFETY: the active Door owns this table's instance. TickIn/Out and the input's
         // extension bytes remain live through the call and copying/releasing its answer.
+        // Raw driver TICK hands Pending to its driver (worker::cross_current; plane_calls::tick_copy),
+        // unlike DRIVE, whose original continuation frame must remain owned below.
         let result = unsafe {
             lifecycle().tick.unwrap()(
                 door.instance,
@@ -529,31 +531,11 @@ fn settlement_driver(door: &Door, receipt: &[u8], tick: bool) -> Driven {
             short: false,
         }
     } else {
-        let mut sessions = [0_u64; 4];
-        let mut input = PlaneDriveIn {
-            drive: DriveIn {
-                head: head::<PlaneDriveIn>(life::DRIVE, driver),
-                driver,
-            },
-            sessions_buf: sessions.as_mut_ptr(),
-            sessions_cap: sessions.len(),
-        };
-        input.drive.head.extensions = octets(&extensions);
-        let mut output: PlaneDriveOut = z();
-        output.head = out_head::<PlaneDriveOut>();
-        // SAFETY: the active Door owns this table's instance. The complete PlaneDriveIn/Out,
-        // extension bytes and exclusive initialized sessions buffer stay live for the call.
-        let result = unsafe {
-            lifecycle().drive.unwrap()(
-                door.instance,
-                std::ptr::from_ref(&input).cast(),
-                std::ptr::from_mut(&mut output).cast(),
-            )
-        };
+        let (outcome, extensions, short) = door.drive_with_extensions(extensions);
         Driven {
-            outcome: result.outcome(),
-            extensions: copied_extensions(door, &output.head),
-            short: output.sessions_needed as usize > sessions.len(),
+            outcome,
+            extensions,
+            short,
         }
     }
 }
@@ -578,6 +560,73 @@ fn recall(door: &Door, slot_id: u64, auth: &str, body: &[u8], cap: usize) -> Ser
         busbar_contract::abi::mechanism::call::FLAG_RESUME,
     )
 }
+/// This existing callback caller owns its original frames and every loan until terminal.
+pub(super) struct ServeFrame {
+    input: Box<ServeIn>,
+    output: Box<ServeOut>,
+    auth: zeroize::Zeroizing<Vec<u8>>,
+    body: zeroize::Zeroizing<Vec<u8>>,
+    fields: Box<[Field; 1]>,
+    reply: zeroize::Zeroizing<Vec<u8>>,
+    out_fields: Vec<OutField>,
+    arena: zeroize::Zeroizing<Vec<u8>>,
+    records: Vec<RecordWrite>,
+    extensions: zeroize::Zeroizing<Vec<u8>>,
+}
+impl ServeFrame {
+    fn new(slot_id: u64, auth: &str, body: &[u8], cap: usize, flags: u32) -> Box<Self> {
+        let mut frame = Box::new(Self {
+            input: Box::new(z()),
+            output: Box::new(z()),
+            auth: zeroize::Zeroizing::new(auth.as_bytes().to_vec()),
+            body: zeroize::Zeroizing::new(body.to_vec()),
+            fields: Box::new([z()]),
+            reply: zeroize::Zeroizing::new(vec![0; cap]),
+            out_fields: vec![z(); 8],
+            arena: zeroize::Zeroizing::new(vec![0; 65536]),
+            records: vec![z(); 64],
+            extensions: zeroize::Zeroizing::new(Vec::new()),
+        });
+        frame.fields[0] = Field {
+            name: str_of(b"authorization"),
+            value: str_of(&frame.auth),
+        };
+        let input = &mut frame.input;
+        input.head = head::<ServeIn>(slot::SERVE, ticket(slot_id));
+        input.head.flags = flags;
+        input.route = 2;
+        input.target = str_of(b"/a2a/push");
+        input.fields = frame.fields.as_ptr();
+        input.fields_len = frame.fields.len();
+        input.body = octets(&frame.body);
+        (input.reply_buf, input.reply_cap) = (frame.reply.as_mut_ptr(), frame.reply.len());
+        (input.fields_buf, input.fields_cap) =
+            (frame.out_fields.as_mut_ptr(), frame.out_fields.len());
+        (input.arena_buf, input.arena_cap) = (frame.arena.as_mut_ptr(), frame.arena.len());
+        (input.records_buf, input.records_cap) = (frame.records.as_mut_ptr(), frame.records.len());
+        frame
+    }
+    fn check_resume(&self, slot_id: u64, auth: &str, body: &[u8], cap: usize, flags: u32) {
+        assert!(
+            self.input.head.ticket == ticket(slot_id)
+                && self.auth.as_slice() == auth.as_bytes()
+                && self.body.as_slice() == body
+                && self.input.head.flags & !busbar_contract::abi::mechanism::call::FLAG_RESUME
+                    == flags & !busbar_contract::abi::mechanism::call::FLAG_RESUME,
+            "a pending callback must resume its exact logical input"
+        );
+        assert_eq!(
+            self.reply.len(),
+            cap,
+            "pending callback loans cannot be replaced"
+        );
+    }
+    fn extensions(&mut self, bytes: Vec<u8>) {
+        // The actual loader's conditional::prepare lends receipt extensions per crossing.
+        self.extensions = zeroize::Zeroizing::new(bytes);
+        self.input.head.extensions = octets(&self.extensions);
+    }
+}
 fn serve_flags(
     door: &Door,
     slot_id: u64,
@@ -586,97 +635,143 @@ fn serve_flags(
     cap: usize,
     flags: u32,
 ) -> Served {
-    let fields = [Field {
-        name: str_of(b"authorization"),
-        value: str_of(auth.as_bytes()),
-    }];
-    let mut reply = vec![0u8; cap];
-    let mut out_fields = [z::<OutField>(); 8];
-    let mut arena = vec![0u8; 65536];
-    let mut records = [z::<RecordWrite>(); 64];
-    let mut input: ServeIn = z();
-    input.head = head::<ServeIn>(slot::SERVE, ticket(slot_id));
-    input.head.flags = flags;
-    input.route = 2;
-    input.target = str_of(b"/a2a/push");
-    input.fields = fields.as_ptr();
-    input.fields_len = fields.len();
-    input.body = octets(body);
-    (input.reply_buf, input.reply_cap) = (reply.as_mut_ptr(), reply.len());
-    (input.fields_buf, input.fields_cap) = (out_fields.as_mut_ptr(), out_fields.len());
-    (input.arena_buf, input.arena_cap) = (arena.as_mut_ptr(), arena.len());
-    (input.records_buf, input.records_cap) = (records.as_mut_ptr(), records.len());
-    let mut output: ServeOut;
-    let mut extensions = begin_conditional(
-        ticket(slot_id),
-        flags & busbar_contract::abi::mechanism::call::FLAG_RESUME != 0,
+    assert!(
+        door.owned,
+        "a borrowed door cannot own a callback continuation"
     );
-    let mut crossings = 0;
-    // SAFETY: exact SERVE structs and all declared buffers remain live throughout the call.
-    let result = loop {
-        crossings += 1;
-        assert!(crossings < 256, "conditional callback failed to settle");
-        input.head.extensions = octets(&extensions);
-        output = z();
-        output.head = out_head::<ServeOut>();
+    assert!(
+        !door.pending.borrow().contains_key(&ticket(slot_id)),
+        "a callback cannot replace a pending piece on the same full ticket"
+    );
+    let resuming = {
+        let pending = door.pending_serves.borrow();
+        if let Some(frame) = pending.get(&ticket(slot_id)) {
+            // Reject changed inputs while the original loans remain in the Door's custody.
+            frame.check_resume(slot_id, auth, body, cap, flags);
+            true
+        } else {
+            flags & busbar_contract::abi::mechanism::call::FLAG_RESUME != 0
+        }
+    };
+    // Keep any original Pending frame owned if the host rejects its receipt preparation.
+    let extensions = begin_conditional(ticket(slot_id), resuming);
+    let mut frame = door
+        .pending_serves
+        .borrow_mut()
+        .remove(&ticket(slot_id))
+        .map_or_else(
+            || ServeFrame::new(slot_id, auth, body, cap, flags),
+            |mut frame| {
+                frame.input.head.flags |= busbar_contract::abi::mechanism::call::FLAG_RESUME;
+                frame
+            },
+        );
+    frame.extensions(extensions);
+    for crossing in 0..256 {
+        *frame.output = z();
+        frame.output.head = out_head::<ServeOut>();
+        // SAFETY: the Door owns these exact boxed frames and all original lent allocations
+        // through Pending, cancellation or synchronous CLOSE, including when host parsing fails.
         let result = unsafe {
             ops().serve.unwrap()(
                 door.instance,
-                std::ptr::from_ref(&input).cast(),
-                std::ptr::from_mut(&mut output).cast(),
+                std::ptr::from_ref(&*frame.input).cast(),
+                std::ptr::from_mut(&mut *frame.output).cast(),
             )
+        }
+        .outcome();
+        let head = frame.output.head;
+        // Park before any fallible host processing can unwind while a loan remains outstanding.
+        door.pending_serves
+            .borrow_mut()
+            .insert(ticket(slot_id), frame);
+        let diags = if head.envelope.diags_len == 0 {
+            Vec::new()
+        } else {
+            // SAFETY: copy the actual envelope while its answer lease is still live.
+            unsafe { std::slice::from_raw_parts(head.envelope.diags, head.envelope.diags_len) }
+                .iter()
+                .map(|d| text(d.text))
+                .collect()
         };
-        let ext = copied_extensions(door, &output.head);
-        if busbar_contract::abi::sdk::plane::conditional::read_request(&ext)
-            .unwrap()
-            .is_some()
-            || busbar_contract::abi::sdk::plane::conditional::read_observation(&ext)
+        let ext = copied_extensions(door, &head);
+        let short = {
+            let pending = door.pending_serves.borrow();
+            let output = &pending[&ticket(slot_id)].output;
+            if busbar_contract::abi::sdk::plane::conditional::read_request(&ext)
                 .unwrap()
                 .is_some()
-        {
-            assert_eq!(
-                (
-                    output.status,
-                    output.reply_written,
-                    output.records_written,
-                    output.fields_written
-                ),
-                (0, 0, 0, 0)
-            );
-        }
-        if let Some(next) = next_conditional(
-            ticket(slot_id),
-            result.outcome(),
-            output.reply_needed > cap as u64,
-            &ext,
-        ) {
-            extensions = next;
-            input.head.flags |= busbar_contract::abi::mechanism::call::FLAG_RESUME;
+                || busbar_contract::abi::sdk::plane::conditional::read_observation(&ext)
+                    .unwrap()
+                    .is_some()
+            {
+                assert_eq!(
+                    (
+                        output.status,
+                        output.reply_written,
+                        output.records_written,
+                        output.fields_written
+                    ),
+                    (0, 0, 0, 0)
+                );
+            }
+            result == Outcome::Failed && output.reply_needed > cap as u64
+        };
+        if let Some(next) = next_conditional(ticket(slot_id), result, short, &ext) {
+            assert!(crossing < 255, "conditional callback failed to settle");
+            frame = door
+                .pending_serves
+                .borrow_mut()
+                .remove(&ticket(slot_id))
+                .unwrap();
+            frame.extensions(next);
+            frame.input.head.flags |= busbar_contract::abi::mechanism::call::FLAG_RESUME;
             continue;
         }
-        break result;
-    };
-    let envelope = output.head.envelope;
-    let diags = if envelope.diags_len == 0 {
-        Vec::new()
-    } else {
-        // SAFETY: per-ticket envelope remains valid until the next operation on this ticket.
-        unsafe { std::slice::from_raw_parts(envelope.diags, envelope.diags_len) }
-            .iter()
-            .map(|d| text(d.text))
-            .collect()
-    };
-    if result.outcome() == Outcome::Ready {
-        apply(&records[..output.records_written as usize], &arena);
+        if result == Outcome::Pending {
+            return Served {
+                outcome: result,
+                status: 0,
+                needed: 0,
+                diags,
+                writes: 0,
+            };
+        }
+        frame = door
+            .pending_serves
+            .borrow_mut()
+            .remove(&ticket(slot_id))
+            .unwrap();
+        if result == Outcome::Ready {
+            apply(
+                &frame.records[..frame.output.records_written as usize],
+                &frame.arena,
+            );
+        }
+        return Served {
+            outcome: result,
+            status: if result == Outcome::Ready {
+                frame.output.status
+            } else {
+                0
+            },
+            needed: if result == Outcome::Failed {
+                frame.output.reply_needed
+            } else {
+                0
+            },
+            diags,
+            writes: if result == Outcome::Ready {
+                frame.output.records_written as usize
+            } else {
+                0
+            },
+        };
     }
-    Served {
-        outcome: result.outcome(),
-        status: output.status,
-        needed: output.reply_needed,
-        diags,
-        writes: output.records_written as usize,
-    }
+    // The last crossing's frame is retained before this failure, including if it is Pending.
+    panic!("conditional callback failed to settle");
 }
+
 fn piece(door: &Door, unit: u64, given: Given<'_>, reply_cap: usize) -> Answered {
     piece_sized(door, unit, given, reply_cap, 16, 1 << 14)
 }
@@ -688,118 +783,93 @@ fn piece_sized(
     fields_cap: usize,
     arena_cap: usize,
 ) -> Answered {
-    let mut reply = vec![0_u8; reply_cap];
-    let mut fields = vec![z::<OutField>(); fields_cap];
-    let mut arena = vec![0_u8; arena_cap];
-    let mut records = [z::<RecordWrite>(); 16];
-    let mut units = [z::<UnitCount>(); 8];
-    let mut i: OnPieceIn = z();
-    i.head = head::<OnPieceIn>(slot::ON_PIECE, ticket(unit));
-    i.unit = unit;
-    i.from = given.from;
-    i.flags = given.flags;
-    i.bytes = octets(given.bytes);
-    i.attempt_no = given.attempt;
-    i.member = str_of(given.member);
-    i.caller_ref = str_of(ALICE);
-    i.reason = given.reason;
-    i.status_code = given.status;
-    (i.reply_buf, i.reply_cap) = (reply.as_mut_ptr(), reply.len());
-    (i.fields_buf, i.fields_cap) = (fields.as_mut_ptr(), fields.len());
-    (i.arena_buf, i.arena_cap) = (arena.as_mut_ptr(), arena.len());
-    (i.records_buf, i.records_cap) = (records.as_mut_ptr(), records.len());
-    (i.units_buf, i.units_cap) = (units.as_mut_ptr(), units.len());
-    let mut o: OnPieceOut;
-    let mut extensions = begin_conditional(ticket(unit), false);
-    let mut crossings = 0;
+    let resuming = {
+        let pending = door.pending.borrow();
+        if let Some(frame) = pending.get(&ticket(unit)) {
+            frame.check_resume(unit, given, reply_cap, fields_cap, arena_cap);
+            true
+        } else {
+            false
+        }
+    };
+    let extensions = begin_conditional(ticket(unit), resuming);
+    let (mut frame, _) = door.piece_frame(unit, given, reply_cap, fields_cap, arena_cap);
+    frame.extensions(extensions);
     let f = ops().on_piece.expect("on_piece");
-    // SAFETY: `f` is the door's own slot, called over an `in` and an `out` laid out as its ABI
-    // states and live for the call.
-    #[allow(unused_unsafe)]
-    let ret = loop {
-        crossings += 1;
-        assert!(crossings < 256, "conditional piece failed to settle");
-        i.head.extensions = octets(&extensions);
-        o = z();
-        o.head = out_head::<OnPieceOut>();
-        let ret = unsafe {
+    for crossing in 0..256 {
+        *frame.output = z();
+        frame.output.head = out_head::<OnPieceOut>();
+        // SAFETY: the same per-Door boxed frames and all original loans survive Pending;
+        // only the host's authoritative receipt extension is renewed for this crossing.
+        #[allow(unused_unsafe)]
+        let outcome = unsafe {
             f(
                 door.instance,
-                std::ptr::from_ref(&i).cast(),
-                std::ptr::from_mut(&mut o).cast(),
+                std::ptr::from_ref(&*frame.input).cast(),
+                std::ptr::from_mut(&mut *frame.output).cast(),
             )
-        };
-        assert!(
-            o.emitted <= reply_cap as u64,
-            "the reply window fits its buffer"
-        );
-        let ext = copied_extensions(door, &o.head);
-        if busbar_contract::abi::sdk::plane::conditional::read_request(&ext)
-            .unwrap()
-            .is_some()
-            || busbar_contract::abi::sdk::plane::conditional::read_observation(&ext)
+        }
+        .outcome();
+        let head = frame.output.head;
+        door.pending.borrow_mut().insert(ticket(unit), frame);
+        let ext = copied_extensions(door, &head);
+        let short = {
+            let pending = door.pending.borrow();
+            let frame = &pending[&ticket(unit)];
+            let o = &frame.output;
+            if outcome == Outcome::Ready {
+                assert!(
+                    o.emitted <= reply_cap as u64,
+                    "the reply window fits its buffer"
+                );
+            }
+            if busbar_contract::abi::sdk::plane::conditional::read_request(&ext)
                 .unwrap()
                 .is_some()
-        {
-            assert_eq!(
-                (
-                    o.emitted,
-                    o.records_written,
-                    o.units_written,
-                    o.flags,
-                    o.fields_written
-                ),
-                (0, 0, 0, 0, 0)
-            );
-        }
-        if let Some(next) = next_conditional(
-            ticket(unit),
-            ret.outcome(),
-            o.fields_needed as usize > fields.len()
-                || o.arena_needed as usize > arena.len()
-                || o.records_needed as usize > records.len()
-                || o.units_needed as usize > units.len(),
-            &ext,
-        ) {
-            extensions = next;
-            i.head.flags |= busbar_contract::abi::mechanism::call::FLAG_RESUME;
+                || busbar_contract::abi::sdk::plane::conditional::read_observation(&ext)
+                    .unwrap()
+                    .is_some()
+            {
+                assert_eq!(
+                    (
+                        o.emitted,
+                        o.records_written,
+                        o.units_written,
+                        o.flags,
+                        o.fields_written
+                    ),
+                    (0, 0, 0, 0, 0)
+                );
+            }
+            outcome == Outcome::Failed
+                && (o.fields_needed as usize > frame.fields.len()
+                    || o.arena_needed as usize > frame.arena.len()
+                    || o.records_needed as usize > frame.records.len()
+                    || o.units_needed as usize > frame.units.len())
+        };
+        if let Some(next) = next_conditional(ticket(unit), outcome, short, &ext) {
+            assert!(crossing < 255, "conditional piece failed to settle");
+            frame = door.pending.borrow_mut().remove(&ticket(unit)).unwrap();
+            frame.extensions(next);
+            frame.input.head.flags |= busbar_contract::abi::mechanism::call::FLAG_RESUME;
             continue;
         }
-        break ret;
-    };
-    if ret.outcome() == Outcome::Ready {
-        apply(&records[..o.records_written as usize], &arena);
+        if outcome == Outcome::Pending {
+            return Answered {
+                outcome: Some(outcome),
+                ..Answered::default()
+            };
+        }
+        frame = door.pending.borrow_mut().remove(&ticket(unit)).unwrap();
+        if outcome == Outcome::Ready {
+            apply(
+                &frame.records[..frame.output.records_written as usize],
+                &frame.arena,
+            );
+        }
+        return frame.answer(outcome);
     }
-    let at = |s: busbar_contract::abi::mechanism::call::Span| {
-        let from = s.offset as usize;
-        String::from_utf8_lossy(&arena[from..from + s.len as usize]).into_owned()
-    };
-    Answered {
-        outcome: Some(ret.outcome()),
-        more: o.more,
-        flags: o.flags,
-        verb: if o.verb.len == 0 {
-            String::new()
-        } else {
-            at(o.verb)
-        },
-        target: if o.target.len == 0 {
-            String::new()
-        } else {
-            at(o.target)
-        },
-        fields: fields[..(o.fields_written as usize).min(fields.len())]
-            .iter()
-            .map(|field| (at(field.name), at(field.value)))
-            .collect(),
-        fields_needed: o.fields_needed,
-        arena_needed: o.arena_needed,
-        emitted: reply[..usize::try_from(o.emitted).unwrap().min(reply_cap)].to_vec(),
-        units: units[..(o.units_written as usize).min(units.len())]
-            .iter()
-            .map(|u| (u.class, u.amount))
-            .collect(),
-    }
+    panic!("conditional piece failed to settle");
 }
 
 const WORKING: &[u8] = br#"{"id":"t1","status":{"state":"working"}}"#;
@@ -859,8 +929,45 @@ fn callback_pending_and_short_refusals_preserve_one_budget_charge_and_one_warnin
         serve(&door, 700, &auth, WORKING, 4096).outcome,
         Outcome::Pending
     );
+    let loans = || {
+        let pending = door.pending_serves.borrow();
+        let frame = &pending[&ticket(700)];
+        [
+            std::ptr::from_ref(&*frame.input) as usize,
+            std::ptr::from_ref(&*frame.output) as usize,
+            frame.input.body.ptr as usize,
+            frame.input.fields as usize,
+            frame.fields[0].value.ptr() as usize,
+            frame.input.reply_buf as usize,
+            frame.input.fields_buf as usize,
+            frame.input.arena_buf as usize,
+            frame.input.records_buf as usize,
+        ]
+    };
+    let original = loans();
+    for (body, cap) in [(COMPLETED, 4096), (WORKING, 8192)] {
+        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            recall(&door, 700, &auth, body, cap)
+        }))
+        .is_err());
+        assert_eq!(
+            loans(),
+            original,
+            "invalid re-entry cannot release pending loans"
+        );
+    }
+    assert_eq!(
+        recall(&door, 700, &auth, WORKING, 4096).outcome,
+        Outcome::Pending
+    );
+    assert_eq!(
+        loans(),
+        original,
+        "actual Pending recall preserves every original loan"
+    );
     script(|s| s.read_pending = false);
     assert_eq!(recall(&door, 700, &auth, WORKING, 4096).status, 202);
+    assert!(!door.pending_serves.borrow().contains_key(&ticket(700)));
 
     for ticket in 701..759 {
         assert_eq!(serve(&door, ticket, &auth, WORKING, 4096).status, 202);
@@ -1222,7 +1329,33 @@ fn cancel_starts_no_publication_and_does_not_replace_a_submitted_attempt() {
     assert_eq!(pending.outcome, Some(Outcome::Pending));
     assert!(pending.emitted.is_empty());
     assert_eq!(pending.flags, 0);
+    let loans = || {
+        let pending = door.pending.borrow();
+        let frame = &pending[&ticket(1141)];
+        [
+            std::ptr::from_ref(&*frame.input) as usize,
+            std::ptr::from_ref(&*frame.output) as usize,
+            frame.input.member.ptr() as usize,
+            frame.input.bytes.ptr as usize,
+            frame.input.reply_buf as usize,
+            frame.input.fields_buf as usize,
+            frame.input.arena_buf as usize,
+            frame.input.records_buf as usize,
+            frame.input.units_buf as usize,
+        ]
+    };
+    let original_loans = loans();
+    assert_eq!(
+        piece(&door, 1141, Given::attempt(b"vendor"), 65536).outcome,
+        Some(Outcome::Pending)
+    );
+    assert_eq!(
+        loans(),
+        original_loans,
+        "paused conditional piece keeps its original frame"
+    );
     assert_eq!(door.cancel_unit(1141), Outcome::Ready);
+    assert!(!door.pending.borrow().contains_key(&ticket(1141)));
     let original = script(|s| s.conditional.emitted.last().unwrap().clone());
     script(|s| {
         s.conditional.pause_commit = false;
@@ -1255,7 +1388,9 @@ fn canceled_raw_callback_settles_late_applied_once_across_lost_driver_ack() {
         Outcome::Pending
     );
     let original = script(|s| s.conditional.emitted.last().unwrap().clone());
+    assert!(door.pending_serves.borrow().contains_key(&ticket(1200)));
     assert_eq!(door.cancel_unit(1200), Outcome::Ready);
+    assert!(!door.pending_serves.borrow().contains_key(&ticket(1200)));
     let reads = script(|s| s.gets);
     let emitted = script(|s| s.conditional.emitted.len());
     let receipt = script(|s| s.conditional.detach(ticket(1200)));
@@ -1276,6 +1411,17 @@ fn canceled_raw_callback_settles_late_applied_once_across_lost_driver_ack() {
     );
     let first = sticky_settlement_driver(&door, false);
     assert_eq!(first.outcome, Outcome::Pending);
+    let driver_loans = || {
+        let driver = door.driver.borrow();
+        let frame = driver.as_ref().unwrap();
+        assert!(frame.pending);
+        [
+            std::ptr::from_ref(&*frame.input) as usize,
+            std::ptr::from_ref(&*frame.output) as usize,
+            frame.input.sessions_buf as usize,
+        ]
+    };
+    let original_driver_loans = driver_loans();
     assert!(wire::read_settlement_ack(&first.extensions)
         .unwrap()
         .unwrap()
@@ -1292,6 +1438,23 @@ fn canceled_raw_callback_settles_late_applied_once_across_lost_driver_ack() {
     assert_eq!(first.extensions, repeated.extensions);
     let repeated_drive = sticky_settlement_driver(&door, false);
     assert_eq!(repeated_drive.outcome, Outcome::Pending);
+    assert_eq!(
+        driver_loans(),
+        original_driver_loans,
+        "DRIVE resumes its original frames and sessions loan after the TICK handoff"
+    );
+    assert_ne!(
+        door.driver
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .input
+            .drive
+            .head
+            .flags
+            & busbar_contract::abi::mechanism::call::FLAG_RESUME,
+        0
+    );
     assert_eq!(first.extensions, repeated_drive.extensions);
     assert_eq!(
         script(|s| s.notifications),
