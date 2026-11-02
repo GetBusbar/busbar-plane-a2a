@@ -86,18 +86,23 @@ fn project_view(
         std::ptr::from_mut(&mut out).cast(),
     )
     .outcome();
-    busbar_contract::abi::plane::check::check_project(
-        outcome,
-        &out,
-        &busbar_contract::abi::plane::check::ProjectHost {
-            signals: &signals,
-            signals_cap: signals.len() as u64,
-            messages: &messages,
-            messages_cap: messages.len() as u64,
-            arena: (arena.as_ptr(), arena.len() as u64),
-            rewrite: false,
-        },
-    )
+    // SAFETY: the production project operation above wrote into these live host buffers. Its
+    // current A2A projection emits no signals, so no recognized tag can select an uninitialized
+    // union member; the initialized signal backing storage also remains live through this check.
+    unsafe {
+        busbar_contract::abi::plane::check::check_project(
+            outcome,
+            &out,
+            &busbar_contract::abi::plane::check::ProjectHost {
+                signals: &signals,
+                signals_cap: signals.len() as u64,
+                messages: &messages,
+                messages_cap: messages.len() as u64,
+                arena: (arena.as_ptr(), arena.len() as u64),
+                rewrite: false,
+            },
+        )
+    }
     .expect("the answer passes the loader's check");
     let s = out.view.session;
     let session = (!s.ptr().is_null()).then(|| {
