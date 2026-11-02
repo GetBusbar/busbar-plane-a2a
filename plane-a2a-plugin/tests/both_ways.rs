@@ -511,16 +511,32 @@ mod both_ways {
         load_linked(&row, bind(d)).expect("the linked door loads")
     }
 
+    fn actual_image() -> std::path::PathBuf {
+        let path = match std::env::var_os("BUSBAR_PLUGIN_CDYLIB") {
+            Some(path) => std::path::PathBuf::from(path),
+            None => std::env::current_exe()
+                .expect("the test binary has a path")
+                .parent()
+                .expect("the test deps directory")
+                .join(busbar_plugin_loader::plugin_library_filename(
+                    "busbar_plane_a2a_plugin",
+                )),
+        };
+        assert!(
+            path.is_absolute(),
+            "the actual A2A artifact path must be absolute"
+        );
+        assert!(
+            path.is_file(),
+            "the actual A2A image is required; build this product first: {}",
+            path.display()
+        );
+        path
+    }
+
     /// This crate's dropped-in image, the `busbar_plane_a2a_plugin` cdylib `cargo test` builds
     fn dropped(d: &Dispatcher) -> Plugin<Plane> {
-        let exe = std::env::current_exe().expect("the test binary has a path");
-        let deps = exe.parent().expect("target/<profile>/deps");
-        let profile = deps.parent().expect("target/<profile>");
-        let file = busbar_plugin_loader::plugin_library_filename("busbar_plane_a2a_plugin");
-        let path = [profile.join(&file), deps.join(&file)]
-            .into_iter()
-            .find(|p| p.exists())
-            .unwrap_or_else(|| panic!("this crate's cdylib ({file}) is not built"));
+        let path = actual_image();
         let stated = LinkedRow::of_loaded(crate::loaded_door())
             .expect("the door renders its Statement")
             .statement;
@@ -969,14 +985,7 @@ mod both_ways {
         let stated =
             LinkedRow::of_loaded(crate::loaded_door()).expect("the door renders its Statement");
         let p: Plugin<Plane> = if dropped_in {
-            let exe = std::env::current_exe().expect("the test binary has a path");
-            let deps = exe.parent().expect("target/<profile>/deps").to_path_buf();
-            let profile = deps.parent().expect("target/<profile>").to_path_buf();
-            let file = busbar_plugin_loader::plugin_library_filename("busbar_plane_a2a_plugin");
-            let path = [profile.join(&file), deps.join(&file)]
-                .into_iter()
-                .find(|p| p.exists())
-                .unwrap_or_else(|| panic!("this crate's cdylib ({file}) is not built"));
+            let path = actual_image();
             load_dropped(&path, &stated.statement, bound).expect("the dropped door loads")
         } else {
             load_linked(&stated, bound).expect("the linked door loads")
