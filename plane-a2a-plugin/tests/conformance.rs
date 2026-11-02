@@ -280,4 +280,115 @@ mod actual_admission {
             );
         }
     }
+    /// These inputs change admission metadata only; all operation slots remain actual A2A.
+    #[test]
+    fn actual_a2a_rejects_incompatible_kind_abi_layout_and_plane_answer_layout() {
+        use busbar_contract::abi::mechanism::door::{Door, DoorParts, KindTailHead, Statement};
+        use busbar_contract::abi::plane::{PlaneTail, ANSWER_LAYOUT};
+        use busbar_plugin_loader::dispatch::load::rendering_of_raw;
+        use std::sync::atomic::{AtomicPtr, Ordering};
+        static MUTATED: AtomicPtr<Door> = AtomicPtr::new(std::ptr::null_mut());
+        extern "C" fn malformed() -> *const Door {
+            MUTATED.load(Ordering::SeqCst)
+        }
+        let row = LinkedRow::of_macro(busbar_plane_a2a::MACRO_DOOR).unwrap();
+        let path = image();
+        let d = Dispatcher::new(DispatchConfig::default());
+        // SAFETY: the real published SDK door and its full operation table are static.
+        let real = unsafe { Door::read_parts(busbar_plane_a2a::door()) };
+        assert_eq!(real.kind_abi, KindCode::Plane.abi_version());
+        assert_eq!(real.layout, KindCode::Plane.layout_fingerprint());
+        for abi in [real.kind_abi + 1, real.kind_abi.wrapping_sub(1)] {
+            // SAFETY: retain static actual product pointers, changing only admission metadata.
+            let bad = unsafe {
+                Door::__from_parts(DoorParts {
+                    kind_abi: abi,
+                    ..real
+                })
+            };
+            MUTATED.store(Box::into_raw(Box::new(bad)), Ordering::SeqCst);
+            let expected = LoadError::KindAbi {
+                kind: KindCode::Plane,
+                door: abi,
+                host: real.kind_abi,
+            };
+            assert_eq!(rendering_of_raw(malformed).err(), Some(expected.clone()));
+            assert_eq!(LinkedRow::of_raw(malformed).err(), Some(expected.clone()));
+            let stated = LinkedRow {
+                statement: row.statement.clone(),
+                door: malformed,
+            };
+            assert_eq!(
+                load_linked::<Plane>(&stated, bind(&d)).err(),
+                Some(expected)
+            );
+            let mut manifest = row.statement.clone();
+            let at = busbar_contract::abi::mechanism::rendering::RENDERING_MAGIC.len() + 8;
+            manifest[at..at + 4].copy_from_slice(&abi.to_le_bytes());
+            assert_eq!(
+                load_dropped::<Plane>(&path, &manifest, bind(&d)).err(),
+                Some(LoadError::ManifestKindAbi {
+                    stated: abi,
+                    host: real.kind_abi
+                })
+            );
+        }
+        for layout in [real.layout ^ 1, 0] {
+            // SAFETY: all immutable actual product pointers are retained.
+            let bad = unsafe { Door::__from_parts(DoorParts { layout, ..real }) };
+            MUTATED.store(Box::into_raw(Box::new(bad)), Ordering::SeqCst);
+            let refused = rendering_of_raw(malformed).unwrap_err();
+            match &refused {
+                LoadError::KindLayout {
+                    kind, stated, host, ..
+                } => assert_eq!(
+                    (*kind, *stated, *host),
+                    (KindCode::Plane, layout, real.layout)
+                ),
+                other => panic!("expected exact kind layout refusal: {other:?}"),
+            }
+            assert!(refused
+                .to_string()
+                .contains("rebuild against this busbar-contract"));
+            assert_eq!(LinkedRow::of_raw(malformed).err(), Some(refused.clone()));
+            let stated = LinkedRow {
+                statement: row.statement.clone(),
+                door: malformed,
+            };
+            assert_eq!(load_linked::<Plane>(&stated, bind(&d)).err(), Some(refused));
+        }
+        // SAFETY: actual admitted Statement and tail are immutable static plane data.
+        let statement = unsafe { real.statement.read_unaligned() };
+        let tail_size = unsafe { statement.kind_tail.read_unaligned() }.size as usize;
+        // SAFETY: PlaneTail is plain ABI integer/pointer data with valid zero defaults.
+        let mut tail: PlaneTail = unsafe { std::mem::zeroed() };
+        // SAFETY: copy only the bytes present in the source tail and fitting the target.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                statement.kind_tail.cast::<u8>(),
+                std::ptr::from_mut(&mut tail).cast::<u8>(),
+                tail_size.min(std::mem::size_of::<PlaneTail>()),
+            )
+        };
+        tail.answer_layout = ANSWER_LAYOUT - 1;
+        let tail = Box::leak(Box::new(tail));
+        let statement = Box::leak(Box::new(Statement {
+            kind_tail: std::ptr::from_ref(tail).cast::<KindTailHead>(),
+            ..statement
+        }));
+        // SAFETY: only plane answer-layout metadata changes, keeping real static product slots.
+        let bad = unsafe { Door::__from_parts(DoorParts { statement, ..real }) };
+        MUTATED.store(Box::into_raw(Box::new(bad)), Ordering::SeqCst);
+        let refused = rendering_of_raw(malformed).unwrap_err();
+        match &refused {
+            LoadError::PlaneLayout { stated, host, .. } => {
+                assert_eq!((*stated, *host), (ANSWER_LAYOUT - 1, ANSWER_LAYOUT))
+            }
+            other => panic!("expected exact plane layout refusal: {other:?}"),
+        }
+        assert!(refused
+            .to_string()
+            .contains("rebuild against this busbar-contract"));
+        assert_eq!(LinkedRow::of_raw(malformed).err(), Some(refused));
+    }
 }
