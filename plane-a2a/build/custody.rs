@@ -63,13 +63,13 @@ fn message_items(items: &mut Vec<Item>) -> syn::Result<()> {
                 let mut owns = false;
                 for variant in &enumeration.variants {
                     let variant_name = &variant.ident;
-                    match &variant.fields {
-                        Fields::Unit => arms.push(parse_quote! { Self::#variant_name => {} }),
+                    let mut arm: syn::Arm = match &variant.fields {
+                        Fields::Unit => parse_quote! { Self::#variant_name => {} },
                         Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {
                             owns = true;
-                            arms.push(parse_quote! {
+                            parse_quote! {
                                 Self::#variant_name(value) => crate::proto::custody::Wipe::wipe(value)
-                            });
+                            }
                         }
                         _ => {
                             return Err(syn::Error::new_spanned(
@@ -77,7 +77,17 @@ fn message_items(items: &mut Vec<Item>) -> syn::Result<()> {
                                 "unsupported protobuf variant",
                             ))
                         }
+                    };
+                    if variant
+                        .attrs
+                        .iter()
+                        .any(|attribute| attribute.path().is_ident("deprecated"))
+                    {
+                        arm.attrs.push(parse_quote! {
+                            #[expect(deprecated, reason = "The original protobuf variant is deprecated but its owned payload must still be wiped")]
+                        });
                     }
+                    arms.push(arm);
                 }
                 additions.push(parse_quote! {
                     impl crate::proto::custody::Wipe for #name {
@@ -150,7 +160,7 @@ impl VisitMut for Locals {
                 && matches!(&*init.expr, Expr::Path(path) if path.path.is_ident("None"))
             {
                 self.0.insert(name.ident.to_string());
-                init.expr = Box::new(parse_quote! { crate::proto::custody::Guard::new(None) });
+                *init.expr = parse_quote! { crate::proto::custody::Guard::new(None) };
             }
         }
         visit_mut::visit_local_mut(self, local);
@@ -193,7 +203,7 @@ impl VisitMut for Guards {
                     unreachable!("pbjson visit_str names its value")
                 };
                 let name = &binding.ident;
-                argument.ty = Box::new(parse_quote! { String });
+                *argument.ty = parse_quote! { String };
                 method.block = parse_quote! {
                     {
                         let #name = crate::proto::custody::Guard::new(#name);
@@ -224,7 +234,7 @@ impl VisitMut for Guards {
             Expr::Assign(assign) if self.local(&assign.left) => {
                 self.visit_expr_mut(&mut assign.right);
                 let left = &assign.left;
-                assign.left = Box::new(parse_quote! { *#left });
+                *assign.left = parse_quote! { *#left };
                 return;
             }
             Expr::MethodCall(call) if self.local(&call.receiver) => {
@@ -233,7 +243,7 @@ impl VisitMut for Guards {
                 }
                 if call.method != "is_some" {
                     let receiver = &call.receiver;
-                    call.receiver = Box::new(parse_quote! { #receiver.take() });
+                    *call.receiver = parse_quote! { #receiver.take() };
                 }
                 return;
             }

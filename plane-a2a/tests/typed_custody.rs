@@ -157,6 +157,71 @@ enum Element {
     Text(String),
     Fail,
 }
+
+/// A non-null JSON field enters an Option through visit_some, unlike Serde's value adapters.
+struct Present<D>(D);
+
+macro_rules! delegate_present {
+    ($($method:ident $(, $arg:ident: $ty:ty)*;)*) => {
+        $(fn $method<V: Visitor<'de>>(self, $($arg: $ty,)* visitor: V) -> Result<V::Value, Self::Error> {
+            self.0.$method($($arg,)* visitor)
+        })*
+    };
+}
+
+impl<'de, D: Deserializer<'de>> Deserializer<'de> for Present<D> {
+    type Error = D::Error;
+
+    fn deserialize_option<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Self::Error> {
+        visitor.visit_some(self.0)
+    }
+
+    fn is_human_readable(&self) -> bool {
+        self.0.is_human_readable()
+    }
+
+    delegate_present! {
+        deserialize_any;
+        deserialize_bool;
+        deserialize_i8;
+        deserialize_i16;
+        deserialize_i32;
+        deserialize_i64;
+        deserialize_i128;
+        deserialize_u8;
+        deserialize_u16;
+        deserialize_u32;
+        deserialize_u64;
+        deserialize_u128;
+        deserialize_f32;
+        deserialize_f64;
+        deserialize_char;
+        deserialize_str;
+        deserialize_string;
+        deserialize_bytes;
+        deserialize_byte_buf;
+        deserialize_unit;
+        deserialize_unit_struct, name: &'static str;
+        deserialize_newtype_struct, name: &'static str;
+        deserialize_seq;
+        deserialize_tuple, len: usize;
+        deserialize_tuple_struct, name: &'static str, len: usize;
+        deserialize_map;
+        deserialize_struct, name: &'static str, fields: &'static [&'static str];
+        deserialize_enum, name: &'static str, variants: &'static [&'static str];
+        deserialize_identifier;
+        deserialize_ignored_any;
+    }
+}
+
+impl<'de, D: Deserializer<'de>> IntoDeserializer<'de, D::Error> for Present<D> {
+    type Deserializer = Self;
+
+    fn into_deserializer(self) -> Self::Deserializer {
+        self
+    }
+}
+
 impl<'de> IntoDeserializer<'de, Error> for Element {
     type Deserializer = Self;
     fn into_deserializer(self) -> Self {
@@ -196,8 +261,9 @@ fn generated_repeated_string_wipes_prior_elements_when_a_later_element_fails() {
     watch(credential.as_bytes());
     let values =
         SeqDeserializer::<_, Error>::new([Element::Text(credential), Element::Fail].into_iter());
-    let input = MapDeserializer::<_, Error>::new([("list", values)].into_iter());
-    assert!(pb::StringList::deserialize(input).is_err());
+    let input = MapDeserializer::<_, Error>::new([("list", Present(values))].into_iter());
+    let error = pb::StringList::deserialize(input).unwrap_err();
+    assert_eq!(error.to_string(), "later element failed");
     assert_eq!(WIPED.with(Cell::get), Some(true));
 }
 
@@ -206,8 +272,9 @@ fn generated_map_wipes_a_pending_key_when_its_value_fails() {
     let key = "scope-private-credential".to_string();
     watch(key.as_bytes());
     let scopes = MapDeserializer::<_, Error>::new([(key, Element::Fail)].into_iter());
-    let input = MapDeserializer::<_, Error>::new([("scopes", scopes)].into_iter());
-    assert!(pb::ClientCredentialsOAuthFlow::deserialize(input).is_err());
+    let input = MapDeserializer::<_, Error>::new([("scopes", Present(scopes))].into_iter());
+    let error = pb::ClientCredentialsOAuthFlow::deserialize(input).unwrap_err();
+    assert_eq!(error.to_string(), "later element failed");
     assert_eq!(WIPED.with(Cell::get), Some(true));
 }
 
