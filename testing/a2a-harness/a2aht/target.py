@@ -238,6 +238,15 @@ class Target:
         self._interface = fallback
         return fallback
 
+    def selection_metadata(self):
+        """Report only an already-selected interface, without discovering again.
+
+        Report writing happens after stop(), including when discovery or the
+        battery failed. It must neither fetch a card nor hide those results
+        behind a fresh selection exception.
+        """
+        return dict(self._interface) if isinstance(self._interface, dict) else None
+
     def _headers(self, extra=None, version=spec.PROTOCOL_VERSION):
         h = {}
         if version:

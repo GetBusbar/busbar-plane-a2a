@@ -142,7 +142,7 @@ def cmd_run(args):
                         meta={"tier": args.tier,
                               "client_drive_configured":
                                   bool(config["client_drive"]),
-                              "selected_interface": target.pick_interface(),
+                              "selected_interface": target.selection_metadata(),
                               "interface_coverage": "one selected interface; see "
                                   "card.every_declared_binding_is_exercised for gaps",
                               # WHICH DIRECTIONS THIS RUN MEASURED. `--role server`

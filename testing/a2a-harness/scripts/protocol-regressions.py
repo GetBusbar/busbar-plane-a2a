@@ -13,9 +13,9 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from a2aht import jcs, runner, spec, tests_adversarial, tests_card, tests_client, tests_core, tests_hostile, transport
+from a2aht import cli, jcs, runner, spec, tests_adversarial, tests_card, tests_client, tests_core, tests_hostile, transport
 from a2aht.model import NotConfigured
-from a2aht.target import Call
+from a2aht.target import Call, Target
 from a2aht.fakes import FakePeer
 
 
@@ -34,6 +34,27 @@ class Context:
 
 
 class ProtocolRegressions(unittest.TestCase):
+    def test_failed_discovery_does_not_break_report_metadata(self):
+        target = Target(endpoint="http://fixture.invalid")
+        target._card = []  # reachable JSON, but not a usable AgentCard
+        row = {"id": "card.served", "outcome": "ERROR", "assertions": 0,
+               "role": "server", "clause": "fixture", "defect": "fixture",
+               "detail": "malformed card", "observations": {}, "notes": []}
+        result = SimpleNamespace(outcome="ERROR", to_dict=lambda: row)
+        test = SimpleNamespace(role="server", tier="every-commit")
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(cli, "build_target", return_value=target), \
+             patch.object(cli, "_preflight", return_value=None), \
+             patch.object(runner, "load_tests", return_value=[test]), \
+             patch.object(runner, "run_battery", return_value=[result]):
+            path = Path(directory) / "report.json"
+            with patch("sys.stdout", io.StringIO()), patch("sys.stderr", io.StringIO()):
+                self.assertEqual(cli.main(["run", "--endpoint", target.endpoint,
+                                           "--json", str(path)]), 1)
+            report = json.loads(path.read_text())
+            self.assertEqual(report["results"][0]["outcome"], "ERROR")
+            self.assertIsNone(report["meta"]["selected_interface"])
+
     def test_binding_coverage_reports_unselected_interfaces_even_when_drivable(self):
         ctx = Context()
         selected = {"url": "http://one/a2a", "protocolBinding": "JSONRPC"}
