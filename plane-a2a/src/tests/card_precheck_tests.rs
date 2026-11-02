@@ -13,7 +13,7 @@ use busbar_contract::abi::mechanism::call::{Outcome, RawOutcome};
 use busbar_contract::abi::mechanism::ticket::{HostCtx, HostTables, Ticket};
 use busbar_contract::abi::sdk::Services;
 use busbar_contract::abi::sdk::conn::Host;
-use busbar_contract::abi::sdk::test_support::{lend, zeroed};
+use busbar_contract::abi::sdk::test_support::zeroed;
 
 use super::*;
 
@@ -88,18 +88,20 @@ fn card_door(with_judgements: bool) -> A2aDoor {
         services: &services,
         io: std::ptr::null(),
     };
-    // SAFETY: both complete, initialized nested tables remain live through both SDK
-    // constructors, which copy their advertised prefixes. Every non-NULL callback is a
-    // static function, validates NONE context before state access, and retains no raw
-    // input/output pointer. Other slots are NULL; only existing thread-local Cells persist.
-    let tables = unsafe { lend(&tables) };
+    // SAFETY: both complete, initialized nested tables remain live during this snapshot.
+    // Their non-NULL slots are static functions validating NONE context and their exact input
+    // prefix. They retain no raw pointers; the SDK copies slots, and all other slots are NULL.
+    let host = unsafe { Host::from_raw(&tables) };
+    let services = if with_judgements {
+        // SAFETY: the complete services table is still live, with the same validated static
+        // callbacks. This constructor copies it; no table pointer or loan escapes this call.
+        unsafe { Services::from_raw(&tables) }
+    } else {
+        None
+    };
     A2aDoor {
-        host: Some(Host::of(tables)),
-        services: if with_judgements {
-            Services::of(tables)
-        } else {
-            None
-        },
+        host: Some(host),
+        services,
         ..A2aDoor::default()
     }
 }
