@@ -122,7 +122,8 @@ def _verification(response: httpx.Response) -> tuple[str, str]:
     if (doc.get("state") == "error" and fingerprint is None and
             failure == "the agent card is signed, but not by the pinned issuer key"):
         return "signature_refused", failure
-    if failure or not isinstance(fingerprint, str) or not fingerprint.strip():
+    if (doc.get("state") == "error" or failure or
+            not isinstance(fingerprint, str) or not fingerprint.strip()):
         return "inconclusive", f"no unambiguous verification verdict: {short(doc)}"
     return "verified", f"fingerprint {fingerprint}"
 

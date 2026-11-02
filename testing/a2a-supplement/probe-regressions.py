@@ -143,6 +143,7 @@ class ProbeRegressions(unittest.TestCase):
                  (malformed, Verdict.ERROR), (response([]), Verdict.ERROR),
                  (response({}), Verdict.ERROR), (response({"fingerprint": 7}), Verdict.ERROR),
                  (response({"failure": "network connection failed"}), Verdict.ERROR),
+                 (response({"state": "error", "fingerprint": "contradiction"}), Verdict.ERROR),
                  (response(dict(refused, fingerprint="contradiction")), Verdict.ERROR)]
         cases += [(response(refused, code), Verdict.ERROR) for code in (401, 403, 500)]
         for bad, expected in cases:
