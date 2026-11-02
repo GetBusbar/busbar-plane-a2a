@@ -5,8 +5,8 @@
 use super::*;
 use busbar_contract::abi::host::conn::connector::EstablishIn;
 use busbar_contract::abi::host::service::{DestJudgeIn, TrustServesIn};
-use busbar_contract::abi::sdk::test_support::fake::{self, FakeHost, FakeService, ServiceCall};
 use busbar_contract::abi::sdk::{conn::StaticHost, StaticServices};
+use busbar_test_kit::test_support::fake::{self, FakeHost, FakeService, ServiceCall};
 use std::cell::Cell;
 
 impl A2aDoor {

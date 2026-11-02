@@ -4,7 +4,7 @@
 use super::*;
 use crate::tests::raw_custody_probe::{Probe, SECRET};
 use busbar_contract::abi::sdk::conn::Host;
-use busbar_contract::abi::sdk::test_support::fake::FakeHost;
+use busbar_test_kit::test_support::fake::FakeHost;
 
 #[test]
 fn records_scratch_growth_and_pending_release_retire_each_initialized_owner() {

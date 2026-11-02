@@ -38,7 +38,7 @@ fn a_write_names_its_kind_by_the_tails_index() {
 // ── the host records, through the SDK wrappers ───────────────────────────────────────────────────
 
 use busbar_contract::abi::sdk::conn::Host;
-use busbar_contract::abi::sdk::test_support::fake::FakeHost;
+use busbar_test_kit::test_support::fake::FakeHost;
 
 const TICKET: Ticket = Ticket {
     slot: 3,
