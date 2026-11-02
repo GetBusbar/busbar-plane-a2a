@@ -991,7 +991,7 @@ mod both_ways {
             load_linked(&stated, bound).expect("the linked door loads")
         };
         assert!(
-            p.served().record_kinds.iter().any(|kind| *kind == "card"),
+            p.declared().record_kinds.iter().any(|kind| *kind == "card"),
             "the actual product declares the card namespace used by this log case"
         );
         let mut o: Frame<PlaneOpenIn, PlaneOpenOut> = Frame::new(z(), z());

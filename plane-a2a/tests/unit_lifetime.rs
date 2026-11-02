@@ -693,10 +693,17 @@ impl PieceFrame {
             } else {
                 at(o.lane)
             }),
-            need: (o.flags & busbar_contract::abi::plane::EMIT_TO_FAR_END != 0).then(|| o.need),
+            need: if o.flags & busbar_contract::abi::plane::EMIT_TO_FAR_END != 0 {
+                Some(o.need)
+            } else {
+                None
+            },
             fault: Some(o.fault),
-            final_status: (o.flags & busbar_contract::abi::plane::EMIT_FINAL_STATUS != 0)
-                .then(|| o.final_status),
+            final_status: if o.flags & busbar_contract::abi::plane::EMIT_FINAL_STATUS != 0 {
+                Some(o.final_status)
+            } else {
+                None
+            },
             verb: if o.verb.len == 0 {
                 String::new()
             } else {
