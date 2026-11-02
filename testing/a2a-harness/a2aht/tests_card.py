@@ -8,8 +8,9 @@ import copy
 import json
 
 from .model import (a2a_test, ROLE_SERVER, EVERY_COMMIT, PULL_REQUEST,
-                    PRE_RELEASE, NEEDS_FAKE_PEER, Inapplicable)
+                    PRE_RELEASE, NEEDS_FAKE_PEER, Inapplicable, NotConfigured)
 from . import spec, transport
+from .target import send_params
 
 
 @a2a_test(
@@ -131,41 +132,41 @@ def test_card_interfaces(ctx):
     role=ROLE_SERVER, tier=EVERY_COMMIT,
 )
 def test_all_bindings_driven(ctx):
-    declared = [i.get("protocolBinding") for i in ctx.target.interfaces()]
+    interfaces = ctx.target.interfaces()
+    declared = [i.get("protocolBinding") for i in interfaces]
     drivable = {"JSONRPC", "HTTP+JSON"}
-    undrivable = sorted({b for b in declared if b not in drivable})
+    selected = ctx.target.pick_interface()
+    selected_index = next((index for index, iface in enumerate(interfaces)
+                           if iface is selected), None)
+    # The normal battery selects ONE interface. Knowing how to encode a
+    # second transport is not evidence that this run exercised that endpoint.
+    gaps = [{"index": index, "url": iface.get("url"),
+             "binding": iface.get("protocolBinding"),
+             "reason": "unselected" if iface.get("protocolBinding") in drivable
+                       else "unsupported transport"}
+            for index, iface in enumerate(interfaces) if index != selected_index]
     ctx.observe("declared_bindings", sorted(set(declared)))
     ctx.observe("bindings_this_harness_can_drive", sorted(drivable))
-    ctx.observe("bindings_not_exercised", undrivable)
-
-    allow = str(ctx.config.get("allow_undriven_bindings", "")).strip()
-    allowed = {b.strip() for b in allow.split(",") if b.strip()}
-    unaccounted = [b for b in undrivable if b not in allowed]
-
+    ctx.observe("selected_interface", {"index": selected_index, "url": selected.get("url"),
+                                       "binding": selected.get("protocolBinding")})
+    ctx.observe("interfaces_not_exercised", gaps)
+    ctx.observe("bindings_not_exercised", sorted({str(i["binding"]) for i in gaps}))
+    if selected_index is None:
+        raise NotConfigured("no declared interface was selected; a synthesized endpoint is not coverage")
+    call = ctx.target.call("SendMessage", send_params("binding exercise"), iface=selected)
+    ctx.observe("selected_interface_operation", {"method": "SendMessage", "ok": call.ok})
     ctx.assert_must(
-        not unaccounted,
-        "the target declares binding(s) %s that this battery CANNOT DRIVE, "
-        "so those transports are completely untested while the run would "
-        "otherwise look green.\n"
-        "SPEC 5.1 requires every binding an agent supports to provide "
-        "identical functionality and consistent behaviour, so an untested "
-        "binding is untested surface, not a duplicate of a tested one.\n"
-        "gRPC in particular is not implemented here: driving it needs "
-        "generated stubs from a2a.proto and a protobuf runtime.\n"
-        "Either build the driver, or stop advertising the binding, or "
-        "acknowledge the gap explicitly with "
-        "--allow-undriven-bindings %s, which records it as a known hole "
-        "rather than hiding it."
-        % (unaccounted, ",".join(unaccounted)),
-        "Harness honesty rule: the battery must not report success on "
-        "surface it never touched.",
+        call.ok, "the selected interface did not complete SendMessage successfully",
+        "SPEC 3.1: the advertised interface must serve its operations",
     )
-    if allowed & set(undrivable):
-        ctx.note(
-            "ACKNOWLEDGED GAP: binding(s) %s are declared by the target and "
-            "are NOT exercised by this battery. Nothing in this run says "
-            "anything about them."
-            % sorted(allowed & set(undrivable)))
+    acknowledged = str(ctx.config.get("allow_undriven_bindings", "")).strip()
+    if acknowledged:
+        ctx.note("Requested gap acknowledgment: %s. Acknowledgment does not turn missing "
+                 "execution into a passing required coverage row." % acknowledged)
+    if gaps:
+        raise NotConfigured("this run did not exercise declared interface(s) %s. The selected "
+                            "interface's SendMessage is smoke evidence only; a full battery per "
+                            "interface remains unmeasured." % gaps)
 
 
 @a2a_test(

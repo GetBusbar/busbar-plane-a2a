@@ -13,9 +13,9 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from a2aht import jcs, spec, tests_adversarial, tests_card, tests_client, tests_core, tests_hostile, transport
+from a2aht import cli, jcs, runner, spec, tests_adversarial, tests_card, tests_client, tests_core, tests_hostile, transport
 from a2aht.model import NotConfigured
-from a2aht.target import Call
+from a2aht.target import Call, Target
 from a2aht.fakes import FakePeer
 
 
@@ -34,6 +34,105 @@ class Context:
 
 
 class ProtocolRegressions(unittest.TestCase):
+    def test_failed_discovery_does_not_break_report_metadata(self):
+        target = Target(endpoint="http://fixture.invalid")
+        target._card = []  # reachable JSON, but not a usable AgentCard
+        row = {"id": "card.served", "outcome": "ERROR", "assertions": 0,
+               "role": "server", "clause": "fixture", "defect": "fixture",
+               "detail": "malformed card", "observations": {}, "notes": []}
+        result = SimpleNamespace(outcome="ERROR", to_dict=lambda: row)
+        test = SimpleNamespace(role="server", tier="every-commit")
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(cli, "build_target", return_value=target), \
+             patch.object(cli, "_preflight", return_value=None), \
+             patch.object(runner, "load_tests", return_value=[test]), \
+             patch.object(runner, "run_battery", return_value=[result]):
+            path = Path(directory) / "report.json"
+            with patch("sys.stdout", io.StringIO()), patch("sys.stderr", io.StringIO()):
+                self.assertEqual(cli.main(["run", "--endpoint", target.endpoint,
+                                           "--json", str(path)]), 1)
+            report = json.loads(path.read_text())
+            self.assertEqual(report["results"][0]["outcome"], "ERROR")
+            self.assertIsNone(report["meta"]["selected_interface"])
+
+    def test_binding_coverage_reports_unselected_interfaces_even_when_drivable(self):
+        ctx = Context()
+        selected = {"url": "http://one/a2a", "protocolBinding": "JSONRPC"}
+        second = {"url": "http://two/a2a", "protocolBinding": "HTTP+JSON"}
+        observed = {}
+        calls = []
+        ctx.observe = lambda key, value, *rest: observed.__setitem__(key, value)
+        def call(method, params, iface):
+            calls.append(iface)
+            return SimpleNamespace(ok=True)
+        ctx.target = SimpleNamespace(interfaces=lambda: [selected],
+                                     pick_interface=lambda: selected, call=call)
+        tests_card.test_all_bindings_driven(ctx)
+        self.assertEqual(observed["interfaces_not_exercised"], [])
+        self.assertEqual(calls, [selected])
+        for other in (second, dict(second, protocolBinding="JSONRPC"),
+                      dict(second, protocolBinding="GRPC")):
+            ctx.target.interfaces = lambda: [selected, other]
+            ctx.config = {"allow_undriven_bindings": "HTTP+JSON,JSONRPC,GRPC"}
+            with self.assertRaises(NotConfigured):
+                tests_card.test_all_bindings_driven(ctx)
+            self.assertEqual(observed["interfaces_not_exercised"][0]["url"], other["url"])
+            self.assertEqual(observed["selected_interface_operation"]["ok"], True)
+        ctx.target.interfaces = lambda: [selected]
+        ctx.target.call = lambda *a, **k: SimpleNamespace(ok=False)
+        with self.assertRaises(AssertionError):
+            tests_card.test_all_bindings_driven(ctx)
+        ctx.target.interfaces = lambda: []
+        with self.assertRaises(NotConfigured):
+            tests_card.test_all_bindings_driven(ctx)
+
+    def test_differential_requires_complete_asserted_subject_evidence(self):
+        def report():
+            return {"target": "fixture", "spec": {"tag": "v1.0.1"}, "results": [
+                {"id": "fixture.%d" % i, "outcome": "PASS", "assertions": 1,
+                 "observations": {}, "clause": "fixture", "defect": "fixture",
+                 "detail": ""} for i in range(10)]}
+        control = report()
+        def fails(subject, ctl=control):
+            diff = runner.differential(ctl, subject)
+            output = io.StringIO()
+            self.assertGreater(runner.print_differential(diff, output), 0)
+            self.assertNotIn("NO DEFECTS", output.getvalue())
+            return diff
+        self.assertEqual(runner.print_differential(
+            runner.differential(control, report()), io.StringIO()), 0)
+        subject = report()
+        subject["results"] = []
+        fails(subject)
+        for outcome in ("NOT_CONFIGURED", "DEVIATION_CHANGED", "DEVIATION_FIXED"):
+            subject = report()
+            subject["results"][0]["outcome"] = outcome
+            fails(subject)
+        subject = report()
+        subject["results"][0].update(id="core.get_task_roundtrip", outcome="INAPPLICABLE")
+        fails(subject)
+        subject = report()
+        subject["results"].append(dict(subject["results"][0]))
+        fails(subject)
+        subject = report()
+        subject["spec"]["tag"] = "different"
+        fails(subject)
+        subject = report()
+        for row in subject["results"]:
+            row["assertions"] = 0
+        fails(subject)
+        subject = report()
+        subject["results"][0].update(id="missing.from.control", outcome="FAIL")
+        self.assertEqual(len(fails(subject)["defects"]), 1)
+        red_control = report()
+        red_control["results"][0]["outcome"] = "FAIL"
+        self.assertEqual(fails(report(), red_control)["defects"], [])
+        for label in ("control", "subject"):
+            unknown = report()
+            unknown["results"][0]["outcome"] = "UNKNOWN"
+            fails(unknown if label == "subject" else report(),
+                  unknown if label == "control" else control)
+
     def test_discovery_query_is_not_counted_as_an_operation(self):
         import urllib.request
         with FakePeer() as peer:
@@ -387,17 +486,49 @@ Path(os.environ["HEADER_CAPTURE"]).write_text(json.dumps({
             def close(self):
                 events.append("closed")
         def healthy(*_):
-            self.assertIn(b"{", events)
+            body = json.loads(events[1])
+            self.assertEqual(body["method"], "SendMessage")
+            self.assertIn("message", body["params"])
+            self.assertIn(b"authorization: Bearer fixture\r\n", events[0])
+            self.assertIn(b"A2A-Version: 1.0\r\n", events[0])
+            self.assertIn(b"Content-Type: application/a2a+json\r\n", events[0])
             self.assertNotIn("closed", events)
             events.append("healthy")
             return SimpleNamespace(error=None, http=None)
         ctx = Context()
-        ctx.target = SimpleNamespace(insecure=False, call=healthy)
+        ctx.target = SimpleNamespace(insecure=False, call=healthy,
+            request_headers=lambda extra: dict(extra, **{
+                "authorization": "Bearer fixture", "A2A-Version": "1.0"}))
         with patch.object(transport, "_connect", return_value=(Socket(), "localhost", "/")), \
              patch.object(tests_adversarial, "_endpoint", return_value="http://localhost/"), \
              patch.object(tests_adversarial, "_binding", return_value="JSONRPC"):
             tests_adversarial.test_connect_and_stall(ctx)
         self.assertLess(events.index("healthy"), events.index("closed"))
+
+    def test_truncated_probe_preserves_auth_version_and_binding_envelope(self):
+        ctx = Context()
+        ctx.target = SimpleNamespace(insecure=False,
+            call=lambda *a: SimpleNamespace(error=None, http=None),
+            request_headers=lambda extra: dict(extra, **{
+                "authorization": "Bearer fixture", "A2A-Version": "1.0"}))
+        for binding in ("JSONRPC", "HTTP+JSON"):
+            with patch.object(tests_adversarial, "_endpoint", return_value="http://fixture/a2a"), \
+                 patch.object(tests_adversarial, "_binding", return_value=binding), \
+                 patch.object(transport, "raw_send", return_value=b"") as send:
+                tests_adversarial.test_truncated_body(ctx)
+            args, kwargs = send.call_args
+            body = json.loads(args[2])
+            self.assertEqual(kwargs["headers"]["authorization"], "Bearer fixture")
+            self.assertEqual(kwargs["headers"]["A2A-Version"], "1.0")
+            self.assertGreater(kwargs["declared_length"], len(args[2]))
+            self.assertLess(kwargs["send_bytes"], len(args[2]))
+            if binding == "JSONRPC":
+                self.assertEqual(body["jsonrpc"], "2.0")
+                self.assertEqual(body["method"], "SendMessage")
+                self.assertIn("message", body["params"])
+            else:
+                self.assertTrue(args[0].endswith("/message:send"))
+                self.assertIn("message", body)
 
     def test_deep_nesting_reaches_transport_at_default_recursion_limit(self):
         captured = []

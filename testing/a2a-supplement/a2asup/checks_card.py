@@ -71,35 +71,23 @@ def _load_public_key(issuer_key: str):
 
 
 def _verify(public_key, alg: str, signing_input: bytes, signature: bytes) -> bool:
-    from cryptography.exceptions import InvalidSignature  # noqa: PLC0415
-    from cryptography.hazmat.primitives import hashes  # noqa: PLC0415
-    from cryptography.hazmat.primitives.asymmetric import ec, ed25519, padding, rsa  # noqa: PLC0415
+    from a2aht.jcs import verify_public_key  # noqa: PLC0415
 
-    try:
-        if isinstance(public_key, ed25519.Ed25519PublicKey):
-            public_key.verify(signature, signing_input)
-            return True
-        if isinstance(public_key, ec.EllipticCurvePublicKey):
-            from cryptography.hazmat.primitives.asymmetric.utils import (  # noqa: PLC0415
-                encode_dss_signature,
-            )
+    return verify_public_key(public_key, alg, signing_input, signature)
 
-            half = len(signature) // 2
-            der = encode_dss_signature(
-                int.from_bytes(signature[:half], "big"),
-                int.from_bytes(signature[half:], "big"),
-            )
-            digest = {"ES256": hashes.SHA256(), "ES384": hashes.SHA384(), "ES512": hashes.SHA512()}[
-                alg
-            ]
-            public_key.verify(der, signing_input, ec.ECDSA(digest))
-            return True
-        if isinstance(public_key, rsa.RSAPublicKey):
-            public_key.verify(signature, signing_input, padding.PKCS1v15(), hashes.SHA256())
-            return True
-    except InvalidSignature:
+
+def _verify_signature(public_key, signature: dict, payload_text: str) -> bool:
+    from a2aht.jcs import crit_is_understood  # noqa: PLC0415
+
+    header = json.loads(b64url_decode(signature["protected"]))
+    if (not isinstance(header, dict) or
+            any(not isinstance(header.get(name), str) or not header[name].strip()
+                for name in ("alg", "kid")) or header.get("b64", True) is not True or
+            not crit_is_understood(header)):
         return False
-    raise TypeError(f"unsupported key type {type(public_key).__name__} for alg {alg!r}")
+    return _verify(public_key, header.get("alg"),
+                   _signing_input(signature["protected"], payload_text),
+                   b64url_decode(signature["signature"]))
 
 
 def _signatures(card: dict) -> list:
@@ -154,12 +142,7 @@ def check_card_sign_001(target: Target, issuer_key: str | None) -> Result:
             evidence.append(f"signatures[{index}] protected is not base64url JSON: {exc}")
             continue
         try:
-            verified = _verify(
-                public_key,
-                str(header.get("alg")),
-                _signing_input(protected_b64, canonical),
-                b64url_decode(sig["signature"]),
-            )
+            verified = _verify_signature(public_key, sig, canonical)
         except Exception as exc:  # noqa: BLE001
             evidence.append(f"signatures[{index}] verification raised {type(exc).__name__}: {exc}")
             continue
@@ -180,12 +163,7 @@ def check_card_sign_001(target: Target, issuer_key: str | None) -> Result:
     naive_ok = False
     for sig in sigs:
         try:
-            naive_ok = naive_ok or _verify(
-                public_key,
-                str(json.loads(b64url_decode(sig["protected"])).get("alg")),
-                _signing_input(sig["protected"], naive),
-                b64url_decode(sig["signature"]),
-            )
+            naive_ok = naive_ok or _verify_signature(public_key, sig, naive)
         except Exception:  # noqa: BLE001, S110
             pass
     evidence.append(f"verifies over a NON-canonical json.dumps of the same document: {naive_ok}")
@@ -227,10 +205,11 @@ def check_card_sign_002(target: Target, issuer_key: str | None) -> Result:
     excluded_ok = False
     included_ok = False
     for index, sig in enumerate(sigs):
-        alg = str(json.loads(b64url_decode(sig["protected"])).get("alg"))
-        raw = b64url_decode(sig["signature"])
-        a = _verify(public_key, alg, _signing_input(sig["protected"], without), raw)
-        b = _verify(public_key, alg, _signing_input(sig["protected"], with_sigs), raw)
+        try:
+            a = _verify_signature(public_key, sig, without)
+            b = _verify_signature(public_key, sig, with_sigs)
+        except (KeyError, TypeError, ValueError):
+            a = b = False
         evidence.append(
             f"signatures[{index}]: verifies with `signatures` EXCLUDED={a}, INCLUDED={b}"
         )
@@ -290,9 +269,10 @@ def check_card_sign_003(target: Target) -> Result:
             failures.append(f"signatures[{index}].protected decodes to {type(header).__name__}")
             continue
         evidence.append(f"signatures[{index}] protected header = {short(header)}")
-        missing = [m for m in ("alg", "kid") if not header.get(m)]
+        missing = [m for m in ("alg", "kid")
+                   if not isinstance(header.get(m), str) or not header[m].strip()]
         if missing:
-            failures.append(f"signatures[{index}] protected header lacks {missing}")
+            failures.append(f"signatures[{index}] protected header needs nonempty strings for {missing}")
         if header.get("alg") == "none":
             failures.append(
                 f"signatures[{index}] declares alg 'none', which is an unsigned JWS wearing the "

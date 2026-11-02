@@ -284,7 +284,7 @@ def raw_send(url, method, body_bytes, headers=None, declared_length=None,
 
 
 def raw_connect_and_stall(url, seconds, timeout=DEFAULT_TIMEOUT, insecure=False,
-                          while_stalled=None):
+                          while_stalled=None, headers=None, body_bytes=b"{"):
     """Open a connection, send a partial request, then go silent.
 
     Returns the number of seconds until the peer closed on us, or None if it
@@ -293,10 +293,12 @@ def raw_connect_and_stall(url, seconds, timeout=DEFAULT_TIMEOUT, insecure=False,
     """
     sock, host, path = _connect(url, timeout, insecure)
     try:
-        head = ("POST %s HTTP/1.1\r\nHost: %s\r\nContent-Length: 1000\r\n\r\n"
-                % (path, host)).encode("ascii")
+        lines = ["POST %s HTTP/1.1" % path, "Host: %s" % host,
+                 "Content-Length: %d" % (len(body_bytes) + 500)]
+        lines.extend("%s: %s" % item for item in (headers or {}).items())
+        head = ("\r\n".join(lines) + "\r\n\r\n").encode("ascii")
         sock.sendall(head)
-        sock.sendall(b"{")
+        sock.sendall(body_bytes)
         if while_stalled is not None:
             while_stalled()
         sock.settimeout(seconds)

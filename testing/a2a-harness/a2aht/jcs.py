@@ -101,6 +101,10 @@ def verify_jws(signature_obj, canonical_payload, jwks=None, timeout=10.0):
         return out
     out["alg"] = header.get("alg")
     out["kid"] = header.get("kid")
+    if any(not isinstance(header.get(name), str) or not header[name].strip()
+           for name in ("alg", "kid")):
+        out.update(verified=False, reason="alg and kid must be nonempty strings")
+        return out
 
     if header.get("alg") == "none":
         out["verified"] = False
@@ -111,7 +115,7 @@ def verify_jws(signature_obj, canonical_payload, jwks=None, timeout=10.0):
     if header.get("alg") not in ("ES256", "ES384", "ES512", "RS256", "RS384", "RS512", "EdDSA"):
         out.update(verified=False, reason="unsupported asymmetric signature algorithm")
         return out
-    if not crit_is_understood(header):
+    if header.get("b64", True) is not True or not crit_is_understood(header):
         out.update(verified=False, reason="unsupported critical protected-header extension")
         return out
 
@@ -165,20 +169,12 @@ def verify_jws(signature_obj, canonical_payload, jwks=None, timeout=10.0):
 
 
 def _verify(jwk, alg, signing_input, sig):
-    from cryptography.hazmat.primitives import hashes
-    from cryptography.hazmat.primitives.asymmetric import ec, ed25519, padding, rsa
-    from cryptography.hazmat.primitives.asymmetric.utils import (
-        encode_dss_signature)
-    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives.asymmetric import ec, ed25519, rsa
 
     kty = jwk.get("kty")
     if kty == "OKP" and alg == "EdDSA" and jwk.get("crv") == "Ed25519":
         pub = ed25519.Ed25519PublicKey.from_public_bytes(b64url_decode(jwk["x"]))
-        try:
-            pub.verify(sig, signing_input)
-            return True
-        except InvalidSignature:
-            return False
+        return verify_public_key(pub, alg, signing_input, sig)
     if kty == "EC":
         curve = {"P-256": ec.SECP256R1(), "P-384": ec.SECP384R1(),
                  "P-521": ec.SECP521R1()}[jwk["crv"]]
@@ -186,29 +182,56 @@ def _verify(jwk, alg, signing_input, sig):
             int.from_bytes(b64url_decode(jwk["x"]), "big"),
             int.from_bytes(b64url_decode(jwk["y"]), "big"), curve)
         pub = numbers.public_key()
-        half = len(sig) // 2
-        der = encode_dss_signature(int.from_bytes(sig[:half], "big"),
-                                   int.from_bytes(sig[half:], "big"))
-        digest = {"ES256": hashes.SHA256(), "ES384": hashes.SHA384(),
-                  "ES512": hashes.SHA512()}[alg]
-        try:
-            pub.verify(der, signing_input, ec.ECDSA(digest))
-            return True
-        except InvalidSignature:
-            return False
+        return verify_public_key(pub, alg, signing_input, sig)
     if kty == "RSA":
         numbers = rsa.RSAPublicNumbers(
             int.from_bytes(b64url_decode(jwk["e"]), "big"),
             int.from_bytes(b64url_decode(jwk["n"]), "big"))
         pub = numbers.public_key()
-        digest = {"RS256": hashes.SHA256(), "RS384": hashes.SHA384(),
-                  "RS512": hashes.SHA512()}[alg]
-        try:
-            pub.verify(sig, signing_input, padding.PKCS1v15(), digest)
-            return True
-        except InvalidSignature:
-            return False
+        return verify_public_key(pub, alg, signing_input, sig)
     raise ValueError("unsupported key type %r" % kty)
+
+
+def verify_public_key(public_key, alg, signing_input, signature):
+    """Verify with the protected algorithm bound to key type, curve and width.
+
+    Shared by JWK-based battery verification and the supplement's operator
+    SPKI key; both must apply the same asymmetric JWS rules.
+    """
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec, ed25519, padding, rsa
+    from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
+
+    try:
+        if isinstance(public_key, ed25519.Ed25519PublicKey):
+            if alg != "EdDSA" or len(signature) != 64:
+                return False
+            public_key.verify(signature, signing_input)
+            return True
+        if isinstance(public_key, ec.EllipticCurvePublicKey):
+            parameters = {"ES256": ("secp256r1", 32, hashes.SHA256),
+                          "ES384": ("secp384r1", 48, hashes.SHA384),
+                          "ES512": ("secp521r1", 66, hashes.SHA512)}.get(alg)
+            if parameters is None:
+                return False
+            curve, width, digest = parameters
+            if public_key.curve.name != curve or len(signature) != width * 2:
+                return False
+            der = encode_dss_signature(int.from_bytes(signature[:width], "big"),
+                                       int.from_bytes(signature[width:], "big"))
+            public_key.verify(der, signing_input, ec.ECDSA(digest()))
+            return True
+        if isinstance(public_key, rsa.RSAPublicKey):
+            digest = {"RS256": hashes.SHA256, "RS384": hashes.SHA384,
+                      "RS512": hashes.SHA512}.get(alg)
+            if digest is None or len(signature) != (public_key.key_size + 7) // 8:
+                return False
+            public_key.verify(signature, signing_input, padding.PKCS1v15(), digest())
+            return True
+    except (InvalidSignature, ValueError):
+        return False
+    return False
 
 
 # ---------------------------------------------------------------------------

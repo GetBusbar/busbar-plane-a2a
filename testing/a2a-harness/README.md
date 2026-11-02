@@ -59,7 +59,21 @@ The differential separates two things that must never be conflated:
   Reported with both values and the governing clause, for a human. Never a
   failure.
 
+The command also exits nonzero for incomplete evidence: missing or duplicate rows,
+different specification versions, an asserted-row shortfall in either report, or
+outcomes in either run that make it red (including NOT_CONFIGURED and required
+profile INAPPLICABLE). `--allow-red` preserves reports; it does not make their
+differential successful. Compare the same selected battery on both targets.
+
 ## Tiers
+
+Each run selects the first supported interface on the card. The required
+`card.every_declared_binding_is_exercised` row drives SendMessage on that
+interface and lists every other declared interface as unmeasured, including
+other endpoints using the same binding. Such a gap is NOT_CONFIGURED and red;
+`--allow-undriven-bindings` records acknowledgment but does not change the verdict.
+A successful smoke operation does not establish a full battery on another
+interface. Full per-interface orchestration remains required for that claim.
 
     --tier every-commit    fast, hermetic, no optional capabilities
     --tier pull-request    the default; full conformance and adversarial

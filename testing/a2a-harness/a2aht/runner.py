@@ -95,7 +95,9 @@ def asserted_row_shortfall(results):
 # If the battery ever shrinks below this, something has stopped being
 # registered and the suite is quietly testing less than it claims. A count
 # that only ever goes up is not a safeguard; a floor that refuses to run is.
-MIN_EXPECTED_TESTS = 85
+# The JWS verifier self-check belongs to protocol-regressions.py, not to a
+# target's verdict. Its removal leaves 84 registered target scenarios.
+MIN_EXPECTED_TESTS = 84
 
 
 def load_tests():
@@ -370,26 +372,44 @@ def differential(control_report, subject_report):
     divergences = []
     outcome_shifts = []
     missing = []
+    incomplete = []
+    for label, report in (("control", control_report), ("subject", subject_report)):
+        shortfall = asserted_row_shortfall(report["results"])
+        if shortfall:
+            incomplete.append({"id": label, "why": shortfall})
+        ids = [r["id"] for r in report["results"]]
+        for duplicate in sorted({i for i in ids if ids.count(i) > 1}):
+            incomplete.append({"id": duplicate, "why": label + " report repeats this id"})
+        for row in report["results"]:
+            if row["outcome"] not in (PASS, OBSERVED, INAPPLICABLE, "BASELINED") + BAD_OUTCOMES:
+                incomplete.append({"id": row["id"], "why": label + " report has an unknown outcome"})
+            elif label == "control" and is_bad(row):
+                incomplete.append({"id": row["id"], "why": "control run is red: " + row["outcome"]})
+    if control_report["spec"] != subject_report["spec"]:
+        incomplete.append({"id": "spec", "why": "control and subject name different specifications"})
 
     for test_id, sub in sorted(subject.items()):
         ctl = control.get(test_id)
+        # A subject failure remains a failure even when the control omitted it.
+        if sub["outcome"] in (FAIL, ERROR):
+            defects.append({
+                "id": test_id,
+                "defect_caught": sub.get("defect", ""),
+                "clause": sub.get("clause") or (ctl or {}).get("clause", ""),
+                "subject_outcome": sub["outcome"],
+                "subject_detail": sub.get("detail", ""),
+                "control_outcome": (ctl or {}).get("outcome", "<not run>"),
+                "control_detail": (ctl or {}).get("detail", ""),
+                "also_fails_on_control": bool(ctl and ctl["outcome"] in (FAIL, ERROR)),
+            })
+        elif is_bad(sub):
+            incomplete.append({"id": test_id, "why": "subject run is red: " + sub["outcome"]})
         if ctl is None:
             missing.append({"id": test_id,
                             "why": "not present in the control report"})
             continue
 
-        if sub["outcome"] in (FAIL, ERROR):
-            defects.append({
-                "id": test_id,
-                "defect_caught": sub["defect"],
-                "clause": sub["clause"] or ctl["clause"],
-                "subject_outcome": sub["outcome"],
-                "subject_detail": sub["detail"],
-                "control_outcome": ctl["outcome"],
-                "control_detail": ctl["detail"],
-                "also_fails_on_control": ctl["outcome"] in (FAIL, ERROR),
-            })
-        elif sub["outcome"] != ctl["outcome"]:
+        if not is_bad(sub) and sub["outcome"] != ctl["outcome"]:
             outcome_shifts.append({
                 "id": test_id,
                 "control_outcome": ctl["outcome"],
@@ -432,11 +452,13 @@ def differential(control_report, subject_report):
         "divergences": divergences,
         "outcome_shifts": outcome_shifts,
         "missing": missing,
+        "incomplete": incomplete,
         "summary": {
             "defects": len(defects),
             "divergences": len(divergences),
             "outcome_shifts": len(outcome_shifts),
             "missing": len(missing),
+            "incomplete": len(incomplete),
         },
     }
 
@@ -488,13 +510,21 @@ def print_differential(diff, stream=sys.stdout):
             w("  %s  %s\n" % (d["id"], d["why"]))
         w("\n")
 
+    if diff["incomplete"]:
+        w("INCOMPLETE EVIDENCE (comparison cannot succeed)\n")
+        for gap in diff["incomplete"]:
+            w("  %s  %s\n" % (gap["id"], gap["why"]))
+        w("\n")
+
     s = diff["summary"]
     w("  defects=%d divergences=%d outcome_shifts=%d not_compared=%d\n"
       % (s["defects"], s["divergences"], s["outcome_shifts"], s["missing"]))
-    w("  %s\n" % ("NO DEFECTS" if s["defects"] == 0
-                  else "%d DEFECT(S) FOUND" % s["defects"]))
+    failures = s["defects"] + s["missing"] + s["incomplete"]
+    w("  %s\n" % ("COMPARISON INCOMPLETE" if s["missing"] or s["incomplete"]
+                  else ("NO DEFECTS" if s["defects"] == 0
+                        else "%d DEFECT(S) FOUND" % s["defects"])))
     w("\n")
-    return s["defects"]
+    return failures
 
 
 # ---------------------------------------------------------------------------

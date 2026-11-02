@@ -143,6 +143,9 @@ def card_signing_mutations() -> None:
         ("kid", {"alg": "EdDSA"}),
         ("alg", {"kid": "k"}),
         ("alg is 'none'", {"alg": "none", "kid": "k"}),
+        ("numeric kid", {"alg": "EdDSA", "kid": 7}),
+        ("object kid", {"alg": "EdDSA", "kid": {"name": "k"}}),
+        ("numeric alg", {"alg": 7, "kid": "k"}),
     ):
         mutated = copy.deepcopy(base_card)
         mutated["signatures"] = [_sign(canonicalize(base_card), header, private)]
@@ -156,6 +159,59 @@ def card_signing_mutations() -> None:
         checks_card.check_card_sign_003(target_with(good)),
         {Verdict.PASS},
     )
+
+    for header in ({"alg": "RS256", "kid": "k"},
+                   {"alg": "EdDSA", "kid": 7},
+                   {"alg": "EdDSA", "kid": {"name": "k"}},
+                   {"alg": "EdDSA", "kid": "k", "crit": ["unknown"]},
+                   {"alg": "EdDSA", "kid": "k", "b64": False},
+                   {"alg": "EdDSA", "kid": "k", "b64": False, "crit": ["b64"]}):
+        confused = copy.deepcopy(base_card)
+        # This is a genuine Ed25519 signature over the misleading header,
+        # rather than random bytes rejected by every verifier.
+        confused["signatures"] = [_sign(canonicalize(base_card), header, private)]
+        for check in (checks_card.check_card_sign_001, checks_card.check_card_sign_002):
+            expect(f"{check.__name__} rejects algorithm/critical-header confusion {header}",
+                   check(target_with(confused), issuer_key), {Verdict.FAIL})
+
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
+    from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+
+    rsa_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    cases = [("EdDSA", private, None)]
+    cases += [(alg, rsa_key, digest) for alg, digest in
+              (("RS256", hashes.SHA256), ("RS384", hashes.SHA384), ("RS512", hashes.SHA512))]
+    cases += [(alg, ec.generate_private_key(curve()), digest) for alg, curve, digest in
+              (("ES256", ec.SECP256R1, hashes.SHA256),
+               ("ES384", ec.SECP384R1, hashes.SHA384),
+               ("ES512", ec.SECP521R1, hashes.SHA512))]
+    for alg, key, digest in cases:
+        card = copy.deepcopy(base_card)
+        protected = checks_card.b64url_encode(json.dumps({"alg": alg, "kid": "k"}).encode())
+        message = checks_card._signing_input(protected, canonicalize(base_card))
+        if alg == "EdDSA":
+            raw = key.sign(message)
+        elif alg.startswith("RS"):
+            raw = key.sign(message, padding.PKCS1v15(), digest())
+        else:
+            r, s = decode_dss_signature(key.sign(message, ec.ECDSA(digest())))
+            width = (key.curve.key_size + 7) // 8
+            raw = r.to_bytes(width, "big") + s.to_bytes(width, "big")
+        card["signatures"] = [{"protected": protected,
+                               "signature": checks_card.b64url_encode(raw)}]
+        issuer = base64.b64encode(key.public_key().public_bytes(
+            Encoding.DER, PublicFormat.SubjectPublicKeyInfo)).decode("ascii")
+        for check in (checks_card.check_card_sign_001, checks_card.check_card_sign_002):
+            expect(f"{alg} real signature positive control for {check.__name__}",
+                   check(target_with(card), issuer), {Verdict.PASS})
+        # Width is part of JWS, even when padding both integers with zero
+        # would yield the same ECDSA numeric values after DER conversion.
+        padded = (b"\0" + raw[:len(raw) // 2] + b"\0" + raw[len(raw) // 2:]
+                  if alg.startswith("ES") else b"\0" + raw)
+        card["signatures"][0]["signature"] = checks_card.b64url_encode(padded)
+        expect(f"{alg} rejects non-JWS signature width",
+               checks_card.check_card_sign_001(target_with(card), issuer), {Verdict.FAIL})
 
 
 # ── binding equivalence ─────────────────────────────────────────────────────────────────────────

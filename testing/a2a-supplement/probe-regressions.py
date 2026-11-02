@@ -130,6 +130,33 @@ class ProbeRegressions(unittest.TestCase):
         self.assertEqual(connect.call_count, 1)
         self.assertEqual(delete.call_count, 2)
 
+    def test_negative_connect_requires_an_explicit_signature_refusal(self):
+        put = SimpleNamespace(status_code=200, text="{}")
+        def response(doc, status=200):
+            return SimpleNamespace(status_code=status, text=str(doc), json=lambda: doc)
+        good = response({"fingerprint": "good"})
+        refused = {"state": "error", "fingerprint": None,
+                   "failure": "the agent card is signed, but not by the pinned issuer key"}
+        malformed = SimpleNamespace(status_code=200, text="not JSON",
+                                    json=Mock(side_effect=ValueError("not JSON")))
+        cases = [(response(refused), Verdict.PASS), (good, Verdict.FAIL),
+                 (malformed, Verdict.ERROR), (response([]), Verdict.ERROR),
+                 (response({}), Verdict.ERROR), (response({"fingerprint": 7}), Verdict.ERROR),
+                 (response({"failure": "network connection failed"}), Verdict.ERROR),
+                 (response({"state": "error", "fingerprint": "contradiction"}), Verdict.ERROR),
+                 (response(dict(refused, fingerprint="contradiction")), Verdict.ERROR)]
+        cases += [(response(refused, code), Verdict.ERROR) for code in (401, 403, 500)]
+        for bad, expected in cases:
+            with self.subTest(reply=bad.text, status=bad.status_code), \
+                 patch.dict(os.environ, {"A2ASUP_RIGHT_ISSUER_KEY": "right"}), \
+                 patch.object(verifier_probe, "_wrong_key", return_value="wrong"), \
+                 patch.object(verifier_probe, "_put_agent", return_value=put), \
+                 patch.object(verifier_probe, "_connect", side_effect=[good, bad]), \
+                 patch.object(verifier_probe, "_delete_agent"):
+                result = verifier_probe._run(SimpleNamespace(id="CARD-SIGN-004", limits="expiry unmeasured"),
+                                             "http://admin", "token", "http://agent")
+                self.assertEqual(result.verdict, expected)
+
     def test_undeclared_legacy_version_can_be_refused(self):
         class OneVersion:
             def call(self, op, params, *, version="1.0", method_override=None, **kwargs):
@@ -252,6 +279,19 @@ class ProbeRegressions(unittest.TestCase):
             here = root / "testing/a2a-supplement"
             here.mkdir(parents=True)
             shutil.copyfile(Path(__file__).with_name("run-supplement.sh"), here / "run-supplement.sh")
+            # Exercise the real wrapper with its real sourced dependency, as
+            # the installed testing tree does; an absent source exits before
+            # the fake suite can supply the exit class being tested.
+            scripts = root / "testing/a2a-harness/scripts"
+            scripts.mkdir(parents=True)
+            shutil.copyfile(Path(__file__).resolve().parents[1] /
+                            "a2a-harness/scripts/process-fixture.sh",
+                            scripts / "process-fixture.sh")
+            package = scripts.parent / "a2aht"
+            package.mkdir()
+            shutil.copyfile(Path(__file__).resolve().parents[1] /
+                            "a2a-harness/a2aht/process_fixture.py",
+                            package / "process_fixture.py")
             tck = root / "testing/a2a-tck"
             tck.mkdir()
             interpreter = root / "suite-python"
