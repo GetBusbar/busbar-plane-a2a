@@ -61,7 +61,7 @@ The differential separates two things that must never be conflated:
 
 The command also exits nonzero for incomplete evidence: missing or duplicate rows,
 different specification versions, an asserted-row shortfall in either report, or
-subject outcomes that make a normal run red (including NOT_CONFIGURED and required
+outcomes in either run that make it red (including NOT_CONFIGURED and required
 profile INAPPLICABLE). `--allow-red` preserves reports; it does not make their
 differential successful. Compare the same selected battery on both targets.
 

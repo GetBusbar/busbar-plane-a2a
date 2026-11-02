@@ -380,6 +380,11 @@ def differential(control_report, subject_report):
         ids = [r["id"] for r in report["results"]]
         for duplicate in sorted({i for i in ids if ids.count(i) > 1}):
             incomplete.append({"id": duplicate, "why": label + " report repeats this id"})
+        for row in report["results"]:
+            if row["outcome"] not in (PASS, OBSERVED, INAPPLICABLE, "BASELINED") + BAD_OUTCOMES:
+                incomplete.append({"id": row["id"], "why": label + " report has an unknown outcome"})
+            elif label == "control" and is_bad(row):
+                incomplete.append({"id": row["id"], "why": "control run is red: " + row["outcome"]})
     if control_report["spec"] != subject_report["spec"]:
         incomplete.append({"id": "spec", "why": "control and subject name different specifications"})
 

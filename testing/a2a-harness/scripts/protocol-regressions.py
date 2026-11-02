@@ -103,6 +103,14 @@ class ProtocolRegressions(unittest.TestCase):
         subject = report()
         subject["results"][0].update(id="missing.from.control", outcome="FAIL")
         self.assertEqual(len(fails(subject)["defects"]), 1)
+        red_control = report()
+        red_control["results"][0]["outcome"] = "FAIL"
+        self.assertEqual(fails(report(), red_control)["defects"], [])
+        for label in ("control", "subject"):
+            unknown = report()
+            unknown["results"][0]["outcome"] = "UNKNOWN"
+            fails(unknown if label == "subject" else report(),
+                  unknown if label == "control" else control)
 
     def test_discovery_query_is_not_counted_as_an_operation(self):
         import urllib.request
