@@ -3871,7 +3871,7 @@ async fn the_legacy_well_known_path_is_tried_only_when_the_canonical_one_served_
     );
 }
 
-/// The kernel's hook double behind the `test-hook` alias (OWNER 2026-10-03, no test plugins):
+/// Test-hook environment registered under the `test-hook` alias.
 
 fn hook_env() -> busbar_kernel::hooks::HookEnv {
     rig::hook_env(&["test-hook"], rig::NeedLevel::Rw, rig::NeedLevel::Ro)
