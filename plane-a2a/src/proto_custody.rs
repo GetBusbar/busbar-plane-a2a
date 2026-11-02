@@ -238,7 +238,7 @@ where
                 f.write_str("a map")
             }
             fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
-                let mut fields = Guard::new(HashMap::new());
+                let mut fields = Guard::new(HashMap::<K, V>::new());
                 while let Some(key) = map.next_key_seed(Seed::<K>::new())? {
                     let mut key = Guard::new(key);
                     let value = map.next_value_seed(Seed::<V>::new())?;

@@ -104,7 +104,7 @@ busbar_contract::statement_extensions!(
     ), (
         // HELD_KINDS[0..3]: task, task_event and push_config. Cards keep their existing writes.
         busbar_contract::abi::sdk::plane::conditional::REQUIRED_KINDS,
-        &[3, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0]
+        &[3_u8, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0]
     )]
 );
 
@@ -1427,7 +1427,7 @@ impl PlaneLife for A2aDoor {
         if let Some(outcome) = crate::push_door::settle_publications(
             plane,
             instance.ticket(),
-            input.head().extensions().bytes(),
+            input.drive().head().extensions().bytes(),
             &mut out,
         ) {
             return outcome;
@@ -2499,7 +2499,7 @@ fn holder_unavailable(hop: &Hop) -> relay::RelayReply {
     if hop
         .request
         .as_ref()
-        .is_some_and(task_hop::conflicting_tasks)
+        .is_some_and(|request| task_hop::conflicting_tasks(request))
     {
         return relay::RelayReply::refused(
             &agent_arrival::AgentRefusal::new(
@@ -4601,7 +4601,7 @@ slot!(
         if plane.generations.at(held_at).and_then(|s| s.agents.get(&name).cloned()).as_ref() != Some(&def) {
             return verb_refused(&input, &mut out, STATUS_NOT_FOUND, "", None, AUDIT_REJECTED);
         }
-        let hold_card = |card| {
+        let hold_card = |card: Value| {
             let card = std::sync::Arc::new(card);
             if generation != held_at && plane.generations.at(generation).is_some() {
                 plane.cards.hold_shared(&name, generation, card.clone());

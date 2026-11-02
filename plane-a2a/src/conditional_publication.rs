@@ -750,8 +750,9 @@ impl Journal {
     }
 
     pub(crate) fn effects_complete(&self) -> bool {
-        self.0
-            .with(&(), |state| state.is_none_or(State::effects_complete))
+        self.0.with(&(), |state| {
+            state.is_none_or(|state| state.effects_complete())
+        })
     }
 
     /// Complete only the batch this caller owns, after every outside-Book obligation returns.
