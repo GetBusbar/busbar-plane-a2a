@@ -955,11 +955,16 @@ impl Ended {
         self.code == Code::Ok as u32
     }
 
-    /// THE A2A ERROR CODE it ended with: its `ErrorInfo` reason's (the protocol's own vocabulary),
+    /// THE A2A ERROR CODE it ended with: its `ErrorInfo` reason's in the protocol's own domain,
     /// else the one code section 5.4 binds to this status alone; `None` where neither says.
     #[must_use]
     pub fn a2a_code(&self) -> Option<i64> {
-        if let Some(reason) = self.info.as_ref().map(|i| i.reason.as_str()) {
+        if let Some(reason) = self
+            .info
+            .as_ref()
+            .filter(|info| info.domain == crate::ERROR_INFO_DOMAIN)
+            .map(|info| info.reason.as_str())
+        {
             if let Some((code, _)) = crate::ERRORS.iter().find(|(_, r)| *r == reason) {
                 return Some(*code);
             }

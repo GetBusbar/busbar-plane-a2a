@@ -242,6 +242,42 @@ fn a_status_names_the_a2a_code_its_reason_or_its_row_binds() {
 }
 
 #[test]
+fn grpc_error_reasons_are_scoped_to_the_a2a_domain_and_other_domains_keep_status_fallback() {
+    for (domain, code, reason, expected) in [
+        (
+            crate::ERROR_INFO_DOMAIN,
+            Code::Internal,
+            "TASK_NOT_FOUND",
+            Some(-32001),
+        ),
+        ("other.example", Code::Internal, "TASK_NOT_FOUND", None),
+        ("", Code::FailedPrecondition, "TASK_NOT_CANCELABLE", None),
+        (
+            "other.example",
+            Code::NotFound,
+            "TASK_NOT_CANCELABLE",
+            Some(-32001),
+        ),
+        (
+            crate::ERROR_INFO_DOMAIN,
+            Code::NotFound,
+            "UNKNOWN_REASON",
+            Some(-32001),
+        ),
+    ] {
+        let ended = Ended {
+            code: code as u32,
+            info: Some(ErrorInfo {
+                domain: domain.into(),
+                reason: reason.into(),
+                metadata: std::collections::BTreeMap::new(),
+            }),
+        };
+        assert_eq!(ended.a2a_code(), expected, "{domain:?} {code:?} {reason}");
+    }
+}
+
+#[test]
 fn grpc_message_length_ceiling_is_inclusive_and_enforced_before_waiting() {
     let length = crate::relay::MAX_REPLY_BYTES;
     let mut bytes = vec![0];

@@ -696,3 +696,78 @@ fn grpc_stream_http_refusal_records_the_http_health_signal() {
     assert_eq!(reply.status, 502);
     assert_eq!(relay.take_reading(), Some(Reading::Hard));
 }
+
+#[test]
+fn grpc_trailer_error_info_cannot_borrow_an_a2a_reason_from_another_domain() {
+    use crate::framed::{CallStatus, Code, ErrorInfo, DETAILS_FIELD};
+    use base64::Engine as _;
+    for (domain, status, reason, expected_http, expected_code, reading) in [
+        (
+            crate::ERROR_INFO_DOMAIN,
+            Code::Internal,
+            "TASK_NOT_FOUND",
+            404,
+            -32001,
+            Reading::Transient,
+        ),
+        (
+            "other.example",
+            Code::Internal,
+            "TASK_NOT_FOUND",
+            502,
+            -32006,
+            Reading::Transient,
+        ),
+        (
+            "other.example",
+            Code::NotFound,
+            "TASK_NOT_CANCELABLE",
+            404,
+            -32001,
+            Reading::Healthy,
+        ),
+    ] {
+        let asked = json!({"jsonrpc":"2.0","id":7,"method":"GetTask","params":{"id":BACKEND}});
+        let (mut relay, _, _) = dialled(&asked, None, false);
+        relay.for_task(TaskHop {
+            task_id: "busbar-t".into(),
+            context_id: "busbar-c".into(),
+            addressed: true,
+            skill: None,
+            references: Vec::new(),
+        });
+        let details = CallStatus::with_error_info(
+            status,
+            "private backend words",
+            ErrorInfo {
+                domain: domain.into(),
+                reason: reason.into(),
+                metadata: std::collections::BTreeMap::new(),
+            },
+        );
+        let block = format!(
+            "{DETAILS_FIELD}: {}\r\n",
+            base64::engine::general_purpose::STANDARD_NO_PAD.encode(details.details())
+        );
+        assert_eq!(
+            relay.on_piece(far(Some(0), &[], false)),
+            PieceAnswer::Nothing
+        );
+        let reply = whole(vec![relay.on_far_fields(
+            block.as_bytes(),
+            Some(status as u32),
+            true,
+        )]);
+        assert_eq!(
+            (reply.status, body(&reply)["error"]["code"].as_i64()),
+            (expected_http, Some(expected_code))
+        );
+        assert_eq!(relay.take_reading(), Some(reading));
+        assert!(
+            relay.take_settled().is_empty(),
+            "an addressed task remains held"
+        );
+        let text = std::str::from_utf8(&reply.body).unwrap();
+        assert!(!text.contains("other.example") && !text.contains("private backend words"));
+    }
+}
