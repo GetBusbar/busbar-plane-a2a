@@ -4601,7 +4601,7 @@ slot!(
         if plane.generations.at(held_at).and_then(|s| s.agents.get(&name).cloned()).as_ref() != Some(&def) {
             return verb_refused(&input, &mut out, STATUS_NOT_FOUND, "", None, AUDIT_REJECTED);
         }
-        let hold_card = |card: Value| {
+        let hold_card = |card: serde_json::Value| {
             let card = std::sync::Arc::new(card);
             if generation != held_at && plane.generations.at(generation).is_some() {
                 plane.cards.hold_shared(&name, generation, card.clone());
