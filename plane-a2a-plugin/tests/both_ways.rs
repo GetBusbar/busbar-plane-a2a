@@ -52,6 +52,7 @@ mod both_ways {
         in_head, load_dropped, load_linked, out_head, Bind, DispatchConfig, Dispatcher, Frame,
         LinkedRow, NoSink, Plugin,
     };
+    use busbar_test_kit::services_double::{Double, ServicesDouble, Unserved};
     use serde_json::{json, Value};
 
     // THE PLANE'S WORDS THIS SCRIPT SPEAKS. The logic crate's only public item is its door
@@ -972,7 +973,7 @@ mod both_ways {
     /// every other service is the shared double's unserved host.
     struct CardRecords;
 
-    impl busbar_contract::services::double::ServicesDouble for CardRecords {
+    impl ServicesDouble for CardRecords {
         fn records_list(
             &self,
             _: &busbar_contract::services::Caller,
@@ -1052,11 +1053,10 @@ mod both_ways {
     #[test]
     fn a_stray_card_part_line_reaches_the_host_log_dropped_in_as_linked() {
         let stray = |l: &String| l.contains("part records that no whole record names were found");
-        let unserved = Dispatcher::with_services(
-            DispatchConfig::default(),
-            Arc::new(busbar_contract::services::double::Unserved),
-        );
-        let held = Dispatcher::with_services(DispatchConfig::default(), Arc::new(CardRecords));
+        let unserved =
+            Dispatcher::with_services(DispatchConfig::default(), Arc::new(Double(Unserved)));
+        let held =
+            Dispatcher::with_services(DispatchConfig::default(), Arc::new(Double(CardRecords)));
         for dropped_in in [false, true] {
             let quiet = ready_lines(&unserved, dropped_in);
             assert!(
