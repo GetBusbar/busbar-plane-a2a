@@ -1269,8 +1269,8 @@ impl PlaneLife for A2aDoor {
         cfg.warn_ignored_protocol_versions();
         let plane = A2aDoor {
             public_url: input.public_url().stated(),
-            host: input.open().host().map(|h| Host::of(&h)),
-            services: input.open().host().and_then(|h| Services::of(&h)),
+            host: input.open().host().map(Host::of),
+            services: input.open().host().and_then(Services::of),
             ..A2aDoor::default()
         };
         let names: Vec<&str> = cfg.agents.keys().map(String::as_str).collect();

@@ -37,7 +37,7 @@ impl FakeService for Dial {
 #[test]
 fn a_card_fetch_without_host_services_is_refused() {
     let fake: &'static FakeHost = Box::leak(Box::new(FakeHost::new().serve(conn::ESTABLISH, Dial)));
-    let tables = Box::leak(Box::new(fake.lent()));
+    let tables = fake.lent();
     let plane = A2aDoor {
         host: Some(Host::of(tables)),
         services: None,
@@ -144,7 +144,7 @@ fn the_canonical_paths_refusal_survives_the_legacy_paths() {
             )
             .serve(conn::ESTABLISH, Dial),
     ));
-    let tables = Box::leak(Box::new(fake.lent()));
+    let tables = fake.lent();
     let plane = A2aDoor {
         host: Some(Host::of(tables)),
         services: busbar_contract::abi::sdk::Services::of(tables),

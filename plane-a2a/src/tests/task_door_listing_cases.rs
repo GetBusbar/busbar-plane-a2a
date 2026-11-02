@@ -81,8 +81,8 @@ fn a_real_failed_mirror_dial_is_visible_without_changing_best_effort_completion(
     ));
     let tables = fake.lent();
     let mut plane = A2aDoor::default();
-    plane.host = Some(Host::of(&tables));
-    plane.services = Services::of(&tables);
+    plane.host = Some(Host::of(tables));
+    plane.services = Services::of(tables);
     let mut flight = crate::mirror::Flight {
         stage: crate::mirror::Stage::Mirror,
         method: crate::mirror::method::CREATE_PUSH_CONFIG,

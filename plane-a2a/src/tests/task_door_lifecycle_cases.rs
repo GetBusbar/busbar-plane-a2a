@@ -14,10 +14,10 @@ fn ticket(slot: u32) -> Ticket {
 fn a_full_sizes_book_never_forgets_a_pending_tickets_short_answer() {
     let fake: &'static FakeHost = Box::leak(Box::new(FakeHost::new()));
     let tables = fake.lent();
-    let host = Host::of(&tables);
+    let host = Host::of(tables);
     let grown = Keyed::new();
     let first = ticket(1);
-    let mut via = Via::new(&host, Services::of(&tables), first, 0, &grown);
+    let mut via = Via::new(&host, Services::of(tables), first, 0, &grown);
     let mut calls = 0;
     let result: Result<(), Halt> = via.issue((1, 0), |_, _, _, _| {
         calls += 1;
@@ -28,11 +28,11 @@ fn a_full_sizes_book_never_forgets_a_pending_tickets_short_answer() {
         }
     });
     assert_eq!(result, Err(Halt::Pending));
-    let other = Via::new(&host, Services::of(&tables), ticket(2), 0, &grown);
+    let other = Via::new(&host, Services::of(tables), ticket(2), 0, &grown);
     for seq in 0..GROWN_MAX as u32 {
         let _ = other.grow(handle(ticket(2), seq), 1, 0);
     }
-    let mut resumed = Via::new(&host, Services::of(&tables), first, 0, &grown);
+    let mut resumed = Via::new(&host, Services::of(tables), first, 0, &grown);
     let result = resumed.issue((1, 0), |_, _, buf, _| {
         assert_eq!(
             buf.len(),
@@ -172,10 +172,8 @@ mod listing_probe {
             _: Out<'_, Self::Out>,
         ) -> Outcome {
             let tables = input.host().unwrap();
-            let plane = A2aDoor::listing_lifecycle_fixture(
-                Host::of(&tables),
-                Services::of(&tables).unwrap(),
-            );
+            let plane =
+                A2aDoor::listing_lifecycle_fixture(Host::of(tables), Services::of(tables).unwrap());
             let doc = serde_json::json!({"jsonrpc":"2.0","id":"busbar-originated","result":{"tasks":[
                 {"id":"backend-t1","status":{"state":"TASK_STATE_COMPLETED"}},
                 {"id":"backend-t2","status":{"state":"TASK_STATE_COMPLETED"}}]}});
@@ -464,9 +462,9 @@ fn a_real_mirror_setup_read_failure_is_reported_without_exposing_request_materia
 fn a_full_book_refuses_an_untracked_handle_before_any_host_issue_even_on_reentry() {
     let fake: &'static FakeHost = Box::leak(Box::new(FakeHost::new()));
     let tables = fake.lent();
-    let host = Host::of(&tables);
+    let host = Host::of(tables);
     let grown = Keyed::new();
-    let held = Via::new(&host, Services::of(&tables), ticket(2), 0, &grown);
+    let held = Via::new(&host, Services::of(tables), ticket(2), 0, &grown);
     for seq in 0..GROWN_MAX as u32 {
         let _ = held.grow(handle(ticket(2), seq), 2, 0);
     }
@@ -474,7 +472,7 @@ fn a_full_book_refuses_an_untracked_handle_before_any_host_issue_even_on_reentry
     // The first error answer may itself have short output buffers; its re-entry must still
     // refuse BEFORE issuing an untracked host handle, rather than asking it SHORT twice.
     for _ in 0..2 {
-        let mut via = Via::new(&host, Services::of(&tables), ticket(1), 0, &grown);
+        let mut via = Via::new(&host, Services::of(tables), ticket(1), 0, &grown);
         let result = via.issue((1, 0), |_, _, buf, _| {
             host_calls += 1;
             if buf.len() < 2 {
@@ -497,9 +495,9 @@ fn a_full_book_refuses_an_untracked_handle_before_any_host_issue_even_on_reentry
 fn completed_records_calls_release_reservations_instead_of_consuming_the_growth_bound() {
     let fake: &'static FakeHost = Box::leak(Box::new(FakeHost::new()));
     let tables = fake.lent();
-    let host = Host::of(&tables);
+    let host = Host::of(tables);
     let grown = Keyed::new();
-    let mut via = Via::new(&host, Services::of(&tables), ticket(1), 0, &grown);
+    let mut via = Via::new(&host, Services::of(tables), ticket(1), 0, &grown);
     for _ in 0..GROWN_MAX * 2 {
         assert_eq!(via.issue((1, 0), |_, _, _, _| Poll::Ready(Ok(()))), Ok(()));
     }
@@ -514,18 +512,18 @@ fn completed_records_calls_release_reservations_instead_of_consuming_the_growth_
 fn an_already_pending_handle_can_grow_at_capacity_without_forgetting_another_ticket() {
     let fake: &'static FakeHost = Box::leak(Box::new(FakeHost::new()));
     let tables = fake.lent();
-    let host = Host::of(&tables);
+    let host = Host::of(tables);
     let grown = Keyed::new();
-    let mut first = Via::new(&host, Services::of(&tables), ticket(1), 0, &grown);
+    let mut first = Via::new(&host, Services::of(tables), ticket(1), 0, &grown);
     let pending: Result<(), Halt> = first.issue((1, 0), |_, _, _, _| Poll::Pending);
     assert_eq!(pending, Err(Halt::Pending));
-    let other = Via::new(&host, Services::of(&tables), ticket(3), 0, &grown);
+    let other = Via::new(&host, Services::of(tables), ticket(3), 0, &grown);
     let _ = other.grow(handle(ticket(3), 0), 2, 0);
-    let filling = Via::new(&host, Services::of(&tables), ticket(2), 0, &grown);
+    let filling = Via::new(&host, Services::of(tables), ticket(2), 0, &grown);
     for seq in 0..(GROWN_MAX - 1) as u32 {
         let _ = filling.grow(handle(ticket(2), seq), 1, 0);
     }
-    let mut resumed = Via::new(&host, Services::of(&tables), ticket(1), 0, &grown);
+    let mut resumed = Via::new(&host, Services::of(tables), ticket(1), 0, &grown);
     assert_eq!(
         resumed.issue((1, 0), |_, _, buf, _| {
             if buf.len() < 2 {
@@ -536,7 +534,7 @@ fn an_already_pending_handle_can_grow_at_capacity_without_forgetting_another_tic
         }),
         Ok(())
     );
-    let mut other = Via::new(&host, Services::of(&tables), ticket(3), 0, &grown);
+    let mut other = Via::new(&host, Services::of(tables), ticket(3), 0, &grown);
     assert_eq!(
         other.issue((1, 0), |_, _, buf, _| {
             assert_eq!(
