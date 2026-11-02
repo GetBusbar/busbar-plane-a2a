@@ -24,17 +24,12 @@ busbar-plane-a2a = { path = "../plane-a2a" }
 busbar-contract = { workspace = true }
 
 [dev-dependencies]
-# The conformance test loads the linked door and dlopens the built cdylib over busbar's REAL loader:
-# dev-only, never in the shipped artifact. `conformance` is busbar's published suite
-# (`tests/conformance.rs`, `conformance_suite!`), which moved here with the crate from busbar's
-# crates/busbar-plane-a2a.
+# Ordinary admission, privacy, and both-image tests use the production loader.
 busbar-plugin-loader = { workspace = true }
 # The ordinary host-log test uses production host services and a fixed read-only row adapter.
 busbar-kernel = { workspace = true }
-busbar-test-kit = { workspace = true }
 # The both-ways op-by-op script (`tests/both_ways.rs`, moved here with the crate from busbar's
 # crates/busbar-plane-a2a) reads the door's answers as JSON.
 serde_json = { workspace = true }
-# Manual ABI fixtures use the contract test support; shared host-service doubles live in
-# busbar-test-kit and remain dev-only.
+# ABI fixtures use the contract's existing low-level input and seal primitives.
 busbar-contract = { workspace = true, features = ["test-support"] }

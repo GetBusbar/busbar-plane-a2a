@@ -66,7 +66,3 @@ proc-macro2 = { workspace = true }
 # fixture implementor of the SEALED `KernelSeal` trait; this crate's test harnesses used to
 # forge their own. Dev-only and feature-gated, so it is absent from every release build.
 busbar-contract = { workspace = true, features = ["test-seal"] }
-# `busbar_test_kit::alloc_counter` is the counting `GlobalAlloc` the allocation gates install
-# (ARCHITECT ruling 2026-10-21; busbar #1830 moved it out of busbar-contract): dev-only, so the
-# crate root keeps the literal `#![forbid(unsafe_code)]`.
-busbar-test-kit = { workspace = true }

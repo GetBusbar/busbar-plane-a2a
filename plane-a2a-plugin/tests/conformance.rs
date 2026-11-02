@@ -1,18 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! Runs the published conformance suite for the A2A plane.
+//! Ordinary admission and privacy assertions over actual linked and dropped A2A images.
 
-busbar_test_kit::conformance_suite! {
-    door: busbar_plane_a2a::door,
-    cdylib: "busbar_plane_a2a_plugin",
-    inputs: include_str!("conformance.json"),
-}
-
-// Ordinary admission assertions over this actual shipped plane. The generated suite above remains
-// until root/actual-Store parity and confidentiality are migrated. Its comparator and coverage
-// mutations are checker self-tests; these admission assertions do not claim to replace those.
-// Generic connection-boundary transfer is tracked by the separately acknowledged core ledger.
+// Relay and lifecycle assertions run through the actual root and Store. Generic connection,
+// layout, and failed-READY assertions are retained at their ordinary owning boundaries.
 mod actual_admission {
     use busbar_contract::abi::mechanism::KindCode;
     use busbar_plugin_loader::dispatch::kinds::plane::Plane;
