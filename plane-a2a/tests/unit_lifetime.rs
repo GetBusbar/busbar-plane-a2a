@@ -19,6 +19,7 @@ mod local_admission_cases;
 #[path = "support/raw_custody_cases.rs"]
 mod raw_custody_cases;
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::os::raw::c_void;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -575,6 +576,107 @@ const CARD_READ: &[u8] =
 /// One opened instance of the door.
 struct Door {
     instance: *mut c_void,
+    owned: bool,
+    pending: RefCell<HashMap<Ticket, Box<PieceFrame>>>,
+}
+
+/// One existing caller's continuation: every original frame and lent allocation stays put.
+struct PieceFrame {
+    input: Box<OnPieceIn>,
+    output: Box<OnPieceOut>,
+    member: zeroize::Zeroizing<Vec<u8>>,
+    bytes: zeroize::Zeroizing<Vec<u8>>,
+    reply: zeroize::Zeroizing<Vec<u8>>,
+    fields: Vec<OutField>,
+    arena: zeroize::Zeroizing<Vec<u8>>,
+    records: Vec<RecordWrite>,
+    units: Vec<UnitCount>,
+}
+
+impl PieceFrame {
+    fn new(unit: u64, given: Given<'_>, reply_cap: usize, fields_cap: usize) -> Box<Self> {
+        let mut frame = Box::new(Self {
+            input: Box::new(z()),
+            output: Box::new(z()),
+            member: zeroize::Zeroizing::new(given.member.to_vec()),
+            bytes: zeroize::Zeroizing::new(given.bytes.to_vec()),
+            reply: zeroize::Zeroizing::new(vec![0; reply_cap]),
+            fields: vec![z(); fields_cap],
+            arena: zeroize::Zeroizing::new(vec![0; 1 << 14]),
+            records: vec![z(); 16],
+            units: vec![z(); 8],
+        });
+        let i = &mut frame.input;
+        i.head = head::<OnPieceIn>(slot::ON_PIECE, ticket(unit));
+        i.unit = unit;
+        (i.from, i.flags, i.attempt_no) = (given.from, given.flags, given.attempt);
+        (i.reason, i.status_code) = (given.reason, given.status);
+        i.member = str_of(&frame.member);
+        i.bytes = octets(&frame.bytes);
+        i.caller_ref = str_of(ALICE);
+        (i.reply_buf, i.reply_cap) = (frame.reply.as_mut_ptr(), frame.reply.len());
+        (i.fields_buf, i.fields_cap) = (frame.fields.as_mut_ptr(), frame.fields.len());
+        (i.arena_buf, i.arena_cap) = (frame.arena.as_mut_ptr(), frame.arena.len());
+        (i.records_buf, i.records_cap) = (frame.records.as_mut_ptr(), frame.records.len());
+        (i.units_buf, i.units_cap) = (frame.units.as_mut_ptr(), frame.units.len());
+        frame
+    }
+
+    fn check_resume(&self, unit: u64, given: Given<'_>, reply_cap: usize, fields_cap: usize) {
+        let i = &self.input;
+        assert!(
+            i.head.ticket == ticket(unit)
+                && i.unit == unit
+                && i.from == given.from
+                && i.flags == given.flags
+                && i.attempt_no == given.attempt
+                && i.reason == given.reason
+                && i.status_code == given.status
+                && self.member.as_slice() == given.member
+                && self.bytes.as_slice() == given.bytes,
+            "a pending piece must resume its exact logical input"
+        );
+        assert_eq!(
+            (self.reply.len(), self.fields.len()),
+            (reply_cap, fields_cap),
+            "pending output loans cannot be replaced; only terminal SHORT permits fresh buffers"
+        );
+    }
+}
+
+impl Drop for Door {
+    fn drop(&mut self) {
+        if !self.owned {
+            assert!(
+                self.pending.get_mut().is_empty(),
+                "a borrowed door owns no continuations"
+            );
+            return;
+        }
+        let input = head::<InHead>(life::CLOSE, Ticket::NONE);
+        let mut output = out_head::<OutHead>();
+        let outcome = lifecycle().close.map_or(Outcome::Fault, |close| {
+            // SAFETY: this owner closes exactly its OPEN's still-live instance, synchronously,
+            // with every retained pending frame and allocation alive until CLOSE returns.
+            unsafe {
+                close(
+                    self.instance,
+                    std::ptr::from_ref(&input).cast(),
+                    std::ptr::from_mut(&mut output).cast(),
+                )
+            }
+            .outcome()
+        });
+        if outcome != Outcome::Ready {
+            // A broken CLOSE is a test failure, but cannot authorize freeing unresolved loans.
+            std::mem::forget(std::mem::take(self.pending.get_mut()));
+        }
+        assert_eq!(
+            outcome,
+            Outcome::Ready,
+            "the owned door closes before its loans retire"
+        );
+    }
 }
 
 /// What one `on_piece` answered.
@@ -707,12 +809,26 @@ fn open_with(section: &[u8]) -> Door {
         )
     };
     assert_eq!(ret.outcome(), Outcome::Ready, "the door opens");
-    Door {
-        instance: o.open.instance,
-    }
+    Door::new(o.open.instance)
 }
 
 impl Door {
+    fn new(instance: *mut c_void) -> Self {
+        Self {
+            instance,
+            owned: true,
+            pending: RefCell::new(HashMap::new()),
+        }
+    }
+
+    fn borrowed(instance: *mut c_void) -> Self {
+        Self {
+            instance,
+            owned: false,
+            pending: RefCell::new(HashMap::new()),
+        }
+    }
+
     /// `arrive` of `body` at `target` on the route `(verb, route)`: its outcome and refusal status.
     fn arrive(
         &self,
@@ -721,6 +837,10 @@ impl Door {
         target: &str,
         body: &[u8],
     ) -> (Outcome, u32) {
+        assert!(
+            !self.pending.borrow().contains_key(&ticket(unit)),
+            "a fresh arrival cannot replace a pending piece on the same full ticket"
+        );
         let mut i: ArriveIn = z();
         i.head = head::<ArriveIn>(slot::ARRIVE, Ticket::NONE);
         i.unit = unit;
@@ -773,46 +893,67 @@ impl Door {
         reply_cap: usize,
         fields_cap: usize,
     ) -> Answered {
-        let mut reply = vec![0_u8; reply_cap];
-        let mut fields = vec![z::<OutField>(); fields_cap];
-        let mut arena = vec![0_u8; 1 << 14];
-        let mut records = [z::<RecordWrite>(); 16];
-        let mut units = [z::<UnitCount>(); 8];
-        let mut i: OnPieceIn = z();
-        i.head = head::<OnPieceIn>(slot::ON_PIECE, ticket(unit));
-        i.unit = unit;
-        i.from = given.from;
-        i.flags = given.flags;
-        i.bytes = octets(given.bytes);
-        i.attempt_no = given.attempt;
-        i.member = str_of(given.member);
-        i.caller_ref = str_of(ALICE);
-        i.reason = given.reason;
-        i.status_code = given.status;
-        (i.reply_buf, i.reply_cap) = (reply.as_mut_ptr(), reply.len());
-        (i.fields_buf, i.fields_cap) = (fields.as_mut_ptr(), fields.len());
-        (i.arena_buf, i.arena_cap) = (arena.as_mut_ptr(), arena.len());
-        (i.records_buf, i.records_cap) = (records.as_mut_ptr(), records.len());
-        (i.units_buf, i.units_cap) = (units.as_mut_ptr(), units.len());
-        let mut o: OnPieceOut = z();
-        o.head = out_head::<OnPieceOut>();
+        assert!(self.owned, "a borrowed door cannot own a pending piece");
+        let mut frame = {
+            let mut pending = self.pending.borrow_mut();
+            if let Some(frame) = pending.get(&ticket(unit)) {
+                // Validate while custody is still in the Door: a rejected re-entry keeps it.
+                frame.check_resume(unit, given, reply_cap, fields_cap);
+            }
+            match pending.remove(&ticket(unit)) {
+                Some(mut frame) => {
+                    frame.input.head.flags |= busbar_contract::abi::mechanism::call::FLAG_RESUME;
+                    frame
+                }
+                None => PieceFrame::new(unit, given, reply_cap, fields_cap),
+            }
+        };
+        *frame.output = z();
+        frame.output.head = out_head::<OnPieceOut>();
         let f = ops().on_piece.expect("on_piece");
-        // SAFETY: `f` is the door's own slot, called over an `in` and an `out` laid out as its ABI
-        // states and live for the call.
+        // SAFETY: the Door retains these exact boxed frames and every original lent allocation
+        // through PENDING. A resume changes only FLAG_RESUME; terminal SHORT ends this loan.
         #[allow(unused_unsafe)]
         let ret = unsafe {
             f(
                 self.instance,
-                std::ptr::from_ref(&i).cast(),
-                std::ptr::from_mut(&mut o).cast(),
+                std::ptr::from_ref(&*frame.input).cast(),
+                std::ptr::from_mut(&mut *frame.output).cast(),
             )
         };
+        let outcome = ret.outcome();
+        if outcome == Outcome::Pending {
+            // Retain custody before reading or allocating any ordinary reply payload.
+            self.pending.borrow_mut().insert(ticket(unit), frame);
+            return Answered {
+                outcome: Some(outcome),
+                ..Answered::default()
+            };
+        }
+        if outcome != Outcome::Ready {
+            return Answered {
+                outcome: Some(outcome),
+                fields_needed: if outcome == Outcome::Failed {
+                    frame.output.fields_needed
+                } else {
+                    0
+                },
+                ..Answered::default()
+            };
+        }
+        let (o, reply, fields, arena, units) = (
+            &frame.output,
+            &frame.reply,
+            &frame.fields,
+            &frame.arena,
+            &frame.units,
+        );
         let at = |s: busbar_contract::abi::mechanism::call::Span| {
             let from = s.offset as usize;
             String::from_utf8_lossy(&arena[from..from + s.len as usize]).into_owned()
         };
         Answered {
-            outcome: Some(ret.outcome()),
+            outcome: Some(outcome),
             more: o.more,
             flags: o.flags,
             verb: if o.verb.len == 0 {
@@ -1057,7 +1198,11 @@ impl Door {
                 std::ptr::from_mut(&mut o).cast(),
             )
         };
-        ret.outcome()
+        let outcome = ret.outcome();
+        if outcome == Outcome::Ready {
+            self.pending.borrow_mut().remove(&ticket(unit));
+        }
+        outcome
     }
 
     /// The host's own cancel of `unit`, naming it by the key `arrive` kept it under as well as by
@@ -1080,7 +1225,11 @@ impl Door {
                 std::ptr::from_mut(&mut o).cast(),
             )
         };
-        ret.outcome()
+        let outcome = ret.outcome();
+        if outcome == Outcome::Ready {
+            self.pending.borrow_mut().remove(&ticket(unit));
+        }
+        outcome
     }
 
     /// The host's own cancel of `unit` (by its key and its ticket): the disposition the door
@@ -1103,6 +1252,9 @@ impl Door {
                 std::ptr::from_mut(&mut o).cast(),
             )
         };
+        if ret.outcome() == Outcome::Ready {
+            self.pending.borrow_mut().remove(&ticket(unit));
+        }
         assert_eq!(ret.outcome(), Outcome::Ready);
         o.cancel.disposition
     }

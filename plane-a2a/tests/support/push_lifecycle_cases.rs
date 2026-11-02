@@ -337,9 +337,7 @@ fn open_scripted_instance() -> Door {
         )
     };
     assert_eq!(result.outcome(), Outcome::Ready);
-    Door {
-        instance: output.open.instance,
-    }
+    Door::new(output.open.instance)
 }
 fn seed() {
     seed_task("t1");

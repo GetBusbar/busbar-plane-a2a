@@ -123,12 +123,7 @@ fn open_scripted(pend_restore: bool) -> (Door, Reset) {
         )
     };
     assert_eq!(result.outcome(), Outcome::Ready);
-    (
-        Door {
-            instance: output.open.instance,
-        },
-        Reset(store().clone()),
-    )
+    (Door::new(output.open.instance), Reset(store().clone()))
 }
 
 fn piece(

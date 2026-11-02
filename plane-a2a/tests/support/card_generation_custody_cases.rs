@@ -25,9 +25,7 @@ pub(super) fn refresh_during_admission() {
             .unwrap()
             .replace("/agent", "/replacement");
         refresh(
-            &Door {
-                instance: instance as *mut c_void,
-            },
+            &Door::borrowed(instance as *mut c_void),
             2,
             moved.as_bytes(),
         );
@@ -57,9 +55,7 @@ pub(super) fn note_decision() {
             .unwrap()
             .replace("vendor.example", "replacement.example");
         refresh(
-            &Door {
-                instance: instance as *mut c_void,
-            },
+            &Door::borrowed(instance as *mut c_void),
             2,
             moved.as_bytes(),
         );

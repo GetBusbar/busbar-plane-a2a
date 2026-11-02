@@ -139,9 +139,7 @@ fn open_card_over(section: &'static [u8], services: HostSlots) -> Door {
         )
     };
     assert_eq!(outcome.outcome(), Outcome::Ready);
-    Door {
-        instance: output.open.instance,
-    }
+    Door::new(output.open.instance)
 }
 
 fn card_answer_with_audit(

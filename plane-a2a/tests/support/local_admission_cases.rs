@@ -151,9 +151,7 @@ fn open_local() -> (Reset, Door) {
         )
     };
     assert_eq!(result.outcome(), Outcome::Ready);
-    let door = Door {
-        instance: output.open.instance,
-    };
+    let door = Door::new(output.open.instance);
     let (outcome, status, body) = door.connect("vendor");
     assert_eq!((outcome, status), (Outcome::Ready, 200), "{body}");
     handles().clear();
