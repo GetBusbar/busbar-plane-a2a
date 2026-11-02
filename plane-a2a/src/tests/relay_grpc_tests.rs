@@ -198,7 +198,7 @@ fn grpc_client_issues_get_task() {
     let reply = whole(answer(
         &mut r,
         &[framed(&task(pb::TaskState::Completed))],
-        None,
+        Some(0),
     ));
     assert_eq!(body(&reply)["result"]["id"], BACKEND);
 }
