@@ -44,14 +44,13 @@ fn a_full_sizes_book_never_forgets_a_pending_tickets_short_answer() {
     assert_eq!(result, Ok(()));
 }
 
-use busbar_contract::abi::host::service::{RecordsClaimIn, RecordsGetIn, RecordsListIn};
-use busbar_contract::abi::mechanism::call::OutHead;
-use busbar_contract::abi::mechanism::lifecycle::{slot as life, DriveIn, OpenIn, OpenOut};
-use busbar_contract::abi::sdk::{Safe, SafeSlot};
-use busbar_test_kit::test_support::fake::{self, FakeHost, FakeService, ServiceCall};
-use busbar_test_kit::test_support::{reply, test_in::TestIn, zeroed, DoorView};
+use busbar_contract::abi::host::service::{HostSlots, ServiceOut};
+use busbar_contract::abi::host::service::{RecordsGetIn, RecordsListIn};
+use busbar_contract::abi::mechanism::call::RawOutcome;
+use busbar_contract::abi::sdk::test_support::zeroed;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::ffi::c_void;
 
 #[derive(Default)]
 struct ListingHost {
@@ -72,16 +71,22 @@ struct ListingHost {
 }
 thread_local! { static LISTING: RefCell<ListingHost> = RefCell::new(ListingHost::default()); }
 
-struct Get;
-impl FakeService for Get {
-    type In = RecordsGetIn;
-    fn serve(call: &mut ServiceCall<Self::In>) -> Outcome {
-        let kind = call.text(|i| &i.kind).to_string();
-        let key = call.text(|i| &i.key).to_string();
+// Each callback receives the exact service frame and exclusive output lent by the actual SDK.
+#[allow(unsafe_code)]
+extern "C" fn listing_get(_: HostCtx, input: *const c_void, out: *mut ServiceOut) -> RawOutcome {
+    // SAFETY: this callback is installed only in records_get; all input text/buffers live through
+    // this call. We check both output capacities before writing either region.
+    unsafe {
+        let i = &*input.cast::<RecordsGetIn>();
+        let kind = std::str::from_utf8(std::slice::from_raw_parts(i.kind.ptr, i.kind.len))
+            .unwrap()
+            .to_string();
+        let key = std::str::from_utf8(std::slice::from_raw_parts(i.key.ptr, i.key.len))
+            .unwrap()
+            .to_string();
         let (failed, value) = LISTING.with(|s| {
             let mut s = s.borrow_mut();
-            if kind == crate::records::KIND_PUSH_CONFIG
-                && s.read_handles.insert(call.input().head.handle.seq)
+            if kind == crate::records::KIND_PUSH_CONFIG && s.read_handles.insert(i.head.handle.seq)
             {
                 s.config_reads.push(key.clone());
             }
@@ -91,34 +96,51 @@ impl FakeService for Get {
                     && key.ends_with("/t2"));
             (failed, s.rows.get(&(kind, key)).cloned())
         });
-        if failed {
-            return Outcome::Failed;
-        }
-        if let Some(bytes) = value {
-            assert!(call.fill(
-                |i| &i.into,
-                &bytes,
-                &[ItemSpan {
+        let outcome = if failed {
+            Outcome::Failed
+        } else {
+            Outcome::Ready
+        };
+        let raw = RawOutcome::of(outcome);
+        let mut answer = ServiceOut {
+            size: std::mem::size_of::<ServiceOut>() as u32,
+            outcome: raw,
+            ..ServiceOut::ZERO
+        };
+        if !failed {
+            if let Some(bytes) = value {
+                assert!(i.into.cap >= bytes.len() && i.into.spans_cap >= 1);
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), i.into.buf, bytes.len());
+                i.into.spans.write(ItemSpan {
                     key: ABSENT_SPAN.key,
                     value: Span {
                         offset: 0,
-                        len: bytes.len() as u32
-                    }
-                }]
-            ));
-            call.set_value(busbar_contract::abi::host::service::FOUND);
-        } else {
-            call.set_value(busbar_contract::abi::host::service::ABSENT);
+                        len: bytes.len() as u32,
+                    },
+                });
+                answer.value = busbar_contract::abi::host::service::FOUND;
+                answer.len = bytes.len() as u64;
+                answer.items = 1;
+            } else {
+                answer.value = busbar_contract::abi::host::service::ABSENT;
+            }
         }
-        Outcome::Ready
+        out.write(answer);
+        raw
     }
 }
-struct List;
-impl FakeService for List {
-    type In = RecordsListIn;
-    fn serve(call: &mut ServiceCall<Self::In>) -> Outcome {
-        let kind = call.text(|i| &i.kind);
-        let prefix = call.text(|i| &i.prefix);
+#[allow(unsafe_code)]
+extern "C" fn listing_list(_: HostCtx, input: *const c_void, out: *mut ServiceOut) -> RawOutcome {
+    // SAFETY: installed only in records_list. Text borrows are confined to this call. SDK-owned
+    // byte/span regions are exclusive and both capacities are checked before copying.
+    unsafe {
+        let i = &*input.cast::<RecordsListIn>();
+        let kind = std::str::from_utf8(std::slice::from_raw_parts(i.kind.ptr, i.kind.len)).unwrap();
+        let prefix = if i.prefix.len == 0 {
+            ""
+        } else {
+            std::str::from_utf8(std::slice::from_raw_parts(i.prefix.ptr, i.prefix.len)).unwrap()
+        };
         let rows: Vec<_> = LISTING.with(|s| {
             s.borrow()
                 .rows
@@ -145,220 +167,153 @@ impl FakeService for List {
                 },
             });
         }
-        assert!(call.fill(|i| &i.into, &bytes, &spans));
-        Outcome::Ready
+        assert!(i.into.cap >= bytes.len() && i.into.spans_cap >= spans.len());
+        if !bytes.is_empty() {
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), i.into.buf, bytes.len());
+        }
+        if !spans.is_empty() {
+            std::ptr::copy_nonoverlapping(spans.as_ptr(), i.into.spans, spans.len());
+        }
+        let raw = RawOutcome::of(Outcome::Ready);
+        out.write(ServiceOut {
+            size: std::mem::size_of::<ServiceOut>() as u32,
+            outcome: raw,
+            len: bytes.len() as u64,
+            items: spans.len() as u64,
+            ..ServiceOut::ZERO
+        });
+        raw
     }
 }
-struct Claim;
-impl FakeService for Claim {
-    type In = RecordsClaimIn;
-    fn serve(call: &mut ServiceCall<Self::In>) -> Outcome {
-        call.set_value(busbar_contract::abi::host::service::CLAIM_WON);
-        Outcome::Ready
+#[allow(unsafe_code)]
+extern "C" fn listing_claim(_: HostCtx, _: *const c_void, out: *mut ServiceOut) -> RawOutcome {
+    let raw = RawOutcome::of(Outcome::Ready);
+    // SAFETY: installed only in records_claim; SDK lends an exclusive complete ServiceOut.
+    unsafe {
+        out.write(ServiceOut {
+            size: std::mem::size_of::<ServiceOut>() as u32,
+            outcome: raw,
+            value: busbar_contract::abi::host::service::CLAIM_WON,
+            ..ServiceOut::ZERO
+        });
     }
+    raw
 }
 
-mod listing_probe {
-    use super::*;
-
-    macro_rules! fixture_slot {
-        ($name:ident, $input:ty, $output:ty, $outcome:expr) => {
-            pub struct $name;
-            impl SafeSlot for $name {
-                type In = $input;
-                type Out = $output;
-                type State = A2aDoor;
-                fn call(
-                    _: Instance<'_, A2aDoor>,
-                    _: Lent<'_, Self::In>,
-                    _: Out<'_, Self::Out>,
-                ) -> Outcome {
-                    $outcome
-                }
-            }
-        };
-    }
-    use busbar_contract::abi::mechanism::call::InHead;
-    use busbar_contract::abi::mechanism::lifecycle::{
-        CancelIn, CancelOut, GenIn, RefreshIn, ReleaseIn, TickIn, TickOut, ValidateIn,
-    };
-    fixture_slot!(Validate, ValidateIn, OutHead, Outcome::Refused);
-    fixture_slot!(Refresh, RefreshIn, OutHead, Outcome::Refused);
-    fixture_slot!(Retire, GenIn, OutHead, Outcome::Refused);
-    fixture_slot!(Tick, TickIn, TickOut, Outcome::Refused);
-    fixture_slot!(Cancel, CancelIn, CancelOut, Outcome::Refused);
-    fixture_slot!(Release, ReleaseIn, OutHead, Outcome::Refused);
-    fixture_slot!(Close, InHead, OutHead, Outcome::Ready);
-    pub struct Open;
-    impl SafeSlot for Open {
-        type In = OpenIn;
-        type Out = OpenOut;
-        type State = A2aDoor;
-        fn call(
-            instance: Instance<'_, A2aDoor>,
-            input: Lent<'_, Self::In>,
-            _: Out<'_, Self::Out>,
-        ) -> Outcome {
-            let tables = input.host().unwrap();
-            let plane =
-                A2aDoor::listing_lifecycle_fixture(Host::of(tables), Services::of(tables).unwrap());
-            let doc = serde_json::json!({"jsonrpc":"2.0","id":"busbar-originated","result":{"tasks":[
-                {"id":"backend-t1","status":{"state":"TASK_STATE_COMPLETED"}},
-                {"id":"backend-t2","status":{"state":"TASK_STATE_COMPLETED"}}]}});
-            plane.on_unit(1, |u| {
-                u.pass.listed = Some((
-                    1,
-                    crate::binding::Binding::JsonRpc,
-                    Some((200, serde_json::to_vec(&doc).unwrap())),
-                ))
-            });
-            instance.open(plane);
-            Outcome::Ready
-        }
-    }
-    pub struct Drive;
-    impl SafeSlot for Drive {
-        type In = DriveIn;
-        type Out = OutHead;
-        type State = A2aDoor;
-        fn call(
-            instance: Instance<'_, A2aDoor>,
-            _: Lent<'_, Self::In>,
-            _: Out<'_, Self::Out>,
-        ) -> Outcome {
-            let plane = instance.get().unwrap();
-            let host = plane.host.as_ref().unwrap();
-            let journal = plane
-                .units
-                .with(&1, |u| u.unwrap().pass.publication.clone());
-            let mut extensions = busbar_contract::abi::sdk::plane::conditional::encode_capability(
-                busbar_contract::abi::sdk::plane::conditional::Capability {
-                    ticket: instance.ticket(),
-                    epoch: 1,
-                },
-            );
-            extensions.extend(LISTING.with(|s| std::mem::take(&mut s.borrow_mut().receipt)));
-            journal.enter(instance.ticket(), &extensions).unwrap();
-            let section = plane
-                .units
-                .with(&1, |u| u.unwrap().section.clone())
-                .unwrap();
-            let mut via = Via::new(host, plane.services, instance.ticket(), 0, &plane.grown)
-                .publishing(&journal);
-            let mut writes = Vec::new();
-            let setup = LISTING.with(|s| s.borrow().fail_task);
-            let result = if setup {
-                let envelope = serde_json::json!({"method":"GetTaskPushNotificationConfig","params":{"taskId":"t1"}});
-                mirror_flight(
-                    plane,
-                    &instance,
-                    &mut via,
-                    (crate::mirror::method::GET_PUSH_CONFIG, "1.0"),
-                    &envelope,
-                    ("a11ce", "planner"),
-                    (Some(&section), 0, 100),
-                )
-                .map(|_| ())
-            } else {
-                refresh_listed(
-                    plane,
-                    &instance,
-                    1,
-                    &mut via,
-                    ("a11ce", "planner"),
-                    (Some(&section), 0, 100, "1.0"),
-                    &mut writes,
-                )
-            };
-            assert!(
-                writes.is_empty(),
-                "conditional records never escape as ordinary writes"
-            );
-            if result == Err(Halt::Pending) {
-                let receipt =
-                    crate::conditional_publication::fixture::receipt(&journal, |request| {
-                        use busbar_contract::abi::sdk::plane::conditional::RecordMutation;
-                        use busbar_contract::abi::sdk::store::conditional::{Decision, Expected};
-                        LISTING.with(|state| {
-                            let mut state = state.borrow_mut();
-                            for predicate in &request.candidate.predicates {
-                                let key = String::from_utf8(predicate.key.clone()).unwrap();
-                                let kind =
-                                    crate::records::HELD_KINDS[predicate.kind as usize].to_string();
-                                let actual = state.rows.get(&(kind, key));
-                                assert!(match &predicate.expected {
-                                    Expected::Absent => actual.is_none(),
-                                    Expected::Bytes(value) => actual == Some(value),
-                                });
-                            }
-                            for mutation in &request.candidate.mutations {
-                                if let RecordMutation::Put { kind, key, value } = mutation {
-                                    let kind =
-                                        crate::records::HELD_KINDS[*kind as usize].to_string();
-                                    state.committed.insert(
-                                        (kind, String::from_utf8(key.clone()).unwrap()),
-                                        value.clone(),
-                                    );
-                                } else {
-                                    panic!("listing moves only put task rows");
-                                }
-                            }
-                            state.publications += 1;
-                        });
-                        Decision::Applied
-                    });
-                LISTING.with(|s| {
-                    let mut s = s.borrow_mut();
-                    s.receipt = receipt;
-                    s.pending_entries += 1;
-                });
-                return Outcome::Pending;
-            }
-            let failed = result.is_err();
-
-            crate::push_door::apply_publication(plane, &journal);
-            let tokens = ["t1", "t2"]
-                .iter()
-                .map(|id| {
-                    plane
-                        .tokens
-                        .claim(&format!("{id}.{}", crate::push::hex(b"signature")))
-                        .is_some()
-                })
-                .collect();
-            let delivery = plane.deliveries.next_due(0);
-            LISTING.with(|s| {
-                let mut s = s.borrow_mut();
-                s.failed = failed;
-                s.writes = writes.len();
-                s.tokens = tokens;
-                s.delivery = delivery.is_some();
-                s.first_delivery = delivery.as_ref().map(|delivery| {
-                    (
-                        delivery.task_id.clone(),
-                        delivery.url.clone(),
-                        delivery.unresolved.is_some(),
-                    )
-                });
-            });
-            Outcome::Ready
-        }
-    }
-    busbar_contract::plugin_door! {
-        ops: busbar_contract::abi::export::Ops,
-        statement: busbar_contract::abi::sdk::door::statement("task-listing-probe", "0", 4),
-        lifecycle: {
-            validate: Safe<Validate>,
-            open: Safe<Open>,
-            refresh: Safe<Refresh>,
-            retire: Safe<Retire>,
-            tick: Safe<Tick>,
-            drive: Safe<Drive>,
-            cancel: Safe<Cancel>,
-            release: Safe<Release>,
-            close: Safe<Close>,
+// One concrete iteration of the actual listing algorithm and its acknowledged receipt.
+fn listing_step(plane: &A2aDoor) -> Outcome {
+    let host = plane.host.as_ref().unwrap();
+    let journal = plane
+        .units
+        .with(&1, |u| u.unwrap().pass.publication.clone());
+    let mut extensions = busbar_contract::abi::sdk::plane::conditional::encode_capability(
+        busbar_contract::abi::sdk::plane::conditional::Capability {
+            ticket: TICKET,
+            epoch: 1,
         },
+    );
+    extensions.extend(LISTING.with(|s| std::mem::take(&mut s.borrow_mut().receipt)));
+    journal.enter(TICKET, &extensions).unwrap();
+    let section = plane
+        .units
+        .with(&1, |u| u.unwrap().section.clone())
+        .unwrap();
+    let mut via = Via::new(host, plane.services, TICKET, 0, &plane.grown).publishing(&journal);
+    let mut writes = Vec::new();
+    let setup = LISTING.with(|s| s.borrow().fail_task);
+    let result = if setup {
+        let envelope =
+            serde_json::json!({"method":"GetTaskPushNotificationConfig","params":{"taskId":"t1"}});
+        mirror_flight(
+            plane,
+            TICKET,
+            &mut via,
+            (crate::mirror::method::GET_PUSH_CONFIG, "1.0"),
+            &envelope,
+            ("a11ce", "planner"),
+            (Some(&section), 0, 100),
+        )
+        .map(|_| ())
+    } else {
+        refresh_listed(
+            plane,
+            TICKET,
+            1,
+            &mut via,
+            ("a11ce", "planner"),
+            (Some(&section), 0, 100, "1.0"),
+            &mut writes,
+        )
+    };
+    assert!(
+        writes.is_empty(),
+        "conditional records never escape as ordinary writes"
+    );
+    if result == Err(Halt::Pending) {
+        let receipt = crate::conditional_publication::fixture::receipt(&journal, |request| {
+            use busbar_contract::abi::sdk::plane::conditional::RecordMutation;
+            use busbar_contract::abi::sdk::store::conditional::{Decision, Expected};
+            LISTING.with(|state| {
+                let mut state = state.borrow_mut();
+                for predicate in &request.candidate.predicates {
+                    let key = String::from_utf8(predicate.key.clone()).unwrap();
+                    let kind = crate::records::HELD_KINDS[predicate.kind as usize].to_string();
+                    let actual = state.rows.get(&(kind, key));
+                    assert!(match &predicate.expected {
+                        Expected::Absent => actual.is_none(),
+                        Expected::Bytes(value) => actual == Some(value),
+                    });
+                }
+                for mutation in &request.candidate.mutations {
+                    if let RecordMutation::Put { kind, key, value } = mutation {
+                        let kind = crate::records::HELD_KINDS[*kind as usize].to_string();
+                        state.committed.insert(
+                            (kind, String::from_utf8(key.clone()).unwrap()),
+                            value.clone(),
+                        );
+                    } else {
+                        panic!("listing moves only put task rows");
+                    }
+                }
+                state.publications += 1;
+            });
+            Decision::Applied
+        });
+        LISTING.with(|s| {
+            let mut s = s.borrow_mut();
+            s.receipt = receipt;
+            s.pending_entries += 1;
+        });
+        return Outcome::Pending;
     }
+    let failed = result.is_err();
+
+    crate::push_door::apply_publication(plane, &journal);
+    let tokens = ["t1", "t2"]
+        .iter()
+        .map(|id| {
+            plane
+                .tokens
+                .claim(&format!("{id}.{}", crate::push::hex(b"signature")))
+                .is_some()
+        })
+        .collect();
+    let delivery = plane.deliveries.next_due(0);
+    LISTING.with(|s| {
+        let mut s = s.borrow_mut();
+        s.failed = failed;
+        s.writes = writes.len();
+        s.tokens = tokens;
+        s.delivery = delivery.is_some();
+        s.first_delivery = delivery.as_ref().map(|delivery| {
+            (
+                delivery.task_id.clone(),
+                delivery.url.clone(),
+                delivery.unresolved.is_some(),
+            )
+        });
+    });
+    Outcome::Ready
 }
 
 fn listing_fixture(fail_second_config: bool, fail_task: bool) {
@@ -396,64 +351,42 @@ fn listing_fixture(fail_second_config: bool, fail_task: bool) {
         *s.borrow_mut() = fixture;
     });
 }
-fn drive_listing() -> Vec<reply::DiagCopy> {
-    struct Opened<'h> {
-        instance: Option<reply::Instance<'h>>,
-        close: busbar_test_kit::test_support::ViewOp,
-    }
-    impl Drop for Opened<'_> {
-        fn drop(&mut self) {
-            if let Some(instance) = self.instance.take() {
-                let _ = reply::close_in(
-                    self.close,
-                    instance,
-                    &TestIn::<busbar_contract::abi::mechanism::call::InHead>::new()
-                        .set(|i| &i.op, life::CLOSE),
-                    zeroed::<OutHead>(),
-                );
-            }
-        }
-    }
-    let fake = FakeHost::new()
-        .serve(fake::host::RECORDS_GET, Get)
-        .serve(fake::host::RECORDS_LIST, List)
-        .serve(fake::host::RECORDS_CLAIM, Claim);
-    let view = DoorView::of(listing_probe::MACRO_DOOR);
-    let open = fake.lend_in(TestIn::<OpenIn>::new().set(|i| &i.head.op, life::OPEN));
-    let mut opened = reply::call_hosted_in(
-        view.op::<busbar_contract::abi::export::Ops>(|t| &t.head.open)
-            .unwrap(),
-        None,
-        &open,
-        zeroed::<OpenOut>(),
-    );
-    assert_eq!(opened.outcome, Outcome::Ready, "{opened:?}");
-    let mut diagnostics = opened.envelope.diags.clone();
-    let instance = Opened {
-        instance: opened.take_instance(),
-        close: view
-            .op::<busbar_contract::abi::export::Ops>(|t| &t.head.close)
-            .unwrap(),
+fn drive_listing() -> Vec<(tracing::Level, String)> {
+    let slots = HostSlots {
+        size: std::mem::size_of::<HostSlots>() as u32,
+        records_get: Some(listing_get),
+        records_list: Some(listing_list),
+        records_claim: Some(listing_claim),
+        ..zeroed()
     };
-    assert!(instance.instance.is_some());
-    let input = TestIn::<DriveIn>::new()
-        .set(|i| &i.head.op, life::DRIVE)
-        .set(|i| &i.head.ticket, TICKET);
-    for _ in 0..10 {
-        let result = reply::call_in(
-            view.op::<busbar_contract::abi::export::Ops>(|t| &t.head.drive)
-                .unwrap(),
-            instance.instance.as_ref(),
-            &input,
-            zeroed::<OutHead>(),
-        );
-        diagnostics.extend(result.envelope.diags);
-        if result.outcome == Outcome::Ready {
-            return diagnostics;
+    let tables = HostTables {
+        services: &slots,
+        ..no_task_services()
+    };
+    let plane =
+        A2aDoor::listing_lifecycle_fixture(Host::of(&tables), Services::of(&tables).unwrap());
+    let doc = serde_json::json!({"jsonrpc":"2.0","id":"busbar-originated","result":{"tasks":[
+        {"id":"backend-t1","status":{"state":"TASK_STATE_COMPLETED"}},
+        {"id":"backend-t2","status":{"state":"TASK_STATE_COMPLETED"}}]}});
+    plane.on_unit(1, |u| {
+        u.pass.listed = Some((
+            1,
+            crate::binding::Binding::JsonRpc,
+            Some((200, serde_json::to_vec(&doc).unwrap())),
+        ))
+    });
+    let (send, receive) = std::sync::mpsc::channel();
+    tracing::subscriber::with_default(crate::tests::capture::Capture(send), || {
+        for _ in 0..10 {
+            let outcome = listing_step(&plane);
+            if outcome == Outcome::Ready {
+                return;
+            }
+            assert_eq!(outcome, Outcome::Pending);
         }
-        assert_eq!(result.outcome, Outcome::Pending);
-    }
-    panic!("listing did not finish its bounded observation/publication sequence");
+        panic!("listing did not finish its bounded observation/publication sequence");
+    });
+    receive.try_iter().collect()
 }
 
 #[test]
@@ -509,15 +442,16 @@ fn a_real_mirror_setup_read_failure_is_reported_without_exposing_request_materia
     let events = drive_listing();
     LISTING.with(|s| assert!(s.borrow().failed));
     assert!(
-        events.iter().any(|event| event.severity
-            == busbar_contract::abi::mechanism::call::SEVERITY_WARN
-            && event.text.contains("setup")
-            && event.text.contains("planner")),
+        events
+            .iter()
+            .any(|(level, text)| *level == tracing::Level::WARN
+                && text.contains("setup")
+                && text.contains("planner")),
         "{events:?}"
     );
     assert!(!events
         .iter()
-        .any(|event| event.text.contains("https://") || event.text.contains("authentication")));
+        .any(|(_, text)| text.contains("https://") || text.contains("authentication")));
 }
 
 #[test]
