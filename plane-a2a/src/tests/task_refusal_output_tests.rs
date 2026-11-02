@@ -265,12 +265,10 @@ fn refused_grpc_error_remains_http_200_with_final_status_and_no_effects() {
 
 #[test]
 fn refused_output_rejects_staged_writes_instead_of_discarding_them() {
-    let pass = Pass {
-        served: true,
-        audit: Some(("agent:planner".into(), true)),
-        response_only: true,
-        ..Pass::default()
-    };
+    let mut pass = Pass::default();
+    pass.served = true;
+    pass.audit = Some(("agent:planner".into(), true));
+    pass.response_only = true;
     let writes = [Write {
         kind: crate::records::KIND_TASK,
         key: "caller/task".into(),

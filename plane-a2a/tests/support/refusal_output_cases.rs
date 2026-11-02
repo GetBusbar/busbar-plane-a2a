@@ -93,10 +93,8 @@ fn refused_grpc_error_remains_http_200_with_final_status_and_no_effects() {
     let mut message = b"\x12\x03cfg\x1a\x02t1".to_vec();
     message.extend_from_slice(&[0x22, url.len() as u8]);
     message.extend_from_slice(url);
-    let mut body = vec![0];
-    body.extend_from_slice(&(message.len() as u32).to_be_bytes());
-    body.extend_from_slice(&message);
-    let outputs = config_windows(&door, 2802, &body, true, 1024);
+    // The gRPC transport removes its five-byte framing before handing the message to ARRIVE.
+    let outputs = config_windows(&door, 2802, &message, true, 1024);
     assert_eq!(outputs.len(), 1);
     let out = &outputs[0];
     assert_eq!(out.reply_status, Some(200));
