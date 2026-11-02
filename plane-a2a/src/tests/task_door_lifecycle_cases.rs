@@ -399,7 +399,7 @@ fn listing_fixture(fail_second_config: bool, fail_task: bool) {
         *s.borrow_mut() = fixture;
     });
 }
-fn drive_listing() {
+fn drive_listing() -> Vec<reply::DiagCopy> {
     struct Opened<'h> {
         instance: Option<reply::Instance<'h>>,
         close: busbar_test_kit::test_support::ViewOp,
@@ -431,6 +431,7 @@ fn drive_listing() {
         zeroed::<OpenOut>(),
     );
     assert_eq!(opened.outcome, Outcome::Ready, "{opened:?}");
+    let mut diagnostics = opened.envelope.diags.clone();
     let instance = Opened {
         instance: opened.take_instance(),
         close: view
@@ -449,8 +450,9 @@ fn drive_listing() {
             &input,
             zeroed::<OutHead>(),
         );
+        diagnostics.extend(result.envelope.diags);
         if result.outcome == Outcome::Ready {
-            return;
+            return diagnostics;
         }
         assert_eq!(result.outcome, Outcome::Pending);
     }
@@ -506,21 +508,20 @@ fn the_success_control_reads_both_configs_and_acknowledges_actual_task_transitio
 #[test]
 fn a_real_mirror_setup_read_failure_is_reported_without_exposing_request_material() {
     listing_fixture(false, true);
-    let (send, receive) = std::sync::mpsc::channel();
-    tracing::subscriber::with_default(crate::tests::capture::Capture(send), drive_listing);
+    // The actual SDK slot capture owns these events; the host observes them on its reply,
+    // rather than through an outer tracing subscriber the trampoline replaces (Decision #85).
+    let events = drive_listing();
     LISTING.with(|s| assert!(s.borrow().failed));
-    let events: Vec<_> = receive.try_iter().collect();
     assert!(
-        events
-            .iter()
-            .any(|(level, words)| *level == tracing::Level::WARN
-                && words.contains("setup")
-                && words.contains("planner")),
+        events.iter().any(|event| event.severity
+            == busbar_contract::abi::mechanism::call::SEVERITY_WARN
+            && event.text.contains("setup")
+            && event.text.contains("planner")),
         "{events:?}"
     );
     assert!(!events
         .iter()
-        .any(|(_, words)| words.contains("https://") || words.contains("authentication")));
+        .any(|event| event.text.contains("https://") || event.text.contains("authentication")));
 }
 
 #[test]
