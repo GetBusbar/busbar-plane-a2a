@@ -134,6 +134,19 @@ fn arrive(door: &Door, unit: u64) {
     );
 }
 
+fn verify_before_pin_scenario(door: &Door, unit: u64, member: &[u8]) {
+    arrive(door, unit);
+    let verified = door.piece(unit, Given::attempt(member), 4096);
+    assert_eq!(verified.outcome, Some(Outcome::Ready), "{verified:?}");
+    assert_eq!(verified.verb, "POST", "{verified:?}");
+    assert_ne!(
+        verified.flags & busbar_contract::abi::plane::EMIT_TO_FAR_END,
+        0,
+        "the real verification completed before the relay head: {verified:?}"
+    );
+    assert_eq!(door.cancel_unit(unit), Outcome::Ready);
+}
+
 #[test]
 fn actual_relay_heads_keep_the_judged_set_for_public_and_private_reach() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
@@ -150,6 +163,7 @@ fn actual_relay_heads_keep_the_judged_set_for_public_and_private_reach() {
         let door = open_with(section);
         let (outcome, status, body) = door.connect("vendor");
         assert_eq!((outcome, status), (Outcome::Ready, 200), "{body}");
+        verify_before_pin_scenario(&door, 10_500, b"vendor");
         arrive(&door, 500);
         let scenario = Scenario::start(&[addresses], false);
         let answered = door.piece(500, Given::attempt(b"vendor"), 4096);
@@ -168,6 +182,7 @@ fn pending_and_short_recall_keep_the_same_pin_then_a_new_attempt_judges_again() 
     let door = open_with(SECTION);
     let (outcome, status, body) = door.connect("vendor");
     assert_eq!((outcome, status), (Outcome::Ready, 200), "{body}");
+    verify_before_pin_scenario(&door, 10_501, b"vendor");
     arrive(&door, 501);
     let scenario = Scenario::start(&[&["203.0.113.7"], &["203.0.113.8"]], true);
     let pending = door.piece_with_fields(501, Given::attempt(b"vendor"), 4096, 0);
@@ -205,6 +220,8 @@ fn changing_the_selected_member_and_url_cannot_reuse_a_previous_relay_pin() {
         let (outcome, status, body) = door.connect(member);
         assert_eq!((outcome, status), (Outcome::Ready, 200), "{body}");
     }
+    verify_before_pin_scenario(&door, 10_502, b"vendor");
+    verify_before_pin_scenario(&door, 10_503, b"backup");
     arrive(&door, 502);
     let scenario = Scenario::start(&[&["203.0.113.7"], &["203.0.113.9"]], false);
     assert_eq!(
