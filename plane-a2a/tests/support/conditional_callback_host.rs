@@ -187,8 +187,9 @@ impl Host {
         }
         if matches!(&intent, Intent::Publish(request) if self.pause_commit ||
             (self.pause_owed_commit && request.candidate.chains.iter().any(|chain|
-                matches!(chain, wire::ChainMutation::Append { content, .. }
-                    if serde_json::from_slice::<Value>(content).is_ok_and(|event| event["kind"] == "task.push_delivered")))))
+                matches!(chain, wire::ChainMutation::Append { kind, content, .. }
+                    if door_facts::HELD_KINDS.get(*kind as usize) == Some(&"task_event")
+                        && task_event_kind(content) == "task.push_delivered"))))
         {
             return false;
         }

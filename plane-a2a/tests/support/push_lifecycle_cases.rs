@@ -1837,15 +1837,75 @@ fn get_named_task_answer(
     )
 }
 
+/// tasks::suffix writes exactly six length-prefixed fields, without the host chain prelude.
+/// Decode every field so a malformed event cannot silently disappear from the count or pause.
+fn task_event_kind(mut content: &[u8]) -> &str {
+    let mut kind = None;
+    for index in 0..6 {
+        let (length, rest) = content
+            .split_first_chunk::<8>()
+            .expect("a task event field has its complete length prefix");
+        let length = usize::try_from(u64::from_be_bytes(*length))
+            .expect("a task event field length fits this host");
+        let (field, rest) = rest
+            .split_at_checked(length)
+            .expect("a task event field has its complete declared payload");
+        if index == 0 {
+            assert_eq!(field.len(), 8, "a task event timestamp is eight bytes");
+        } else {
+            let text =
+                std::str::from_utf8(field).expect("a task event's declared text fields are UTF-8");
+            if index == 1 {
+                kind = Some(text);
+            }
+        }
+        content = rest;
+    }
+    assert!(content.is_empty(), "a task event has exactly six fields");
+    kind.expect("the event kind is the second field")
+}
+
+#[test]
+fn task_event_kind_reads_the_declared_suffix_and_rejects_malformed_fields() {
+    // Independent literal for timestamp=1, kind, context, principal, agent and state.
+    let valid = b"\0\0\0\0\0\0\0\x08\0\0\0\0\0\0\0\x01\0\0\0\0\0\0\0\x13task.push_delivered\0\0\0\0\0\0\0\x02c1\0\0\0\0\0\0\0\x06caller\0\0\0\0\0\0\0\x06vendor\0\0\0\0\0\0\0\x07working";
+    assert_eq!(task_event_kind(valid), "task.push_delivered");
+    let mut other_kind = valid.to_vec();
+    other_kind[42] = b'X';
+    assert_ne!(task_event_kind(&other_kind), "task.push_delivered");
+    let mut wrong_timestamp = valid.to_vec();
+    wrong_timestamp[..8].copy_from_slice(&7_u64.to_be_bytes());
+    let mut oversized = valid.to_vec();
+    oversized[..8].copy_from_slice(&u64::MAX.to_be_bytes());
+    let mut bad_kind = valid.to_vec();
+    bad_kind[24] = 0xff;
+    let mut bad_state = valid.to_vec();
+    *bad_state.last_mut().unwrap() = 0xff;
+    let mut trailing = valid.to_vec();
+    trailing.push(0);
+    for malformed in [
+        valid[..7].to_vec(),
+        valid[..valid.len() - 1].to_vec(),
+        valid[..valid.len() - 15].to_vec(),
+        wrong_timestamp,
+        oversized,
+        bad_kind,
+        bad_state,
+        trailing,
+    ] {
+        assert!(
+            std::panic::catch_unwind(|| task_event_kind(&malformed)).is_err(),
+            "malformed relevant event framing must fail rather than be skipped"
+        );
+    }
+}
+
 fn delivered_events() -> usize {
     script(|s| {
         s.conditional
             .events
             .iter()
-            .filter(|(_, content)| {
-                let event: Value = serde_json::from_slice(content).unwrap();
-                event["kind"] == "task.push_delivered"
-            })
+            .filter(|(_, content)| task_event_kind(content) == "task.push_delivered")
             .count()
     })
 }
@@ -1872,9 +1932,10 @@ fn canceled_owed_append_is_acknowledged_only_after_its_exact_late_applied() {
     assert_eq!(original.capability.ticket, ticket(1231));
     assert!(
         original.candidate.chains.iter().any(|chain| matches!(chain,
-        busbar_contract::abi::sdk::plane::conditional::ChainMutation::Append { scope, content, .. }
-        if scope == format!("{}/t1", std::str::from_utf8(ALICE).unwrap()).as_bytes()
-            && serde_json::from_slice::<Value>(content).unwrap()["kind"] == "task.push_delivered"))
+        busbar_contract::abi::sdk::plane::conditional::ChainMutation::Append { kind, scope, content, .. }
+        if door_facts::HELD_KINDS.get(*kind as usize) == Some(&"task_event")
+            && scope == format!("{}/t1", std::str::from_utf8(ALICE).unwrap()).as_bytes()
+            && task_event_kind(content) == "task.push_delivered"))
     );
     assert!(
         script(|s| !s.conditional.requests.contains(&original)),
