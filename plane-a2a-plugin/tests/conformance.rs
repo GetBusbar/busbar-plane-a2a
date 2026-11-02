@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! THE PUBLISHED CONFORMANCE SUITE, run over this plane (OWNER 2026-10-03: plugins test themselves
+//! Runs the published conformance suite for the A2A plane.
 
 busbar_test_kit::conformance_suite! {
     door: busbar_plane_a2a::door,
