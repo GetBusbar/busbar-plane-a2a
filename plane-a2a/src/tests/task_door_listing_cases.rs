@@ -97,16 +97,19 @@ extern "C" fn failed_dial(_: HostCtx, _: *const c_void, out: *mut ServiceOut) ->
 }
 
 #[test]
+#[allow(unsafe_code)]
 fn a_real_failed_mirror_dial_is_visible_without_changing_best_effort_completion() {
     DIALS.with(|v| v.set(0));
     let slots = HostSlots {
         size: std::mem::size_of::<HostSlots>() as u32,
+        slots: busbar_contract::abi::host::service::SERVICES,
         dest_judge: Some(admitted),
         trust_serves: Some(serving),
         ..zeroed()
     };
     let conns = ConnectorSlots {
         size: std::mem::size_of::<ConnectorSlots>() as u32,
+        slots: busbar_contract::abi::host::conn::connector::SERVICES,
         establish: Some(failed_dial),
         ..zeroed()
     };
@@ -119,9 +122,12 @@ fn a_real_failed_mirror_dial_is_visible_without_changing_best_effort_completion(
         services: &slots,
         io: std::ptr::null(),
     };
+    // SAFETY: the immutable tables/slot arrays remain live until plane and its mirror call
+    // finish; all callbacks are static functions, and no pointer escapes the test.
+    let loan = unsafe { busbar_contract::abi::sdk::test_support::lend(&tables) };
     let plane = A2aDoor {
-        host: Some(Host::of(&tables)),
-        services: Services::of(&tables),
+        host: Some(Host::of(loan)),
+        services: Services::of(loan),
         ..A2aDoor::default()
     };
     let mut flight = crate::mirror::Flight {

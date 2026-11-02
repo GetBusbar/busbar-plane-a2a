@@ -11,9 +11,11 @@ fn ticket(slot: u32) -> Ticket {
     }
 }
 #[test]
+#[allow(unsafe_code)]
 fn a_full_sizes_book_never_forgets_a_pending_tickets_short_answer() {
     let unserved = no_task_services();
-    let tables = &unserved;
+    // SAFETY: immutable local tables advertise no nested pointers and outlive all adapters.
+    let tables = unsafe { busbar_contract::abi::sdk::test_support::lend(&unserved) };
     let host = Host::of(tables);
     let grown = Keyed::new();
     let first = ticket(1);
@@ -351,9 +353,11 @@ fn listing_fixture(fail_second_config: bool, fail_task: bool) {
         *s.borrow_mut() = fixture;
     });
 }
+#[allow(unsafe_code)]
 fn drive_listing() -> Vec<(tracing::Level, String)> {
     let slots = HostSlots {
         size: std::mem::size_of::<HostSlots>() as u32,
+        slots: busbar_contract::abi::host::service::SERVICES,
         records_get: Some(listing_get),
         records_list: Some(listing_list),
         records_claim: Some(listing_claim),
@@ -363,8 +367,10 @@ fn drive_listing() -> Vec<(tracing::Level, String)> {
         services: &slots,
         ..no_task_services()
     };
-    let plane =
-        A2aDoor::listing_lifecycle_fixture(Host::of(&tables), Services::of(&tables).unwrap());
+    // SAFETY: the immutable table and its immutable slots stay in this scope until plane and
+    // every adapter are dropped. Callbacks are static functions and borrow no external storage.
+    let loan = unsafe { busbar_contract::abi::sdk::test_support::lend(&tables) };
+    let plane = A2aDoor::listing_lifecycle_fixture(Host::of(loan), Services::of(loan).unwrap());
     let doc = serde_json::json!({"jsonrpc":"2.0","id":"busbar-originated","result":{"tasks":[
         {"id":"backend-t1","status":{"state":"TASK_STATE_COMPLETED"}},
         {"id":"backend-t2","status":{"state":"TASK_STATE_COMPLETED"}}]}});
@@ -455,9 +461,11 @@ fn a_real_mirror_setup_read_failure_is_reported_without_exposing_request_materia
 }
 
 #[test]
+#[allow(unsafe_code)]
 fn a_full_book_refuses_an_untracked_handle_before_any_host_issue_even_on_reentry() {
     let unserved = no_task_services();
-    let tables = &unserved;
+    // SAFETY: immutable local tables advertise no nested pointers and outlive all adapters.
+    let tables = unsafe { busbar_contract::abi::sdk::test_support::lend(&unserved) };
     let host = Host::of(tables);
     let grown = Keyed::new();
     let held = Via::new(&host, Services::of(tables), ticket(2), 0, &grown);
@@ -487,9 +495,11 @@ fn a_full_book_refuses_an_untracked_handle_before_any_host_issue_even_on_reentry
 }
 
 #[test]
+#[allow(unsafe_code)]
 fn completed_records_calls_release_reservations_instead_of_consuming_the_growth_bound() {
     let unserved = no_task_services();
-    let tables = &unserved;
+    // SAFETY: immutable local tables advertise no nested pointers and outlive all adapters.
+    let tables = unsafe { busbar_contract::abi::sdk::test_support::lend(&unserved) };
     let host = Host::of(tables);
     let grown = Keyed::new();
     let mut via = Via::new(&host, Services::of(tables), ticket(1), 0, &grown);
@@ -504,9 +514,11 @@ fn completed_records_calls_release_reservations_instead_of_consuming_the_growth_
 }
 
 #[test]
+#[allow(unsafe_code)]
 fn an_already_pending_handle_can_grow_at_capacity_without_forgetting_another_ticket() {
     let unserved = no_task_services();
-    let tables = &unserved;
+    // SAFETY: immutable local tables advertise no nested pointers and outlive all adapters.
+    let tables = unsafe { busbar_contract::abi::sdk::test_support::lend(&unserved) };
     let host = Host::of(tables);
     let grown = Keyed::new();
     let mut first = Via::new(&host, Services::of(tables), ticket(1), 0, &grown);
