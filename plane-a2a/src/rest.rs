@@ -226,17 +226,29 @@ pub fn path_decode(s: &str) -> Option<String> {
     String::from_utf8(out).ok()
 }
 
-/// A request body as the `params`, or the empty object when there is none or it is not JSON: an
-/// empty body is no fault on this binding (a `DELETE` carries none, a `:cancel` may), and a body
-/// that is not JSON reaches the operation as empty `params`, refused there for the member it lacks.
-#[must_use]
-pub fn json_body(body: &[u8]) -> Value {
+/// A request object's `params`, or the empty object when no body was supplied. Malformed
+/// nonempty input is refused before a path-derived task id can turn it into a valid operation.
+pub fn json_body(body: &[u8]) -> Result<Value, AgentRefusal> {
     if body.is_empty() {
-        return json!({});
+        return Ok(json!({}));
     }
-    serde_json::from_slice::<RequestJson>(body)
-        .map(RequestJson::into_value)
-        .unwrap_or_else(|_| json!({}))
+    let document = serde_json::from_slice::<RequestJson>(body).map_err(|_| {
+        AgentRefusal::new(
+            crate::agent_arrival::STATUS_BAD_REQUEST,
+            None,
+            crate::agent_arrival::CODE_PARSE,
+            crate::agent_arrival::NOT_JSON,
+        )
+    })?;
+    if !document.is_object() {
+        return Err(AgentRefusal::new(
+            crate::agent_arrival::STATUS_BAD_REQUEST,
+            None,
+            crate::agent_arrival::CODE_INVALID_PARAMS,
+            "the request body must be a JSON object",
+        ));
+    }
+    Ok(document.into_value())
 }
 
 /// `body` less its `members`: the path names the task, so the body's spellings of it go.
@@ -376,9 +388,9 @@ pub fn compose_from(
         .unwrap_or(route.target);
     let at = |verb: &str, path: &str| route.verb == verb && rel == path;
     let (name, params) = if at("POST", crate::ROUTE_MESSAGE_SEND) {
-        (method::SEND_MESSAGE, json_body(body))
+        (method::SEND_MESSAGE, json_body(body)?)
     } else if at("POST", crate::ROUTE_MESSAGE_STREAM) {
-        (method::SEND_STREAM_MESSAGE, json_body(body))
+        (method::SEND_STREAM_MESSAGE, json_body(body)?)
     } else if at("GET", crate::ROUTE_TASKS) {
         let params = Params::new()
             .maybe("contextId", query.get("contextId"))
@@ -418,7 +430,7 @@ pub fn compose_from(
         // `:cancel` carries its request as the body (proto `CancelTask`, `body: "*"`: its
         // `metadata`); THE PATH WINS, so the id is set after the merge.
         let posted = RequestJson::new(if name == method::CANCEL_TASK {
-            json_body(body)
+            json_body(body)?
         } else {
             json!({})
         });
@@ -432,7 +444,7 @@ pub fn compose_from(
         // THE PATH WINS: merged first, `taskId` set after, so a posted member cannot re-point it.
         // The path names the task alone: the body's other spelling of it is dropped (`id` here
         // is the config's).
-        let posted = RequestJson::new(json_body(body));
+        let posted = RequestJson::new(json_body(body)?);
         let posted = RequestJson::new(without(&posted, &["task_id"]));
         let params = Params::new().merge(&posted).set("taskId", var("id"));
         (method::CREATE_PUSH_CONFIG, params.into_value())

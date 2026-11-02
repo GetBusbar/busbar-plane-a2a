@@ -1464,6 +1464,106 @@ async fn an_agent_unit_whose_body_is_not_json_is_refused_at_its_arrival() {
     assert_eq!(admitted(&s), 0, "nothing was charged");
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn malformed_rest_bodies_never_dispatch_or_charge_and_empty_cancel_still_dispatches() {
+    let _one = PUBLISHING.lock().await;
+    let mut agent = Agent::start_answering(
+        200,
+        Arc::new(|request| {
+            let body = request.split_once("\r\n\r\n").unwrap().1;
+            let envelope: serde_json::Value = serde_json::from_str(body).unwrap();
+            serde_json::json!({"jsonrpc":"2.0", "id":envelope["id"], "result":{
+                "kind":"task", "id":"backend-live", "contextId":"ctx", "status":{"state":"working"}
+            }})
+            .to_string()
+        }),
+    )
+    .await;
+    let s = served(
+        "serve-agent-door-rest-malformed",
+        &agent.entry("parser", "1h"),
+        false,
+        None,
+    );
+    approve(&s, "parser").await;
+    let (status, body) = answered(
+        &s.router,
+        rpc("parser", "message/send", SEND, Some(&s.token)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let document: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let task = document["result"]["id"].as_str().unwrap();
+    agent
+        .heard
+        .recv()
+        .await
+        .expect("the initial task was dispatched");
+    let before_requests = admitted(&s);
+    let before_counts = caller_counts(&s);
+    for target in [
+        format!("{}/tasks/{task}:cancel", mount()),
+        format!("{}/message:send", mount()),
+        format!("{}/message:stream", mount()),
+    ] {
+        for body in ["{broken", "[]", "null", "false"] {
+            let request = axum::http::Request::builder()
+                .method("POST")
+                .uri(&target)
+                .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {}", s.token))
+                .body(axum::body::Body::from(body))
+                .unwrap();
+            let (status, answer) = answered(&s.router, request).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{target}: {answer}");
+            let document: serde_json::Value = serde_json::from_str(&answer).unwrap();
+            assert_eq!(document["error"]["status"], "INVALID_ARGUMENT");
+            assert!(
+                !agent.relayed(),
+                "a refused body must never reach the agent"
+            );
+            assert_eq!(admitted(&s), before_requests);
+            assert_eq!(caller_counts(&s).len(), before_counts.len());
+        }
+    }
+    let target = format!("{}/tasks/{task}:cancel", mount());
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri(&target)
+        .header("content-type", "text/plain")
+        .header("authorization", format!("Bearer {}", s.token))
+        .body(axum::body::Body::from("{broken"))
+        .unwrap();
+    let (status, _) = answered(&s.router, request).await;
+    assert_eq!(
+        status,
+        StatusCode::UNSUPPORTED_MEDIA_TYPE,
+        "head refusal precedes body decoding"
+    );
+    assert!(!agent.relayed());
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri(&target)
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {}", s.token))
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let (status, body) = answered(&s.router, request).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "empty cancel remains legitimate: {body}"
+    );
+    let sent = agent
+        .heard
+        .recv()
+        .await
+        .expect("the empty cancel was dispatched");
+    assert!(sent.contains("CancelTask") && sent.contains("backend-live"));
+    assert_eq!(admitted(&s), before_requests + 1);
+    assert_eq!(caller_counts(&s).last().unwrap().fee_count, 1);
+}
+
 /// A NOTIFICATION over the agent door (a JSON-RPC message with no `id`): acknowledged `202`
 /// with no body at all, and never relayed, as the served engine answered it
 /// (`jsonrpc::accepted`).
@@ -3287,7 +3387,11 @@ async fn a_request_the_card_does_not_fit_is_judged_after_the_trust_gate() {
     );
     approve(&s, "planner").await;
     let (status, body) = answered(&s.router, send()).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "then the card's fit: {body}");
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "then the card's fit: {body}"
+    );
     let doc: serde_json::Value = serde_json::from_str(&body).expect("an envelope");
     assert_eq!(doc["error"]["code"], -32004, "{body}");
     assert_eq!(

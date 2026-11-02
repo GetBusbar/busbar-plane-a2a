@@ -1527,10 +1527,29 @@ slot!(
         let body = input.body().bytes();
         let (dialect, envelope, framed) = match statement::line_of(route) {
             Line::Document => (statement::DIALECT_DOCUMENT, None, None),
-            Line::Target => match crate::rest::compose(route, target, body) {
-                Ok(Some(envelope)) => (statement::DIALECT_TARGET, Some(envelope), None),
-                Ok(None) => return unserved(&mut out),
-                Err(refusal) => return refused(&mut out, &refusal),
+            Line::Target => {
+                // Judge the head before decoding a REST body, just as the document line does.
+                let fields = input.fields();
+                let raw = |name: &str| fields.iter().find(|field| {
+                    field.name().as_str().is_ok_and(|key| key.eq_ignore_ascii_case(name))
+                }).map(|field| field.value().bytes());
+                let mut values = [None; 3];
+                let names = [agent_arrival::H_ORIGIN, agent_arrival::H_CONTENT_TYPE, agent_arrival::H_VERSION];
+                for (name, value) in names.iter().zip(&mut values) {
+                    *value = match agent_arrival::read_head_field(name, raw(name)) {
+                        Ok(value) => value,
+                        Err(refusal) => return refused(&mut out, &refusal),
+                    };
+                }
+                let field = |name: &str| names.iter().position(|key| *key == name).and_then(|at| values[at]);
+                if let Err(refusal) = agent_arrival::origin_refusal(field).and_then(|()| agent_arrival::head_refusal(field)) {
+                    return refused(&mut out, &refusal);
+                }
+                match crate::rest::compose(route, target, body) {
+                    Ok(Some(envelope)) => (statement::DIALECT_TARGET, Some(envelope), None),
+                    Ok(None) => return unserved(&mut out),
+                    Err(refusal) => return refused(&mut out, &refusal),
+                }
             },
             Line::Open => return arrive_card(plane, route, target, given.unit(), &mut out),
             // The gRPC line: the rpc the target names, its one request

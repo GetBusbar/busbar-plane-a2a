@@ -79,9 +79,44 @@ fn a_body_member_cannot_re_point_the_addressed_task() {
 /// own request shape.
 #[test]
 fn an_absent_body_composes_empty_params() {
-    assert_eq!(json_body(b""), json!({}));
-    assert_eq!(json_body(b"nope"), json!({}));
-    assert_eq!(json_body(b"{\"message\":1}"), json!({"message": 1}));
+    assert_eq!(json_body(b"").unwrap(), json!({}));
+    assert_eq!(
+        json_body(b"{\"message\":1}").unwrap(),
+        json!({"message": 1})
+    );
+}
+
+#[test]
+fn malformed_or_nonobject_bodies_never_compose_a_path_addressed_operation() {
+    for (pattern, target) in [
+        ("/a2a/message:send", "/a2a/message:send"),
+        ("/a2a/message:stream", "/a2a/message:stream"),
+        ("/a2a/tasks/{id}", "/a2a/tasks/live-task:cancel"),
+        (
+            "/a2a/tasks/{id}/pushNotificationConfigs",
+            "/a2a/tasks/live-task/pushNotificationConfigs",
+        ),
+    ] {
+        for body in [
+            b"nope".as_slice(),
+            b"{broken",
+            b"[]",
+            b"null",
+            b"false",
+            b"\"scalar\"",
+        ] {
+            let refusal = compose(route("POST", pattern), target, body).unwrap_err();
+            assert_eq!(refusal.status, 400);
+            assert!(matches!(refusal.code, -32700 | -32602));
+            let rendered = crate::agent_arrival::render(
+                crate::agent_arrival::Dialect::RestJson,
+                &refusal,
+                true,
+            );
+            let document: Value = serde_json::from_slice(&rendered.body).unwrap();
+            assert_eq!(document["error"]["status"], "INVALID_ARGUMENT");
+        }
+    }
 }
 
 /// EVERY ROUTE OF THE LINE composes the engine's envelope: the method its request line names, the
