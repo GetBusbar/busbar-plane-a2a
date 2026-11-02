@@ -12,8 +12,8 @@ fn ticket(slot: u32) -> Ticket {
 }
 #[test]
 fn a_full_sizes_book_never_forgets_a_pending_tickets_short_answer() {
-    let fake: &'static FakeHost = Box::leak(Box::new(FakeHost::new()));
-    let tables = fake.lent();
+    let unserved = no_task_services();
+    let tables = &unserved;
     let host = Host::of(tables);
     let grown = Keyed::new();
     let first = ticket(1);
@@ -522,8 +522,8 @@ fn a_real_mirror_setup_read_failure_is_reported_without_exposing_request_materia
 
 #[test]
 fn a_full_book_refuses_an_untracked_handle_before_any_host_issue_even_on_reentry() {
-    let fake: &'static FakeHost = Box::leak(Box::new(FakeHost::new()));
-    let tables = fake.lent();
+    let unserved = no_task_services();
+    let tables = &unserved;
     let host = Host::of(tables);
     let grown = Keyed::new();
     let held = Via::new(&host, Services::of(tables), ticket(2), 0, &grown);
@@ -554,8 +554,8 @@ fn a_full_book_refuses_an_untracked_handle_before_any_host_issue_even_on_reentry
 
 #[test]
 fn completed_records_calls_release_reservations_instead_of_consuming_the_growth_bound() {
-    let fake: &'static FakeHost = Box::leak(Box::new(FakeHost::new()));
-    let tables = fake.lent();
+    let unserved = no_task_services();
+    let tables = &unserved;
     let host = Host::of(tables);
     let grown = Keyed::new();
     let mut via = Via::new(&host, Services::of(tables), ticket(1), 0, &grown);
@@ -571,8 +571,8 @@ fn completed_records_calls_release_reservations_instead_of_consuming_the_growth_
 
 #[test]
 fn an_already_pending_handle_can_grow_at_capacity_without_forgetting_another_ticket() {
-    let fake: &'static FakeHost = Box::leak(Box::new(FakeHost::new()));
-    let tables = fake.lent();
+    let unserved = no_task_services();
+    let tables = &unserved;
     let host = Host::of(tables);
     let grown = Keyed::new();
     let mut first = Via::new(&host, Services::of(tables), ticket(1), 0, &grown);

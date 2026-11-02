@@ -32,8 +32,21 @@ fn a_write_names_its_kind_by_the_tails_index() {
     );
 }
 
+use busbar_contract::abi::mechanism::ticket::{HostCtx, HostTables};
 use busbar_contract::abi::sdk::conn::Host;
-use busbar_test_kit::test_support::fake::FakeHost;
+
+// These buffer/reservation cases never invoke a host slot; absence is explicit.
+fn no_task_services() -> HostTables {
+    HostTables {
+        size: std::mem::size_of::<HostTables>() as u32,
+        _reserved: 0,
+        ctx: HostCtx { handle: 0 },
+        wake: None,
+        conns: std::ptr::null(),
+        services: std::ptr::null(),
+        io: std::ptr::null(),
+    }
+}
 
 const TICKET: Ticket = Ticket {
     slot: 3,
@@ -63,8 +76,8 @@ fn long_record(
 /// A short answer is re-called ONCE, on the same handle, at the size it named.
 #[test]
 fn a_short_records_answer_is_re_called_once_on_its_handle_at_the_named_size() {
-    let fake: &'static FakeHost = Box::leak(Box::new(FakeHost::new()));
-    let t = fake.lent();
+    let tables = no_task_services();
+    let t = &tables;
     let host = Host::of(t);
     let grown = Keyed::new();
     let mut via = Via::new(&host, Services::of(t), TICKET, 0, &grown);
@@ -80,8 +93,8 @@ fn a_short_records_answer_is_re_called_once_on_its_handle_at_the_named_size() {
 /// A piece that answers PENDING runs again from the top: the handle a short answer already sized is
 #[test]
 fn a_piece_run_again_issues_a_short_handle_at_the_size_already_named() {
-    let fake: &'static FakeHost = Box::leak(Box::new(FakeHost::new()));
-    let t = fake.lent();
+    let tables = no_task_services();
+    let t = &tables;
     let host = Host::of(t);
     let grown = Keyed::new();
     let mut log = Vec::new();
@@ -113,8 +126,8 @@ fn a_piece_run_again_issues_a_short_handle_at_the_size_already_named() {
 /// A host that names a size and then answers short at it broke its own rule.
 #[test]
 fn a_second_short_answer_on_one_handle_is_a_broken_host() {
-    let fake: &'static FakeHost = Box::leak(Box::new(FakeHost::new()));
-    let t = fake.lent();
+    let tables = no_task_services();
+    let t = &tables;
     let host = Host::of(t);
     let grown = Keyed::new();
     let mut via = Via::new(&host, Services::of(t), TICKET, 0, &grown);
@@ -130,8 +143,8 @@ fn a_second_short_answer_on_one_handle_is_a_broken_host() {
 /// No host services: every records call fails, and nothing is crossed.
 #[test]
 fn a_door_opened_with_no_services_reads_no_record() {
-    let fake: &'static FakeHost = Box::leak(Box::new(FakeHost::new()));
-    let t = fake.lent();
+    let tables = no_task_services();
+    let t = &tables;
     let host = Host::of(t);
     let grown = Keyed::new();
     let mut via = Via::new(&host, None, TICKET, 0, &grown);
@@ -143,8 +156,8 @@ fn a_door_opened_with_no_services_reads_no_record() {
 /// The sizes book stays bounded without evicting any active ticket's replay state.
 #[test]
 fn the_sizes_book_is_bounded() {
-    let fake: &'static FakeHost = Box::leak(Box::new(FakeHost::new()));
-    let t = fake.lent();
+    let tables = no_task_services();
+    let t = &tables;
     let host = Host::of(t);
     let grown = Keyed::new();
     let via = Via::new(&host, Services::of(t), TICKET, 0, &grown);

@@ -3,11 +3,14 @@
 
 //! Test-only seeding of the existing private backend cache; no product helper/API.
 use super::*;
-use busbar_contract::abi::host::conn::connector::EstablishIn;
-use busbar_contract::abi::host::service::{DestJudgeIn, TrustServesIn};
+use busbar_contract::abi::host::conn::connector::ConnectorSlots;
+use busbar_contract::abi::host::service::{HostSlots, ServiceOut};
+use busbar_contract::abi::mechanism::call::RawOutcome;
+use busbar_contract::abi::mechanism::ticket::{HostCtx, HostTables};
+use busbar_contract::abi::sdk::test_support::zeroed;
 use busbar_contract::abi::sdk::{conn::StaticHost, StaticServices};
-use busbar_test_kit::test_support::fake::{self, FakeHost, FakeService, ServiceCall};
 use std::cell::Cell;
+use std::ffi::c_void;
 
 impl A2aDoor {
     pub(crate) fn listing_lifecycle_fixture(host: StaticHost, services: StaticServices) -> Self {
@@ -47,44 +50,78 @@ impl A2aDoor {
 }
 
 thread_local! { static DIALS: Cell<usize> = const { Cell::new(0) }; }
-struct Admitted;
-impl FakeService for Admitted {
-    type In = DestJudgeIn;
-    fn serve(call: &mut ServiceCall<Self::In>) -> Outcome {
-        call.set_value(busbar_contract::abi::host::service::DEST_ALLOWED);
-        Outcome::Ready
+#[allow(unsafe_code)]
+extern "C" fn admitted(_: HostCtx, _: *const c_void, out: *mut ServiceOut) -> RawOutcome {
+    let raw = RawOutcome::of(Outcome::Ready);
+    // SAFETY: the actual SDK lends this exclusive complete ServiceOut for the callback.
+    unsafe {
+        out.write(ServiceOut {
+            size: std::mem::size_of::<ServiceOut>() as u32,
+            outcome: raw,
+            value: busbar_contract::abi::host::service::DEST_ALLOWED,
+            ..ServiceOut::ZERO
+        });
     }
+    raw
 }
-struct Serving;
-impl FakeService for Serving {
-    type In = TrustServesIn;
-    fn serve(call: &mut ServiceCall<Self::In>) -> Outcome {
-        call.set_value(busbar_contract::abi::host::service::DISTRUST_NONE);
-        Outcome::Ready
+
+#[allow(unsafe_code)]
+extern "C" fn serving(_: HostCtx, _: *const c_void, out: *mut ServiceOut) -> RawOutcome {
+    let raw = RawOutcome::of(Outcome::Ready);
+    // SAFETY: the actual SDK lends this exclusive complete ServiceOut for the callback.
+    unsafe {
+        out.write(ServiceOut {
+            size: std::mem::size_of::<ServiceOut>() as u32,
+            outcome: raw,
+            value: busbar_contract::abi::host::service::DISTRUST_NONE,
+            ..ServiceOut::ZERO
+        });
     }
+    raw
 }
-struct FailedDial;
-impl FakeService for FailedDial {
-    type In = EstablishIn;
-    fn serve(_: &mut ServiceCall<Self::In>) -> Outcome {
-        DIALS.with(|v| v.set(v.get() + 1));
-        Outcome::Failed
+
+#[allow(unsafe_code)]
+extern "C" fn failed_dial(_: HostCtx, _: *const c_void, out: *mut ServiceOut) -> RawOutcome {
+    DIALS.with(|v| v.set(v.get() + 1));
+    let raw = RawOutcome::of(Outcome::Failed);
+    // SAFETY: the actual SDK lends this exclusive complete ServiceOut for the callback.
+    unsafe {
+        out.write(ServiceOut {
+            size: std::mem::size_of::<ServiceOut>() as u32,
+            outcome: raw,
+            value: 0,
+            ..ServiceOut::ZERO
+        });
     }
+    raw
 }
 
 #[test]
 fn a_real_failed_mirror_dial_is_visible_without_changing_best_effort_completion() {
     DIALS.with(|v| v.set(0));
-    let fake: &'static FakeHost = Box::leak(Box::new(
-        FakeHost::new()
-            .serve(fake::host::DEST_JUDGE, Admitted)
-            .serve(fake::host::TRUST_SERVES, Serving)
-            .serve(fake::conn::ESTABLISH, FailedDial),
-    ));
-    let tables = fake.lent();
+    let slots = HostSlots {
+        size: std::mem::size_of::<HostSlots>() as u32,
+        dest_judge: Some(admitted),
+        trust_serves: Some(serving),
+        ..zeroed()
+    };
+    let conns = ConnectorSlots {
+        size: std::mem::size_of::<ConnectorSlots>() as u32,
+        establish: Some(failed_dial),
+        ..zeroed()
+    };
+    let tables = HostTables {
+        size: std::mem::size_of::<HostTables>() as u32,
+        _reserved: 0,
+        ctx: HostCtx { handle: 1 },
+        wake: None,
+        conns: &conns,
+        services: &slots,
+        io: std::ptr::null(),
+    };
     let plane = A2aDoor {
-        host: Some(Host::of(tables)),
-        services: Services::of(tables),
+        host: Some(Host::of(&tables)),
+        services: Services::of(&tables),
         ..A2aDoor::default()
     };
     let mut flight = crate::mirror::Flight {
