@@ -120,7 +120,7 @@ fn unavailable(
     cached_refusal(instance, input, out, state, 503, UNAVAILABLE)
 }
 
-/// The signature retains the service's Pending/Short/failure distinction. A failed signer is
+/// The synchronous signer retains the service's Short/failure distinction. A failed signer is
 /// not evidence that a caller presented an invalid capability.
 fn signature(
     plane: &A2aDoor,
@@ -234,10 +234,6 @@ pub(crate) fn serve(
     };
     let signed = match signature(plane, ticket, &task_id) {
         Ok(signature) => signature,
-        Err(ServiceError::Pending) => {
-            instance.park(state);
-            return Outcome::Pending;
-        }
         Err(_) => return unavailable(instance, &input, &mut out, state),
     };
     if !crate::push::verified(&signed, presented) {
