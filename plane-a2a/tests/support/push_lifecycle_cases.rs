@@ -78,17 +78,37 @@ extern "C" fn get(_: HostCtx, input: *const c_void, out: *mut ServiceOut) -> Raw
     let Some(row) = row else {
         return answer(out, Outcome::Ready, 0, 0);
     };
-    if row.len() > i.into.cap {
+    if row.len() > i.into.cap || i.into.spans_cap < 1 {
         let result = answer(out, Outcome::Failed, 0, 0);
+        // SAFETY: the live ServiceOut reports both complete loan requirements; neither payload
+        // buffer has been written on this SHORT path.
         unsafe {
             (*out).needed_bytes = row.len() as u64;
+            (*out).needed_items = 1;
         }
         return result;
     }
+    // SAFETY: both output capacities were checked above; the SDK lends the byte/span regions
+    // exclusively for this synchronous records.get callback.
     unsafe {
         std::ptr::copy_nonoverlapping(row.as_ptr(), i.into.buf, row.len());
+        i.into.spans.write(ItemSpan {
+            key: Span {
+                offset: busbar_contract::abi::mechanism::check::SPAN_ABSENT,
+                len: 0,
+            },
+            value: Span {
+                offset: 0,
+                len: u32::try_from(row.len()).expect("the fixture record fits its span"),
+            },
+        });
     }
-    answer(out, Outcome::Ready, FOUND, row.len() as u64)
+    let result = answer(out, Outcome::Ready, FOUND, row.len() as u64);
+    // SAFETY: this is the callback's live output; its one initialized value span was just written.
+    unsafe {
+        (*out).items = 1;
+    }
+    result
 }
 extern "C" fn claimed(_: HostCtx, _: *const c_void, out: *mut ServiceOut) -> RawOutcome {
     let failed = script(|s| {
