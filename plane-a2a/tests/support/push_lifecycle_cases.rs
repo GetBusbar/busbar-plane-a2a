@@ -23,6 +23,10 @@ struct Script {
     full_lists: usize,
     random: u8,
     notifications: usize,
+    capture_mirror: bool,
+    mirror_stream: Option<u64>,
+    mirror_captures: usize,
+    mirror_auth: Option<zeroize::Zeroizing<String>>,
 }
 static SCRIPT: Mutex<Option<Script>> = Mutex::new(None);
 fn script<T>(f: impl FnOnce(&mut Script) -> T) -> T {
@@ -253,6 +257,40 @@ fn apply(records: &[RecordWrite], arena: &[u8]) {
         }
     }
 }
+// Borrow the real wire document so parsing never creates an unwiped token copy.
+#[derive(serde::Deserialize)]
+struct MirrorCreate<'a> {
+    #[serde(borrow)]
+    id: &'a str,
+    #[serde(borrow)]
+    method: &'a str,
+    #[serde(borrow)]
+    params: MirrorParams<'a>,
+}
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MirrorParams<'a> {
+    #[serde(borrow)]
+    task_id: &'a str,
+    #[serde(borrow)]
+    push_notification_config: MirrorConfig<'a>,
+}
+#[derive(serde::Deserialize)]
+struct MirrorConfig<'a> {
+    #[serde(borrow)]
+    id: &'a str,
+    #[serde(borrow)]
+    url: &'a str,
+    #[serde(borrow)]
+    authentication: MirrorAuth<'a>,
+}
+#[derive(serde::Deserialize)]
+struct MirrorAuth<'a> {
+    #[serde(borrow)]
+    schemes: [&'a str; 1],
+    #[serde(borrow)]
+    credentials: &'a str,
+}
 extern "C" fn notification_request(
     ctx: HostCtx,
     input: *const c_void,
@@ -263,10 +301,60 @@ extern "C" fn notification_request(
     let piece = unsafe { i.piece.read() };
     if piece.kind == busbar_contract::abi::host::conn::connector::REQUEST_HEAD {
         let bytes = unsafe { std::slice::from_raw_parts(i.buf, i.len) };
-        let target = piece.target;
-        if &bytes[target.offset as usize..(target.offset + target.len) as usize] == b"/cb" {
+        let at = |span: busbar_contract::abi::transport::FrameSpan| {
+            &bytes[span.offset as usize..(span.offset + span.len) as usize]
+        };
+        if at(piece.target) == b"/cb" {
             script(|s| s.notifications += 1);
+        } else {
+            script(|s| {
+                if s.capture_mirror {
+                    assert!(
+                        at(piece.method) == b"POST" && at(piece.target) == b"/agent",
+                        "the current mirror must use the negotiated JSON-RPC agent endpoint"
+                    );
+                    assert!(
+                        s.mirror_stream.is_none(),
+                        "the setup sends exactly one mirror head"
+                    );
+                    s.mirror_stream = Some(i.stream);
+                }
+            });
         }
+    } else if piece.kind == busbar_contract::abi::host::conn::connector::REQUEST_BODY
+        && script(|s| s.capture_mirror && s.mirror_stream == Some(i.stream))
+    {
+        // SAFETY: RequestIn lends this complete body until the synchronous write completes.
+        let bytes = unsafe { std::slice::from_raw_parts(i.buf, i.len) };
+        let mirror: MirrorCreate<'_> = serde_json::from_slice(bytes)
+            .unwrap_or_else(|_| panic!("the actual mirror writes a borrowed v0.3 create document"));
+        assert!(
+            mirror.id == "busbar-originated"
+                && mirror.method == "tasks/pushNotificationConfig/set"
+                && mirror.params.task_id == "backend-t1",
+            "the current mirror names the negotiated method and actual backend identity"
+        );
+        let config = mirror.params.push_notification_config;
+        assert!(
+            config.id == "busbar-backend-t1"
+                && config.url == "https://gw.example/a2a/push"
+                && config.authentication.schemes == ["Bearer"],
+            "the current mirror registers busbar's exact callback destination and scheme"
+        );
+        let mut auth = zeroize::Zeroizing::new(String::with_capacity(
+            "Bearer ".len() + config.authentication.credentials.len(),
+        ));
+        auth.push_str("Bearer ");
+        auth.push_str(config.authentication.credentials);
+        script(|s| {
+            assert!(
+                s.mirror_auth.is_none(),
+                "a current mirror credential cannot replace another"
+            );
+            s.mirror_auth = Some(auth);
+            s.mirror_captures += 1;
+            s.capture_mirror = false;
+        });
     }
     super::write_request(ctx, input, out)
 }
@@ -360,18 +448,20 @@ fn open_scripted_instance() -> Door {
     Door::new(output.open.instance)
 }
 fn seed() {
-    seed_task("t1");
+    // This controlled held-row prerequisite must differ from the actual working report:
+    // a same-state GET publishes no backend-identity metadata for the subsequent mirror.
+    seed_task("t1", "input-required");
 }
-fn seed_task(task_id: &str) {
+fn seed_task(task_id: &str, state: &str) {
     let caller = std::str::from_utf8(ALICE).unwrap();
-    let row = json!({"task_id":task_id,"context_id":"c1","principal":caller,"direction":"inbound","state":"working","agent_id":"vendor","artifact_cursor":0,"push_callback":"","created_at":1_800_000_000u64,"updated_at":1_800_000_000u64,"next_seq":1});
+    let row = json!({"task_id":task_id,"context_id":"c1","principal":caller,"direction":"inbound","state":state,"agent_id":"vendor","artifact_cursor":0,"push_callback":"","created_at":1_800_000_000u64,"updated_at":1_800_000_000u64,"next_seq":1});
     store().push((
         "task".into(),
         format!("{caller}/{task_id}"),
         serde_json::to_vec(&row).unwrap(),
     ));
 }
-fn registered(door: &Door) -> String {
+fn registered(door: &Door) -> zeroize::Zeroizing<String> {
     assert_eq!(door.connect("vendor").1, 200);
     seed();
     let get = br#"{"jsonrpc":"2.0","id":1,"method":"GetTask","params":{"id":"t1"}}"#;
@@ -399,12 +489,28 @@ fn registered(door: &Door) -> String {
         piece(door, 501, Given::caller(get), 65536).outcome,
         Some(Outcome::Ready)
     );
-    let response=br#"{"jsonrpc":"2.0","id":1,"result":{"id":"backend-t1","contextId":"c1","status":{"state":"working"}}}"#;
+    let applied = script(|s| s.conditional.applied);
+    let response=br#"{"jsonrpc":"2.0","id":1,"result":{"kind":"task","id":"backend-t1","contextId":"c1","status":{"state":"working"}}}"#;
     let far = piece(door, 501, Given::far_end(200, response), 65536);
     assert_eq!(far.outcome, Some(Outcome::Ready),
         "far reply did not settle (flags={}, emitted_bytes={}, publications={}, observations={}, applied={})",
         far.flags, far.emitted.len(), script(|s| s.conditional.requests.len()),
         script(|s| s.conditional.observations.len()), script(|s| s.conditional.applied));
+    assert_eq!(
+        script(|s| s.conditional.applied),
+        applied + 1,
+        "the real working transition must publish the backend identity before mirroring"
+    );
+    assert!(
+        task_state()["state"] == "working",
+        "the setup holds the reported working task"
+    );
+    script(|s| {
+        assert!(!s.capture_mirror && s.mirror_auth.is_none());
+        s.mirror_stream = None;
+        s.mirror_captures = 0;
+        s.capture_mirror = true;
+    });
     let create=br#"{"jsonrpc":"2.0","id":2,"method":"CreateTaskPushNotificationConfig","params":{"taskId":"t1","id":"cfg","url":"https://receiver.example/cb"}}"#;
     assert_eq!(
         door.arrive(
@@ -425,7 +531,28 @@ fn registered(door: &Door) -> String {
         script(|s| s.signs) > 0,
         "real config mirror must mint a callback token: {reply:?}"
     );
-    format!("Bearer t1.{}", "07".repeat(32))
+    let auth = script(|s| {
+        assert!(
+            !s.capture_mirror && s.mirror_captures == 1,
+            "the current setup must capture exactly one actual mirror credential"
+        );
+        s.mirror_stream = None;
+        s.mirror_auth
+            .take()
+            .expect("the current mirror supplies its callback credential")
+    });
+    let token = auth
+        .strip_prefix("Bearer ")
+        .expect("the captured scheme was checked on wire");
+    assert!(
+        !token.is_empty()
+            && !reply
+                .emitted
+                .windows(token.len())
+                .any(|w| w == token.as_bytes()),
+        "the callback capability is never echoed to the local caller"
+    );
+    auth
 }
 #[derive(Debug)]
 struct Served {
@@ -1728,7 +1855,7 @@ fn canceled_owed_append_is_acknowledged_only_after_its_exact_late_applied() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
     let (_reset, door) = open_scripted();
     let auth = registered(&door);
-    seed_task("t2");
+    seed_task("t2", "working");
     assert_eq!(serve(&door, 1230, &auth, COMPLETED, 4096).status, 202);
     assert_eq!(door.tick().0, Outcome::Ready);
     assert_eq!(door.tick().0, Outcome::Ready);
