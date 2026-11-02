@@ -3,7 +3,8 @@
 
 //! The A2A plane: the agent-to-agent protocol, spelled two ways (v0.3 and v1.0) over three
 
-#![forbid(unsafe_code)]
+#![cfg_attr(not(test), forbid(unsafe_code))]
+#![cfg_attr(test, deny(unsafe_code))]
 #![deny(missing_docs)]
 
 /// The wire dialect's own modules (the card, the config grammar, the credentials, the public URL
