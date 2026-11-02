@@ -39,10 +39,9 @@ def _target_args(p):
     p.add_argument("--label", default=None,
                    help="name for this target in reports")
     p.add_argument("--allow-undriven-bindings", default="",
-                   help="comma-separated bindings the target declares that "
-                        "this battery cannot drive (e.g. GRPC). Records them "
-                        "as an ACKNOWLEDGED GAP instead of failing. Never "
-                        "silently ignored.")
+                   help="record a comma-separated acknowledgment of undriven "
+                        "bindings (e.g. GRPC). Missing interface execution still "
+                        "makes the required coverage row NOT_CONFIGURED.")
     p.add_argument("--client-drive",
                    help="command that makes the target act as an A2A CLIENT. "
                         "{url} is replaced with the fake peer base URL and "
@@ -143,6 +142,9 @@ def cmd_run(args):
                         meta={"tier": args.tier,
                               "client_drive_configured":
                                   bool(config["client_drive"]),
+                              "selected_interface": target.pick_interface(),
+                              "interface_coverage": "one selected interface; see "
+                                  "card.every_declared_binding_is_exercised for gaps",
                               # WHICH DIRECTIONS THIS RUN MEASURED. `--role server`
                               # is a legitimate narrowing and it stays legitimate;
                               # what it must never be is INVISIBLE in the number it

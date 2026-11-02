@@ -34,6 +34,37 @@ class Context:
 
 
 class ProtocolRegressions(unittest.TestCase):
+    def test_binding_coverage_reports_unselected_interfaces_even_when_drivable(self):
+        ctx = Context()
+        selected = {"url": "http://one/a2a", "protocolBinding": "JSONRPC"}
+        second = {"url": "http://two/a2a", "protocolBinding": "HTTP+JSON"}
+        observed = {}
+        calls = []
+        ctx.observe = lambda key, value, *rest: observed.__setitem__(key, value)
+        def call(method, params, iface):
+            calls.append(iface)
+            return SimpleNamespace(ok=True)
+        ctx.target = SimpleNamespace(interfaces=lambda: [selected],
+                                     pick_interface=lambda: selected, call=call)
+        tests_card.test_all_bindings_driven(ctx)
+        self.assertEqual(observed["interfaces_not_exercised"], [])
+        self.assertEqual(calls, [selected])
+        for other in (second, dict(second, protocolBinding="JSONRPC"),
+                      dict(second, protocolBinding="GRPC")):
+            ctx.target.interfaces = lambda: [selected, other]
+            ctx.config = {"allow_undriven_bindings": "HTTP+JSON,JSONRPC,GRPC"}
+            with self.assertRaises(NotConfigured):
+                tests_card.test_all_bindings_driven(ctx)
+            self.assertEqual(observed["interfaces_not_exercised"][0]["url"], other["url"])
+            self.assertEqual(observed["selected_interface_operation"]["ok"], True)
+        ctx.target.interfaces = lambda: [selected]
+        ctx.target.call = lambda *a, **k: SimpleNamespace(ok=False)
+        with self.assertRaises(AssertionError):
+            tests_card.test_all_bindings_driven(ctx)
+        ctx.target.interfaces = lambda: []
+        with self.assertRaises(NotConfigured):
+            tests_card.test_all_bindings_driven(ctx)
+
     def test_differential_requires_complete_asserted_subject_evidence(self):
         def report():
             return {"target": "fixture", "spec": {"tag": "v1.0.1"}, "results": [

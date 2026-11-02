@@ -214,6 +214,9 @@ battery_python() {
     if ! fixture_await_card "$pid" 41241 60 1; then echo "the a2a-python control never owned its card listener"; cat "$LOGS/a2a-python-agent.log"; exit 1; fi
     rm -f reports/control-python.json
     local run_rc=0
+    # This multi-interface control remains incomplete on interface coverage:
+    # acknowledgment of GRPC does not pass the required coverage row. The
+    # baseline comparison records outcomes, not qualification of every binding.
     python3 -m a2aht run --endpoint http://127.0.0.1:41241 --label "control:a2a-python" \
       --tier pre-release --known-deviations baselines/known-deviations-a2a-python.json \
       --role server --allow-undriven-bindings GRPC --json reports/control-python.json --allow-red || run_rc=$?
