@@ -273,12 +273,11 @@ mod actual_admission {
         declarations.sort();
         declarations.dedup();
         assert_eq!(needs, declarations);
-        if std::env::var_os("BUSBAR_EXPECT_RELEASE").is_some() {
-            assert!(
-                !cfg!(debug_assertions),
-                "the requested actual image proof must run in release"
-            );
-        }
+        #[cfg(debug_assertions)]
+        assert!(
+            std::env::var_os("BUSBAR_EXPECT_RELEASE").is_none(),
+            "the requested actual image proof must run in release"
+        );
     }
     /// These inputs change admission metadata only; all operation slots remain actual A2A.
     #[test]
