@@ -115,16 +115,14 @@ fn an_answer_with_no_payload_is_refused() {
 fn the_card_follows_the_models_rules() {
     let mut card = crate::proto::custody::initialized::<pb::AgentCard>(|__custody_message| {
         __custody_message.supported_interfaces = vec![
-            pb::AgentInterface {
-                url: "http://h:1".into(),
-                protocol_binding: "grpc".into(),
-                ..Default::default()
-            },
-            pb::AgentInterface {
-                url: "http://h:2".into(),
-                protocol_binding: "JSONRPC".into(),
-                ..Default::default()
-            },
+            crate::proto::custody::initialized::<pb::AgentInterface>(|interface| {
+                interface.url = "http://h:1".into();
+                interface.protocol_binding = "grpc".into();
+            }),
+            crate::proto::custody::initialized::<pb::AgentInterface>(|interface| {
+                interface.url = "http://h:2".into();
+                interface.protocol_binding = "JSONRPC".into();
+            }),
         ];
         __custody_message.security_schemes = [
             ("none".to_string(), pb::SecurityScheme { scheme: None }),

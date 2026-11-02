@@ -169,14 +169,15 @@ fn grpc_client_issues_list_tasks() {
     let _ = pb::ListTasksRequest::decode(r.body.as_slice()).expect("a ListTasksRequest");
     let listing = framed(
         &crate::proto::custody::initialized::<pb::ListTasksResponse>(|__custody_message| {
-            __custody_message.tasks = vec![pb::Task {
-                id: BACKEND_TASK.into(),
-                status: Some(pb::TaskStatus {
-                    state: pb::TaskState::Completed as i32,
-                    ..Default::default()
-                }),
-                ..Default::default()
-            }];
+            __custody_message.tasks =
+                vec![crate::proto::custody::initialized::<pb::Task>(|task| {
+                    task.id = BACKEND_TASK.into();
+                    task.status = Some(crate::proto::custody::initialized::<pb::TaskStatus>(
+                        |status| {
+                            status.state = pb::TaskState::Completed as i32;
+                        },
+                    ));
+                })];
         }),
     );
     let answer = answered(Binding::Grpc, LIST_TASKS, 0, listing);
