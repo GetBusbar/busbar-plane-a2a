@@ -10,13 +10,13 @@ use busbar_contract::abi::sdk::test_support::fake::FakeHost;
 fn records_scratch_growth_and_pending_release_retire_each_initialized_owner() {
     let fake: &'static FakeHost = Box::leak(Box::new(FakeHost::new()));
     let tables = fake.lent();
-    let host = Host::of(&tables);
+    let host = Host::of(tables);
     let grown = Keyed::new();
     let ticket = Ticket {
         slot: 7,
         generation: 1,
     };
-    let mut via = Via::new(&host, Services::of(&tables), ticket, 0, &grown);
+    let mut via = Via::new(&host, Services::of(tables), ticket, 0, &grown);
     let read: Result<(), Halt> = via.issue((SECRET.len(), 0), |_, _, bytes, _| {
         bytes.copy_from_slice(SECRET);
         Poll::Ready(Ok(()))
@@ -51,13 +51,13 @@ fn records_scratch_growth_and_pending_release_retire_each_initialized_owner() {
 fn records_scratch_is_wiped_when_a_host_read_unwinds() {
     let fake: &'static FakeHost = Box::leak(Box::new(FakeHost::new()));
     let tables = fake.lent();
-    let host = Host::of(&tables);
+    let host = Host::of(tables);
     let grown = Keyed::new();
     let probe = Probe::start();
     let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut via = Via::new(
             &host,
-            Services::of(&tables),
+            Services::of(tables),
             Ticket {
                 slot: 8,
                 generation: 1,

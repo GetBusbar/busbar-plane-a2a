@@ -93,7 +93,7 @@ const TICKET: Ticket = Ticket {
 
 /// A door opened over `fake`: its host and its services, nothing else.
 fn door_over(fake: &'static FakeHost) -> A2aDoor {
-    let tables = Box::leak(Box::new(fake.lent()));
+    let tables = fake.lent();
     A2aDoor {
         host: Some(Host::of(tables)),
         services: Services::of(tables),
