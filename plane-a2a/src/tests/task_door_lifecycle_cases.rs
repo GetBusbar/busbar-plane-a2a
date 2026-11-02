@@ -48,7 +48,7 @@ use busbar_contract::abi::host::service::{RecordsClaimIn, RecordsGetIn, RecordsL
 use busbar_contract::abi::mechanism::call::OutHead;
 use busbar_contract::abi::mechanism::lifecycle::{slot as life, DriveIn, OpenIn, OpenOut};
 use busbar_contract::abi::sdk::{Safe, SafeSlot};
-use busbar_test_kit::test_support::fake::{self, FakeService, ServiceCall};
+use busbar_test_kit::test_support::fake::{self, FakeHost, FakeService, ServiceCall};
 use busbar_test_kit::test_support::{reply, test_in::TestIn, zeroed, DoorView};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
