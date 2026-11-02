@@ -761,13 +761,17 @@ fn a_v10_push_config_verb_never_reads_its_config_id_as_the_task() {
         );
         assert_eq!(error_of(&body).0, -32001, "{method}");
     }
-    let (_, body) = call(
+    let (status, body) = call(
         &mut desk,
         "GetTaskPushNotificationConfig",
         json!({ "id": "t1" }),
         ALICE,
     );
-    assert_eq!(error_of(&body).0, -32001, "v1.0 `id` alone names no task");
+    assert_eq!(
+        (status, error_of(&body).0),
+        (400, -32602),
+        "v1.0 `id` alone is a malformed task reference, not a lookup of the config id"
+    );
     let (_, body) = call(
         &mut desk,
         "tasks/pushNotificationConfig/get",
@@ -781,7 +785,8 @@ fn a_v10_push_config_verb_never_reads_its_config_id_as_the_task() {
 /// engine's scheme words.
 #[test]
 fn malformed_urls_are_refused() {
-    let words = |url: &str| format!("push callback URL is malformed: `{url}`");
+    let words =
+        |_url: &str| "push callback URL is malformed: `<malformed URL omitted>`".to_string();
     for (url, verdict, said) in [
         ("not-a-url", DEST_ALLOWED, words("not-a-url")),
         (

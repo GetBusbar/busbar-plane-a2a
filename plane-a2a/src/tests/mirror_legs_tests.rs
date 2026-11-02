@@ -166,6 +166,10 @@ fn grpc_client_issues_delete_task_push_notification_config() {
 fn grpc_client_issues_list_tasks() {
     let r = request(Binding::Grpc, URL, "1.0", LIST_TASKS, &json!({})).expect("framed");
     assert_eq!(target(&r), "/lf.a2a.v1.A2AService/ListTasks");
+    assert!(
+        r.body.is_empty(),
+        "the zero-field protobuf message is framed by the transport"
+    );
     let _ = pb::ListTasksRequest::decode(r.body.as_slice()).expect("a ListTasksRequest");
     let listing = framed(
         &crate::proto::custody::initialized::<pb::ListTasksResponse>(|__custody_message| {

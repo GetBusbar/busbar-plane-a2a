@@ -1559,6 +1559,18 @@ mod inline_push_custody;
 fn streamed_submitted_does_not_regress_state_or_lose_its_artifact() {
     let mut desk = desk();
     let (task, _) = hop(opened(&mut desk, &send(json!({})), ALICE));
+    assert_eq!(
+        settled(
+            &mut desk,
+            &task,
+            &TaskSettled::Reported {
+                state: TaskState::Working,
+                backend_id: None,
+            }
+        ),
+        2,
+        "the anti-regression witness begins with an actually working task"
+    );
     let event = TaskSettled::Event {
         state: Some(TaskState::Submitted),
         artifact: false,

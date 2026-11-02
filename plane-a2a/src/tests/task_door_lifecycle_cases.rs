@@ -46,7 +46,7 @@ fn a_full_sizes_book_never_forgets_a_pending_tickets_short_answer() {
 
 use busbar_contract::abi::host::service::{RecordsClaimIn, RecordsGetIn, RecordsListIn};
 use busbar_contract::abi::mechanism::call::OutHead;
-use busbar_contract::abi::mechanism::lifecycle::{DriveIn, OpenIn, OpenOut};
+use busbar_contract::abi::mechanism::lifecycle::{slot as life, DriveIn, OpenIn, OpenOut};
 use busbar_contract::abi::sdk::{Safe, SafeSlot};
 use busbar_test_kit::test_support::fake::{self, FakeService, ServiceCall};
 use busbar_test_kit::test_support::{reply, test_in::TestIn, zeroed, DoorView};
@@ -410,7 +410,8 @@ fn drive_listing() {
                 let _ = reply::close_in(
                     self.close,
                     instance,
-                    &TestIn::<busbar_contract::abi::mechanism::call::InHead>::new(),
+                    &TestIn::<busbar_contract::abi::mechanism::call::InHead>::new()
+                        .set(|i| &i.op, life::CLOSE),
                     zeroed::<OutHead>(),
                 );
             }
@@ -421,7 +422,7 @@ fn drive_listing() {
         .serve(fake::host::RECORDS_LIST, List)
         .serve(fake::host::RECORDS_CLAIM, Claim);
     let view = DoorView::of(listing_probe::MACRO_DOOR);
-    let open = fake.lend_in(TestIn::<OpenIn>::new());
+    let open = fake.lend_in(TestIn::<OpenIn>::new().set(|i| &i.head.op, life::OPEN));
     let mut opened = reply::call_hosted_in(
         view.op::<busbar_contract::abi::export::Ops>(|t| &t.head.open)
             .unwrap(),
@@ -429,7 +430,7 @@ fn drive_listing() {
         &open,
         zeroed::<OpenOut>(),
     );
-    assert_eq!(opened.outcome, Outcome::Ready);
+    assert_eq!(opened.outcome, Outcome::Ready, "{opened:?}");
     let instance = Opened {
         instance: opened.take_instance(),
         close: view
@@ -437,7 +438,9 @@ fn drive_listing() {
             .unwrap(),
     };
     assert!(instance.instance.is_some());
-    let input = TestIn::<DriveIn>::new().set(|i| &i.head.ticket, TICKET);
+    let input = TestIn::<DriveIn>::new()
+        .set(|i| &i.head.op, life::DRIVE)
+        .set(|i| &i.head.ticket, TICKET);
     for _ in 0..10 {
         let result = reply::call_in(
             view.op::<busbar_contract::abi::export::Ops>(|t| &t.head.drive)

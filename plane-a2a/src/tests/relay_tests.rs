@@ -290,7 +290,7 @@ fn a_reply_over_the_ceiling_is_refused_and_a_refused_status_is_judged_first() {
         reply.body,
         refused(
             "a2a.hop.reply_too_large",
-            "this agent's backend replied with more than the configured ceiling"
+            "this agent's backend replied with more than the fixed reply limit"
         )
     );
     let reply = answered(&mut sent(), 500, &big);
@@ -702,7 +702,7 @@ fn an_http_json_attempt_is_the_operations_request_line_and_sends_no_body_for_a_r
         r.on_piece(kernel(Some(URL))),
         PieceAnswer::Attempt(Attempt {
             verb: "GET",
-            target: "/a2a/v1/tasks/t1".into(),
+            target: "/a2a/v1/tasks/t1?tenant=t1".into(),
             fields: vec![
                 ("accept", "application/json".into()),
                 ("a2a-version", "1.0".into()),
@@ -1279,7 +1279,7 @@ fn an_oversized_body_is_cut_one_byte_past_the_ceiling_so_the_driver_can_refuse_i
         reply.body,
         refused(
             "a2a.hop.reply_too_large",
-            "this agent's backend replied with more than the configured ceiling"
+            "this agent's backend replied with more than the fixed reply limit"
         )
     );
 

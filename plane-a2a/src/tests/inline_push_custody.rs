@@ -177,9 +177,16 @@ fn repeated_state_report_neither_writes_nor_trips_the_error_once_latch() {
     assert!(
         heard
             .try_iter()
-            .any(|(level, _)| level == tracing::Level::ERROR),
-        "real failure must still own the first error"
+            .any(|(level, _)| level == tracing::Level::WARN),
+        "real failure must still own the first warning"
     );
+    let (sent, heard) = std::sync::mpsc::channel();
+    tracing::subscriber::with_default(Capture(sent), || {
+        settle_on_answer(&mut d.book, &task, &report, BOB, 402, &mut out, &latches).unwrap();
+    });
+    let levels: Vec<_> = heard.try_iter().map(|(level, _)| level).collect();
+    assert!(levels.contains(&tracing::Level::DEBUG));
+    assert!(!levels.contains(&tracing::Level::WARN));
 }
 
 struct FailedResume(Desk);
