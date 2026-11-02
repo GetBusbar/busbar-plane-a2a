@@ -560,42 +560,79 @@ fn recall(door: &Door, slot_id: u64, auth: &str, body: &[u8], cap: usize) -> Ser
         busbar_contract::abi::mechanism::call::FLAG_RESUME,
     )
 }
-/// This existing callback caller owns its original frames and every loan until terminal.
+/// The existing SERVE callers retain complete semantic input and every original loan.
+#[derive(Clone, Copy)]
+pub(super) struct ServeGiven<'a> {
+    pub(super) route: u32,
+    pub(super) target: &'a [u8],
+    pub(super) fields: &'a [Field],
+    pub(super) body: &'a [u8],
+}
+struct ServeField {
+    name: zeroize::Zeroizing<Vec<u8>>,
+    value: zeroize::Zeroizing<Vec<u8>>,
+}
 pub(super) struct ServeFrame {
-    input: Box<ServeIn>,
-    output: Box<ServeOut>,
-    auth: zeroize::Zeroizing<Vec<u8>>,
+    pub(super) input: Box<ServeIn>,
+    pub(super) output: Box<ServeOut>,
+    target: zeroize::Zeroizing<Vec<u8>>,
+    field_bytes: Vec<ServeField>,
     body: zeroize::Zeroizing<Vec<u8>>,
-    fields: Box<[Field; 1]>,
-    reply: zeroize::Zeroizing<Vec<u8>>,
+    fields: Vec<Field>,
+    pub(super) reply: zeroize::Zeroizing<Vec<u8>>,
     out_fields: Vec<OutField>,
-    arena: zeroize::Zeroizing<Vec<u8>>,
-    records: Vec<RecordWrite>,
+    pub(super) arena: zeroize::Zeroizing<Vec<u8>>,
+    pub(super) records: Vec<RecordWrite>,
     extensions: zeroize::Zeroizing<Vec<u8>>,
 }
 impl ServeFrame {
-    fn new(slot_id: u64, auth: &str, body: &[u8], cap: usize, flags: u32) -> Box<Self> {
+    pub(super) fn new(
+        slot_id: u64,
+        given: ServeGiven<'_>,
+        caps: (usize, usize),
+        flags: u32,
+    ) -> Box<Self> {
+        let copy = |s: AbiStr| {
+            let bytes = if s.is_empty() {
+                Vec::new()
+            } else {
+                // SAFETY: these are the existing caller's live input Field strings, copied
+                // before crossing; no caller-owned field storage is borrowed across Pending.
+                unsafe { std::slice::from_raw_parts(s.ptr(), s.len()) }.to_vec()
+            };
+            zeroize::Zeroizing::new(bytes)
+        };
         let mut frame = Box::new(Self {
             input: Box::new(z()),
             output: Box::new(z()),
-            auth: zeroize::Zeroizing::new(auth.as_bytes().to_vec()),
-            body: zeroize::Zeroizing::new(body.to_vec()),
-            fields: Box::new([z()]),
-            reply: zeroize::Zeroizing::new(vec![0; cap]),
+            target: zeroize::Zeroizing::new(given.target.to_vec()),
+            field_bytes: given
+                .fields
+                .iter()
+                .map(|f| ServeField {
+                    name: copy(f.name),
+                    value: copy(f.value),
+                })
+                .collect(),
+            body: zeroize::Zeroizing::new(given.body.to_vec()),
+            fields: vec![z(); given.fields.len()],
+            reply: zeroize::Zeroizing::new(vec![0; caps.0]),
             out_fields: vec![z(); 8],
-            arena: zeroize::Zeroizing::new(vec![0; 65536]),
+            arena: zeroize::Zeroizing::new(vec![0; caps.1]),
             records: vec![z(); 64],
             extensions: zeroize::Zeroizing::new(Vec::new()),
         });
-        frame.fields[0] = Field {
-            name: str_of(b"authorization"),
-            value: str_of(&frame.auth),
-        };
+        for (field, bytes) in frame.fields.iter_mut().zip(&frame.field_bytes) {
+            *field = Field {
+                name: str_of(&bytes.name),
+                value: str_of(&bytes.value),
+            };
+        }
         let input = &mut frame.input;
         input.head = head::<ServeIn>(slot::SERVE, ticket(slot_id));
         input.head.flags = flags;
-        input.route = 2;
-        input.target = str_of(b"/a2a/push");
+        input.route = given.route;
+        input.target = str_of(&frame.target);
         input.fields = frame.fields.as_ptr();
         input.fields_len = frame.fields.len();
         input.body = octets(&frame.body);
@@ -606,19 +643,40 @@ impl ServeFrame {
         (input.records_buf, input.records_cap) = (frame.records.as_mut_ptr(), frame.records.len());
         frame
     }
-    fn check_resume(&self, slot_id: u64, auth: &str, body: &[u8], cap: usize, flags: u32) {
+    pub(super) fn check_resume(
+        &self,
+        slot_id: u64,
+        given: ServeGiven<'_>,
+        caps: (usize, usize),
+        flags: u32,
+    ) {
+        let same = |s: AbiStr, held: &[u8]| {
+            if s.is_empty() {
+                held.is_empty()
+            } else {
+                // SAFETY: the re-entry's input Field strings are live for this comparison.
+                (unsafe { std::slice::from_raw_parts(s.ptr(), s.len()) }) == held
+            }
+        };
         assert!(
             self.input.head.ticket == ticket(slot_id)
-                && self.auth.as_slice() == auth.as_bytes()
-                && self.body.as_slice() == body
+                && self.input.route == given.route
+                && self.target.as_slice() == given.target
+                && self.body.as_slice() == given.body
+                && self.fields.len() == given.fields.len()
+                && given
+                    .fields
+                    .iter()
+                    .zip(&self.field_bytes)
+                    .all(|(f, bytes)| same(f.name, &bytes.name) && same(f.value, &bytes.value))
                 && self.input.head.flags & !busbar_contract::abi::mechanism::call::FLAG_RESUME
                     == flags & !busbar_contract::abi::mechanism::call::FLAG_RESUME,
-            "a pending callback must resume its exact logical input"
+            "a pending serve must resume its exact logical input"
         );
         assert_eq!(
-            self.reply.len(),
-            cap,
-            "pending callback loans cannot be replaced"
+            (self.reply.len(), self.arena.len()),
+            caps,
+            "pending serve loans cannot be replaced"
         );
     }
     fn extensions(&mut self, bytes: Vec<u8>) {
@@ -627,6 +685,7 @@ impl ServeFrame {
         self.input.head.extensions = octets(&self.extensions);
     }
 }
+
 fn serve_flags(
     door: &Door,
     slot_id: u64,
@@ -643,11 +702,22 @@ fn serve_flags(
         !door.pending.borrow().contains_key(&ticket(slot_id)),
         "a callback cannot replace a pending piece on the same full ticket"
     );
+    let fields = [Field {
+        name: str_of(b"authorization"),
+        value: str_of(auth.as_bytes()),
+    }];
+    let given = ServeGiven {
+        route: 2,
+        target: b"/a2a/push",
+        fields: &fields,
+        body,
+    };
+    let caps = (cap, 65536);
     let resuming = {
         let pending = door.pending_serves.borrow();
         if let Some(frame) = pending.get(&ticket(slot_id)) {
             // Reject changed inputs while the original loans remain in the Door's custody.
-            frame.check_resume(slot_id, auth, body, cap, flags);
+            frame.check_resume(slot_id, given, caps, flags);
             true
         } else {
             flags & busbar_contract::abi::mechanism::call::FLAG_RESUME != 0
@@ -660,7 +730,7 @@ fn serve_flags(
         .borrow_mut()
         .remove(&ticket(slot_id))
         .map_or_else(
-            || ServeFrame::new(slot_id, auth, body, cap, flags),
+            || ServeFrame::new(slot_id, given, caps, flags),
             |mut frame| {
                 frame.input.head.flags |= busbar_contract::abi::mechanism::call::FLAG_RESUME;
                 frame

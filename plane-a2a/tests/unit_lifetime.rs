@@ -1154,34 +1154,60 @@ impl Door {
         body: &[u8],
         flags: u32,
     ) -> (Outcome, u32, String, u32) {
-        let mut reply = vec![0_u8; 1 << 14];
-        let mut out_fields = [z::<OutField>(); 8];
-        let mut arena = vec![0_u8; 1 << 14];
-        let mut records = [z::<RecordWrite>(); 64];
-        let mut i: ServeIn = z();
-        i.head = head::<ServeIn>(slot::SERVE, ticket(1 << 30));
-        i.head.flags = flags;
-        i.route = route;
-        i.target = str_of(target.as_bytes());
-        (i.fields, i.fields_len) = (fields.as_ptr(), fields.len());
-        i.body = octets(body);
-        (i.reply_buf, i.reply_cap) = (reply.as_mut_ptr(), reply.len());
-        (i.fields_buf, i.fields_cap) = (out_fields.as_mut_ptr(), out_fields.len());
-        (i.arena_buf, i.arena_cap) = (arena.as_mut_ptr(), arena.len());
-        (i.records_buf, i.records_cap) = (records.as_mut_ptr(), records.len());
-        let mut o: ServeOut = z();
-        o.head = out_head::<ServeOut>();
+        let slot_id = 1 << 30;
+        assert!(
+            !self.pending.borrow().contains_key(&ticket(slot_id)),
+            "an admin verb cannot replace a pending piece on the same full ticket"
+        );
+        let given = push_lifecycle_cases::ServeGiven {
+            route,
+            target: target.as_bytes(),
+            fields,
+            body,
+        };
+        let caps = (1 << 14, 1 << 14);
+        let mut frame = {
+            let mut pending = self.pending_serves.borrow_mut();
+            if let Some(frame) = pending.get(&ticket(slot_id)) {
+                frame.check_resume(slot_id, given, caps, flags);
+            }
+            pending.remove(&ticket(slot_id)).map_or_else(
+                || push_lifecycle_cases::ServeFrame::new(slot_id, given, caps, flags),
+                |mut frame| {
+                    frame.input.head.flags |= busbar_contract::abi::mechanism::call::FLAG_RESUME;
+                    frame
+                },
+            )
+        };
+        *frame.output = z();
+        frame.output.head = out_head::<ServeOut>();
         let f = ops().serve.expect("serve");
-        // SAFETY: `f` is the door's own slot, called over an `in` and an `out` laid out as its ABI
-        // states and live for the call.
+        // SAFETY: complete semantic input and every original lent allocation are owned by the
+        // typed boxed frame until terminal; an owned Door retains it across Pending.
         #[allow(unused_unsafe)]
         let ret = unsafe {
             f(
                 self.instance,
-                std::ptr::from_ref(&i).cast(),
-                std::ptr::from_mut(&mut o).cast(),
+                std::ptr::from_ref(&*frame.input).cast(),
+                std::ptr::from_mut(&mut *frame.output).cast(),
             )
         };
+        if ret.outcome() == Outcome::Pending {
+            if !self.owned {
+                // A temporary callback wrapper cannot close its shared owner. Unexpected
+                // Pending fails the test while keeping the outstanding loans alive.
+                std::mem::forget(frame);
+                panic!("a borrowed admin callback must complete synchronously");
+            }
+            let head = frame.output.head;
+            self.pending_serves
+                .borrow_mut()
+                .insert(ticket(slot_id), frame);
+            forward_diagnostics(&head);
+            return (Outcome::Pending, 0, String::new(), 0);
+        }
+        let (o, reply, arena, records) =
+            (&frame.output, &frame.reply, &frame.arena, &frame.records);
 
         forward_diagnostics(&o.head);
         let held = door_facts::HELD_KINDS;

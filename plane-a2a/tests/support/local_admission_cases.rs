@@ -187,50 +187,57 @@ struct Reply {
 }
 
 fn local_reply(door: &Door, unit: u64, member: &[u8], body: &[u8], fields_cap: usize) -> Reply {
-    let mut reply = vec![0; 65536];
-    let mut fields = vec![z::<OutField>(); fields_cap];
-    let mut arena = vec![0; 16384];
-    let mut records = [z::<RecordWrite>(); 16];
-    let mut units = [z::<UnitCount>(); 8];
-    let mut input: OnPieceIn = z();
-    input.head = head::<OnPieceIn>(slot::ON_PIECE, ticket(unit));
-    input.unit = unit;
-    input.from = FROM_CALLER;
-    input.flags = PIECE_LAST;
-    input.bytes = octets(body);
-    input.member = str_of(member);
-    input.caller_ref = str_of(ALICE);
-    (input.reply_buf, input.reply_cap) = (reply.as_mut_ptr(), reply.len());
-    (input.fields_buf, input.fields_cap) = (fields.as_mut_ptr(), fields.len());
-    (input.arena_buf, input.arena_cap) = (arena.as_mut_ptr(), arena.len());
-    (input.records_buf, input.records_cap) = (records.as_mut_ptr(), records.len());
-    (input.units_buf, input.units_cap) = (units.as_mut_ptr(), units.len());
-    let mut output: OnPieceOut = z();
-    output.head = out_head::<OnPieceOut>();
-    // SAFETY: the existing ON_PIECE slot receives exact live structs and stated buffer regions.
-    let result = unsafe {
+    let given = Given {
+        member,
+        ..Given::caller(body)
+    };
+    let (mut frame, _) = door.piece_frame(unit, given, 65536, fields_cap, 16384);
+    *frame.output = z();
+    frame.output.head = out_head::<OnPieceOut>();
+    // SAFETY: the per-Door boxed frames and all original input/output loans remain owned
+    // across Pending and are retired only after a terminal answer, cancellation or CLOSE.
+    let outcome = unsafe {
         ops().on_piece.unwrap()(
             door.instance,
-            std::ptr::from_ref(&input).cast(),
-            std::ptr::from_mut(&mut output).cast(),
+            std::ptr::from_ref(&*frame.input).cast(),
+            std::ptr::from_mut(&mut *frame.output).cast(),
         )
-    };
-    reply.truncate(output.emitted as usize);
-    let lane = if output.lane.len == 0 {
-        String::new()
-    } else {
-        let s = output.lane;
-        String::from_utf8(arena[s.offset as usize..(s.offset + s.len) as usize].to_vec()).unwrap()
-    };
-    Reply {
-        outcome: result.outcome(),
-        output,
-        body: reply,
-        lane,
-        units: units[..output.units_written as usize]
+    }
+    .outcome();
+    if outcome == Outcome::Pending {
+        door.pending.borrow_mut().insert(ticket(unit), frame);
+        return Reply {
+            outcome,
+            output: z(),
+            body: Vec::new(),
+            lane: String::new(),
+            units: Vec::new(),
+        };
+    }
+    let output = *frame.output;
+    let (body, lane, units) = if outcome == Outcome::Ready {
+        let body = frame.reply[..output.emitted as usize].to_vec();
+        let lane = if output.lane.len == 0 {
+            String::new()
+        } else {
+            let s = output.lane;
+            String::from_utf8(frame.arena[s.offset as usize..(s.offset + s.len) as usize].to_vec())
+                .unwrap()
+        };
+        let units = frame.units[..output.units_written as usize]
             .iter()
             .map(|u| (u.class, u.amount))
-            .collect(),
+            .collect();
+        (body, lane, units)
+    } else {
+        (Vec::new(), String::new(), Vec::new())
+    };
+    Reply {
+        outcome,
+        output,
+        body,
+        lane,
+        units,
     }
 }
 
@@ -387,12 +394,18 @@ fn a_live_call_keeps_principal_and_context_filtering_and_replay_handles_separate
         br#"{"jsonrpc":"2.0","id":19,"method":"ListTasks","params":{"contextId":"wanted"}}"#;
     arrive_local(&door, 604, envelope);
     LIST_PENDS.store(true, Ordering::SeqCst);
-    let pending = local_reply(&door, 604, b"vendor", envelope, 16);
+    // The original zero-field loan survives Pending and causes SHORT only on completion.
+    let pending = local_reply(&door, 604, b"vendor", envelope, 0);
     assert_eq!(pending.outcome, Outcome::Pending, "{pending:?}");
+    assert!(door.pending.borrow().contains_key(&ticket(604)));
     LIST_PENDS.store(false, Ordering::SeqCst);
     let short = local_reply(&door, 604, b"vendor", envelope, 0);
     assert_eq!(short.outcome, Outcome::Failed, "{short:?}");
     assert!(short.output.fields_needed > 0);
+    assert!(
+        !door.pending.borrow().contains_key(&ticket(604)),
+        "terminal SHORT ends the old loan"
+    );
     let ready = local_reply(&door, 604, b"vendor", envelope, 16);
     assert_eq!(
         (ready.outcome, ready.output.reply_status),
