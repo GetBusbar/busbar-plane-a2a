@@ -491,6 +491,64 @@ fn the_push_volume_bound_is_one_point_five_point_fives() {
 }
 
 #[test]
+fn a_short_refund_cannot_change_a_replacement_window() {
+    let limiter = PushLimiter::default();
+    let old = limiter.charge("t", 120).unwrap();
+    for _ in 1..PUSH_RATE_LIMIT {
+        assert!(limiter.admit("t", 120));
+    }
+    let current = limiter.charge("t", 180).unwrap();
+    for _ in 1..PUSH_RATE_LIMIT {
+        assert!(limiter.admit("t", 180));
+    }
+    old.refund();
+    assert!(
+        !limiter.admit("t", 180),
+        "an old pending callback cannot refund the replacement window"
+    );
+    current.refund();
+    assert!(limiter.admit("t", 180));
+    assert!(
+        !limiter.admit("t", 120),
+        "refund does not reopen an older clock window"
+    );
+}
+
+#[test]
+fn dropping_a_push_charge_preserves_its_spent_budget() {
+    let limiter = PushLimiter::default();
+    drop(limiter.charge("t", 120).unwrap());
+    for _ in 1..PUSH_RATE_LIMIT {
+        assert!(limiter.admit("t", 120));
+    }
+    assert!(!limiter.admit("t", 120));
+}
+
+#[test]
+fn concurrent_push_charges_and_refunds_keep_the_exact_bound() {
+    let limiter = PushLimiter::default();
+    let charges = std::thread::scope(|scope| {
+        let calls: Vec<_> = (0..PUSH_RATE_LIMIT + 4)
+            .map(|_| scope.spawn(|| limiter.charge("t", 120)))
+            .collect();
+        calls
+            .into_iter()
+            .filter_map(|call| call.join().unwrap())
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(charges.len(), PUSH_RATE_LIMIT as usize);
+    let mut charges = charges.into_iter();
+    for _ in 0..PUSH_RATE_LIMIT / 2 {
+        charges.next().unwrap().refund();
+    }
+    drop(charges);
+    for _ in 0..PUSH_RATE_LIMIT / 2 {
+        assert!(limiter.admit("t", 120));
+    }
+    assert!(!limiter.admit("t", 120));
+}
+
+#[test]
 fn the_statement_declares_its_open_web_need_and_its_agent_member_need() {
     use crate::statement::{MEMBER_TARGET, NEEDS, NEED_AGENT, NEED_OPEN_WEB};
     use busbar_contract::abi::host::conn::connector::{
