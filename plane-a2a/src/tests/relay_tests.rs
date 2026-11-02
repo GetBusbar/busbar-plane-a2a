@@ -1301,7 +1301,7 @@ fn an_oversized_body_is_cut_one_byte_past_the_ceiling_so_the_driver_can_refuse_i
         reply.body,
         refused(
             "a2a.hop.reply_too_large",
-            "this agent's backend replied with more than the configured ceiling"
+            "this agent's backend replied with more than the fixed reply limit"
         )
     );
     assert_eq!(r.far.len(), MAX_REPLY_BYTES + 1);
