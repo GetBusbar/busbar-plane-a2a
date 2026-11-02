@@ -54,7 +54,6 @@ async fn push_config_verbs_distinguish_malformed_task_ids_from_unheld_string_ids
             assert_eq!(body["id"], 1);
         }
         for name in ["taskId", alias] {
-
             for value in ["", "not-a-held-task"] {
                 let mut params = serde_json::json!({});
                 params[name] = serde_json::json!(value);
@@ -69,6 +68,11 @@ async fn push_config_verbs_distinguish_malformed_task_ids_from_unheld_string_ids
         }
     }
 
+    assert!(
+        !agent.relayed(),
+        "malformed and unheld push verbs never reach the backend"
+    );
+    let mut valid_answers = Vec::new();
     for (method, member) in [
         ("ListTaskPushNotificationConfigs", "task_id"),
         ("tasks/pushNotificationConfig/list", "id"),
@@ -82,9 +86,59 @@ async fn push_config_verbs_distinguish_malformed_task_ids_from_unheld_string_ids
         .await;
         assert_eq!(status, StatusCode::OK, "{body}");
         assert!(body.get("result").is_some(), "{body}");
+        valid_answers.push(body.to_string());
     }
-    assert!(
-        !agent.relayed(),
-        "malformed/local push verbs never reach the backend"
+    let mirrored = heard(&mut agent);
+    assert_eq!(
+        mirrored.len(),
+        4,
+        "each valid list mirrors and re-arms once"
     );
+    for pair in mirrored.chunks_exact(2) {
+        let documents: Vec<serde_json::Value> = pair
+            .iter()
+            .map(|request| {
+                assert!(
+                    !request.contains(&s.token),
+                    "the caller credential stays local"
+                );
+                serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1)
+                    .expect("a mirrored JSON-RPC request")
+            })
+            .collect();
+        for document in &documents {
+            assert_eq!(document["jsonrpc"], "2.0");
+            assert_eq!(document["id"], "busbar-originated");
+        }
+        assert_eq!(documents[0]["method"], "tasks/pushNotificationConfig/list");
+        assert_eq!(documents[0]["params"], serde_json::json!({"id": FAR_TASK}));
+        assert_eq!(documents[1]["method"], "tasks/pushNotificationConfig/set");
+        assert_eq!(documents[1]["params"]["taskId"], FAR_TASK);
+        let config = &documents[1]["params"]["pushNotificationConfig"];
+        assert_eq!(config["id"], format!("busbar-{FAR_TASK}"));
+        assert_eq!(config["url"], format!("https://gw.example{}/push", mount()));
+        assert_eq!(
+            config["authentication"]["schemes"],
+            serde_json::json!(["Bearer"])
+        );
+        let capability = config["authentication"]["credentials"]
+            .as_str()
+            .filter(|value| !value.is_empty())
+            .expect("busbar registers its own callback capability");
+        assert_ne!(capability, s.token);
+        for answer in &valid_answers {
+            assert!(
+                !answer.contains(capability),
+                "the callback capability stays private"
+            );
+            assert!(
+                !answer.contains(FAR_TASK),
+                "the backend task id stays private"
+            );
+            assert!(
+                !answer.contains("https://gw.example"),
+                "the callback stays private"
+            );
+        }
+    }
 }

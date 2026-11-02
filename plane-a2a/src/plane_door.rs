@@ -3139,6 +3139,7 @@ slot!(
         let asked = input.target().as_str().unwrap_or_default();
         let dialect = match given.dialect() {
             statement::DIALECT_DOCUMENT if crate::framed::on_service(asked) => Dialect::Framed,
+            statement::DIALECT_DOCUMENT if crate::rest::on_target(asked) => Dialect::RestJson,
             statement::DIALECT_DOCUMENT => Dialect::JsonRpc,
             statement::DIALECT_TARGET => Dialect::RestJson,
             statement::DIALECT_FRAMED => Dialect::Framed,
