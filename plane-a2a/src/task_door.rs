@@ -1425,6 +1425,14 @@ struct WindowHead<'h> {
     close: Option<&'h crate::framed::FramedReply>,
 }
 
+/// A response-only refusal cannot stage record effects beside its error answer.
+fn check_response_effects(response_only: bool, writes: &[Write]) -> Result<(), Outcome> {
+    if response_only && !writes.is_empty() {
+        return Err(Outcome::Failed);
+    }
+    Ok(())
+}
+
 /// One window: on the first (`first`), its head; then as many bytes as the reply buffer holds.
 fn window_core(
     plane: &A2aDoor,
@@ -1438,8 +1446,8 @@ fn window_core(
     let response_only = plane
         .units
         .with(&unit, |u| u.is_some_and(|u| u.pass.response_only));
-    if response_only && !writes.is_empty() {
-        return Outcome::Failed;
+    if let Err(outcome) = check_response_effects(response_only, writes) {
+        return outcome;
     }
     let (mut reply, mut fields, mut records, mut arena, mut units) = (
         input.reply_buf(),
