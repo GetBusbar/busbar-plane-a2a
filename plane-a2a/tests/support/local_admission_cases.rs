@@ -260,6 +260,65 @@ fn refused(reply: &Reply, status: u32, sentence: &str) {
 const LIST: &[u8] = br#"{"jsonrpc":"2.0","id":17,"method":"ListTasks","params":{}}"#;
 
 #[test]
+fn addressed_lists_resolve_only_the_named_agent_without_an_egress_walk() {
+    use busbar_contract::abi::plane::{ROUTE_COUNTED, ROUTE_DIRECT, ROUTE_SCOPE_LOCAL};
+    let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    for (body, route) in [
+        (LIST, ROUTE_SCOPE_LOCAL),
+        (
+            &br#"{"jsonrpc":"2.0","id":18,"method":"tasks/list","params":{}}"#[..],
+            ROUTE_SCOPE_LOCAL,
+        ),
+        (
+            &br#"{"jsonrpc":"2.0","id":19,"method":"tasks/get","params":{"id":"task-one"}}"#[..],
+            ROUTE_DIRECT,
+        ),
+        (
+            &br#"{"jsonrpc":"2.0","id":20,"method":"message/send","params":{"message":{"role":"user","messageId":"m-one","parts":[{"kind":"text","text":"hello"}]}}}"#[..],
+            ROUTE_DIRECT,
+        ),
+    ] {
+        let (_reset, door) = open_local();
+        let mut input: ArriveIn = z();
+        input.head = head::<ArriveIn>(slot::ARRIVE, Ticket::NONE);
+        input.unit = 605;
+        input.claim = claim("POST", "/a2a/agents/{agent_id}");
+        input.target = str_of(b"/a2a/agents/vendor");
+        input.method = str_of(b"POST");
+        input.body = octets(body);
+        let mut units = [z::<UnitCount>(); 8];
+        (input.units_buf, input.units_cap) = (units.as_mut_ptr(), units.len());
+        let mut output: ArriveOut = z();
+        output.head = out_head::<ArriveOut>();
+        // SAFETY: ARRIVE receives its complete live ABI input and output buffers.
+        let result = unsafe {
+            ops().arrive.unwrap()(
+                door.instance,
+                std::ptr::from_ref(&input).cast(),
+                std::ptr::from_mut(&mut output).cast(),
+            )
+        };
+        assert_eq!(result.outcome(), Outcome::Ready);
+        assert_eq!(output.refusal_status, 0);
+        assert_eq!(output.route, route);
+        let text = |value: AbiStr| {
+            if value.len() == 0 {
+                return String::new();
+            }
+            // SAFETY: the live door owns the output's nonempty UTF-8 strings.
+            let bytes = unsafe { std::slice::from_raw_parts(value.ptr(), value.len()) };
+            std::str::from_utf8(bytes).unwrap().to_string()
+        };
+        assert_eq!(text(output.pool), "vendor", "only the addressed candidate");
+        assert_eq!(text(output.trust_counterparty), "vendor");
+        assert_eq!(
+            output.route_flags & ROUTE_COUNTED,
+            if route == ROUTE_SCOPE_LOCAL { ROUTE_COUNTED } else { 0 },
+        );
+    }
+}
+
+#[test]
 fn dead_or_unavailable_principals_are_refused_before_local_verbs() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
     for unavailable in [false, true] {
