@@ -1520,7 +1520,7 @@ slot!(
             return Outcome::Ready;
         }
         let mut pool = None;
-        let mut scope_local = false;
+        let scope_local;
         match &agent {
             Some(agent) => {
                 scope_local = hop.is_none()
