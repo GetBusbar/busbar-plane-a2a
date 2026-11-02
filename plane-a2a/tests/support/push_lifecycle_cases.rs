@@ -366,19 +366,27 @@ fn registered(door: &Door) -> String {
         ),
         (Outcome::Ready, 0)
     );
+    let attempt = piece(door, 501, Given::attempt(b"vendor"), 65536);
     assert_eq!(
-        piece(door, 501, Given::attempt(b"vendor"), 65536).outcome,
-        Some(Outcome::Ready)
+        attempt.outcome,
+        Some(Outcome::Ready),
+        "flags={}, emitted_bytes={}",
+        attempt.flags,
+        attempt.emitted.len()
     );
+    assert_ne!(attempt.flags & busbar_contract::abi::plane::EMIT_TO_FAR_END, 0,
+        "the setup must actually reach the agent (flags={}, emitted_bytes={}, publications={}, observations={})",
+        attempt.flags, attempt.emitted.len(), script(|s| s.conditional.requests.len()), script(|s| s.conditional.observations.len()));
     assert_eq!(
         piece(door, 501, Given::caller(get), 65536).outcome,
         Some(Outcome::Ready)
     );
     let response=br#"{"jsonrpc":"2.0","id":1,"result":{"id":"backend-t1","contextId":"c1","status":{"state":"working"}}}"#;
-    assert_eq!(
-        piece(door, 501, Given::far_end(200, response), 65536).outcome,
-        Some(Outcome::Ready)
-    );
+    let far = piece(door, 501, Given::far_end(200, response), 65536);
+    assert_eq!(far.outcome, Some(Outcome::Ready),
+        "far reply did not settle (flags={}, emitted_bytes={}, publications={}, observations={}, applied={})",
+        far.flags, far.emitted.len(), script(|s| s.conditional.requests.len()),
+        script(|s| s.conditional.observations.len()), script(|s| s.conditional.applied));
     let create=br#"{"jsonrpc":"2.0","id":2,"method":"CreateTaskPushNotificationConfig","params":{"taskId":"t1","id":"cfg","url":"https://receiver.example/cb"}}"#;
     assert_eq!(
         door.arrive(
@@ -1117,10 +1125,17 @@ fn an_applied_task_open_keeps_its_identity_through_output_short_recall() {
     let (_reset, door) = open_scripted();
     assert_eq!(door.connect("vendor").1, 200);
     arrive_submit(&door, 1130);
+    let attempt = piece(&door, 1130, Given::attempt(b"vendor"), 65536);
     assert_eq!(
-        piece(&door, 1130, Given::attempt(b"vendor"), 65536).outcome,
-        Some(Outcome::Ready)
+        attempt.outcome,
+        Some(Outcome::Ready),
+        "flags={}, emitted_bytes={}",
+        attempt.flags,
+        attempt.emitted.len()
     );
+    assert_ne!(attempt.flags & busbar_contract::abi::plane::EMIT_TO_FAR_END, 0,
+        "the setup must actually open its task (flags={}, emitted_bytes={}, publications={}, observations={})",
+        attempt.flags, attempt.emitted.len(), script(|s| s.conditional.requests.len()), script(|s| s.conditional.observations.len()));
     let applied = script(|s| s.conditional.applied);
     let rows = store().clone();
     let short = piece(&door, 1130, Given::caller(SUBMIT), 0);
