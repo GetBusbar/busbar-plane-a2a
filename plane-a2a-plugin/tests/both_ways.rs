@@ -29,12 +29,15 @@ mod both_ways {
         RefusalIn, RefusalOut, REFUSAL_ARRIVE, REFUSAL_GATE, REFUSAL_KERNEL,
     };
     use busbar_contract::abi::sdk::door::abi_str;
+    use busbar_contract::ids::RecordSchemaId;
+    use busbar_contract::kinds::{RecordBytes, StoreError};
+    use busbar_kernel::host_records::{record_key, RecordRows};
+    use busbar_kernel::host_services::{InstanceFacts, KernelServices, Offload};
     use busbar_plugin_loader::dispatch::kinds::plane::{OwnedSnapshot, Plane};
     use busbar_plugin_loader::dispatch::{
         in_head, load_dropped, load_linked, out_head, Bind, DispatchConfig, Dispatcher, Frame,
         LinkedRow, NoSink, Plugin,
     };
-    use busbar_test_kit::services_double::{Double, ServicesDouble, Unserved};
     use serde_json::{json, Value};
 
     use super::door_facts::{
@@ -896,41 +899,64 @@ mod both_ways {
         fn dropped(&self, _: busbar_plugin_loader::dispatch::Dropped) {}
     }
 
-    /// A HOST WHOSE STORE HOLDS ONE STRAY CARD PART: `records.list` of the `card` kind answers one
+    /// Only the fixed read-only card row belongs to this host-log test.
     struct CardRecords;
 
-    impl ServicesDouble for CardRecords {
-        fn records_list(
+    impl RecordRows for CardRecords {
+        fn record_put(
             &self,
-            _: &busbar_contract::services::Caller,
-            list: busbar_contract::services::RecordsList,
-            _: busbar_contract::services::Later,
-        ) -> busbar_contract::services::Ran {
-            let rows: &[(&[u8], &[u8])] = if list.kind == "card" && list.after.is_none() {
-                &[(b"vendor/0123456789abcdef/0", b"{}")]
-            } else {
-                &[]
-            };
-            let mut s = busbar_contract::services::Stored::ready(0);
-            for (key, value) in rows {
-                let n = |x: usize| u32::try_from(x).expect("a small row");
-                let key_at = s.bytes.len();
-                s.bytes.extend_from_slice(key);
-                let value_at = s.bytes.len();
-                s.bytes.extend_from_slice(value);
-                s.spans.push(busbar_contract::abi::host::service::ItemSpan {
-                    key: Span {
-                        offset: n(key_at),
-                        len: n(key.len()),
-                    },
-                    value: Span {
-                        offset: n(value_at),
-                        len: n(value.len()),
-                    },
-                });
-            }
-            busbar_contract::services::Ran::Now(s)
+            _: RecordSchemaId,
+            _: &[u8],
+            _: &RecordBytes,
+        ) -> Result<(), StoreError> {
+            Err(StoreError::Unavailable)
         }
+        fn record_get(
+            &self,
+            _: RecordSchemaId,
+            _: &[u8],
+        ) -> Result<Option<RecordBytes>, StoreError> {
+            Ok(None)
+        }
+        fn record_scan(
+            &self,
+            schema: RecordSchemaId,
+            prefix: &[u8],
+            limit: u32,
+        ) -> Result<Vec<(Vec<u8>, RecordBytes)>, StoreError> {
+            let key = record_key("both-ways", b"vendor/0123456789abcdef/0");
+            if schema.as_str() == "card" && key.starts_with(prefix) && limit != 0 {
+                Ok(vec![(key, RecordBytes::new(b"{}".to_vec()).unwrap())])
+            } else {
+                Ok(Vec::new())
+            }
+        }
+        fn claim(&self, _: &str, _: &str, _: u64, _: u64) -> Result<bool, StoreError> {
+            Err(StoreError::Unavailable)
+        }
+    }
+
+    struct CardReadOnCaller;
+    impl Offload for CardReadOnCaller {
+        fn run(&self, job: Box<dyn FnOnce() + Send>) {
+            job();
+        }
+    }
+
+    fn card_record_services() -> KernelServices {
+        let services = KernelServices::new()
+            .with_records(Arc::new(CardRecords))
+            .with_pool(Arc::new(CardReadOnCaller));
+        services
+            .admit(
+                "both-ways",
+                InstanceFacts {
+                    record_kinds: vec![RecordSchemaId::new("card")],
+                    ..Default::default()
+                },
+            )
+            .expect("the host-log case admits only its declared read namespace");
+        services
     }
 
     /// `open` over [`GOOD`] on `d`, then `ready` (the held cards warmed from the host's `card`
@@ -955,6 +981,10 @@ mod both_ways {
         } else {
             load_linked(&stated, bound).expect("the linked door loads")
         };
+        assert!(
+            p.served().record_kinds.iter().any(|kind| *kind == "card"),
+            "the actual product declares the card namespace used by this log case"
+        );
         let mut o: Frame<PlaneOpenIn, PlaneOpenOut> = Frame::new(z(), z());
         (o.input.open.head, o.out.open.head) = (in_head(), out_head());
         (o.input.open.generation, o.input.open.settings) = (1, octets(GOOD));
@@ -974,9 +1004,9 @@ mod both_ways {
     fn a_stray_card_part_line_reaches_the_host_log_dropped_in_as_linked() {
         let stray = |l: &String| l.contains("part records that no whole record names were found");
         let unserved =
-            Dispatcher::with_services(DispatchConfig::default(), Arc::new(Double(Unserved)));
+            Dispatcher::with_services(DispatchConfig::default(), Arc::new(KernelServices::new()));
         let held =
-            Dispatcher::with_services(DispatchConfig::default(), Arc::new(Double(CardRecords)));
+            Dispatcher::with_services(DispatchConfig::default(), Arc::new(card_record_services()));
         for dropped_in in [false, true] {
             let quiet = ready_lines(&unserved, dropped_in);
             assert!(

@@ -29,6 +29,8 @@ busbar-contract = { workspace = true }
 # (`tests/conformance.rs`, `conformance_suite!`), which moved here with the crate from busbar's
 # crates/busbar-plane-a2a.
 busbar-plugin-loader = { workspace = true }
+# The ordinary host-log test uses production host services and a fixed read-only row adapter.
+busbar-kernel = { workspace = true }
 busbar-test-kit = { workspace = true }
 # The both-ways op-by-op script (`tests/both_ways.rs`, moved here with the crate from busbar's
 # crates/busbar-plane-a2a) reads the door's answers as JSON.
