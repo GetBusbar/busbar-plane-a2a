@@ -637,7 +637,7 @@ fn a_tripped_agent_rejects_fresh_submissions_on_every_binding() {
     assert!(String::from_utf8_lossy(&trailers).contains("grpc-status: 14\r\n"));
 }
 
-/// P-ITEM: REFUSAL-REASON COLLAPSE (spec DONE item 2, "All P-item behaviours match 1.5.5"; drive
+/// Only node faults use the internal refusal class; each refusal class has one consistent answer.
 
 #[test]
 fn p_item_refusal_reason_collapse_only_a_node_fault_is_internal_and_one_class_one_answer() {

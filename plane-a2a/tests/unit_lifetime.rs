@@ -1154,7 +1154,7 @@ fn cancelled_units_make_room_before_a_live_unit_does() {
     );
 }
 
-/// AN INSTANCE FULL OF LIVE UNITS REFUSES THE NEXT ARRIVAL, AND EVICTS NONE (THE DESIGN section
+/// An instance at live-unit capacity refuses the next arrival without evicting active units.
 
 #[test]
 fn an_instance_full_of_live_units_refuses_the_next_arrival_and_evicts_none() {
@@ -1484,7 +1484,7 @@ fn the_card_warm_on_a_units_ticket_never_shares_a_handle_with_the_units_own_call
     }
 }
 
-/// A RESTART SERVES THE AGENTS APPROVED BEFORE IT (ARCHITECT ruling B2, as amended: the `connect`
+/// A restarted instance serves agents from the approved cards it previously recorded.
 
 #[test]
 fn a_restarted_instance_serves_an_agent_from_its_recorded_card() {
@@ -1556,7 +1556,7 @@ fn a_tick_whose_card_warm_pends_ends_pending_and_its_drive_lands_the_warm() {
     );
 }
 
-/// A RESTART KEEPS THE SKILLS THE OPERATOR APPROVED (`BUSBAR-1.6.0.md` l.345-346: "what must
+/// A restart preserves the skills approved by the operator.
 
 #[test]
 fn a_restarted_instance_keeps_the_skills_its_operator_approved() {
@@ -1741,7 +1741,7 @@ fn a_card_listing_the_host_refused_is_listed_again() {
 
 const READY_ARRIVAL_ALLOCATIONS: u64 = 56;
 
-/// A WARMED READY ARRIVAL NAMES ITS ROUTE WITHOUT THE HEAP (THE DESIGN, the plugin ABI: "no
+/// A warmed ready arrival matches its pinned allocation count.
 
 #[test]
 fn a_warmed_ready_arrival_allocates_its_pinned_count() {

@@ -207,7 +207,7 @@ fn a_blank_a2a_version_on_the_grpc_line_reads_as_the_lines_own_version() {
     assert_eq!(framed_field(named, H_VERSION), Some("0.3"));
 }
 
-/// THE STREAM CEILING (ARCHITECT ruling 2026-10-07, STREAM-CEILING): every hop whose answer is
+/// Streamed hops declare streaming and the 600-second stream ceiling.
 
 #[test]
 fn a_streamed_hop_states_a_stream_and_the_tail_predevs_600_second_ceiling() {
@@ -873,7 +873,7 @@ fn diags_of<R>(f: impl FnOnce() -> R) -> (R, Vec<String>) {
     (r, heard.try_iter().map(|(_, line)| line).collect())
 }
 
-/// G1-53 (lead ruling, 1.5.5's RewriteReply semantics): A REWRITE THAT YIELDS NO OBJECT LEAVES THE
+/// A rewrite yielding no object leaves the original request intact and reports that it was not applied.
 
 #[test]
 fn a_rewrite_that_yields_no_object_is_not_applied_and_says_so() {

@@ -220,7 +220,7 @@ fn exactly_the_discovery_documents_are_open_claims() {
     assert_eq!(open, [crate::METADATA_PATH, crate::WELL_KNOWN_CARD_PATH]);
 }
 
-/// BUSBAR'S OWN PUSH CALLBACK is the plane's one PUBLIC route, served by `serve` (ARCHITECT ruling
+/// The push callback is the plane's only public route, served through `serve`.
 
 #[test]
 fn the_push_callback_is_a_public_route_and_no_claim() {
@@ -256,7 +256,7 @@ fn the_openapi_fragment_keys_its_paths_under_the_prefix_given() {
     );
 }
 
-/// THE ADMIN OPENAPI BLOB CARRIES ITS OWN BODIES (ARCHITECT Q2): every trust verb's `200` names a
+/// Each trust verb's OpenAPI `200` response names its own body schema.
 
 #[test]
 fn the_admin_openapi_blob_states_every_body_its_verbs_name() {
@@ -589,7 +589,7 @@ fn the_plane_declares_its_published_identity_and_its_claims_speak_its_wire_forma
     assert!(agents_snapshot_spec(None, &["vendor"]).claims.is_empty());
 }
 
-/// THE PUSH QUEUE IS DROP-OLDEST, COUNTED (THE DESIGN, a2a; A2A-PUSH "drop-oldest + metric"): the
+/// The Statement declares counters for the drop-oldest push queue.
 
 #[test]
 fn the_statement_declares_the_push_queue_counters() {
@@ -610,7 +610,7 @@ fn the_statement_declares_the_push_queue_counters() {
     }
 }
 
-/// RED before R-16 (architect ruling 2026-10-24): each configured agent's endpoint is claimed in
+/// Every configured agent claims its endpoint with a trailing separator.
 
 #[test]
 fn each_fronted_agent_claims_its_endpoint_with_a_trailing_separator() {

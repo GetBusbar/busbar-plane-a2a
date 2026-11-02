@@ -403,7 +403,7 @@ fn a_grpc_attempt_rides_the_doors_grpc_need() {
     assert_eq!(attempt_need(Binding::HttpJson), 0);
 }
 
-/// THE CALL'S END AS THE KERNEL HANDS IT ON (`BUSBAR-1.6.0.md` l.394, l.747): a call that ends
+/// A final status handed on with the last trailers ends the call.
 
 #[test]
 fn a_status_handed_on_with_the_last_trailers_ends_the_call() {
@@ -554,7 +554,7 @@ fn a_cut_grpc_stream_ends_with_an_error_even_after_complete_messages() {
     }
 }
 
-/// A STREAM WHOSE TRAILERS END IT WITH AN ERROR STATUS AFTER ITS EVENTS BEGAN (THE DESIGN section 2
+/// A gRPC stream ending with an error status fails its task even after events have begun.
 
 #[test]
 fn a_grpc_stream_ending_with_an_error_status_fails_its_task() {

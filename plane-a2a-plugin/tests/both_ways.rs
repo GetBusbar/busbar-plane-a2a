@@ -3,7 +3,7 @@
 
 //! THE DOOR, BOTH WAYS, OP BY OP: the logic crate's `door` linked and this crate's
 
-/// THE DOOR, BOTH WAYS (BUSBAR-1.6.0.md Part 2 #2 steps (4) and (5); Part 3 section 12 "Proven
+/// Loads the same door for linked and dropped-in behavior checks.
 
 fn loaded_door() -> busbar_plugin_loader::dispatch::LoadedDoor {
     busbar_plugin_loader::dispatch::LoadedDoor::from(
@@ -578,7 +578,7 @@ mod both_ways {
         assert_eq!(grpc.trust_from, http.trust_from);
     }
 
-    /// THE PUSH NEED'S TRUST, AS THE DOOR STATES IT (ARCHITECT ruling 2026-10-14): the open-web need a
+    /// The door declares that its push need trusts the owned `agent_push.ca` material.
 
     #[test]
     fn the_door_states_its_push_need_trusting_the_owned_agent_push_ca() {
@@ -839,7 +839,7 @@ mod both_ways {
         );
     }
 
-    /// A REQUEST-STAGE HOOK'S REWRITE (BUSBAR-1.6.0.md Part 3 section 12, "Hooks"; the served
+    /// A request-stage rewrite replaces the parameters before projecting the rewritten request.
 
     #[test]
     fn a_rewrite_replaces_the_params_and_the_rewritten_request_is_projected() {
@@ -984,7 +984,7 @@ mod both_ways {
         lines.clone()
     }
 
-    /// THE PLANE'S LOG REACHES THE HOST'S LOG, DROPPED IN AS LINKED (owner ruling 2026-10-27): the
+    /// Plane log events reach the host log through both linked and dropped-in doors.
 
     #[test]
     fn a_stray_card_part_line_reaches_the_host_log_dropped_in_as_linked() {

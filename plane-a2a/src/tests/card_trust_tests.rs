@@ -585,7 +585,7 @@ fn the_guard_s_verdicts_are_worded_as_the_engine_worded_them() {
     );
 }
 
-/// THE JUDGEMENT'S REFUSAL IN 1.5.5's WORDS (ARCHITECT Q-DEL-A2A-GUARD-WORDS): a name that
+/// A card-trust refusal preserves the 1.5.5 client text naming the address or resolver failure.
 
 #[test]
 fn a_judged_refusal_names_the_address_or_the_resolvers_reason() {

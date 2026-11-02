@@ -624,7 +624,7 @@ fn v03_delete_reads_pushnotificationconfigid_and_actually_clears() {
     );
 }
 
-/// THE DESTINATION IS THE HOST'S TO JUDGE (`BUSBAR-1.6.0.md`, the ONE destination guard): an
+/// The host judges callback destinations, and its refusal prevents the callback.
 
 #[test]
 fn an_internal_callback_is_refused_on_the_hosts_verdict_and_the_host_is_asked() {

@@ -667,7 +667,7 @@ fn the_sweep_tombstones_the_expired_and_leaves_the_idle_active() {
     }
 }
 
-/// AN ACTIVE TASK IS NEVER EVICTED (Q128 K2-H5, coordinator 2026-10-07; spec docs/design/BUSBAR-1.6.0.md
+/// Retention sweeping preserves active tasks and their push tokens.
 
 #[test]
 fn an_idle_active_task_survives_the_sweep_with_its_push_token() {
@@ -1183,7 +1183,7 @@ fn moving_bytes_between_context_principal_and_agent_breaks_verification() {
     );
 }
 
-/// B1 RULING 3 (coordinator 2026-10-07; `BUSBAR-1.6.0.md` Part 3, the piece frame: "a plane never
+/// Task record-chain scopes use the caller's opaque reference and task identity without exposing the principal or key id.
 
 #[test]
 fn the_chain_scope_is_the_callers_opaque_reference_and_the_task() {

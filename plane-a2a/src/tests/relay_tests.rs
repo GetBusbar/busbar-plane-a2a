@@ -327,7 +327,7 @@ fn a_last_far_end_piece_with_no_status_is_refused() {
     assert_eq!(r.on_piece(far(None, b"{}", true)), PieceAnswer::Refused);
 }
 
-/// P-ITEM: UNARY/EMPTY TERMINALITY (spec DONE item 2, "All P-item behaviours match 1.5.5"; the
+/// An answer closes once, an empty envelope never closes, and a stream closes at its last frame.
 
 #[test]
 fn p_item_unary_empty_terminality_an_answer_closes_once_an_empty_envelope_never_and_a_stream_at_its_last_frame(
@@ -1013,7 +1013,7 @@ fn an_http_json_far_ends_bare_events_are_read_as_results() {
     assert_eq!(got[0]["result"]["taskId"], "a2a-p-0102030405060708");
 }
 
-/// THE BREAKER'S READING (ARCHITECT ruling: the engine's `classify_hop` table, stated by the plane;
+/// The plane states the breaker-health classification of the far end's complete answer.
 
 #[test]
 fn the_far_ends_whole_answer_states_the_breakers_reading() {

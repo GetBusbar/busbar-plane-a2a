@@ -544,7 +544,7 @@ fn the_statement_declares_its_open_web_need_and_its_agent_member_need() {
     );
 }
 
-/// THE PUSH NEED'S TRUST IS THE PLANE'S OWN `agent_push.ca`, in the owned namespace (ARCHITECT ruling
+/// Push trust names the plane's owned `agent_push.ca` setting.
 
 #[test]
 fn the_push_trust_path_names_the_owned_agent_push_section() {
@@ -768,7 +768,7 @@ fn the_callback_mac_is_compared_in_constant_time() {
     );
 }
 
-/// RED (BUSBAR-1.6.0.md Locked Decision #54: logs, audit records, metrics and error text never
+/// The push credential reaches the authorization field without appearing in logs, debug output, metrics, audit records, or error text.
 
 #[test]
 fn the_push_credential_reaches_the_authorization_field_and_no_debug_or_error_text() {
@@ -796,7 +796,7 @@ fn the_push_credential_reaches_the_authorization_field_and_no_debug_or_error_tex
     assert!(!refused.contains(secret), "{refused}");
 }
 
-/// EACH ATTEMPT IS BOUNDED BY THE REQUEST DEADLINE (ARCHITECT ruling on a slow push receiver): a
+/// The request deadline bounds each push-delivery attempt.
 
 #[test]
 fn a_delivery_attempt_is_bounded_by_the_request_deadline() {
@@ -807,7 +807,7 @@ fn a_delivery_attempt_is_bounded_by_the_request_deadline() {
     );
 }
 
-/// THE PUMP SERVES THE TASKS' QUEUES IN TURN, one attempt per task per turn (ARCHITECT ruling on a
+/// The pump serves task queues in turn, with at most one attempt per task per turn.
 
 #[test]
 fn the_pump_serves_each_tasks_queue_in_turn() {

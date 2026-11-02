@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! THE SESSION ON THE DOOR PATH (ARCHITECT RULING 2026-10-03, Q-FOLD-A2A-2-PROJECT-POOL session
+//! Exercises session projection through the door path.
 
 #[path = "support/door_facts.rs"]
 #[allow(dead_code)]
@@ -138,7 +138,7 @@ fn claim_of(verb: &str, target: &str) -> usize {
     door_facts::claim(verb, target) as usize
 }
 
-/// THE SESSION ON THE DOOR PATH (ARCHITECT RULING 2026-10-03, Q-FOLD-A2A-2-PROJECT-POOL session
+/// The projected session is the message's context id.
 
 #[test]
 fn project_writes_the_messages_context_id_as_the_session() {

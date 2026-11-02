@@ -4395,7 +4395,7 @@ slot!(
     Start, GenIn, OutHead, |_, _, _| { Outcome::Ready }
 );
 
-/// THE HOOK PROJECTION of one request envelope (the design's legacy engine folds and its plane
+/// Projects an A2A request envelope into the hook's `tool` and `arguments` JSON view.
 
 #[must_use]
 pub fn projection(envelope: &[u8]) -> Option<Vec<u8>> {

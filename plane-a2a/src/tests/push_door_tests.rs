@@ -794,7 +794,7 @@ fn a_notification_queued_during_a_held_attempt_waits_for_that_attempts_own_wake(
     assert_eq!(host.sent.len(), 2, "the queued notification goes next");
 }
 
-/// ONE RECEIVER THAT NEVER ANSWERS HOLDS THE PUMP FOR ONE ATTEMPT'S DEADLINE AT MOST (ARCHITECT
+/// A silent receiver can delay another task's delivery by at most one attempt deadline.
 
 #[test]
 fn a_silent_receiver_delays_another_tasks_delivery_by_one_deadline_at_most() {
@@ -835,7 +835,7 @@ fn a_silent_receiver_delays_another_tasks_delivery_by_one_deadline_at_most() {
     );
 }
 
-/// THE DEADLINE BOUNDS THE WHOLE ATTEMPT, ten seconds from the tick that began it (ARCHITECT ruling
+/// The ten-second deadline bounds the whole attempt from the tick that began it.
 
 #[test]
 fn the_whole_attempt_is_abandoned_at_ten_seconds_as_a_transport_error() {

@@ -3,18 +3,6 @@
 
 //! THE A2A PLANE'S ROOT LEG, through its door: the agent plane's root cells are units driven on the
 
-
-
-
-
-
-
-
-
-
-
-
-
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -31,15 +19,12 @@ use busbar_kernel::{
 
 /// The plane's private facts and the protobuf words this leg sends and reads, restated as data
 
-
 #[path = "../support/root_facts.rs"]
 #[allow(dead_code)]
 mod root_facts;
 
 mod piece_pending_observer;
 mod reported_observations;
-
-
 
 use super::door_rig as rig;
 use rig::{LinkedRow, Node, NodeEndPost, PUBLISHING};
@@ -72,8 +57,6 @@ fn mount() -> &'static str {
 
 /// THE AGENT DOOR: of the linked plane doors, the one whose Statement DECLARES the section the
 
-
-
 fn linked_door() -> Option<DoorFn> {
     static DOOR: std::sync::OnceLock<Option<DoorFn>> = std::sync::OnceLock::new();
     *DOOR.get_or_init(|| rig::door_declaring(surface("section")))
@@ -91,8 +74,6 @@ fn door() -> DoorFn {
 pub(crate) const COLUMNS: &[&str] = &["a2a-client", "a2a-server"];
 
 /// `(capability, column, reason)`: the root-leg cells this plane is NOT owed, each the ledger's own
-
-
 
 pub(crate) const NOT_APPLICABLE: &[(&str, &str, &str)] = &[
     (
@@ -123,7 +104,6 @@ pub(crate) const NOT_APPLICABLE: &[(&str, &str, &str)] = &[
 ];
 
 /// THE SECRET-SOURCE SCAN'S DRIVEN DOOR (the composition root's `secret_source.rs`, which holds
-
 
 pub(crate) fn secret_source_driven() -> Vec<String> {
     let row = LinkedRow::of(door()).expect("the door states itself");
@@ -193,20 +173,15 @@ struct Served {
     /// The node's end post: the units whose facts are still open.
     post: Arc<NodeEndPost>,
     /// The paths the door's routes were mounted at on the data router, as its construction
-
     routes: Vec<String>,
     /// The bytes a record key must hold for the cell's store to refuse writing it
-
     refuse: Arc<std::sync::Mutex<Option<Vec<u8>>>>,
     /// The table the kernel's egress walk reached the far ends through, every open it made on it
-
     riding: Arc<Riding>,
     observed_destinations: Arc<reported_observations::Destinations>,
 }
 
 /// THE CELL'S STORE, REFUSING ON CUE (predev's `RefuseOneTaskRow`, `local_tests.rs:1300-1356`):
-
-
 
 struct Refusing {
     inner: Arc<dyn busbar_contract::store_calls::StoreCalls>,
@@ -361,7 +336,6 @@ impl busbar_contract::store_calls::StoreCalls for Refusing {
 
 /// THE EGRESS WALK'S TABLE, WATCHED: the cell's connector as the kernel's walk reaches it (the
 
-
 struct Riding {
     inner: Arc<rig::Connector>,
     opened: std::sync::Mutex<
@@ -493,11 +467,6 @@ enum Facing {
 
 /// The a2a door linked and bound through the loader's one load (its host services and the
 
-
-
-
-
-
 fn served(
     instance: &'static str,
     section: &str,
@@ -516,8 +485,6 @@ fn served_trusting(
     allowed_pools: Option<Vec<String>>,
     root: Option<Vec<u8>>,
 ) -> Served {
-
-
     served_under(
         instance,
         section,
@@ -600,8 +567,6 @@ struct AgentHooks {
 
 /// [`served_under`], the deployment's `hooks:` attached to one agent when `hooks` is given, the
 
-
-
 #[allow(clippy::too_many_arguments)]
 fn served_full(
     instance: &'static str,
@@ -630,7 +595,6 @@ fn served_full(
 
 /// [`served_trusting`] with boot's tick schedule spawned over the door (`Served::spawn_ticks`,
 
-
 fn served_pushing(
     instance: &'static str,
     section: &str,
@@ -657,7 +621,6 @@ fn served_pushing(
 }
 
 /// [`served_pushing`] over the process's own connector shape (the public roots alone, no test
-
 
 fn served_push_trusting(
     instance: &'static str,
@@ -700,7 +663,6 @@ fn pem_of(der: &[u8]) -> String {
 }
 
 /// What the deployment prices the agent door at, for the cells that read money: the card's rate
-
 
 struct Priced {
     bytes_rate: Option<u64>,
@@ -778,7 +740,6 @@ fn served_core(
     ticking: bool,
     push_ca: Option<String>,
 ) -> Served {
-
     let groups: BTreeMap<String, busbar_kernel::config::GroupCfg> = requests
         .map(|amount| (busbar_kernel::config::groups::LimitMetric::Requests, amount))
         .or_else(|| priced.map(|p| (busbar_kernel::config::groups::LimitMetric::Budget, p.budget)))
@@ -815,10 +776,7 @@ fn served_core(
     ));
     let judge: Arc<dyn busbar_kernel::host_services::DestJudge> = observed_destinations.clone();
 
-
-
     rig::install_io_reactor();
-
 
     let opened =
         rig::open_ephemeral_store(instance).expect("the default store opens through its door");
@@ -832,7 +790,6 @@ fn served_core(
         .expect("governance"),
     );
 
-
     let refuse = Arc::new(std::sync::Mutex::new(None));
     assert!(gov.attach_store_calls(Arc::new(Refusing {
         inner: opened
@@ -841,9 +798,7 @@ fn served_core(
         named: Arc::clone(&refuse),
     })));
 
-
     let services = rig::late_services(Arc::clone(&judge));
-
 
     rig::attach_late(&services, &gov);
     let dispatcher = rig::dispatcher(1, &services);
@@ -907,8 +862,6 @@ fn served_core(
         sections.insert(root_facts::PUSH_SECTION, serde_yaml::Value::Mapping(push));
     }
 
-
-
     let riding = Arc::new(Riding {
         inner: Arc::clone(&connector),
         opened: std::sync::Mutex::default(),
@@ -919,7 +872,6 @@ fn served_core(
         Arc::clone(&riding) as Arc<dyn busbar_contract::conn::PollConns>,
         Arc::clone(&post) as Arc<dyn busbar_kernel_egress::ports::Journal>,
     );
-
 
     let tables = busbar_kernel::plane_driver::serve::ServeTables::default();
     let mut compose = rig::DoorCompose::new(
@@ -933,8 +885,6 @@ fn served_core(
     .public_url("https://gw.example")
     .egress(&egress)
     .post(post)
-
-
     .framers(Arc::clone(&connector));
     if hooks.is_some() {
         let live = Arc::clone(&live);
@@ -952,16 +902,13 @@ fn served_core(
         composed.spawn_ticks();
     }
 
-
     let facing_of = if facing == Facing::Admitted {
         rig::admissions(&composed)
     } else {
         Vec::new()
     };
 
-
     busbar_core_admin::install();
-
 
     rig::register_door(door(), "serve-agent-row").expect("the door binds and folds");
     rig::install_root_auth();
@@ -1007,14 +954,9 @@ fn served_core(
     let (router, admin, handle) =
         busbar_kernel::build_split_routers_serving(Arc::clone(&app), doors, 1 << 20, 0, false);
 
-
-
-
     let router = router.layer(axum::Extension(ListenerScheme(
         busbar_contract::abi::host::service::SCHEME_PLAIN,
     )));
-
-
 
     let admin = rig::mount_node_admin(admin, 1 << 20, &handle, &book, &services);
 
@@ -1081,9 +1023,6 @@ async fn answered(
 }
 
 /// The root cell `governance-budget × a2a-server`: a keyed caller's unit addressed to one
-
-
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_agent_unit_served_through_its_door_charges_the_presenting_key() {
@@ -1315,9 +1254,6 @@ const SEND: &str = r#"{"message":{"kind":"message","messageId":"m-1","role":"use
 
 /// The root cell `net-guard × a2a-client`: an agent is reached over its member route (its own
 
-
-
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_agent_unit_dials_only_the_address_the_guard_admits() {
     let _one = PUBLISHING.lock().await;
@@ -1395,9 +1331,6 @@ fn chain() -> Vec<busbar_kernel::audit_ring::AuditEntry> {
 
 /// The root cells `audit-chain × a2a`, and the teller steps AUDIT, METER and EXIT over the
 
-
-
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_relayed_agent_unit_is_audited_on_the_chain_and_posts_one_line_once() {
     let _one = PUBLISHING.lock().await;
@@ -1441,7 +1374,6 @@ async fn a_relayed_agent_unit_is_audited_on_the_chain_and_posts_one_line_once() 
 }
 
 /// The teller step ADMIT over the agent door: a caller whose group admits one request is
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_agent_unit_past_its_callers_request_limit_is_refused_before_it_dials() {
@@ -1599,7 +1531,6 @@ async fn malformed_rest_bodies_never_dispatch_or_charge_and_empty_cancel_still_d
 
 /// A NOTIFICATION over the agent door (a JSON-RPC message with no `id`): acknowledged `202`
 
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_agent_notification_is_acknowledged_202_with_no_body_and_dials_nothing() {
     let _one = PUBLISHING.lock().await;
@@ -1622,8 +1553,7 @@ async fn an_agent_notification_is_acknowledged_202_with_no_body_and_dials_nothin
     assert!(!agent.relayed(), "nothing was relayed");
 }
 
-/// SELECT, ONE REACHES (ARCHITECT Q-DEL-A2A-SELECT): an unaddressed unit on the plane's own
-
+/// An unaddressed unit selects the one agent reached by the caller's grant.
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_unaddressed_agent_unit_is_routed_to_the_one_agent_the_grant_reaches() {
@@ -1644,7 +1574,6 @@ async fn an_unaddressed_agent_unit_is_routed_to_the_one_agent_the_grant_reaches(
 }
 
 /// SELECT, SEVERAL REACH: with two approved agents in the caller's grant, the unaddressed unit
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_unaddressed_agent_unit_several_agents_reach_is_refused_naming_them() {
@@ -1714,9 +1643,6 @@ async fn an_unaddressed_agent_unit_no_agent_reaches_is_refused_in_its_1_5_5_word
 
 /// THE GRANT'S REFUSAL, in predev's bytes (1.5.5's `InboundRefusal::NotInScope`: `403`,
 
-
-
-
 fn assert_not_granted(status: StatusCode, body: &str, agent: &str) {
     assert_eq!(status, StatusCode::FORBIDDEN, "the grant's refusal: {body}");
     let doc: serde_json::Value = serde_json::from_str(body).expect("an envelope");
@@ -1730,8 +1656,6 @@ fn assert_not_granted(status: StatusCode, body: &str, agent: &str) {
 }
 
 /// The root cell `catalogue × a2a-server`: a unit addressed to an agent outside the caller's
-
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_agent_unit_outside_the_callers_grant_is_refused_before_it_dials() {
@@ -1750,7 +1674,6 @@ async fn an_agent_unit_outside_the_callers_grant_is_refused_before_it_dials() {
 }
 
 /// The caller's key must be LIVE for busbar to spend its hop on the caller's behalf (predev's
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_agent_unit_from_a_key_that_is_no_longer_live_never_dials() {
@@ -1781,7 +1704,6 @@ async fn an_agent_unit_from_a_key_that_is_no_longer_live_never_dials() {
 
 /// The root cell `disposition × a2a-client`: a relayed unit to an approved agent that has gone
 
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_relayed_agent_unit_to_an_agent_that_is_down_ends_inside_its_unit() {
     let _one = PUBLISHING.lock().await;
@@ -1811,7 +1733,6 @@ async fn a_relayed_agent_unit_to_an_agent_that_is_down_ends_inside_its_unit() {
 }
 
 /// The root cells `breaker-trip` and `breaker-fastfail × a2a-client`: an approved agent that
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_failing_agent_trips_its_breaker_and_the_next_unit_is_refused_before_it_dials() {
@@ -1862,7 +1783,6 @@ struct Counted {
 
 /// Every unit the caller ran, oldest first, as its one audit record carries it: the node keeps no
 
-
 fn caller_counts(s: &Served) -> Vec<Counted> {
     let caller = busbar_kernel_audit::Subject::PrincipalId(s.key.id.clone());
     s.book
@@ -1889,7 +1809,6 @@ fn counted(counts: &Counted, class: &str) -> u64 {
 }
 
 /// The root cells `billed-bytes × a2a-client` and the agent fee unit: a served hop's one line
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_agent_hop_ledgers_the_bodies_it_moved_and_its_fee_unit_once() {
@@ -1919,8 +1838,6 @@ async fn an_agent_hop_ledgers_the_bodies_it_moved_and_its_fee_unit_once() {
 }
 
 /// The root cells `billed-bytes` and the agent fee unit, refused before the socket: every hop
-
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_agent_hop_refused_before_the_socket_counts_no_bytes_and_keeps_no_fee() {
@@ -1987,7 +1904,6 @@ async fn an_agent_hop_refused_before_the_socket_counts_no_bytes_and_keeps_no_fee
 
 /// The agent section's fees: `per_request` is the unit the plane counts, so it validates, and
 
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_agent_sections_per_request_fee_validates_and_per_session_is_refused() {
     let _one = PUBLISHING.lock().await;
@@ -1995,8 +1911,6 @@ async fn an_agent_sections_per_request_fee_validates_and_per_session_is_refused(
     let agent = Agent::start(200, ANSWER).await;
 
     let _s = served(instance, &agent.entry("planner", "1h"), false, None);
-
-
 
     rig::register_linked_protocols();
     let with_fees = |per_request: i64, per_session: i64| {
@@ -2036,11 +1950,6 @@ async fn an_agent_sections_per_request_fee_validates_and_per_session_is_refused(
 
 /// THE STATUS FIRST (COORDINATOR ruling 2026-10-07 on finding A: predev `relay.rs:1813-1819`
 
-
-
-
-
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_agent_answering_protocol_errors_under_a_502_trips_its_breaker() {
     let _one = PUBLISHING.lock().await;
@@ -2077,8 +1986,6 @@ async fn an_agent_answering_protocol_errors_under_a_502_trips_its_breaker() {
 }
 
 /// THE TWIN: an error the protocol defines on a `2xx` is the destination ANSWERING, the work
-
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_agent_answering_protocol_errors_under_a_200_never_trips_its_breaker() {
@@ -2142,16 +2049,6 @@ impl Billed {
 }
 
 /// R2 (ruled; the kernel owns metering): A HOP THE BREAKER REFUSED COUNTS ITS REQUEST AND BILLS
-
-
-
-
-
-
-
-
-
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_hop_the_breaker_refused_counts_its_request_and_bills_no_fee_no_bytes_no_spend() {
@@ -2222,8 +2119,6 @@ fn body_bytes(heard: &str) -> u64 {
 
 /// **N REQUEST BYTES + M RESPONSE BYTES LEDGER N+M `bytes`**, and with no `agents.rate_card` at
 
-
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_hop_ledgers_its_request_and_response_body_bytes_and_no_card_reads_zero() {
     let _one = PUBLISHING.lock().await;
@@ -2264,8 +2159,6 @@ async fn a_hop_ledgers_its_request_and_response_body_bytes_and_no_card_reads_zer
 }
 
 /// **AN `agents.rate_card` PRICES THE BYTES, AND A BUDGET CAP TRIPS ON AGENT TRAFFIC.** One
-
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_agents_card_prices_the_bytes_and_a_budget_cap_trips() {
@@ -2310,8 +2203,6 @@ async fn an_agents_card_prices_the_bytes_and_a_budget_cap_trips() {
 
 /// **`agents.fees.per_request` CHARGES ONCE PER SERVED HOP.** Each hop is admitted under the
 
-
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn agents_fees_per_request_charges_once_per_served_hop() {
     let _one = PUBLISHING.lock().await;
@@ -2341,9 +2232,6 @@ async fn agents_fees_per_request_charges_once_per_served_hop() {
 }
 
 /// **A HOP REFUSED BEFORE THE SOCKET KEEPS NO FEE.** At `agents.fees.per_request: 2`, every hop
-
-
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_hop_refused_before_the_socket_keeps_no_fee() {
@@ -2401,12 +2289,6 @@ async fn a_hop_refused_before_the_socket_keeps_no_fee() {
 
 /// B2 (restored, #42, #77(5)): A PRESENT AGENTS CARD SILENT ABOUT AN AGENT REFUSES THE CONFIG,
 
-
-
-
-
-
-
 #[test]
 fn a_present_agents_card_silent_about_an_agent_refuses_the_config() {
     let folded =
@@ -2453,7 +2335,6 @@ fn a_present_agents_card_silent_about_an_agent_refuses_the_config() {
 
 /// The root cell `egress-auth × a2a-client`: the agent is handed only the credential the egress
 
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_relayed_agent_unit_never_hands_the_agent_the_callers_token() {
     let _one = PUBLISHING.lock().await;
@@ -2479,8 +2360,6 @@ async fn a_relayed_agent_unit_never_hands_the_agent_the_callers_token() {
         "no credential is planned for this member, so none is presented: {head}"
     );
 }
-
-
 
 /// A GET of `path` on the admin router, under the operator credential: its status and body.
 async fn admin_get(s: &Served, path: &str) -> (StatusCode, serde_json::Value) {
@@ -2571,9 +2450,6 @@ fn key_info(issuer: &ed25519_dalek::SigningKey) -> String {
 
 /// AN AGENT ON LOOPBACK PINNED BY ITS SIGNING KEY: it serves the card `card` holds (signed when it
 
-
-
-
 struct Agent {
     port: u16,
     heard: tokio::sync::mpsc::UnboundedReceiver<String>,
@@ -2585,10 +2461,6 @@ struct Agent {
     accepted: Arc<std::sync::atomic::AtomicUsize>,
     down: Arc<std::sync::atomic::AtomicBool>,
     /// `0`: the card is served at the well-known path; `1`: the well-known path redirects to
-
-
-
-
     redirect: Arc<std::sync::atomic::AtomicU8>,
     /// How long the next card fetch takes to answer (the ones after it answer at once).
     card_delay_ms: Arc<std::sync::atomic::AtomicU64>,
@@ -2646,7 +2518,6 @@ impl Agent {
     }
 
     /// The agent every constructor starts: each relayed request answered at the status
-
 
     async fn start_core(
         status_of: Arc<dyn Fn(&str) -> u16 + Send + Sync>,
@@ -2920,17 +2791,7 @@ impl AgentTls {
     }
 }
 
-/// THE TRANSPORT PIN THROUGH THE DOOR (ARCHITECT 2026-10-03, L3B round-4 TRANSPORT PIN:
-
-
-
-
-
-
-
-
-
-
+/// A certificate-SPKI agent is served after approval and refused once its key changes.
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_cert_spki_agent_is_observed_approved_served_and_refused_once_its_key_changes() {
@@ -2981,8 +2842,7 @@ async fn a_cert_spki_agent_is_observed_approved_served_and_refused_once_its_key_
     );
 }
 
-/// THE OPERATOR'S CEREMONY for agent `name` (ARCHITECT Q-L3B-VERBS, over the kernel's trust
-
+/// Connect and approve the named agent through the administrative trust endpoints.
 
 async fn approve(s: &Served, name: &str) {
     let (status, preview) = admin(s, &format!("/agents/{name}/connect"), "").await;
@@ -3010,24 +2870,6 @@ async fn decide_key(s: &Served, name: &str, decision: &str) -> (StatusCode, serd
 }
 
 /// The root cells `trust-pinning × a2a-client` and `trust-pinning × a2a-server`, on the KERNEL'S
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_kernel_trust_book_pins_an_agent_card_and_the_relay_serves_only_the_approved_one() {
@@ -3078,7 +2920,6 @@ async fn the_kernel_trust_book_pins_an_agent_card_and_the_relay_serves_only_the_
     untrusted(status, &body, "planner", "Pending");
     assert!(!agent.relayed(), "a refused unit is never dialled");
 
-
     let (status, approved) = admin(
         &s,
         "/agents/planner/approve",
@@ -3102,7 +2943,6 @@ async fn the_kernel_trust_book_pins_an_agent_card_and_the_relay_serves_only_the_
         "its card was re-verified on call"
     );
 
-
     let (status, revoked) = decide_key(&s, "planner", "revoke").await;
     assert_eq!(status, StatusCode::OK, "{revoked}");
     let (status, body) = answered(&s.router, send("planner")).await;
@@ -3113,7 +2953,6 @@ async fn the_kernel_trust_book_pins_an_agent_card_and_the_relay_serves_only_the_
     let (status, body) = answered(&s.router, send("planner")).await;
     assert_eq!(status, StatusCode::OK, "approved on /trust, served: {body}");
     assert!(agent.relayed(), "dialled again");
-
 
     agent.reissue("plans the work and forwards it on");
     let fetched = agent.fetches();
@@ -3147,8 +2986,6 @@ async fn the_kernel_trust_book_pins_an_agent_card_and_the_relay_serves_only_the_
     assert_eq!(drifted["state"], "quarantined", "{drifted}");
     assert_ne!(drifted["fingerprint"], fingerprint.as_str(), "{drifted}");
 
-
-
     let (_, state) = trust_key(&s, "planner").await;
     assert_eq!(state, "drifted", "the book holds the quarantine");
     let (status, stale) = admin(
@@ -3162,7 +2999,6 @@ async fn the_kernel_trust_book_pins_an_agent_card_and_the_relay_serves_only_the_
     approve(&s, "planner").await;
     let (status, body) = answered(&s.router, send("planner")).await;
     assert_eq!(status, StatusCode::OK, "re-approved, it is served: {body}");
-
 
     let (status, captured) = admin(&s, "/agents/scout/connect", "").await;
     assert_eq!(status, StatusCode::OK, "{captured}");
@@ -3192,15 +3028,6 @@ async fn the_kernel_trust_book_pins_an_agent_card_and_the_relay_serves_only_the_
 
 /// THE LOOK-ALIKE, ONCE APPROVED (moved here from busbar's root `qa_a2a.rs`, where it ran the
 
-
-
-
-
-
-
-
-
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_approved_agents_card_resigned_by_another_key_stops_it_being_served() {
     let _one = PUBLISHING.lock().await;
@@ -3218,7 +3045,6 @@ async fn an_approved_agents_card_resigned_by_another_key_stops_it_being_served()
     );
     assert!(body.contains("m-far"), "the far agent's answer: {body}");
     assert!(agent.relayed(), "the approved agent was dialled");
-
 
     agent.resign_with(ed25519_dalek::SigningKey::from_bytes(&[9u8; 32]));
     let fetched = agent.fetches();
@@ -3241,7 +3067,6 @@ async fn an_approved_agents_card_resigned_by_another_key_stops_it_being_served()
 }
 
 /// SINGLE-FLIGHT VERIFY-ON-CALL (the engine's `VerifyGate`): two units due on one agent at once
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn concurrent_units_due_on_one_agent_share_one_card_look() {
@@ -3267,8 +3092,6 @@ async fn concurrent_units_due_on_one_agent_share_one_card_look() {
 }
 
 /// THE CARD FETCH'S GUARD AND REDIRECTS, as 1.5.5 fetched a card: a card behind a redirect is
-
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_card_fetch_follows_redirects_and_is_guarded_in_its_1_5_5_words() {
@@ -3321,11 +3144,6 @@ async fn a_card_fetch_follows_redirects_and_is_guarded_in_its_1_5_5_words() {
 }
 
 /// A REDIRECT IS A URL A STRANGER CHOSE, judged from scratch at the hop that names it: a card
-
-
-
-
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_card_fetch_redirected_at_cloud_metadata_is_refused_at_the_hop_that_names_it() {
@@ -3381,9 +3199,6 @@ async fn a_card_fetch_redirected_at_cloud_metadata_is_refused_at_the_hop_that_na
 
 /// A LEGAL CHAIN IS FOLLOWED HOP BY HOP: a card behind two redirects (the well-known path to
 
-
-
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn every_hop_of_a_legal_chain_is_followed_to_the_card() {
     use std::sync::atomic::Ordering;
@@ -3400,9 +3215,6 @@ async fn every_hop_of_a_legal_chain_is_followed_to_the_card() {
 }
 
 /// THE CHECK ORDER, as 1.5.5's admission kept it: the caller's grant, then the agent's trust,
-
-
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_request_the_card_does_not_fit_is_judged_after_the_trust_gate() {
@@ -3435,11 +3247,7 @@ async fn a_request_the_card_does_not_fit_is_judged_after_the_trust_gate() {
     assert!(!agent.relayed(), "an unfit request is never dialled");
 }
 
-/// THE GATE (ARCHITECT Q-DEL-A2A-GATE: refused -> audits the refusal; nothing was charged): a
-
-
-
-
+/// A gate refusal is audited and uncharged; the caller's grant is checked before agent standing.
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_unit_to_an_agent_that_is_not_serving_is_refused_after_its_grant_and_charges_nothing() {
@@ -3482,9 +3290,7 @@ async fn a_unit_to_an_agent_that_is_not_serving_is_refused_after_its_grant_and_c
     assert_eq!(admitted(&s), 0, "nothing charged");
 }
 
-/// SCOPE AND STANDING (ARCHITECT Q-DEL-A2A-SCOPE-TRUST): an unaddressed unit is routed over the
-
-
+/// An unaddressed unit routes to the one granted agent that is serving.
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_unaddressed_unit_is_routed_to_the_one_granted_agent_that_serves() {
@@ -3508,8 +3314,7 @@ async fn an_unaddressed_unit_is_routed_to_the_one_granted_agent_that_serves() {
     assert!(agent.relayed(), "the approved agent was dialled");
 }
 
-/// A CONFIG APPLY (ARCHITECT Q-DEL-A2A-APPLY) bumps the door's refresh generation and the door
-
+/// A config apply advances the refresh generation while preserving operator approval.
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_config_apply_keeps_the_operators_approval() {
@@ -3624,9 +3429,7 @@ async fn a_config_apply_keeps_the_operators_approval() {
     assert!(replacement.relayed());
 }
 
-/// THE CARD FETCH'S GUARD WORDS, as 1.5.5 printed them (ARCHITECT Q-DEL-A2A-GUARD-WORDS): a
-
-
+/// Card-fetch refusals preserve the 1.5.5 error text regardless of the deployment's private-address stance.
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_card_fetch_is_refused_in_1_5_5_words_whatever_the_deployment_private_stance() {
@@ -3679,7 +3482,6 @@ async fn a_card_fetch_is_refused_in_1_5_5_words_whatever_the_deployment_private_
         "the guard refused before opening a socket"
     );
 
-
     let predev = match tokio::net::lookup_host("card-host.invalid:0").await {
         Ok(_) => panic!("a `.invalid` name never resolves"),
         Err(e) => e.to_string(),
@@ -3691,8 +3493,6 @@ async fn a_card_fetch_is_refused_in_1_5_5_words_whatever_the_deployment_private_
 }
 
 /// A CARD FETCH WHOSE FAR END CLOSES BEFORE REPLYING, in predev's exact words: its engine's
-
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_card_fetch_whose_far_end_closes_unanswered_fails_in_predev_words() {
@@ -3736,10 +3536,7 @@ async fn a_card_fetch_whose_far_end_closes_unanswered_fails_in_predev_words() {
     );
 }
 
-/// A CARD FETCH THE CONNECTION FAILS, in predev's exact words (ARCHITECT
-
-
-
+/// A failed card-fetch connection preserves the recorded client-visible error text.
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_card_fetch_to_a_closed_port_fails_in_predev_words() {
@@ -3774,14 +3571,6 @@ async fn a_card_fetch_to_a_closed_port_fails_in_predev_words() {
 }
 
 /// THE AGENT DOOR'S TRUST VERBS' DECLARED ERRORS, driven through the admin router by the door's
-
-
-
-
-
-
-
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_agent_doors_trust_verbs_refuse_in_their_declared_taxonomy() {
@@ -3830,9 +3619,7 @@ async fn the_agent_doors_trust_verbs_refuse_in_their_declared_taxonomy() {
     );
 }
 
-/// CANCELLATION IS A WAKE (ARCHITECT Q-DEL-A2A-TIMED-WAKE): the unit holding an agent's card
-
-
+/// Abandoning a card lookup wakes its waiters immediately.
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_abandoned_card_look_wakes_its_waiters_at_once() {
@@ -3867,9 +3654,6 @@ async fn an_abandoned_card_look_wakes_its_waiters_at_once() {
     );
     callback.arm_after_owner_held();
 
-
-
-
     let mut waiting = Box::pin(answered(
         &s.router,
         rpc("planner", "GetExtendedAgentCard", "{}", Some(&s.token)),
@@ -3901,16 +3685,7 @@ async fn an_abandoned_card_look_wakes_its_waiters_at_once() {
     );
 }
 
-
-
 /// AN UNREACHABLE CARD AT VERIFY FAILS CLOSED ON THE CALL PATH (the engine's
-
-
-
-
-
-
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_unreachable_card_at_verify_fails_closed_on_the_call_path() {
@@ -3927,7 +3702,6 @@ async fn an_unreachable_card_at_verify_fails_closed_on_the_call_path() {
         "the approved agent is served: {body}"
     );
     assert!(agent.relayed(), "the approved agent was dialled");
-
 
     agent.go_down();
     let (status, body) = answered(&s.router, send()).await;
@@ -3950,14 +3724,11 @@ async fn an_unreachable_card_at_verify_fails_closed_on_the_call_path() {
     );
     assert!(!agent.relayed(), "the refused hop never reached the agent");
 
-
-
     let (_, state) = trust_key(&s, "planner").await;
     assert_eq!(
         state, "same",
         "the kernel's last verdict is untouched by an unreachable card"
     );
-
 
     agent.down.store(false, std::sync::atomic::Ordering::SeqCst);
     let (status, body) = answered(&s.router, send()).await;
@@ -3966,10 +3737,6 @@ async fn an_unreachable_card_at_verify_fails_closed_on_the_call_path() {
 }
 
 /// A CARD SIGNED BY THE WRONG KEY IS REFUSED AND RECORDED AS A FAILED CONTACT (the engine's
-
-
-
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_card_signed_by_the_wrong_key_is_refused_and_recorded_as_a_failed_contact() {
@@ -4016,10 +3783,6 @@ async fn a_card_signed_by_the_wrong_key_is_refused_and_recorded_as_a_failed_cont
 }
 
 /// THE LEGACY WELL-KNOWN PATH IS TRIED ONLY WHEN THE CANONICAL ONE SERVED NOTHING (the engine's
-
-
-
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_legacy_well_known_path_is_tried_only_when_the_canonical_one_served_nothing() {
@@ -4108,18 +3871,13 @@ async fn the_legacy_well_known_path_is_tried_only_when_the_canonical_one_served_
     );
 }
 
-
-
-
 /// The kernel's hook double behind the `test-hook` alias (OWNER 2026-10-03, no test plugins):
-
 
 fn hook_env() -> busbar_kernel::hooks::HookEnv {
     rig::hook_env(&["test-hook"], rig::NeedLevel::Rw, rig::NeedLevel::Ro)
 }
 
 /// A `hooks:` definition on the kernel's hook double, as an operator writes it, its `prompt:` grant
-
 
 fn hook_def(prompt: &str, settings: serde_json::Value) -> serde_json::Value {
     serde_json::json!({
@@ -4157,8 +3915,6 @@ fn hooked(instance: &'static str, agent: &Agent, name: &str, def: serde_json::Va
 }
 
 /// THE GATE (the engine's `agents_hooks_reject_all_rejects_a_message_send`): a gate attached to
-
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_agents_gate_refuses_a_submission_in_its_own_words_before_the_hop() {
@@ -4237,7 +3993,6 @@ async fn the_messages_own_parts_reach_the_agents_gate() {
 
 /// THE REWRITE (the engine's `a_rewrite_hook_edits_the_submission_params_before_the_hop`): a
 
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_agents_rewrite_replaces_the_params_the_agent_receives() {
     let _one = PUBLISHING.lock().await;
@@ -4276,9 +4031,6 @@ async fn an_agents_rewrite_replaces_the_params_the_agent_receives() {
     );
 }
 
-
-
-
 /// A `GET` of `path` on the data router, bearing `token` or none.
 fn get(path: &str, token: Option<&str>) -> axum::http::Request<axum::body::Body> {
     let mut req = axum::http::Request::builder().method("GET").uri(path);
@@ -4288,8 +4040,7 @@ fn get(path: &str, token: Option<&str>) -> axum::http::Request<axum::body::Body>
     req.body(axum::body::Body::empty()).expect("a request")
 }
 
-/// THE AGENT DOOR'S BREAKER FACT (ARCHITECT Q4): its linked row's `declares` states that one
-
+/// The door declares that a breaker cell refuses on a trip, not below the trip threshold.
 
 #[test]
 fn the_agent_door_states_a_cell_refuses_on_a_trip_and_nothing_less() {
@@ -4374,7 +4125,6 @@ async fn a_fronted_agents_card_is_served_rewritten_through_busbar_behind_its_gra
         "the backend authority is never published: {body}"
     );
 
-
     assert_eq!(
         card["security"],
         serde_json::json!([{ "busbarA2aInbound": [] }])
@@ -4389,7 +4139,6 @@ async fn a_fronted_agents_card_is_served_rewritten_through_busbar_behind_its_gra
 }
 
 /// A CARD READ IS NOT SCREENED: with a gate attached to the agent that refuses every
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_gated_agents_card_is_still_served_and_its_submission_refused() {
@@ -4452,8 +4201,6 @@ async fn the_extended_card_on_the_planes_endpoint_names_the_callers_agents() {
 }
 /// A unit addressed to an agent nothing registered is a `404`, never dialled and charging
 
-
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_agent_unit_to_an_unregistered_agent_is_a_404() {
     let _one = PUBLISHING.lock().await;
@@ -4475,11 +4222,6 @@ async fn an_agent_unit_to_an_unregistered_agent_is_a_404() {
 }
 
 /// AN UNKNOWN AGENT HAS NO SCOPE TO BE GRANTED ON: a key whose grant reaches no agent at all,
-
-
-
-
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_agent_unit_from_a_restricted_key_to_an_unregistered_agent_is_a_404() {
@@ -4509,10 +4251,6 @@ async fn an_agent_unit_from_a_restricted_key_to_an_unregistered_agent_is_a_404()
 }
 
 /// A tripped agent refuses a fresh submission with `503` and a `Retry-After` of at least one
-
-
-
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_tripped_agent_refuses_a_fresh_submission_with_503_and_retry_after() {
@@ -4579,7 +4317,6 @@ async fn a_tripped_agent_refuses_a_fresh_submission_with_503_and_retry_after() {
 
 /// The id of the task a breaker refusal names, read where a conformant client reads it: the
 
-
 fn refused_task_id(body: &str) -> String {
     let doc: serde_json::Value = serde_json::from_str(body).expect("a refusal");
     doc.pointer("/error/data")
@@ -4594,10 +4331,6 @@ fn refused_task_id(body: &str) -> String {
 }
 
 /// THE `rejected` HALF of predev's `breaker_fastfail_tests.rs::battery` (lines 329-338), on one
-
-
-
-
 
 async fn rejected_battery(
     s: &Served,
@@ -4657,9 +4390,6 @@ async fn rejected_battery(
     assert!(!agent(), "[{line}] a tripped agent is never dialled");
     let task = refused_task_id(&body);
 
-
-
-
     let (status, listed) =
         answered(&s.router, rpc("planner", "ListTasks", "{}", Some(&s.token))).await;
     assert_eq!(status, StatusCode::OK, "[{line}] {listed}");
@@ -4676,9 +4406,6 @@ async fn rejected_battery(
         state.contains("rejected"),
         "[{line}] a breaker refusal is `rejected`, never `failed`: {row}"
     );
-
-
-
 
     let get = format!(r#"{{"id":"{task}"}}"#);
     let response = {
@@ -4730,7 +4457,6 @@ async fn a_tripped_agent_rejects_fresh_submissions_on_the_jsonrpc_binding() {
 
 /// Ported from busbar-a2a a2a/tests/breaker_fastfail_tests.rs::a_tripped_agent_rejects_fresh_submissions_on_the_httpjson_binding
 
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_tripped_agent_rejects_fresh_submissions_on_the_httpjson_binding() {
     let _one = PUBLISHING.lock().await;
@@ -4749,7 +4475,6 @@ async fn a_tripped_agent_rejects_fresh_submissions_on_the_httpjson_binding() {
 }
 
 /// Ported from busbar-a2a a2a/tests/breaker_fastfail_tests.rs::a_tripped_agent_rejects_fresh_submissions_on_the_grpc_binding
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_tripped_agent_rejects_fresh_submissions_on_the_grpc_binding() {
@@ -4776,8 +4501,6 @@ async fn a_tripped_agent_rejects_fresh_submissions_on_the_grpc_binding() {
 }
 
 /// THE EXTENDED CARD IS METERED: busbar answers it out of its own state, and it is still one
-
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_extended_card_is_metered_as_one_request_and_no_tokens() {
@@ -4806,10 +4529,6 @@ async fn the_extended_card_is_metered_as_one_request_and_no_tokens() {
     assert_eq!(usage.requests, 1, "one call, one request accrual");
     assert_eq!(usage.tokens, 0, "a locally answered verb accrues no tokens");
 
-
-
-
-
     let lanes: Vec<String> = s
         .gov
         .bucket_model_tokens(
@@ -4831,8 +4550,6 @@ async fn the_extended_card_is_metered_as_one_request_and_no_tokens() {
         "the extended card is busbar's, never relayed"
     );
 }
-
-
 
 use busbar_contract::records::{ScopeRef, VirtualKey};
 
@@ -5008,10 +4725,6 @@ fn two_agents(agent: &Agent) -> String {
 
 /// Ported from busbar-a2a ingress_tests.rs::no_agents_configured_means_no_route_in_the_table_at_all.
 
-
-
-
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_deployment_writing_no_agents_section_mounts_no_agent_route_at_all() {
     let _one = PUBLISHING.lock().await;
@@ -5059,12 +4772,6 @@ async fn a_deployment_writing_no_agents_section_mounts_no_agent_route_at_all() {
 }
 
 /// Ported from busbar-a2a plane_tests.rs::a_section_carrying_only_the_reserved_keys_is_still_no_plane.
-
-
-
-
-
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_section_carrying_only_the_reserved_keys_is_still_no_plane() {
@@ -5122,8 +4829,6 @@ async fn a_section_carrying_only_the_reserved_keys_is_still_no_plane() {
 
 /// Ported from busbar-a2a ingress_tests.rs::an_anonymous_caller_is_refused_and_told_where_to_get_a_token.
 
-
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_anonymous_caller_is_refused_and_told_where_to_get_a_token() {
     use tower::ServiceExt as _;
@@ -5156,9 +4861,6 @@ async fn an_anonymous_caller_is_refused_and_told_where_to_get_a_token() {
 }
 
 /// Ported from busbar-a2a ingress_tests.rs::the_metadata_document_advertises_the_audience_the_verifier_demands.
-
-
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_metadata_document_advertises_the_audience_the_verifier_demands() {
@@ -5201,10 +4903,6 @@ async fn the_metadata_document_advertises_the_audience_the_verifier_demands() {
 }
 
 /// Ported from busbar-a2a inbound_tests.rs::a_credential_of_another_kind_is_refused_with_401_and_never_names_a_backend.
-
-
-
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_credential_of_another_kind_is_refused_with_401_and_never_names_a_backend() {
@@ -5260,10 +4958,6 @@ async fn a_credential_of_another_kind_is_refused_with_401_and_never_names_a_back
 
 /// Ported from busbar-a2a relay_stream_tests.rs::the_callers_busbar_key_is_absent_from_the_stream_wire_too.
 
-
-
-
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_callers_busbar_key_is_absent_from_the_stream_wire_too() {
     let _one = PUBLISHING.lock().await;
@@ -5310,8 +5004,6 @@ async fn the_callers_busbar_key_is_absent_from_the_stream_wire_too() {
 
 /// Ported from busbar-a2a relay_stream_tests.rs::a_stream_hop_that_fails_before_its_first_event_is_a_busbar_attributed_error.
 
-
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_stream_hop_that_fails_before_its_first_event_is_a_busbar_attributed_error() {
     let _one = PUBLISHING.lock().await;
@@ -5326,9 +5018,6 @@ async fn a_stream_hop_that_fails_before_its_first_event_is_a_busbar_attributed_e
     agent.streams();
     let s = served(instance, &agent.entry("planner", "1h"), false, None);
     approve(&s, "planner").await;
-
-
-
 
     let (status, body) = answered(
         &s.router,
@@ -5354,9 +5043,6 @@ async fn a_stream_hop_that_fails_before_its_first_event_is_a_busbar_attributed_e
 }
 
 /// Ported from busbar-a2a catalogue_tests.rs::scope_decides_visibility_and_a_pool_only_key_sees_nothing.
-
-
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn scope_decides_visibility_and_a_pool_only_key_sees_nothing() {
@@ -5388,9 +5074,6 @@ async fn scope_decides_visibility_and_a_pool_only_key_sees_nothing() {
 }
 
 /// Ported from busbar-a2a catalogue_tests.rs::no_principal_sees_another_principals_agents.
-
-
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn no_principal_sees_another_principals_agents() {
@@ -5424,21 +5107,6 @@ async fn no_principal_sees_another_principals_agents() {
 }
 
 /// Ported from busbar-a2a catalogue_tests.rs::a_key_that_is_no_longer_live_sees_no_agent_at_all.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_key_that_is_no_longer_live_sees_no_agent_at_all() {
@@ -5502,11 +5170,6 @@ async fn a_key_that_is_no_longer_live_sees_no_agent_at_all() {
 }
 
 /// Ported from busbar-a2a inbound_jws_tests.rs::the_seam_refuses_a_wrong_key_and_a_malformed_key_exactly_as_the_free_function
-
-
-
-
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_card_signed_by_another_key_than_the_pinned_one_is_refused_and_never_served() {
@@ -5584,10 +5247,6 @@ async fn a_card_signed_by_another_key_than_the_pinned_one_is_refused_and_never_s
 
 /// THE AGENT'S OWN CREDENTIAL THROUGH THE DOOR (`upstream_credential:`): busbar's credential
 
-
-
-
-
 mod upstream_credential {
     use super::*;
 
@@ -5596,7 +5255,6 @@ mod upstream_credential {
     const WORKING: &str = r#"{"jsonrpc":"2.0","id":1,"result":{"kind":"task","id":"far-1","contextId":"far-c","status":{"state":"working"}}}"#;
 
     /// AN AGENT THAT KEEPS EVERY REQUEST IT IS SENT, WHOLE — its card fetches included: it
-
 
     struct Recorded {
         port: u16,
@@ -5715,9 +5373,6 @@ mod upstream_credential {
     }
 
     /// `placement: bearer`: the agent's relayed hop, its extended card read through the relay,
-
-
-
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn the_agents_own_bearer_rides_its_hops_and_never_its_card_fetches() {
@@ -5867,13 +5522,6 @@ mod upstream_credential {
 
     /// EACH AGENT'S OWN CREDENTIAL, NEVER ITS NEIGHBOUR'S (predev `creds.rs` `Lease::header_for`:
 
-
-
-
-
-
-
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn agents_sharing_an_origin_each_present_only_their_own_credential() {
         let _one = PUBLISHING.lock().await;
@@ -5955,7 +5603,6 @@ mod upstream_credential {
 
     /// ROTATION: the secret's source changes between two hops; a hop before the next refresh
 
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_rotated_secret_is_presented_on_the_first_hop_after_the_next_refresh() {
         let _one = PUBLISHING.lock().await;
@@ -6008,13 +5655,6 @@ mod upstream_credential {
     }
 
     /// A CREDENTIAL THAT STOPS RESOLVING (its secret file removed) refuses every hop after the
-
-
-
-
-
-
-
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_vanished_secret_refuses_each_hop_after_the_next_refresh() {
@@ -6069,8 +5709,6 @@ mod upstream_credential {
             } }),
             "{body}"
         );
-
-
 
         let (status, body) = answered(
             &s.router,
@@ -6155,10 +5793,6 @@ mod upstream_credential {
     }
 
     /// A SECRET'S SOURCE NEVER REACHES A CALLER (the root's secret-source scan, coordinator ruling
-
-
-
-
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_credential_that_stops_resolving_reaches_the_caller_without_its_source() {
@@ -6246,8 +5880,6 @@ fn grpc_working_answer() -> Vec<u8> {
 
 /// A gRPC AGENT ON LOOPBACK, pinned by its signing key: its card (naming only the gRPC binding)
 
-
-
 struct GrpcAgent {
     port: u16,
     heard: tokio::sync::mpsc::UnboundedReceiver<(String, Vec<u8>)>,
@@ -6266,8 +5898,6 @@ impl GrpcAgent {
     }
 
     /// [`GrpcAgent::ending`], each rpc answered at the HTTP status `http` (any other than `200`
-
-
 
     async fn serving(
         answer: Vec<u8>,
@@ -6377,11 +6007,6 @@ impl GrpcAgent {
 
 /// THE DOOR DIALS A gRPC AGENT (the engine's `grpc_client_issues_send_message`, end to end
 
-
-
-
-
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_agent_whose_card_names_only_grpc_is_dialled_over_grpc() {
     let _one = PUBLISHING.lock().await;
@@ -6422,17 +6047,7 @@ async fn an_agent_whose_card_names_only_grpc_is_dialled_over_grpc() {
     );
 }
 
-/// AN A2A HOP RIDES THE HOST'S gRPC NEED ON THE gRPC TRANSPORT, END TO END (status row 174): the
-
-
-
-
-
-
-
-
-
-
+/// An A2A hop uses the host's declared gRPC need and the gRPC transport end to end.
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_a2a_hop_rides_the_hosts_grpc_need_to_an_in_process_grpc_agent() {
@@ -6448,8 +6063,6 @@ async fn an_a2a_hop_rides_the_hosts_grpc_need_to_an_in_process_grpc_agent() {
         rpc("planner", "SendMessage", params, Some(&s.token)),
     )
     .await;
-
-
 
     let (path, sent) = agent
         .heard
@@ -6470,7 +6083,6 @@ async fn an_a2a_hop_rides_the_hosts_grpc_need_to_an_in_process_grpc_agent() {
         "the caller's one text part"
     );
 
-
     assert_eq!(status, StatusCode::OK, "{body}");
     let doc: serde_json::Value = serde_json::from_str(&body).expect("an answer");
     assert_eq!(doc["id"], 1, "{body}");
@@ -6478,9 +6090,6 @@ async fn an_a2a_hop_rides_the_hosts_grpc_need_to_an_in_process_grpc_agent() {
         doc["result"]["task"]["status"]["state"], "TASK_STATE_WORKING",
         "{body}"
     );
-
-
-
 
     let opened = s.riding.opened();
     let &(owner, need) = opened
@@ -6504,10 +6113,6 @@ async fn an_a2a_hop_rides_the_hosts_grpc_need_to_an_in_process_grpc_agent() {
 }
 
 /// A gRPC CALLER IS ANSWERED THROUGH ITS STREAM'S FRAMER (SEAM-4l): `SendMessage` over the gRPC
-
-
-
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_grpc_callers_send_message_is_answered_ok_with_its_status_in_the_trailers() {
@@ -6584,10 +6189,6 @@ async fn a_grpc_callers_send_message_is_answered_ok_with_its_status_in_the_trail
 
 /// A gRPC CALL REFUSED BEFORE ITS LINE WAS READ IS REFUSED ON THE gRPC LINE: a `SendMessage`
 
-
-
-
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_grpc_call_naming_a_version_this_endpoint_does_not_speak_is_unimplemented() {
     use http_body_util::BodyExt as _;
@@ -6639,22 +6240,12 @@ async fn a_grpc_call_naming_a_version_this_endpoint_does_not_speak_is_unimplemen
 
 /// A gRPC CALL THAT ENDS IN AN ERROR BEFORE ANY MESSAGE CLOSES TRAILERS-ONLY, in predev's bytes:
 
-
-
-
-
-
-
-
-
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_grpc_call_refused_before_any_message_closes_trailers_only_as_predev() {
     use http_body_util::BodyExt as _;
     use tower::ServiceExt as _;
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-grpc-trailers-only";
-
 
     let mut agent = Agent::start(
         200,
@@ -6723,16 +6314,6 @@ async fn a_grpc_call_refused_before_any_message_closes_trailers_only_as_predev()
 
 /// MONEY (this cell touches money: it reads the units' lines on the node's book). A RELAYED
 
-
-
-
-
-
-
-
-
-
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_grpc_hop_ledgers_predevs_bytes_and_a_record_served_answer_none() {
     let _one = PUBLISHING.lock().await;
@@ -6766,9 +6347,6 @@ async fn a_grpc_hop_ledgers_predevs_bytes_and_a_record_served_answer_none() {
     .await;
     assert_eq!(status, StatusCode::OK, "answered from the records: {body}");
 
-
-
-
     while let Ok((path, sent)) = agent.heard.try_recv() {
         assert!(
             path.ends_with("/ListTasks"),
@@ -6785,13 +6363,7 @@ async fn a_grpc_hop_ledgers_predevs_bytes_and_a_record_served_answer_none() {
     );
 }
 
-/// A gRPC AGENT'S ERROR STATUS IS ITS ANSWER (`BUSBAR-1.6.0.md` l.394, l.747; the coordinator's
-
-
-
-
-
-
+/// An agent's final gRPC error status remains its answer.
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_grpc_agents_error_status_is_relayed_as_the_error_it_binds_and_never_trips_it() {
@@ -6832,7 +6404,6 @@ async fn a_grpc_agents_error_status_is_relayed_as_the_error_it_binds_and_never_t
 const FAR_TASK: &str = "far-task";
 
 /// An agent's answer to `request` (its whole text) for the port cells: a send is answered
-
 
 fn far_answer(request: &str, send_state: &str, listed_state: &str) -> String {
     let originated = |result: serde_json::Value| {
@@ -6920,7 +6491,6 @@ fn push(token: &str, state: &str) -> axum::http::Request<axum::body::Body> {
 
 /// One task's ending pushed by the agent and delivered by busbar to the caller's own https webhook
 
-
 async fn delivered_within(
     s: &Served,
     agent: &mut Agent,
@@ -6957,11 +6527,6 @@ async fn delivered_within(
 
 /// **THE OPERATOR'S `agent_push.ca` IS WHAT A DELIVERY TRUSTS ON TOP OF THE PUBLIC ROOTS**
 
-
-
-
-
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_delivery_to_a_webhook_under_the_operators_agent_push_ca_is_made() {
     let _one = PUBLISHING.lock().await;
@@ -6984,7 +6549,6 @@ async fn a_delivery_to_a_webhook_under_the_operators_agent_push_ca_is_made() {
 }
 
 /// **A WEBHOOK UNDER A CA THE OPERATOR DID NOT WRITE IS REFUSED**: `agent_push.ca` names another
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_delivery_to_a_webhook_under_another_ca_is_refused() {
@@ -7017,7 +6581,6 @@ async fn a_delivery_to_a_webhook_under_another_ca_is_refused() {
 
 /// **NO `agent_push:` SECTION: A DELIVERY TRUSTS THE PUBLIC ROOTS ALONE**, as before the section
 
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn without_an_agent_push_section_a_delivery_trusts_the_public_roots_alone() {
     let _one = PUBLISHING.lock().await;
@@ -7047,7 +6610,6 @@ async fn without_an_agent_push_section_a_delivery_trusts_the_public_roots_alone(
 }
 
 /// **AN `agent_push.ca` THAT IS NO TRUST ANCHOR REFUSES THE BOOT**, naming the key: the host
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_malformed_agent_push_ca_refuses_the_boot() {
@@ -7086,13 +6648,6 @@ async fn a_malformed_agent_push_ca_refuses_the_boot() {
 
 /// **AN APPLY CARRYING A MALFORMED `agent_push.ca` IS REFUSED, AND DELIVERIES KEEP THE PREVIOUS
 
-
-
-
-
-
-
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_apply_carrying_a_malformed_agent_push_ca_is_refused_and_deliveries_keep_the_anchor() {
     let _one = PUBLISHING.lock().await;
@@ -7108,8 +6663,6 @@ async fn an_apply_carrying_a_malformed_agent_push_ca_is_refused_and_deliveries_k
         vec!["127.0.0.1".to_string()],
         Some(pem_of(&tls.root)),
     );
-
-
 
     rig::register_door(door(), instance).expect("the door binds and folds");
     let text = format!(
@@ -7141,7 +6694,6 @@ async fn an_apply_carrying_a_malformed_agent_push_ca_is_refused_and_deliveries_k
         "the apply is refused in the boot's words: {refusal}"
     );
 
-
     let delivered = delivered_within(&s, &mut agent, &mut hook, std::time::Duration::from_secs(2))
         .await
         .expect("the previous anchor still delivers");
@@ -7149,7 +6701,6 @@ async fn an_apply_carrying_a_malformed_agent_push_ca_is_refused_and_deliveries_k
 }
 
 /// **A DELIVERY REACHES THE WEBHOOK EXACTLY ONCE** (R-PUSH, coordinator round 2): the queued
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_pushed_state_reaches_the_callers_own_webhook_exactly_once() {
@@ -7219,10 +6770,6 @@ async fn a_pushed_state_reaches_the_callers_own_webhook_exactly_once() {
 }
 
 /// **A TRANSITION BUSBAR LEARNS ON A REFRESH REACHES THE CALLER'S WEBHOOK AT ONCE.** The agent
-
-
-
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_refreshed_transition_reaches_the_callers_own_webhook_at_once() {
@@ -7298,7 +6845,6 @@ async fn listed_state(s: &Served, task: &str) -> String {
 
 /// `the_refreshed_state_reaches_the_callers_own_list` (the engine's client-leg cell): the agent
 
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_refreshed_state_reaches_the_callers_own_list() {
     let _one = PUBLISHING.lock().await;
@@ -7348,7 +6894,6 @@ async fn a_list_with_no_open_task_of_this_callers_makes_no_hop() {
 
 /// `a_terminal_task_is_not_armed_at_the_backend` (the engine's pushback cell): the caller's own
 
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_terminal_task_is_not_armed_at_the_backend() {
     let _one = PUBLISHING.lock().await;
@@ -7381,7 +6926,6 @@ async fn a_terminal_task_is_not_armed_at_the_backend() {
 }
 
 /// `a_token_is_not_spent_by_being_used_while_the_task_is_live` (the engine's pushback cell):
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_token_is_not_spent_by_being_used_while_the_task_is_live() {
@@ -7416,7 +6960,6 @@ async fn a_token_is_not_spent_by_being_used_while_the_task_is_live() {
 
 /// `a_token_for_a_task_that_has_ended_authorises_nothing` (the engine's pushback cell): the
 
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_token_for_a_task_that_has_ended_authorises_nothing() {
     let _one = PUBLISHING.lock().await;
@@ -7450,9 +6993,6 @@ async fn a_token_for_a_task_that_has_ended_authorises_nothing() {
     }
 }
 
-
-
-
 /// The status and the whole JSON document `req` is answered with.
 async fn document(
     s: &Served,
@@ -7465,10 +7005,6 @@ async fn document(
 }
 
 /// Ported from busbar-a2a a2a/tests/local_tests.rs::a_delete_whose_durable_clear_fails_keeps_the_config_and_returns_the_error
-
-
-
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_delete_whose_durable_clear_fails_keeps_the_config_and_returns_the_error() {
@@ -7514,7 +7050,6 @@ async fn a_delete_whose_durable_clear_fails_keeps_the_config_and_returns_the_err
         ),
         "a delete whose durable clear failed answers the engine's internal error, never OK"
     );
-
 
     *s.refuse.lock().expect("unpoisoned") = None;
     let (status, doc) = document(
@@ -7565,7 +7100,6 @@ async fn a_delete_whose_durable_clear_fails_keeps_the_config_and_returns_the_err
 }
 
 /// A REGISTRATION THE STORE REFUSES is not acknowledged: predev's internal error, `500` with
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_registration_the_store_refuses_answers_the_engines_internal_error() {
@@ -7618,9 +7152,6 @@ async fn a_registration_the_store_refuses_answers_the_engines_internal_error() {
 }
 
 /// A SUBMISSION WHOSE TASK THE STORE REFUSES is answered as predev answered a task it could not
-
-
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_submission_whose_task_the_store_refuses_answers_the_engines_503() {
@@ -7702,11 +7233,7 @@ async fn a_resumption_the_store_refuses_is_retryable_and_never_dials_the_agent()
     );
 }
 
-
-
 /// Ported from busbar-a2a a2a/tests/serve_tests.rs::an_agent_outside_this_callers_catalogue_appears_nowhere_in_the_extended_card.
-
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_agent_outside_this_callers_catalogue_appears_nowhere_in_the_extended_card() {
@@ -7747,8 +7274,6 @@ async fn an_agent_outside_this_callers_catalogue_appears_nowhere_in_the_extended
 
 /// Ported from busbar-a2a a2a/tests/serve_tests.rs::a_caller_entitled_to_no_agent_gets_an_empty_extended_card_rather_than_a_refusal.
 
-
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_caller_entitled_to_no_agent_gets_an_empty_extended_card_rather_than_a_refusal() {
     let _one = PUBLISHING.lock().await;
@@ -7779,7 +7304,6 @@ async fn a_caller_entitled_to_no_agent_gets_an_empty_extended_card_rather_than_a
 
 /// Verify `card`'s one signature as an outside caller does: the signing input is
 
-
 fn card_signature_verifies(card: &serde_json::Value) -> Result<String, &'static str> {
     use base64::Engine as _;
     use ed25519_dalek::Verifier as _;
@@ -7809,8 +7333,6 @@ fn card_signature_verifies(card: &serde_json::Value) -> Result<String, &'static 
 }
 
 /// Ported from busbar-a2a a2a/tests/sign_tests.rs::the_signature_is_taken_over_the_document_that_is_actually_served.
-
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_signature_is_taken_over_the_document_that_is_actually_served() {
@@ -7876,9 +7398,6 @@ fn total(lines: &[String]) -> f64 {
 
 /// Ported from busbar-a2a a2a/tests/relay_leg_metrics_tests.rs::a_relayed_task_counts_an_upstream_attempt_naming_the_agent_it_was_issued_to.
 
-
-
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_relayed_task_counts_an_upstream_attempt_naming_the_agent_it_was_issued_to() {
     busbar_kernel_testkit::test_support::metrics::init();
@@ -7918,9 +7437,6 @@ async fn a_relayed_task_counts_an_upstream_attempt_naming_the_agent_it_was_issue
 
 /// Ported from busbar-a2a a2a/tests/relay_leg_metrics_tests.rs::a_backend_that_cannot_be_reached_is_counted_as_a_transient_upstream_failure.
 
-
-
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_backend_that_cannot_be_reached_is_counted_as_a_transient_upstream_failure() {
     busbar_kernel_testkit::test_support::metrics::init();
@@ -7929,10 +7445,6 @@ async fn a_backend_that_cannot_be_reached_is_counted_as_a_transient_upstream_fai
     let mut agent = Agent::start(200, ANSWER).await;
     let s = served(instance, &agent.entry("unreached", "1h"), false, None);
     approve(&s, "unreached").await;
-
-
-
-
 
     let (status, body) = answered(
         &s.router,
@@ -7970,7 +7482,6 @@ async fn a_backend_that_cannot_be_reached_is_counted_as_a_transient_upstream_fai
 }
 
 /// A CLIENT CERTIFICATE for registration `who`, issued by a root of its own: that root's DER
-
 
 struct ClientIdentityFiles(std::path::PathBuf);
 
@@ -8030,9 +7541,6 @@ fn mutual_entry(agent: &Agent, name: &str, pin: &str, cert: &str, key: &str) -> 
 
 /// Ported from busbar-a2a a2a/tests/transport_mutual_tls_tests.rs::the_verb_layers_probe_fetches_a_mutual_tls_vendors_card_with_that_registrations_certificate.
 
-
-
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_verb_layers_probe_fetches_a_mutual_tls_vendors_card_with_that_registrations_certificate(
 ) {
@@ -8071,9 +7579,6 @@ async fn the_verb_layers_probe_fetches_a_mutual_tls_vendors_card_with_that_regis
 
 /// Ported from busbar-a2a a2a/tests/transport_mutual_tls_tests.rs::each_registration_presents_its_own_certificate_and_not_another_registrations.
 
-
-
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn each_registration_presents_its_own_certificate_and_not_another_registrations() {
     let _one = PUBLISHING.lock().await;
@@ -8097,7 +7602,6 @@ async fn each_registration_presents_its_own_certificate_and_not_another_registra
             &payments_cert,
             &payments_key,
         ),
-
         mutual_entry(
             &planner_peer,
             "stranger",
@@ -8126,16 +7630,10 @@ async fn each_registration_presents_its_own_certificate_and_not_another_registra
     );
 }
 
-
-
-
-
 /// What a healthy pool member answers a relayed request: a task it is working on.
 const TASK_ANSWER: &str = r#"{"jsonrpc":"2.0","id":1,"result":{"kind":"task","id":"far-task","contextId":"far-ctx","status":{"state":"working"}}}"#;
 
 /// The `agents:` section `entries`, with the pool `planner` of `members` (in that order) handed
-
-
 
 #[allow(clippy::needless_update)]
 fn pooled(entries: &str, members: &[&str]) -> String {
@@ -8155,9 +7653,6 @@ fn pooled(entries: &str, members: &[&str]) -> String {
 }
 
 /// ONE AGENT REGISTERED TWICE, `planner-a` then `planner-b` at its paths `/planner-a` and
-
-
-
 
 async fn twins(status_of: Arc<dyn Fn(&str) -> u16 + Send + Sync>) -> (Agent, String) {
     let agent = Agent::start_replying(
@@ -8219,9 +7714,6 @@ fn task_id_of(body: &str) -> String {
 
 /// THE REROUTE BATTERY (predev `reroute_battery`): the first fresh submission addressed to the
 
-
-
-
 async fn reroute_battery(
     s: &Served,
     heard: &mut dyn FnMut() -> (usize, usize),
@@ -8251,8 +7743,6 @@ async fn reroute_battery(
 
 /// THE EQUALITY-CELL INSTRUMENT (`failover-reroute × a2a-client`, predev
 
-
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_tripped_pool_primary_reroutes_a_fresh_submission_to_the_twin_and_stays_untouched() {
     let _one = PUBLISHING.lock().await;
@@ -8277,15 +7767,10 @@ async fn a_tripped_pool_primary_reroutes_a_fresh_submission_to_the_twin_and_stay
 
 /// The same battery on the gRPC binding (predev
 
-
-
-
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_tripped_pool_primary_reroutes_a_fresh_submission_on_the_grpc_binding() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-pool-reroute-grpc";
-
 
     let mut primary = GrpcAgent::serving(Vec::new(), "16", 200, None).await;
     let mut twin = GrpcAgent::serving(grpc_working_answer(), "0", 200, Some(primary.port)).await;
@@ -8359,7 +7844,6 @@ async fn an_accepted_task_stays_pinned_to_its_member_and_a_tripped_pin_refuses_t
     hear(&mut agent, &mut log);
     assert_eq!((hits(&log, "planner-a"), hits(&log, "planner-b")), (1, 1));
 
-
     let get = format!(r#"{{"id":"{task_id}"}}"#);
     let (status, body) = answered(
         &s.router,
@@ -8378,8 +7862,6 @@ async fn an_accepted_task_stays_pinned_to_its_member_and_a_tripped_pin_refuses_t
         2,
         "the read went to the member holding the task"
     );
-
-
 
     twin_status.store(503, Ordering::SeqCst);
     let mut tripped = false;
@@ -8461,9 +7943,6 @@ async fn an_accepted_task_stays_pinned_to_its_member_and_a_tripped_pin_refuses_t
 
 /// THE PIN RULE (predev
 
-
-
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_member_approved_under_a_different_card_fingerprint_is_refused_never_dispatched() {
     let _one = PUBLISHING.lock().await;
@@ -8516,9 +7995,6 @@ async fn a_member_approved_under_a_different_card_fingerprint_is_refused_never_d
 
 /// DISPOSITION (`disposition × a2a-client`, predev
 
-
-
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_client_fault_answer_never_penalizes_the_agent() {
     let _one = PUBLISHING.lock().await;
@@ -8569,11 +8045,6 @@ async fn a_client_fault_answer_never_penalizes_the_agent() {
 
 /// A HOP PINNED TO A POOL MEMBER THE CALLER MAY NO LONGER REACH KEEPS NO FEE (predev
 
-
-
-
-
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_hop_pinned_to_a_member_the_caller_may_not_reach_keeps_no_fee() {
     let _one = PUBLISHING.lock().await;
@@ -8596,7 +8067,6 @@ async fn a_hop_pinned_to_a_member_the_caller_may_not_reach_keeps_no_fee() {
         "the twin accepts the placed submission: {b2}"
     );
     let task_id = task_id_of(&b2);
-
 
     let mut row = s
         .gov
@@ -8650,10 +8120,6 @@ async fn a_hop_pinned_to_a_member_the_caller_may_not_reach_keeps_no_fee() {
 
 /// THE GRANT ON THE ADDRESSED MEMBER (QP2, coordinator 2026-10-07; predev's admission judged
 
-
-
-
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_pooled_member_outside_the_callers_grant_is_refused_before_anything_is_charged() {
     let _one = PUBLISHING.lock().await;
@@ -8679,10 +8145,6 @@ async fn a_pooled_member_outside_the_callers_grant_is_refused_before_anything_is
 }
 
 /// RESUME AT THE HOLDER (predev `receive.rs:1858-1868`): ANY member's interrupted task under
-
-
-
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_interrupted_task_on_any_member_resumes_at_the_member_holding_it() {
@@ -8753,7 +8215,6 @@ async fn an_interrupted_task_on_any_member_resumes_at_the_member_holding_it() {
 
 /// A POOLED AGENT HAS NO ONE CARD (predev `receive.rs:1841-1857`): `GetExtendedAgentCard`
 
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_card_read_addressed_to_a_pooled_agent_is_refused_in_predevs_words() {
     let _one = PUBLISHING.lock().await;
@@ -8782,8 +8243,6 @@ async fn a_card_read_addressed_to_a_pooled_agent_is_refused_in_predevs_words() {
 }
 
 /// A TASK THE WALK PLACED ON THE TWIN IS NAMED FOR THE AGENT THE CALLER ADDRESSED (predev
-
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_task_placed_on_the_twin_is_named_for_the_agent_addressed() {
@@ -8821,12 +8280,6 @@ async fn a_task_placed_on_the_twin_is_named_for_the_agent_addressed() {
 }
 
 /// AN UNADDRESSED UNIT WHOSE ONE AGENT IS A POOL MEMBER IS WALKED OVER THE POOL (predev
-
-
-
-
-
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_unaddressed_unit_whose_one_agent_is_pooled_is_walked_over_the_pool() {
@@ -8890,13 +8343,6 @@ fn audited(before: u64, agent: &str) -> usize {
 }
 
 /// AN UNADDRESSED LOCAL VERB IS ANSWERED AT THE ONE AGENT THE CALLER'S GRANT REACHES, never over
-
-
-
-
-
-
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_unaddressed_local_verb_is_answered_at_the_tripped_agent_its_grant_reaches() {
@@ -8970,10 +8416,6 @@ async fn an_unaddressed_local_verb_is_answered_at_the_tripped_agent_its_grant_re
 
 /// THE TWIN, the pool's primary HEALTHY: a caller granted the twin alone lists its tasks
 
-
-
-
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_unaddressed_local_verb_never_walks_to_a_healthy_primary_outside_the_grant() {
     let _one = PUBLISHING.lock().await;
@@ -9007,16 +8449,6 @@ async fn an_unaddressed_local_verb_never_walks_to_a_healthy_primary_outside_the_
 }
 
 /// MONEY: AN UNADDRESSED LOCAL VERB BILLS WHAT PREDEV BILLED (`ROUTE_SCOPE_LOCAL` counted,
-
-
-
-
-
-
-
-
-
-
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_unaddressed_local_verb_bills_what_predev_billed_on_the_agents_own_line() {
@@ -9071,10 +8503,6 @@ async fn an_unaddressed_local_verb_bills_what_predev_billed_on_the_agents_own_li
 
 /// A CONFIG APPLY KEEPS THE POOL (`DoorApply::apply`): the generation an apply installs holds
 
-
-
-
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_config_apply_keeps_the_pool_walking() {
     let _one = PUBLISHING.lock().await;
@@ -9083,8 +8511,6 @@ async fn a_config_apply_keeps_the_pool_walking() {
     let s = served(instance, &section, false, None);
     approve(&s, "planner-a").await;
     approve(&s, "planner-b").await;
-
-
 
     let mut written: serde_yaml::Value = serde_yaml::from_str(&section).expect("a section");
     if let Some(map) = written.as_mapping_mut() {
@@ -9107,7 +8533,6 @@ async fn a_config_apply_keeps_the_pool_walking() {
         },
         opened: true,
     };
-
 
     let mut next = busbar_kernel_testkit::test_support::TestApp::new()
         .serve_tables(s.app.serve_tables.clone())
@@ -9138,14 +8563,6 @@ async fn a_config_apply_keeps_the_pool_walking() {
 
 /// THE PINNED REFUSAL ANSWERS THE PINNED MEMBER'S OWN WAIT (predev `relay.rs:1659`: the pinned
 
-
-
-
-
-
-
-
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_pinned_refusal_answers_the_pinned_members_own_wait() {
     use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
@@ -9156,9 +8573,6 @@ async fn a_pinned_refusal_answers_the_pinned_members_own_wait() {
     let (twin, calls) = (Arc::clone(&twin_status), Arc::clone(&primary_calls));
     let (mut agent, section) = twins(Arc::new(move |request: &str| {
         if to_member(request, "planner-a") {
-
-
-
             if calls.fetch_add(1, Ordering::SeqCst) % 2 == 0 {
                 503
             } else {
@@ -9172,7 +8586,6 @@ async fn a_pinned_refusal_answers_the_pinned_members_own_wait() {
     let s = served(instance, &section, false, None);
     approve(&s, "planner-a").await;
     approve(&s, "planner-b").await;
-
 
     let (key, token) = another_caller(&s, "pinned-wait", Some(vec![agent_scope("planner-b")]));
     let (status, body) = answered(
@@ -9192,7 +8605,6 @@ async fn a_pinned_refusal_answers_the_pinned_members_own_wait() {
     s.gov.store().put_key(&row).expect("the grant is written");
     s.gov.refresh().expect("the book reloads");
 
-
     twin_status.store(503, Ordering::SeqCst);
     let get = format!(r#"{{"id":"{task_id}"}}"#);
     let mut tripped = false;
@@ -9205,7 +8617,6 @@ async fn a_pinned_refusal_answers_the_pinned_members_own_wait() {
         }
     }
     assert!(tripped, "the twin's cell opened");
-
 
     let mut tripped = false;
     for _ in 0..12 {
