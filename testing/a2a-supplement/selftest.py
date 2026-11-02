@@ -164,6 +164,7 @@ def card_signing_mutations() -> None:
                    {"alg": "EdDSA", "kid": 7},
                    {"alg": "EdDSA", "kid": {"name": "k"}},
                    {"alg": "EdDSA", "kid": "k", "crit": ["unknown"]},
+                   {"alg": "EdDSA", "kid": "k", "b64": False},
                    {"alg": "EdDSA", "kid": "k", "b64": False, "crit": ["b64"]}):
         confused = copy.deepcopy(base_card)
         # This is a genuine Ed25519 signature over the misleading header,

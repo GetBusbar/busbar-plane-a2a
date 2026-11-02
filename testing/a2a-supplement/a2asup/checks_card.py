@@ -82,7 +82,8 @@ def _verify_signature(public_key, signature: dict, payload_text: str) -> bool:
     header = json.loads(b64url_decode(signature["protected"]))
     if (not isinstance(header, dict) or
             any(not isinstance(header.get(name), str) or not header[name].strip()
-                for name in ("alg", "kid")) or not crit_is_understood(header)):
+                for name in ("alg", "kid")) or header.get("b64", True) is not True or
+            not crit_is_understood(header)):
         return False
     return _verify(public_key, header.get("alg"),
                    _signing_input(signature["protected"], payload_text),

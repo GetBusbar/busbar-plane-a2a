@@ -115,7 +115,7 @@ def verify_jws(signature_obj, canonical_payload, jwks=None, timeout=10.0):
     if header.get("alg") not in ("ES256", "ES384", "ES512", "RS256", "RS384", "RS512", "EdDSA"):
         out.update(verified=False, reason="unsupported asymmetric signature algorithm")
         return out
-    if not crit_is_understood(header):
+    if header.get("b64", True) is not True or not crit_is_understood(header):
         out.update(verified=False, reason="unsupported critical protected-header extension")
         return out
 
