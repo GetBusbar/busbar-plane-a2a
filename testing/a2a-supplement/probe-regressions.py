@@ -260,6 +260,11 @@ class ProbeRegressions(unittest.TestCase):
             shutil.copyfile(Path(__file__).resolve().parents[1] /
                             "a2a-harness/scripts/process-fixture.sh",
                             scripts / "process-fixture.sh")
+            package = scripts.parent / "a2aht"
+            package.mkdir()
+            shutil.copyfile(Path(__file__).resolve().parents[1] /
+                            "a2a-harness/a2aht/process_fixture.py",
+                            package / "process_fixture.py")
             tck = root / "testing/a2a-tck"
             tck.mkdir()
             interpreter = root / "suite-python"
