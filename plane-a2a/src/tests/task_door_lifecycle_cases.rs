@@ -47,9 +47,9 @@ fn a_full_sizes_book_never_forgets_a_pending_tickets_short_answer() {
 use busbar_contract::abi::host::service::{RecordsClaimIn, RecordsGetIn, RecordsListIn};
 use busbar_contract::abi::mechanism::call::OutHead;
 use busbar_contract::abi::mechanism::lifecycle::{DriveIn, OpenIn, OpenOut};
-use busbar_contract::abi::sdk::test_support::fake::{self, FakeService, ServiceCall};
-use busbar_contract::abi::sdk::test_support::{reply, test_in::TestIn, zeroed, DoorView};
 use busbar_contract::abi::sdk::{Safe, SafeSlot};
+use busbar_test_kit::test_support::fake::{self, FakeService, ServiceCall};
+use busbar_test_kit::test_support::{reply, test_in::TestIn, zeroed, DoorView};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 
