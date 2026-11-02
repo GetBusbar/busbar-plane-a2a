@@ -910,7 +910,7 @@ fn local_piece(
         None if verb == local::LocalVerb::ListTasks => {
             match refresh_listed(
                 plane,
-                instance,
+                instance.ticket(),
                 unit,
                 &mut via,
                 (caller, member),
@@ -970,7 +970,7 @@ fn local_piece(
     let flight = match mirrored {
         Some(method) => match mirror_flight(
             plane,
-            instance,
+            instance.ticket(),
             &mut via,
             (method, version),
             &envelope,
@@ -1037,7 +1037,7 @@ fn local_piece(
 #[allow(clippy::too_many_arguments)]
 fn refresh_listed<'h>(
     plane: &'h A2aDoor,
-    instance: &Instance<'_, A2aDoor>,
+    ticket: Ticket,
     unit: u64,
     via: &mut Via<'h>,
     (caller, member): (&str, &str),
@@ -1058,7 +1058,7 @@ fn refresh_listed<'h>(
     if ours.is_empty() {
         return Ok(());
     }
-    let (Some(host), ticket) = (plane.host.as_ref(), instance.ticket()) else {
+    let (Some(host), ticket) = (plane.host.as_ref(), ticket) else {
         return Ok(());
     };
     let held = plane.units.with(&unit, |u| {
@@ -1181,7 +1181,7 @@ pub(crate) fn listed_backend_ids(
 /// THE MIRROR a successful push-config verb owes ([`crate::mirror`]), or `None` when it owes none:
 fn mirror_flight(
     plane: &A2aDoor,
-    instance: &Instance<'_, A2aDoor>,
+    ticket: Ticket,
     via: &mut Via<'_>,
     (method, version): (&'static str, &'static str),
     envelope: &Value,
@@ -1190,7 +1190,7 @@ fn mirror_flight(
 ) -> Result<Option<Box<crate::mirror::Flight>>, Halt> {
     let made = mirror_flight_inner(
         plane,
-        instance,
+        ticket,
         via,
         (method, version),
         envelope,
@@ -1206,7 +1206,7 @@ fn mirror_flight(
 
 fn mirror_flight_inner(
     plane: &A2aDoor,
-    instance: &Instance<'_, A2aDoor>,
+    ticket: Ticket,
     via: &mut Via<'_>,
     (method, version): (&'static str, &'static str),
     envelope: &Value,
@@ -1248,7 +1248,7 @@ fn mirror_flight_inner(
     };
     let mut signer = HostSigner {
         services: plane.services.as_ref(),
-        ticket: instance.ticket(),
+        ticket,
         seq: via.issued(),
     };
     let Some(token) = signer
