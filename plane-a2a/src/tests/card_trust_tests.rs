@@ -78,7 +78,7 @@ fn a_card_read_refuses_what_is_not_a_card_in_the_engine_s_words() {
     let big = vec![b' '; MAX_CARD_BYTES + 1];
     assert!(read_card(url, Ok((200, &big)))
         .unwrap_err()
-        .ends_with("bytes, over the configured ceiling"));
+        .ends_with("bytes, over the fixed card limit"));
     assert_eq!(
         read_card(url, Ok((200, b"{\"a\":1}"))).unwrap(),
         json!({"a": 1})

@@ -714,8 +714,10 @@ fn grpc_trailer_error_info_cannot_borrow_an_a2a_reason_from_another_domain() {
             "other.example",
             Code::Internal,
             "TASK_NOT_FOUND",
-            502,
-            -32006,
+            // A foreign reason is ignored. This ambiguous gRPC status falls back to the
+            // relay's existing JSON-RPC internal error, without borrowing TASK_NOT_FOUND.
+            500,
+            -32603,
             Reading::Transient,
         ),
         (

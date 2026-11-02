@@ -131,6 +131,10 @@ pub fn request(
     let body = match relay.on_piece(piece(From::Caller)) {
         PieceAnswer::ToFarEnd(bytes) => bytes,
         PieceAnswer::ToFarEndLent => body.clone(),
+        // A read's HTTP request and a zero-field protobuf request have no payload. The
+        // successful Attempt already established the request line; an empty body is not
+        // a framing failure (the gRPC transport supplies its message length prefix).
+        PieceAnswer::Nothing => crate::relay::RawBytes::default(),
         _ => return None,
     };
     Some(busbar_contract::abi::sdk::exchange::Request {
