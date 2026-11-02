@@ -66,7 +66,7 @@ use crate::rest::STATUS_NOT_FOUND;
 use crate::statement::{self, Line};
 use crate::task_door::{kind_index, Via};
 use crate::task_hop::{self, Opened};
-use crate::tasks::{task_key, Halt, Write};
+use crate::tasks::{self, task_key, Halt, Write};
 
 /// The most calls the kernel keeps in flight on one instance, as the transport doors state it.
 const MAX_INFLIGHT: u32 = 64;

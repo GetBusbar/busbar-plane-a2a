@@ -522,7 +522,7 @@ pub(crate) fn json_bytes<T: serde::Serialize + ?Sized>(
     Ok(bytes.into_vec())
 }
 
-impl From<Vec<u8>> for RawBytes {
+impl std::convert::From<Vec<u8>> for RawBytes {
     fn from(bytes: Vec<u8>) -> Self {
         Self(bytes)
     }
