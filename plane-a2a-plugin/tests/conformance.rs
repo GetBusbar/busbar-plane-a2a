@@ -390,4 +390,202 @@ mod actual_admission {
             .contains("rebuild against this busbar-contract"));
         assert_eq!(LinkedRow::of_raw(malformed).err(), Some(refused));
     }
+    /// The only configured canary is in a rejected URL. No opened Store or host facade is needed.
+    #[test]
+    fn rejected_userinfo_never_crosses_back_from_validate_or_open_in_either_image() {
+        use busbar_contract::abi::mechanism::call::{Blob, Outcome, BLOB_JSON};
+        use busbar_contract::abi::mechanism::lifecycle::{slot, ValidateIn};
+        use busbar_contract::abi::plane::{PlaneOpenIn, PlaneOpenOut};
+        use busbar_plugin_loader::dispatch::{
+            in_head, out_head, Diagnostic, Dropped, EnvelopeSink, Frame, Metric,
+        };
+        use std::sync::atomic::{AtomicBool, Ordering};
+        #[derive(Default)]
+        struct A2aRefusalEnvelopes {
+            bytes: std::sync::Mutex<Vec<Vec<u8>>>,
+            dropped: AtomicBool,
+        }
+        impl EnvelopeSink for A2aRefusalEnvelopes {
+            fn metric(&self, metric: Metric<'_>) {
+                self.bytes
+                    .lock()
+                    .unwrap()
+                    .extend(metric.labels.iter().map(|label| label.to_vec()));
+            }
+            fn diag(&self, diagnostic: Diagnostic<'_>) {
+                self.bytes
+                    .lock()
+                    .unwrap()
+                    .extend([diagnostic.name.to_vec(), diagnostic.text.to_vec()]);
+            }
+            fn dropped(&self, _: Dropped) {
+                self.dropped.store(true, Ordering::SeqCst);
+            }
+        }
+        let inputs: serde_json::Value =
+            serde_json::from_str(include_str!("conformance.json")).unwrap();
+        let credentials = inputs["credentials"].as_array().unwrap();
+        assert_eq!(
+            credentials.len(),
+            1,
+            "this product property names the actual configured canary"
+        );
+        let secret = credentials[0].as_str().unwrap().as_bytes();
+        assert!(!secret.is_empty());
+        let bad = &inputs["plane"]["bad_settings"][0];
+        assert!(
+            bad["vendor"]["url"]
+                .as_str()
+                .unwrap()
+                .as_bytes()
+                .windows(secret.len())
+                .any(|part| part == secret),
+            "the invalid URL actually carries the configured canary"
+        );
+        // Preserve the pinned canary algorithm's raw, percent (both cases), base64 (both
+        // alphabets, unpadded) and hex (both cases) spellings without a new dependency/framework.
+        let percent = |upper: bool| -> Vec<u8> {
+            secret
+                .iter()
+                .flat_map(|byte| {
+                    if byte.is_ascii_alphanumeric() || matches!(*byte, b'-' | b'.' | b'_' | b'~') {
+                        vec![*byte]
+                    } else if upper {
+                        format!("%{byte:02X}").into_bytes()
+                    } else {
+                        format!("%{byte:02x}").into_bytes()
+                    }
+                })
+                .collect()
+        };
+        let base64 = |alphabet: &[u8]| -> Vec<u8> {
+            let mut encoded = Vec::new();
+            for block in secret.chunks(3) {
+                let a = block[0];
+                let b = block.get(1).copied().unwrap_or(0);
+                let c = block.get(2).copied().unwrap_or(0);
+                encoded.push(alphabet[usize::from(a >> 2)]);
+                encoded.push(alphabet[usize::from(((a & 3) << 4) | (b >> 4))]);
+                if block.len() > 1 {
+                    encoded.push(alphabet[usize::from(((b & 15) << 2) | (c >> 6))]);
+                }
+                if block.len() > 2 {
+                    encoded.push(alphabet[usize::from(c & 63)]);
+                }
+            }
+            encoded
+        };
+        let mut spellings = vec![
+            secret.to_vec(),
+            percent(true),
+            percent(false),
+            base64(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"),
+            base64(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"),
+            secret
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+                .into_bytes(),
+            secret
+                .iter()
+                .map(|byte| format!("{byte:02X}"))
+                .collect::<String>()
+                .into_bytes(),
+        ];
+        spellings.sort();
+        spellings.dedup();
+        let settings = serde_json::to_vec(bad).unwrap();
+        let expected = b"`agents.vendor`: `url:` carries a userinfo (`user@` or `user:password@`) in its authority; name the agent's credential under `upstream_credential:`, never in its URL";
+        let row = LinkedRow::of_macro(busbar_plane_a2a::MACRO_DOOR).unwrap();
+        let path = image();
+        for dropped in [false, true] {
+            let sink = Arc::new(A2aRefusalEnvelopes::default());
+            let d = Dispatcher::new(DispatchConfig::default());
+            let bound = Bind {
+                sink: sink.clone(),
+                ..bind(&d)
+            };
+            let product = if dropped {
+                load_dropped::<Plane>(&path, &row.statement, bound)
+            } else {
+                load_linked::<Plane>(&row, bound)
+            }
+            .unwrap();
+            let held = product.inner.clone();
+            let first = || {
+                let resumes = held.resumes.load(Ordering::SeqCst);
+                held.crossings.load(Ordering::SeqCst) - resumes
+            };
+            let mut emitted = Vec::new();
+            let mut reason = vec![0_u8; expected.len() + 64];
+            // SAFETY: settings and exclusive complete reason buffer remain live for VALIDATE.
+            let blob =
+                unsafe { Blob::from_raw_parts(settings.as_ptr(), settings.len(), BLOB_JSON, 0) };
+            let mut validate = Frame::new(
+                ValidateIn {
+                    head: in_head(),
+                    settings: blob,
+                    err_buf: reason.as_mut_ptr(),
+                    err_cap: reason.len(),
+                },
+                out_head(),
+            );
+            let before = first();
+            let answer = product.call(slot::VALIDATE, &mut validate);
+            assert_eq!(answer.outcome, Outcome::Refused);
+            assert_eq!(answer.error.as_deref(), Some(expected.as_slice()));
+            assert_eq!(answer.lease, 0, "rejected validation owes no lease release");
+            assert_eq!(first() - before, 1, "one real validation first crossing");
+            emitted.push(answer.error.unwrap());
+            emitted.push(reason.clone());
+            reason.fill(0);
+            // SAFETY: plane OPEN frames are plain C ABI data with valid zero defaults.
+            let mut open: Frame<PlaneOpenIn, PlaneOpenOut> =
+                Frame::new(unsafe { std::mem::zeroed() }, unsafe { std::mem::zeroed() });
+            open.input.open.head = in_head();
+            open.out.open.head = out_head();
+            open.input.open.generation = 1;
+            open.input.open.settings = blob;
+            open.input.open.err_buf = reason.as_mut_ptr();
+            open.input.open.err_cap = reason.len();
+            let before = first();
+            let (answer, snapshot) = product.open(&mut open);
+            assert_eq!(answer.outcome, Outcome::Refused);
+            assert_eq!(answer.error.as_deref(), Some(expected.as_slice()));
+            assert_eq!(answer.lease, 0, "refused OPEN publishes no lease");
+            assert!(snapshot.is_none(), "refused OPEN publishes no snapshot");
+            assert!(
+                open.out.open.instance.is_null(),
+                "refused OPEN creates no instance"
+            );
+            assert_eq!(first() - before, 1, "one real refused OPEN first crossing");
+            assert_eq!(
+                open.out.open.err_len,
+                expected.len(),
+                "complete error without truncation"
+            );
+            emitted.push(answer.error.unwrap());
+            emitted.push(reason);
+            let before = first();
+            drop(product);
+            assert_eq!(
+                first(),
+                before,
+                "an instance that never opened owes no cleanup CLOSE"
+            );
+            assert!(
+                !sink.dropped.load(Ordering::SeqCst),
+                "all real diagnostic and metric bytes must be captured"
+            );
+            emitted.extend(sink.bytes.lock().unwrap().iter().cloned());
+            for bytes in emitted {
+                assert!(
+                    !spellings
+                        .iter()
+                        .any(|needle| bytes.windows(needle.len()).any(|part| part == needle)),
+                    "configured credential crossed back from actual image (dropped={dropped})"
+                );
+            }
+        }
+    }
 }
