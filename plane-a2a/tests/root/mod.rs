@@ -7204,7 +7204,7 @@ async fn the_signature_is_taken_over_the_document_that_is_actually_served() {
 
 /// The exposition lines of `family` whose `pool` label is `pool` and `lane` label is `lane`.
 fn series_of(family: &str, pool: &str, lane: &str) -> Vec<String> {
-    busbar_kernel::snapshot::render()
+    busbar_kernel_testkit::test_support::export_axis::render()
         .lines()
         .filter(|l| l.starts_with(&format!("{family}{{")))
         .filter(|l| l.contains(&format!("pool=\"{pool}\"")))
@@ -7245,7 +7245,7 @@ async fn a_relayed_task_counts_an_upstream_attempt_naming_the_agent_it_was_issue
         !lines.is_empty(),
         "a relayed unit left no `{family}` series naming the agent it was issued to and its \
          binding: {}",
-        busbar_kernel::snapshot::render()
+        busbar_kernel_testkit::test_support::export_axis::render()
     );
     assert!(
         total(&lines) > before,
