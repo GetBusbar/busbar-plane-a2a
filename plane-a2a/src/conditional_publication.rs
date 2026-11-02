@@ -29,6 +29,10 @@ struct State {
     steps: Vec<Step>,
     cancelled: bool,
     broken: bool,
+    /// A definitive refusal permits only the caller's error, including every partial suffix.
+    response_only: bool,
+    /// A refused publication, distinct from a refused planning read.
+    refused_commit: bool,
     completed: bool,
     ack_offered: Option<wire::Settlement>,
     quarantined: bool,
@@ -258,6 +262,16 @@ impl Journal {
                     s.broken = true;
                     return Err(failed());
                 }
+                match &step.action {
+                    Action::Observe { answer: Some(Err(wire::ConditionalFailure::Refused(_))), .. } => {
+                        s.response_only = true;
+                    }
+                    Action::Publish { answer: Some(Err(wire::ConditionalFailure::Refused(_))), .. } => {
+                        s.response_only = true;
+                        s.refused_commit = true;
+                    }
+                    _ => {}
+                }
             }
             Ok(())
         })
@@ -283,6 +297,9 @@ impl Journal {
                 .position(|step| step.seq == seq)
                 .unwrap_or(s.steps.len());
             if at == s.steps.len() {
+                if s.response_only {
+                    return Err(failed());
+                }
                 if s.steps.last().is_some_and(|step| seq <= step.seq) {
                     s.broken = true;
                     return Err(failed());
@@ -316,6 +333,7 @@ impl Journal {
                 None => Err(Halt::Pending),
                 Some(Ok(Expected::Absent)) => Ok(None),
                 Some(Ok(Expected::Bytes(bytes))) if bytes.len() == 8 => Ok(Some(bytes.clone())),
+                Some(Err(wire::ConditionalFailure::Refused(_))) => Err(failed()),
                 _ => {
                     s.broken = true;
                     Err(failed())
@@ -355,6 +373,9 @@ impl Journal {
                 .iter()
                 .position(|step| step.seq == seq)
                 .unwrap_or(s.steps.len());
+            if at == s.steps.len() && s.response_only {
+                return Err(failed());
+            }
             for life in lives {
                 let observed_kind = kind(life.kind)?;
                 let original = s.steps.iter().rev().find_map(|step| {
@@ -625,6 +646,16 @@ impl Journal {
 
     pub(crate) fn completed(&self) -> bool {
         self.0.with(&(), |s| s.is_none_or(|s| s.completed))
+    }
+
+    /// Exact received Refused provenance survives candidate disposal and reply continuation.
+    pub(crate) fn response_only(&self) -> bool {
+        self.0.with(&(), |s| s.is_some_and(|s| s.response_only))
+    }
+
+    /// Only a refused commit selects a verb's durable-write error; a refused read never does.
+    pub(crate) fn refused_commit(&self) -> bool {
+        self.0.with(&(), |s| s.is_some_and(|s| s.refused_commit))
     }
 
     pub(crate) fn released(&self) {
@@ -942,6 +973,10 @@ fn candidate(
 #[cfg(test)]
 #[path = "tests/conditional_callback_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/conditional_refusal_tests.rs"]
+mod refusal_tests;
 
 #[cfg(test)]
 #[path = "tests/conditional_raw_custody.rs"]
