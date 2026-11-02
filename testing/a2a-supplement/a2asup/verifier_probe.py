@@ -102,35 +102,29 @@ def _delete_agent(base: str, token: str, name: str) -> None:
         pass
 
 
-def _verified(response: httpx.Response) -> tuple[bool, str]:
-    """Did the subject actually VERIFY the card, or merely answer the request?
+def _verification(response: httpx.Response) -> tuple[str, str]:
+    """Separate verified, explicit signature refusal, and inconclusive evidence.
 
-    THIS FUNCTION EXISTS BECAUSE THE FIRST VERSION OF IT WAS WRONG IN THE DANGEROUS DIRECTION. It
-    tested `"fingerprint" in response.text`, and the operator API answers a REFUSED verification
-    with HTTP 200 carrying `{"state":"error","fingerprint":null,"failure":"the agent card is
-    signed, but not by the pinned issuer key"}` -- a body in which the string `fingerprint`
-    appears. The check therefore read a correct refusal as an acceptance and was one report away
-    from accusing the subject of a signature-verification defect it does not have.
-
-    A verification counts as having SUCCEEDED only when the response carries a non-empty
-    fingerprint AND names no failure. Any other shape is a refusal, and an unparseable body is a
-    refusal too -- the conservative direction for a check whose FAIL is an accusation.
+    This probe speaks the operator API's exact refusal vocabulary. Transport,
+    authentication, malformed replies and unrelated failures establish no
+    cryptographic refusal and cannot satisfy the negative half of the pair.
     """
-    if response.status_code >= 400:
-        return False, f"http {response.status_code}"
+    if not 200 <= response.status_code < 300:
+        return "inconclusive", f"http {response.status_code}"
     try:
         doc = response.json()
     except Exception:  # noqa: BLE001
-        return False, "the response body did not parse as JSON"
+        return "inconclusive", "the response body did not parse as JSON"
     if not isinstance(doc, dict):
-        return False, f"the response body is a {type(doc).__name__}, not an object"
+        return "inconclusive", f"the response body is a {type(doc).__name__}, not an object"
     failure = doc.get("failure")
     fingerprint = doc.get("fingerprint")
-    if failure:
-        return False, f"refused, naming: {failure}"
-    if not fingerprint:
-        return False, "no fingerprint was produced, so no card was verified"
-    return True, f"fingerprint {fingerprint}"
+    if (doc.get("state") == "error" and fingerprint is None and
+            failure == "the agent card is signed, but not by the pinned issuer key"):
+        return "signature_refused", failure
+    if failure or not isinstance(fingerprint, str) or not fingerprint.strip():
+        return "inconclusive", f"no unambiguous verification verdict: {short(doc)}"
+    return "verified", f"fingerprint {fingerprint}"
 
 
 def _run(req, base: str, token: str, agent_url: str) -> Result:
@@ -201,12 +195,16 @@ def _run(req, base: str, token: str, agent_url: str) -> Result:
         _delete_agent(base, token, good_name)
         _delete_agent(base, token, bad_name)
 
-    good_ok, good_why = _verified(good)
-    bad_ok, bad_why = _verified(bad)
-    evidence.append(f"verdict on the trusted key:   verified={good_ok} ({good_why})")
-    evidence.append(f"verdict on the untrusted key: verified={bad_ok} ({bad_why})")
+    good_state, good_why = _verification(good)
+    bad_state, bad_why = _verification(bad)
+    evidence.append(f"verdict on the trusted key:   {good_state} ({good_why})")
+    evidence.append(f"verdict on the untrusted key: {bad_state} ({bad_why})")
 
-    if not good_ok:
+    if good_state == "inconclusive":
+        return Result(req.id, Verdict.ERROR,
+                      "the positive-control connection produced no attributable verification verdict",
+                      evidence)
+    if good_state != "verified":
         return Result(
             req.id,
             Verdict.FAIL,
@@ -215,7 +213,7 @@ def _run(req, base: str, token: str, agent_url: str) -> Result:
             "so this is reported as a failure of the pair rather than as a pass on one half.",
             evidence,
         )
-    if bad_ok:
+    if bad_state == "verified":
         return Result(
             req.id,
             Verdict.FAIL,
@@ -224,6 +222,11 @@ def _run(req, base: str, token: str, agent_url: str) -> Result:
             "honouring revocation, because revocation is removal from exactly that set.",
             evidence,
         )
+    if bad_state != "signature_refused":
+        return Result(req.id, Verdict.ERROR,
+                      "the negative-control connection did not explicitly refuse the pinned signature; "
+                      "transport, authentication and unrelated failures cannot prove key refusal",
+                      evidence)
     return Result(
         req.id,
         Verdict.PASS,
