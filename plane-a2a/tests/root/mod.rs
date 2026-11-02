@@ -7858,14 +7858,26 @@ async fn a_member_approved_under_a_different_card_fingerprint_is_refused_never_d
 async fn a_client_fault_answer_never_penalizes_the_agent() {
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-pool-client-fault";
-    let (mut agent, section) = twins(Arc::new(|request: &str| {
-        if to_member(request, "planner-a") {
-            400
-        } else {
-            200
-        }
-    }))
+    let mut agent = Agent::start_replying(
+        Arc::new(|request: &str| {
+            if to_member(request, "planner-a") {
+                FarReply::of(
+                    400,
+                    r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"invalid params"}}"#.to_string(),
+                )
+            } else {
+                FarReply::of(200, TASK_ANSWER.to_string())
+            }
+        }),
+        None,
+    )
     .await;
+    let entries = format!(
+        "{}\n{}",
+        agent.entry("planner-a", "1h"),
+        agent.entry("planner-b", "1h")
+    );
+    let section = pooled(&entries, &["planner-a", "planner-b"]);
     let s = served(instance, &section, false, None);
     approve(&s, "planner-a").await;
     approve(&s, "planner-b").await;

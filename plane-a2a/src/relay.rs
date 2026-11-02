@@ -1517,6 +1517,15 @@ impl HopRelay {
                 let code = match (self.binding, refusal) {
                     (_, HopRefusal::BackendError) => backend_error_code(&self.far),
                     (Binding::HttpJson, HopRefusal::Status) => http_json_error_code(&self.far),
+                    (Binding::JsonRpc, HopRefusal::Status)
+                        if status == 400
+                            && self.far.len() <= MAX_REPLY_BYTES
+                            && read_answer_document(&self.far, &self.id)
+                                == Err(HopRefusal::BackendError) =>
+                    {
+                        backend_error_code(&self.far)
+                            .filter(|code| task_identity::status_of_code(*code) == Some(status))
+                    }
                     _ => None,
                 };
                 let (reply, failed) = task_refusal(code, task, &self.id);
