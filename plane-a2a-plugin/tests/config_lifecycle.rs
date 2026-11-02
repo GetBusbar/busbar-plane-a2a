@@ -123,12 +123,18 @@ fn open(section: &Value) -> (Outcome, String, Vec<String>, Vec<ConfigDiagnostic>
     frame.input.public_url = unsafe {
         AbiStr::from_raw_parts(b"https://gw.example".as_ptr(), b"https://gw.example".len())
     };
-    let (called, snapshot) = plugin.open(&mut frame);
+    let (mut called, snapshot) = plugin.open(&mut frame);
     if called.outcome == Outcome::Pending {
         // An unexpected asynchronous OPEN cannot authorize freeing any original loan owner.
         std::mem::forget((dispatcher, plugin, frame, bytes, reason));
         panic!("configuration OPEN must complete synchronously");
     }
+    // The production loader substitutes its own bounded OPEN reason buffer, then returns
+    // its owned copy here. The original caller buffer is not the returned error payload.
+    let reason_bytes = match called.outcome {
+        Outcome::Failed | Outcome::Refused => called.error.take().unwrap_or_default(),
+        _ => Vec::new(),
+    };
     if called.lease != 0 && release(&plugin, called.lease) != Outcome::Ready {
         std::mem::forget((dispatcher, plugin, frame, bytes, reason));
         panic!("the actual OPEN reply lease must release synchronously");
@@ -141,8 +147,7 @@ fn open(section: &Value) -> (Outcome, String, Vec<String>, Vec<ConfigDiagnostic>
         !plugin.is_open(),
         "the opened configuration instance is closed exactly once"
     );
-    assert!(frame.out.open.err_len <= reason.len());
-    let reason = String::from_utf8(reason[..frame.out.open.err_len].to_vec()).unwrap();
+    let reason = String::from_utf8(reason_bytes).unwrap();
     let claims = if called.outcome == Outcome::Ready {
         snapshot
             .expect("READY publishes a snapshot")
