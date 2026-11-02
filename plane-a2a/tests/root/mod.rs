@@ -3308,6 +3308,30 @@ async fn a_config_apply_keeps_the_operators_approval() {
         !agent.relayed() && !replacement.relayed(),
         "neither URL was dispatched under stale approval"
     );
+    let (status, preview) = admin(&s, "/agents/planner/connect", "").await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(
+        preview["fingerprint"],
+        replacement.fingerprint(),
+        "{preview}"
+    );
+    assert_ne!(
+        preview["fingerprint"],
+        agent.fingerprint(),
+        "the new URL serves a different signed card"
+    );
+    assert_eq!(preview["state"], "quarantined", "{preview}");
+    let (status, body) = answered(&s.router, send()).await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "a preview cannot approve the replacement card: {body}"
+    );
+    assert!(body.contains("is not serving"), "{body}");
+    assert!(
+        !agent.relayed() && !replacement.relayed(),
+        "neither endpoint was dispatched before the replacement card was approved"
+    );
     approve(&s, "planner").await;
     let (status, body) = answered(&s.router, send()).await;
     assert_eq!(

@@ -2106,9 +2106,14 @@ pub(crate) fn admit_unit(
             UNTRUSTED_STATUS,
         ));
     }
-    let excluded = |unfit: crate::skill::Unfit| match addressed {
-        Some(_) => crate::skill::refusal(&unfit),
-        None => agent_arrival::scope_refusal(""),
+    let excluded = |unfit: crate::skill::Unfit| match (unfit, addressed) {
+        (crate::skill::Unfit::NoCachedCard, _) => not_serving(
+            addressed,
+            crate::card_trust::State::Pending,
+            UNTRUSTED_STATUS,
+        ),
+        (unfit, Some(_)) => crate::skill::refusal(&unfit),
+        (_, None) => agent_arrival::scope_refusal(""),
     };
     let Some(card) = plane.cards.at(member, generation) else {
         return Err(excluded(crate::skill::Unfit::NoCachedCard));
