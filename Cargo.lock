@@ -427,6 +427,7 @@ name = "busbar-plane-a2a-plugin"
 version = "1.6.0"
 dependencies = [
  "busbar-contract",
+ "busbar-kernel",
  "busbar-plane-a2a",
  "busbar-plugin-loader",
  "busbar-test-kit",
