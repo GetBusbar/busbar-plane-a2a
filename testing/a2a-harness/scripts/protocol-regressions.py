@@ -426,17 +426,49 @@ Path(os.environ["HEADER_CAPTURE"]).write_text(json.dumps({
             def close(self):
                 events.append("closed")
         def healthy(*_):
-            self.assertIn(b"{", events)
+            body = json.loads(events[1])
+            self.assertEqual(body["method"], "SendMessage")
+            self.assertIn("message", body["params"])
+            self.assertIn(b"authorization: Bearer fixture\r\n", events[0])
+            self.assertIn(b"A2A-Version: 1.0\r\n", events[0])
+            self.assertIn(b"Content-Type: application/a2a+json\r\n", events[0])
             self.assertNotIn("closed", events)
             events.append("healthy")
             return SimpleNamespace(error=None, http=None)
         ctx = Context()
-        ctx.target = SimpleNamespace(insecure=False, call=healthy)
+        ctx.target = SimpleNamespace(insecure=False, call=healthy,
+            request_headers=lambda extra: dict(extra, **{
+                "authorization": "Bearer fixture", "A2A-Version": "1.0"}))
         with patch.object(transport, "_connect", return_value=(Socket(), "localhost", "/")), \
              patch.object(tests_adversarial, "_endpoint", return_value="http://localhost/"), \
              patch.object(tests_adversarial, "_binding", return_value="JSONRPC"):
             tests_adversarial.test_connect_and_stall(ctx)
         self.assertLess(events.index("healthy"), events.index("closed"))
+
+    def test_truncated_probe_preserves_auth_version_and_binding_envelope(self):
+        ctx = Context()
+        ctx.target = SimpleNamespace(insecure=False,
+            call=lambda *a: SimpleNamespace(error=None, http=None),
+            request_headers=lambda extra: dict(extra, **{
+                "authorization": "Bearer fixture", "A2A-Version": "1.0"}))
+        for binding in ("JSONRPC", "HTTP+JSON"):
+            with patch.object(tests_adversarial, "_endpoint", return_value="http://fixture/a2a"), \
+                 patch.object(tests_adversarial, "_binding", return_value=binding), \
+                 patch.object(transport, "raw_send", return_value=b"") as send:
+                tests_adversarial.test_truncated_body(ctx)
+            args, kwargs = send.call_args
+            body = json.loads(args[2])
+            self.assertEqual(kwargs["headers"]["authorization"], "Bearer fixture")
+            self.assertEqual(kwargs["headers"]["A2A-Version"], "1.0")
+            self.assertGreater(kwargs["declared_length"], len(args[2]))
+            self.assertLess(kwargs["send_bytes"], len(args[2]))
+            if binding == "JSONRPC":
+                self.assertEqual(body["jsonrpc"], "2.0")
+                self.assertEqual(body["method"], "SendMessage")
+                self.assertIn("message", body["params"])
+            else:
+                self.assertTrue(args[0].endswith("/message:send"))
+                self.assertIn("message", body)
 
     def test_deep_nesting_reaches_transport_at_default_recursion_limit(self):
         captured = []

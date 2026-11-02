@@ -298,12 +298,15 @@ def test_truncated_body(ctx):
     url = _endpoint(ctx).rstrip("/")
     if _binding(ctx) == "HTTP+JSON":
         url += "/message:send"
-    body = json.dumps({"message": user_message("truncate me")}).encode("utf-8")
+    payload = {"message": user_message("truncate me")}
+    if _binding(ctx) == "JSONRPC":
+        payload = {"jsonrpc": "2.0", "id": 1, "method": "SendMessage", "params": payload}
+    body = json.dumps(payload).encode("utf-8")
     try:
         reply = transport.raw_send(
             url, "POST", body, declared_length=len(body) + 500,
             send_bytes=len(body) // 2,
-            headers={"Content-Type": spec.MEDIA_TYPE_A2A_JSON},
+            headers=ctx.target.request_headers({"Content-Type": spec.MEDIA_TYPE_A2A_JSON}),
             timeout=10.0, insecure=ctx.target.insecure)
         ctx.observe("truncated_body_reply",
                     (reply or b"")[:80].decode("ascii", "replace"))
@@ -336,8 +339,13 @@ def test_connect_and_stall(ctx):
         url += "/message:send"
     budget = float(ctx.config.get("stall_seconds", 8.0))
     healthy = []
+    payload = {"message": user_message("stall me")}
+    if _binding(ctx) == "JSONRPC":
+        payload = {"jsonrpc": "2.0", "id": 1, "method": "SendMessage", "params": payload}
     closed_after = transport.raw_connect_and_stall(
         url, budget, insecure=ctx.target.insecure,
+        headers=ctx.target.request_headers({"Content-Type": spec.MEDIA_TYPE_A2A_JSON}),
+        body_bytes=json.dumps(payload).encode("utf-8"),
         while_stalled=lambda: healthy.append(
             ctx.target.call("SendMessage", send_params("alive during stall"))))
     # Deliberately NOT an assertion on elapsed time. The recorded value is
