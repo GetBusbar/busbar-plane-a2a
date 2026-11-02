@@ -26,7 +26,7 @@ extern "C" fn listed(_: HostCtx, input: *const c_void, out: *mut ServiceOut) -> 
     // SAFETY: the SDK lends the complete RecordsListIn and its text for this call.
     let i = unsafe { input.cast::<RecordsListIn>().read() };
     let kind = unsafe { std::slice::from_raw_parts(i.kind.ptr(), i.kind.len()) };
-    let full = kind == b"task" && i.prefix.len() == 0;
+    let full = kind == b"task" && i.prefix.is_empty();
     let pending = {
         let mut script = SCRIPT.lock().unwrap_or_else(PoisonError::into_inner);
         let s = script.as_mut().unwrap();
@@ -45,7 +45,7 @@ extern "C" fn listed(_: HostCtx, input: *const c_void, out: *mut ServiceOut) -> 
 extern "C" fn signed(_: HostCtx, input: *const c_void, out: *mut ServiceOut) -> RawOutcome {
     // SAFETY: the SDK lends SignIn, its input blob and writable result regions for this call.
     let i = unsafe { input.cast::<SignIn>().read() };
-    let data = if i.data.len() == 0 {
+    let data = if i.data.is_empty() {
         &[]
     } else {
         // SAFETY: a nonempty SDK blob names exactly this many live input bytes.

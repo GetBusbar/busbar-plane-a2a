@@ -49,12 +49,12 @@ extern "C" fn standing(_: HostCtx, input: *const c_void, out: *mut ServiceOut) -
 extern "C" fn listed(ctx: HostCtx, input: *const c_void, out: *mut ServiceOut) -> RawOutcome {
     // SAFETY: records.list lends its complete input and text for this call.
     let i = unsafe { input.cast::<RecordsListIn>().read() };
-    if i.prefix.len() == 0 {
+    if i.prefix.is_empty() {
         return records_list(ctx, input, out);
     }
     handed(input);
     let text = |s: AbiStr| {
-        if s.len() == 0 {
+        if s.is_empty() {
             Vec::new()
         } else {
             // SAFETY: the nonempty service string is live for this callback.
@@ -302,7 +302,7 @@ fn addressed_lists_resolve_only_the_named_agent_without_an_egress_walk() {
         assert_eq!(output.refusal_status, 0);
         assert_eq!(output.route, route);
         let text = |value: AbiStr| {
-            if value.len() == 0 {
+            if value.is_empty() {
                 return String::new();
             }
             // SAFETY: the live door owns the output's nonempty UTF-8 strings.

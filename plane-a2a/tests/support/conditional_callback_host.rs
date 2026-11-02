@@ -390,7 +390,7 @@ impl Host {
             return (true, read());
         };
         let fresh = !self.lists.contains_key(&call);
-        let rows = self.lists.entry(call).or_insert_with(|| read()).clone();
+        let rows = self.lists.entry(call).or_insert_with(read).clone();
         (fresh, rows)
     }
 

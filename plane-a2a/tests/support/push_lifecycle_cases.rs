@@ -33,7 +33,7 @@ fn script<T>(f: impl FnOnce(&mut Script) -> T) -> T {
         .unwrap())
 }
 fn text(s: AbiStr) -> String {
-    if s.len() == 0 {
+    if s.is_empty() {
         return String::new();
     }
     // SAFETY: every caller passes a live ABI string during its call or envelope lifetime.
@@ -159,7 +159,7 @@ extern "C" fn listed(ctx: HostCtx, input: *const c_void, out: *mut ServiceOut) -
                 i.limit as usize
             },
         );
-        if rows.0 && text(i.kind) == "task" && i.prefix.len() == 0 {
+        if rows.0 && text(i.kind) == "task" && i.prefix.is_empty() {
             s.full_lists += 1;
         }
         rows
