@@ -9,8 +9,6 @@ use std::sync::Arc;
 use axum::http::StatusCode;
 use busbar_contract::abi::mechanism::door::DoorFn;
 use busbar_contract::conn::DeclaredConns;
-use busbar_kernel::cost::CostModel;
-use busbar_kernel::governance::signing::{TokenSigner, DEFAULT_KID};
 use busbar_kernel::governance::{GovState, NewKeySpec};
 use busbar_kernel::{
     plane_driver::{EndPost, PlaneMoney},
@@ -25,12 +23,27 @@ mod root_facts;
 mod piece_pending_observer;
 mod reported_observations;
 
-use super::door_rig as rig;
-use rig::{LinkedRow, Node, NodeEndPost, PUBLISHING};
+use crate::root::loader::dispatch::{
+    kinds::plane::Plane, load_dropped, load_linked, rendering_of_library, Bind, ConnTable,
+    DispatchConfig, Dispatcher, LinkedRow, NoSink,
+};
+use crate::root::plane_node::{Node, NodeEndPost};
+use crate::root::PUBLISHING;
 
 /// The deployment's dated card history, billing off (one entry, no price).
-static CARD: std::sync::LazyLock<rig::RootHistory> =
-    std::sync::LazyLock::new(|| rig::unpriced_card(1_000));
+static CARD: std::sync::LazyLock<crate::root::kernel::RootHistory> =
+    std::sync::LazyLock::new(|| {
+        let history = crate::root::kernel::RootHistory::default();
+        history.apply(
+            crate::root::kernel::card_from_config(
+                std::iter::empty::<(&str, busbar_contract::billing::RawTierRates)>(),
+                0,
+                true,
+            ),
+            1_000,
+        );
+        history
+    });
 
 /// The governance book's admin token.
 const ADMIN_TOKEN: &str = "admintok";
@@ -55,8 +68,7 @@ fn mount() -> &'static str {
 
 /// THE AGENT DOOR: of the linked plane doors, the one whose Statement DECLARES the section the
 fn linked_door() -> Option<DoorFn> {
-    static DOOR: std::sync::OnceLock<Option<DoorFn>> = std::sync::OnceLock::new();
-    *DOOR.get_or_init(|| rig::door_declaring(surface("section")))
+    Some(busbar_plane_a2a::door)
 }
 
 /// The agent door, which a cell's `Served` needs (see [`linked_door`]).
@@ -161,7 +173,7 @@ struct Served {
     /// The handle a config apply swaps the serving generation on.
     handle: Arc<busbar_kernel::state::AppHandle>,
     /// The node's book: every unit's one line.
-    book: Arc<std::sync::Mutex<rig::Durability>>,
+    book: Arc<std::sync::Mutex<crate::root::durability::Durability>>,
     /// The node's end post: the units whose facts are still open.
     post: Arc<NodeEndPost>,
     /// The paths the door's routes were mounted at on the data router, as its construction
@@ -171,6 +183,58 @@ struct Served {
     /// The table the kernel's egress walk reached the far ends through, every open it made on it
     riding: Arc<Riding>,
     observed_destinations: Arc<reported_observations::Destinations>,
+    deployment: serde_json::Value,
+    plugins: busbar_kernel::config::PluginsCfg,
+    rules: Arc<dyn busbar_kernel::appbuild::RootRules>,
+    hook_peers: Vec<tokio::task::JoinHandle<()>>,
+}
+
+impl Drop for Served {
+    fn drop(&mut self) {
+        for peer in &self.hook_peers {
+            peer.abort();
+        }
+    }
+}
+
+impl Served {
+    /// A reload uses the same production builder and its prior generation, including Store and
+    /// governance. Pool ownership can be installed independently of a raw door section.
+    fn applied(
+        &self,
+        section: serde_yaml::Value,
+        keep_pools: bool,
+    ) -> Arc<busbar_kernel::state::App> {
+        let mut deployment = self.deployment.clone();
+        deployment[surface("section")] =
+            serde_json::to_value(section).expect("the applied section");
+        let deploy = busbar_kernel::config::deploy_from_deserializer(deployment)
+            .expect("the applied deployment parses");
+        let mut config = busbar_kernel::config::resolve(&deploy, &Default::default())
+            .expect("the applied deployment resolves");
+        let prior = self.handle.load();
+        if keep_pools {
+            if let Some(pools) = prior.plane_pools(surface("plane_key")) {
+                config.plane_pools.insert(surface("section"), pools.clone());
+            }
+        }
+        let (next, rotate, limits) = busbar_kernel::build_app_from_config(
+            config,
+            self.plugins.clone(),
+            None,
+            Default::default(),
+            Default::default(),
+            (None, None),
+            Some(&prior),
+            &self.rules,
+        )
+        .expect("the normal root builds the applied generation");
+        limits.keep().expect("the applied card activates");
+        if let Some(rotate) = rotate {
+            rotate();
+        }
+        Arc::new(next)
+    }
 }
 
 /// THE CELL'S STORE, REFUSING ON CUE (predev's `RefuseOneTaskRow`, `local_tests.rs:1300-1356`):
@@ -327,7 +391,7 @@ impl busbar_contract::store_calls::StoreCalls for Refusing {
 
 /// THE EGRESS WALK'S TABLE, WATCHED: the cell's connector as the kernel's walk reaches it (the
 struct Riding {
-    inner: Arc<rig::Connector>,
+    inner: Arc<busbar_core_connector::Connector>,
     opened: std::sync::Mutex<
         Vec<(
             busbar_contract::conn::InstanceId,
@@ -441,15 +505,12 @@ impl busbar_contract::conn::PollConns for Riding {
     }
 }
 
-/// How the cell's App faces the world beside the door's routes.
+/// Which deployment the cell boots; the production builder derives its claims and admission.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Facing {
-    /// The `agents:` section written; the App's plane table binds nothing for the door.
+    /// The `agents:` section is written and its normal routes are exercised.
     Routes,
-    /// The section written, and the App's plane table mounting the door's claims and binding
-    /// the audience and metadata document its snapshot states, as boot's `build_dispatch`
-    /// binds a door's facing: a token presented on the door must be bound to its audience,
-    /// and a refusal there is the RFC 6750 challenge naming its metadata document.
+    /// The written section's normal audience and RFC 6750 metadata are also asserted.
     Admitted,
     /// No `agents:` section at all: the plane loads iff its section is present (LAW 7).
     Unconfigured,
@@ -546,7 +607,6 @@ fn served_facing(instance: &'static str, section: &str, facing: Facing) -> Serve
 
 /// The hooks the deployment attaches to one agent (`agents.<agent>.hooks:`): the loaded hook
 struct AgentHooks {
-    env: busbar_kernel::hooks::HookEnv,
     defs: Vec<(String, serde_json::Value)>,
     agent: &'static str,
 }
@@ -652,39 +712,6 @@ struct Priced {
     budget: u64,
 }
 
-/// The cost model a deployment pricing the door as `priced` resolves: the card is the one the
-fn priced_cost(
-    priced: &Priced,
-    groups: &BTreeMap<String, busbar_kernel::config::GroupCfg>,
-) -> CostModel {
-    rig::register_door(door(), "serve-agent-priced").expect("the door binds and folds");
-    let (section, kind, class) = (
-        surface("section"),
-        surface("resource_kind"),
-        surface("bytes_class"),
-    );
-    let card = priced.bytes_rate.map_or_else(String::new, |rate| {
-        format!("  rate_card:\n    {kind}:planner: {{ units: {{ {class}: {rate} }} }}\n")
-    });
-    let text = format!(
-        "store: {{module: memory}}\nproviders: {{}}\nmodels: {{}}\n{section}:\n  \
-         planner: {{ url: https://planner.example/rpc, pin: {{ mechanism: unpinned }} }}\n{card}"
-    );
-    let deploy = busbar_kernel::config::deploy_from_yaml_str(&text).expect("the config parses");
-    let cfg = busbar_kernel::config::resolve(&deploy, &Default::default()).expect("resolves");
-    let fees: busbar_kernel::config::PlaneFeesMap = [(
-        surface("plane_key").to_string(),
-        busbar_kernel_ledger::cost::PlaneFees {
-            per_request: priced.fee,
-            per_session: 0,
-        },
-    )]
-    .into_iter()
-    .collect();
-    CostModel::resolve_parts(cfg.rate_card.as_ref(), cfg.per_request_fee, groups)
-        .with_plane_fees(&fees)
-}
-
 /// [`served`] over a deployment pricing the door as `priced`: the caller's group capped at its
 fn served_priced(instance: &'static str, section: &str, priced: &Priced) -> Served {
     served_core(
@@ -744,203 +771,405 @@ fn served_core(
         })
         .into_iter()
         .collect();
-    let cost = match priced {
-        Some(priced) => priced_cost(priced, &groups),
-        None if groups.is_empty() => CostModel::flat(1),
-        None => CostModel::resolve_parts(None, 1, &groups),
-    };
-
+    crate::dist_root_install::install();
+    crate::root::connector::install_io_reactor();
     let live: Arc<std::sync::OnceLock<Arc<busbar_kernel::state::App>>> = Arc::default();
     let observed_destinations = Arc::new(reported_observations::Destinations::new(
-        rig::destination_guard(&destinations).expect("the guard"),
+        crate::root::connector::guard_for(&destinations).expect("the production destination guard"),
     ));
     let judge: Arc<dyn busbar_kernel::host_services::DestJudge> = observed_destinations.clone();
+    let rules = Arc::new(crate::root::door_steps::Rules::hearing(judge.clone()));
 
-    rig::install_io_reactor();
-
-    let opened =
-        rig::open_ephemeral_store(instance).expect("the default store opens through its door");
-    let signer = TokenSigner::from_secret_bytes(&[9u8; 32], DEFAULT_KID);
-    let gov = Arc::new(
-        GovState::new_with_signer(
-            opened.records(),
-            Some(ADMIN_TOKEN.to_string()),
-            Some(signer),
-        )
-        .expect("governance"),
-    );
-
-    let refuse = Arc::new(std::sync::Mutex::new(None));
-    assert!(gov.attach_store_calls(Arc::new(Refusing {
-        inner: opened
-            .calls()
-            .expect("a door-opened store has its record slots"),
-        named: Arc::clone(&refuse),
-    })));
-
-    let services = rig::late_services(Arc::clone(&judge));
-
-    rig::attach_late(&services, &gov);
-    let dispatcher = rig::dispatcher(1, &services);
-
-    let process = rig::ProcessRig::new(judge, dispatcher.conn_waker());
-    let connector = match root {
-        None => process,
-        Some(root) => process.trusting(root),
+    // The Store and optional hook are freshly built external products. Their signed archives go
+    // through normal registry admission; the retained archive digest also authorizes Store boot.
+    let directory = crate::root::test_plugins::scratch(&format!(
+        "{instance}-{}",
+        busbar_kernel::door::op_id().counter(),
+    ));
+    let mut store_module = None;
+    let mut hook_module = None;
+    let mut fetch = Vec::new();
+    for (kind, variable) in [
+        ("store", "BUSBAR_GOVERNANCE_TEST_STORE_PLUGIN"),
+        ("hook", "BUSBAR_TEST_WEBREQUEST_CDYLIB"),
+    ] {
+        if kind == "hook" && hooks.is_none() {
+            continue;
+        }
+        let path = std::path::PathBuf::from(std::env::var_os(variable).expect(variable));
+        assert!(
+            path.is_absolute() && path.is_file(),
+            "{variable} is an actual image"
+        );
+        let statement = rendering_of_library(&path)
+            .expect("the actual product statement reads")
+            .expect("the actual product states itself");
+        let name = busbar_contract::abi::mechanism::rendering::read(&statement)
+            .expect("the actual product statement is valid")
+            .name;
+        let mut manifest = crate::root::test_plugins::manifest(
+            kind,
+            &name,
+            crate::root::loader::sign::FIRST_PARTY_PUBLISHER,
+        );
+        manifest.statement = Some(hex::encode(statement));
+        if kind == "hook" {
+            manifest.needs.prompt = busbar_contract::plugin_rows::NeedLevel::Rw;
+            manifest.needs.user = busbar_contract::plugin_rows::NeedLevel::Ro;
+            hook_module = Some(name);
+        } else {
+            store_module = Some(name);
+        }
+        let archive = crate::root::test_plugins::signed(
+            &crate::dist_root_install::release_key(),
+            manifest,
+            &std::fs::read(path).expect("the actual image reads"),
+        );
+        let filename = format!("{kind}.tar.gz");
+        fetch.push(busbar_kernel::config::PluginFetch::Url(
+            busbar_kernel::config::UrlFetch {
+                url: format!("https://fixtures.invalid/{filename}"),
+                sha256: Some(crate::root::loader::sign::sha256_hex(&archive)),
+            },
+        ));
+        std::fs::write(directory.join(filename), archive).expect("stage the signed actual product");
     }
-    .build()
-    .expect("the connector builds");
-    let plane = rig::bind_door(
-        door(),
-        instance,
-        &dispatcher,
-        Arc::clone(&connector) as Arc<dyn DeclaredConns>,
+    let module = store_module.expect("the fixture always stages the actual Store");
+    let settings: serde_json::Value = serde_json::from_str(
+        &std::env::var("BUSBAR_GOVERNANCE_TEST_STORE_SETTINGS").unwrap_or_else(|_| "{}".into()),
     )
-    .expect("the linked door binds");
-    let section_key = plane.served().section;
-
+    .expect("the actual Store settings are JSON");
+    let operator_file = directory.join("operator.token");
+    std::fs::write(&operator_file, ADMIN_TOKEN).expect("the normal operator credential");
+    let signing_file = directory.join("signing.key");
+    std::fs::write(&signing_file, hex::encode([9u8; 32])).expect("the normal signing credential");
+    let mut sections: BTreeMap<&'static str, serde_yaml::Value> = BTreeMap::new();
+    if facing != Facing::Unconfigured {
+        sections.insert(
+            surface("section"),
+            serde_yaml::from_str(section).expect("a section"),
+        );
+    }
+    if let Some(priced) = priced {
+        let section = sections
+            .get_mut(surface("section"))
+            .expect("a priced agent section");
+        section["fees"] = serde_yaml::to_value(serde_json::json!({"per_request": priced.fee}))
+            .expect("the agent section's configured fee");
+        if let Some(rate) = priced.bytes_rate {
+            section["rate_card"] = serde_yaml::from_str(&format!(
+                "{}:planner: {{ units: {{ {}: {rate} }} }}",
+                surface("resource_kind"),
+                surface("bytes_class"),
+            ))
+            .expect("the agent section's configured rate");
+        }
+    }
+    if let Some(ca) = push_ca {
+        sections.insert(
+            root_facts::PUSH_SECTION,
+            serde_yaml::to_value(serde_json::json!({(root_facts::PUSH_CA_KEY): ca}))
+                .expect("the owned push trust section"),
+        );
+    }
+    let mut hook_peers = Vec::new();
+    let mut hook_defs = serde_json::Map::new();
+    if let Some(hooks) = hooks {
+        let mut names = Vec::new();
+        for (name, mut def) in hooks.defs {
+            names.push(name.clone());
+            let settings = def["settings"].clone();
+            let listener =
+                std::net::TcpListener::bind("127.0.0.1:0").expect("the hook policy peer binds");
+            listener
+                .set_nonblocking(true)
+                .expect("the hook listener is nonblocking");
+            let endpoint = format!(
+                "http://{}/hook",
+                listener.local_addr().expect("the hook address")
+            );
+            let listener = tokio::net::TcpListener::from_std(listener).expect("the hook listener");
+            let router = axum::Router::new().route("/hook", axum::routing::post(
+                move |axum::Json(body): axum::Json<serde_json::Value>| {
+                    let settings = settings.clone();
+                    async move {
+                        let reject = settings["reject_if_contains"].as_str().is_some_and(|needle| {
+                            body["request"]["messages"].to_string().contains(needle)
+                        });
+                        axum::Json(if reject {
+                            serde_json::json!({"reject": {"status": 403, "message": "blocked by test gate"}})
+                        } else if body["op"] == "transform" {
+                            settings.get("raw_transform_reply").cloned()
+                                .unwrap_or_else(|| serde_json::json!({}))
+                        } else {
+                            settings.get("raw_decide_reply").cloned()
+                                .unwrap_or_else(|| serde_json::json!({}))
+                        })
+                    }
+                }
+            ));
+            hook_peers.push(tokio::spawn(async move {
+                axum::serve(listener, router)
+                    .await
+                    .expect("the hook policy peer serves");
+            }));
+            def["module"] = hook_module
+                .as_ref()
+                .expect("the actual hook is staged")
+                .clone()
+                .into();
+            def["settings"] = serde_json::json!({"url": endpoint});
+            hook_defs.insert(name, def);
+        }
+        sections
+            .get_mut(surface("section"))
+            .expect("a hooked agent section")[hooks.agent]["hooks"] =
+            serde_yaml::to_value(names).expect("the agent's hook names");
+    }
+    let mut deployment = serde_json::json!({
+        "providers": {}, "models": {}, "public_url": "https://gw.example",
+        "per_request_fee": if priced.is_some() { 0 } else { 1 },
+        "identity-providers": {
+            (busbar_kernel::config::operator_provider()): {
+                "module": busbar_kernel::config::operator_provider(),
+                "token": {"file": operator_file}
+            }
+        },
+        "auth": {
+            "chain": ["keys"], "admin_auth": [busbar_kernel::config::operator_provider()],
+            "signing_key": {"file": signing_file}
+        },
+        "advanced": {
+            "block_private_addresses": destinations.block_private_addresses,
+            "allow_destinations": destinations.allow,
+        },
+        "security": {
+            "blocked_metadata_hosts": destinations.blocked,
+            "allow_metadata_hosts": destinations.legacy_allow,
+            "allow_all_metadata": destinations.allow_all_metadata,
+        },
+        "store": {"module": module, "settings": settings},
+        "hooks": hook_defs,
+    });
+    for (key, value) in &sections {
+        deployment[*key] = serde_json::to_value(value).expect("the deployment section");
+    }
+    let deploy = busbar_kernel::config::deploy_from_deserializer(deployment.clone())
+        .expect("the deployment parses through the normal grammar");
+    let mut config = busbar_kernel::config::resolve(&deploy, &Default::default())
+        .expect("the deployment resolves through the normal root");
+    config.groups = groups.clone();
+    let plugins = busbar_kernel::config::PluginsCfg {
+        enabled: true,
+        dir: directory.to_string_lossy().into_owned(),
+        fetch,
+        ..Default::default()
+    };
+    for step in crate::ROOT_UNITS.iter().filter_map(|unit| unit.on_config) {
+        step(&config.limits);
+    }
+    let mut opened = busbar_kernel::appbuild::bootstrap_config_store(&config, &plugins)
+        .expect("normal bootstrap admits and opens the signed actual Store");
+    let refuse = Arc::new(std::sync::Mutex::new(None));
+    opened.calls = Some(Arc::new(Refusing {
+        inner: opened
+            .calls
+            .take()
+            .expect("the actual Store has record slots"),
+        named: refuse.clone(),
+    }));
+    let rules: Arc<dyn busbar_kernel::appbuild::RootRules> = rules;
+    let (app, rotate, limits) = busbar_kernel::appbuild::build_app_from_config_with_store(
+        config,
+        plugins.clone(),
+        None,
+        Default::default(),
+        Default::default(),
+        (None, None),
+        None,
+        &rules,
+        Some(opened),
+        true,
+    )
+    .expect("the production builder boots the actual Store-backed application");
+    limits.stage_boot();
+    let book = crate::root::boot::book(&app, &module).expect("the normal durable node book opens");
+    limits.keep().expect("the boot card activates");
+    if let Some(rotate) = rotate {
+        rotate();
+    }
+    let ctx = crate::root::linked::BookCtx {
+        book: &book,
+        app: &app,
+    };
+    for step in crate::ROOT_UNITS.iter().filter_map(|unit| unit.on_book) {
+        step(&ctx);
+    }
+    let gov = app
+        .governance
+        .as_ref()
+        .expect("normal Store-backed governance")
+        .clone();
     let (key, token) = gov
         .mint_signed(
             NewKeySpec {
-                name: "delegator".to_string(),
+                name: "delegator".into(),
                 allowed_pools,
                 group: groups.keys().next().cloned(),
                 ..Default::default()
             },
             4_000_000_000,
-            1_700_000_000,
+            busbar_kernel::store::now(),
         )
-        .expect("mint");
-    gov.hydrate_budgets(&cost, 0).expect("hydrate");
-    let node = Arc::new(Node::new());
-    let book = rig::node_book();
-    node.bind_book(Arc::clone(&book.durability));
-    let post = Arc::new(NodeEndPost::new(Arc::clone(&node)));
-    let end = Arc::clone(&post);
-    let site = Arc::clone(&post);
-    let book_money = Arc::clone(&gov);
-    let plane_money = move || {
-        Arc::new(PlaneMoney::new(
-            Arc::clone(&book_money),
-            Arc::clone(&site) as Arc<dyn EndPost>,
+        .expect("mint the normal signed caller token");
+    gov.hydrate_budgets(&app.cost, 0).expect("hydrate");
+
+    let services = crate::root::serve::LateServices::new();
+    let kernel = Arc::new(crate::root::serve::kernel_services(judge.clone()));
+    services
+        .install_kernel(kernel.clone(), kernel)
+        .expect("install the actual KernelServices");
+    crate::root::serve::attach(
+        &services,
+        Some(&gov),
+        Some(gov.clone()),
+        &app.demotion_record,
+        &[],
+    );
+    let dispatcher = Arc::new(crate::root::dispatch::build(1, &services));
+    crate::root::connector::install_io(&dispatcher);
+    let settings = busbar_contract::transport::TransportSettings::default();
+    let transports = crate::root::connector::entries(crate::LINKED_TRANSPORT_DOORS, &settings)
+        .expect("the actual distribution's external transport rows open");
+    let connector = if let Some(root) = root {
+        let tls = busbar_core_connector::tls::client::build_client_config(
+            &busbar_contract::transport::trust::EgressTrust {
+                extra_anchors: vec![root],
+                ..Default::default()
+            },
+        )
+        .expect("the actual connector trusts the peer's test CA");
+        Arc::new(busbar_core_connector::Connector::serving(
+            busbar_core_connector::registry::Transports::new(transports)
+                .expect("the actual transport view"),
+            busbar_core_connector::process::judge(judge, &[]),
+            Some(Arc::new(tls)),
+            dispatcher.conn_waker(),
         ))
+    } else {
+        busbar_core_connector::process::build_with_secrets(
+            || Ok(transports),
+            judge,
+            &[],
+            dispatcher.conn_waker(),
+            crate::root::connector::pool_posture(&settings),
+            busbar_kernel::config::secret::resolve_linked_string_at_config,
+        )
+        .expect("the actual production connector builds")
     };
-    let mut sections = BTreeMap::new();
-    if facing != Facing::Unconfigured {
-        sections.insert(
-            section_key,
-            serde_yaml::from_str(section).expect("a section"),
-        );
-    }
-
-    if let Some(ca) = push_ca {
-        let mut push = serde_yaml::Mapping::new();
-        push.insert(
-            root_facts::PUSH_CA_KEY.into(),
-            serde_yaml::Value::String(ca),
-        );
-        sections.insert(root_facts::PUSH_SECTION, serde_yaml::Value::Mapping(push));
-    }
-
+    let row = LinkedRow::of(door()).expect("the actual linked A2A Statement");
+    let plane = Arc::new(
+        load_linked::<Plane>(
+            &row,
+            Bind {
+                instance: Arc::from(instance),
+                max_inflight_cap: 64,
+                sink: Arc::new(NoSink),
+                dispatcher: dispatcher.adopter(),
+                conns: ConnTable::Host(connector.clone()),
+            },
+        )
+        .expect("the actual linked A2A product binds"),
+    );
+    let node = Arc::new(Node::new());
+    node.bind_book(book.durability.clone());
+    let post = Arc::new(NodeEndPost::new(node));
+    let money = Arc::new(PlaneMoney::new(
+        gov.clone(),
+        post.clone() as Arc<dyn EndPost>,
+    ));
     let riding = Arc::new(Riding {
-        inner: Arc::clone(&connector),
+        inner: connector.clone(),
         opened: std::sync::Mutex::default(),
     });
-    let egress = rig::EgressRig::new(
-        &dispatcher,
-        Arc::clone(&connector) as Arc<dyn DeclaredConns>,
-        Arc::clone(&riding) as Arc<dyn busbar_contract::conn::PollConns>,
-        Arc::clone(&post) as Arc<dyn busbar_kernel_egress::ports::Journal>,
-    );
-
-    let tables = busbar_kernel::plane_driver::serve::ServeTables::default();
-    let builder = busbar_kernel_testkit::test_support::TestApp::new();
-    let mut compose = rig::DoorCompose::new(
-        vec![(instance.to_string(), plane)],
+    let providers = BTreeMap::new();
+    let reach = crate::root::door_steps::DoorReach {
+        providers: &providers,
+        secrets: Arc::new(busbar_kernel::config::secret::SecretResolver::builtins_only()),
+        auths: Arc::new(crate::root::door_steps::OutboundAuths::new(
+            dispatcher.clone(),
+            crate::LINKED.auths,
+            None,
+            ConnTable::Host(connector.clone()),
+            busbar_kernel::diagnostics::Catalogue::NEUTRAL,
+        )),
+        conns: riding.clone(),
+        stream_ceiling_secs: 600,
+        catalog: None,
+        models: None,
+        upgrades: Vec::new(),
+    };
+    let hooks = crate::root::serve::HookStage {
+        host: Arc::new({
+            let live = live.clone();
+            move || {
+                busbar_kernel::plane_driver::engine_host(
+                    live.get().expect("the serving App is built"),
+                )
+            }
+        }),
+        gov: gov.clone(),
+        journal: None,
+    };
+    let mut composed = crate::root::serve::compose_planes(
+        &[(instance.to_string(), plane)],
         &dispatcher,
         &services,
         &sections,
-        &plane_money,
+        Some("https://gw.example"),
+        &|| money.clone(),
+        Some(&crate::root::serve::DoorEgress {
+            reach: &reach,
+            journal: post.clone(),
+        }),
+        Some(&hooks),
+        &app.serve_tables,
     )
-    .tables(&tables)
-    .public_url("https://gw.example")
-    .egress(&egress)
-    .post(post)
-    .framers(Arc::clone(&connector));
-    if hooks.is_some() {
-        let live = Arc::clone(&live);
-        compose = compose.hooks(
-            Arc::new(move || {
-                busbar_kernel::plane_driver::engine_host(
-                    live.get().expect("the App is built before a unit runs"),
-                )
-            }),
-            Arc::clone(&gov),
-        );
-    }
-    let composed = compose.compose().expect("the agent door composes");
+    .expect("the actual root composes the agent door");
+    composed.post = Some(post.clone());
+    composed.framers = Some(crate::root::serve::StreamFramers(Arc::new(move |claim| {
+        connector.framer_for(claim)
+    })));
     if ticking {
         composed.spawn_ticks();
     }
-
-    let facing_of = if facing == Facing::Admitted {
-        rig::admissions(&composed)
-    } else {
-        Vec::new()
-    };
-
-    busbar_core_admin::install();
-
-    rig::register_door(door(), "serve-agent-row").expect("the door binds and folds");
-    rig::install_root_auth();
-    let mut builder = builder
-        .serve_tables(tables.clone())
-        .keys_chain()
-        .admin_chain(vec![busbar_kernel::config::operator_provider().to_string()])
-        .governance(Arc::clone(&gov));
-    for (name, cfg) in &groups {
-        builder = builder.group(name, cfg.clone());
-    }
-    builder = builder.cost(cost);
-    if let Some(hooks) = hooks {
-        let names: Vec<String> = hooks.defs.iter().map(|(n, _)| n.clone()).collect();
-        builder = builder.hook_env(hooks.env);
-        for (name, def) in hooks.defs {
-            builder = builder.hook(
-                &name,
-                serde_json::from_value(def).expect("a hooks: definition"),
-            );
-        }
-        builder.set_container_hooks(
-            surface("plane_key"),
-            vec![(hooks.agent.to_string(), names)],
-            Vec::new(),
-        );
-    }
-    for (paths, admission) in facing_of {
-        for path in &paths {
-            builder.mount_plane(
-                surface("plane_key"),
-                path,
-                busbar_kernel::plane_driver::dispatch::WIRE_JSONRPC,
-            );
-        }
-        builder.admit_plane(surface("plane_key"), admission);
-    }
-    let app = builder.build();
-    let _ = live.set(Arc::clone(&app));
+    let app = Arc::new(app);
+    assert!(
+        live.set(app.clone()).is_ok(),
+        "the serving App is installed once"
+    );
     let appliers = composed.appliers();
-    let doors = rig::door_routes(composed, || CARD.pin()).expect("its claims mount");
+    let doors = crate::root::serve::door_routes(composed, || CARD.pin(), &[], &[])
+        .expect("the actual root mounts the declared claims");
     let routes = doors.iter().map(|r| r.path.clone()).collect();
     let (router, admin, handle) =
-        busbar_kernel::build_split_routers_serving(Arc::clone(&app), doors, 1 << 20, 0, false);
-
+        busbar_kernel::build_split_routers_serving(app.clone(), doors, 1 << 20, 0, false);
+    services
+        .kernel()
+        .expect("the actual host is installed")
+        .attach_standing(busbar_kernel::plane_driver::live_standing(handle.clone()));
     let router = router.layer(axum::Extension(ListenerScheme(
         busbar_contract::abi::host::service::SCHEME_PLAIN,
     )));
-
-    let admin = rig::mount_node_admin(admin, 1 << 20, &handle, &book, &services);
-
+    let admin = crate::root::units_admin::mount_node(
+        admin,
+        1 << 20,
+        &handle,
+        &book,
+        None,
+        &services,
+        crate::root::adapters::BreakerPolicy::new(),
+    );
     handle.on_apply(Box::new(move |app| appliers.apply(app)));
     Served {
         router,
@@ -950,12 +1179,16 @@ fn served_core(
         key,
         token: token.expose(&busbar_kernel::seal::lend()).to_string(),
         handle,
-        book: Arc::clone(&book.durability),
-        post: end,
+        book: book.durability.clone(),
+        post,
         routes,
         refuse,
         riding,
         observed_destinations,
+        deployment,
+        plugins,
+        rules,
+        hook_peers,
     }
 }
 
@@ -1915,11 +2148,14 @@ async fn an_agent_sections_per_request_fee_validates_and_per_session_is_refused(
 
     let _s = served(instance, &agent.entry("planner", "1h"), false, None);
 
-    rig::register_linked_protocols();
+    crate::dist_root_install::install();
     let with_fees = |per_request: i64, per_session: i64| {
-        let mut cfg = busbar_kernel_testkit::test_support::cfg_with_provider_api_key(
-            busbar_kernel::config::SecretRef::none(),
-        );
+        let deploy = busbar_kernel::config::deploy_from_yaml_str(
+            "store: {module: memory}\nproviders: {}\nmodels: {}\n",
+        )
+        .expect("the fee validation deployment parses");
+        let mut cfg = busbar_kernel::config::resolve(&deploy, &Default::default())
+            .expect("the fee validation deployment resolves");
         cfg.plane_fees = [(
             surface("plane_key").to_string(),
             busbar_kernel_ledger::cost::PlaneFees {
@@ -2286,12 +2522,8 @@ async fn a_hop_refused_before_the_socket_keeps_no_fee() {
 /// B2 (restored, #42, #77(5)): A PRESENT AGENTS CARD SILENT ABOUT AN AGENT REFUSES THE CONFIG,
 #[test]
 fn a_present_agents_card_silent_about_an_agent_refuses_the_config() {
-    let folded =
-        rig::folded_door(door(), "serve-agent-card-row").expect("the door binds and folds");
-    let _registry = busbar_kernel_testkit::test_support::planes::TestRegistryIsolation::seeded(&[
-        busbar_kernel_testkit::test_support::neutral_fallback_plane(),
-        folded,
-    ]);
+    let _one = PUBLISHING.blocking_lock();
+    crate::dist_root_install::install();
     let (section, kind) = (surface("section"), surface("resource_kind"));
     let resolved = |card: &str| {
         let text = format!(
@@ -2703,7 +2935,7 @@ struct AgentTls {
 
 impl AgentTls {
     fn new() -> Self {
-        rig::install_crypto_provider();
+        busbar_core_connector::tls::install_crypto_provider();
         let kp = rcgen::KeyPair::generate().expect("a key");
         let mut params = rcgen::CertificateParams::new(Vec::new()).expect("params");
         params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
@@ -3296,36 +3528,14 @@ async fn a_config_apply_keeps_the_operators_approval() {
     assert!(agent.relayed());
 
     let apply = |section: &str| {
-        let row = busbar_kernel::plane_driver::registry::plane_decl_for_config_section(surface(
-            "section",
-        ))
-        .expect("the registry holds the door's row");
-        let slot = busbar_kernel::plane_driver::door::DoorSlot {
-            section: busbar_kernel::plane_driver::door::DoorSection::new(
-                row.door,
-                surface("section"),
-                serde_yaml::from_str(section).expect("the applied section"),
-            ),
-            facing: busbar_contract::plane_calls::DoorFacing {
-                claims: Vec::new(),
-                admission: None,
-                listed: Vec::new(),
-            },
-            opened: true,
-        };
-        let mut next = busbar_kernel_testkit::test_support::TestApp::new()
-            .serve_tables(s.app.serve_tables.clone())
-            .keys_chain()
-            .admin_chain(vec![busbar_kernel::config::operator_provider().to_string()])
-            .governance(Arc::clone(&s.gov))
-            .cost(CostModel::flat(1));
-        next.install_plane_runtime(surface("plane_key"), Arc::new(slot));
-        let next = next.build();
+        let next = s.applied(
+            serde_yaml::from_str(section).expect("the applied section"),
+            false,
+        );
         assert!(
             !Arc::ptr_eq(&s.app, &next),
             "a distinct serving App is applied"
         );
-        let _registry = busbar_kernel_testkit::test_support::planes::TestRegistryIsolation::empty();
         s.handle.swap(next);
     };
     apply(&format!(
@@ -3871,11 +4081,6 @@ async fn the_legacy_well_known_path_is_tried_only_when_the_canonical_one_served_
     );
 }
 
-/// Test-hook environment registered under the `test-hook` alias.
-fn hook_env() -> busbar_kernel::hooks::HookEnv {
-    rig::hook_env(&["test-hook"], rig::NeedLevel::Rw, rig::NeedLevel::Ro)
-}
-
 /// A `hooks:` definition on the kernel's hook double, as an operator writes it, its `prompt:` grant
 fn hook_def(prompt: &str, settings: serde_json::Value) -> serde_json::Value {
     serde_json::json!({
@@ -3902,7 +4107,6 @@ fn hooked(instance: &'static str, agent: &Agent, name: &str, def: serde_json::Va
         None,
         None,
         Some(AgentHooks {
-            env: hook_env(),
             defs: vec![(name.to_string(), def)],
             agent: "planner",
         }),
@@ -4042,7 +4246,8 @@ fn the_agent_door_states_a_cell_refuses_on_a_trip_and_nothing_less() {
     let name = busbar_contract::abi::mechanism::rendering::read(&row.statement)
         .expect("its Statement reads")
         .name;
-    let stated = rig::door_breaker(&name).expect("its declares section reads");
+    let stated = crate::root::linked::door_breaker(&crate::LINKED, None, &name)
+        .expect("its declares section reads");
     assert_eq!(stated.map(|b| b.bench_below_trip_threshold), Some(false));
 }
 
@@ -5284,7 +5489,7 @@ mod upstream_credential {
 
     /// REFRESH every served credential now, off the runtime's workers (each lease here is a
     async fn refreshed() {
-        tokio::task::spawn_blocking(rig::refresh_credentials)
+        tokio::task::spawn_blocking(crate::root::door_steps::refresh_credentials)
             .await
             .expect("the refresh");
     }
@@ -5749,10 +5954,14 @@ mod upstream_credential {
     /// A SECRET'S SOURCE NEVER REACHES A CALLER (the root's secret-source scan, coordinator ruling
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_credential_that_stops_resolving_reaches_the_caller_without_its_source() {
-        use super::rig::{assert_clean, missing, refused_naming_its_source, unset};
         let _one = PUBLISHING.lock().await;
-        let var = unset("AGENT_UPSTREAM_ENV");
-        let path = missing("agent-upstream-file");
+        let var = format!("BUSBAR_A2A_UPSTREAM_ENV_{}", std::process::id());
+        let path = std::env::temp_dir()
+            .join(format!("busbar-a2a-upstream-file-{}", std::process::id(),))
+            .to_string_lossy()
+            .into_owned();
+        std::env::remove_var(&var);
+        let _ = std::fs::remove_file(&path);
         let cases = [
             (
                 "serve-agent-cred-source-env",
@@ -5790,7 +5999,35 @@ mod upstream_credential {
             std::env::remove_var(&var);
             let _ = std::fs::remove_file(&path);
             refreshed().await;
-            refused_naming_its_source(&secret);
+            let needles = || {
+                let mut words = vec![
+                    "environment variable".to_string(),
+                    "is unset".to_string(),
+                    "no such file".to_string(),
+                    format!("secret {}", busbar_contract::secret_ref::SECRET_MODULE_FILE),
+                    secret.describe(),
+                ];
+                words.extend(
+                    secret
+                        .settings
+                        .values()
+                        .filter_map(serde_json::Value::as_str)
+                        .map(str::to_string),
+                );
+                words
+            };
+            let refusal = busbar_kernel::config::secret::resolve_linked_string_at_config(
+                &secret,
+                &busbar_contract::config_time::ConfigScope::config_time(),
+            )
+            .expect_err("the source reference no longer resolves");
+            assert!(
+                needles().iter().any(|word| !word.is_empty()
+                    && refusal
+                        .to_ascii_lowercase()
+                        .contains(&word.to_ascii_lowercase())),
+                "the source's own refusal names it, so the scan has something to find: {refusal}"
+            );
             let response = {
                 use tower::ServiceExt as _;
                 s.router
@@ -5805,7 +6042,33 @@ mod upstream_credential {
                 .await
                 .expect("the body");
             assert_ne!(status, StatusCode::OK, "{instance}: the hop is refused");
-            assert_clean(instance, status, &headers, &body, &secret);
+            let mut rendered = format!(
+                "{} {}\n",
+                status.as_str(),
+                status.canonical_reason().unwrap_or_default()
+            );
+            for (name, value) in &headers {
+                rendered.push_str(&format!(
+                    "{}: {}\n",
+                    name.as_str(),
+                    String::from_utf8_lossy(value.as_bytes())
+                ));
+            }
+            rendered.push('\n');
+            rendered.push_str(&String::from_utf8_lossy(&body));
+            let found: Vec<_> = needles()
+                .into_iter()
+                .filter(|word| {
+                    !word.is_empty()
+                        && rendered
+                            .to_ascii_lowercase()
+                            .contains(&word.to_ascii_lowercase())
+                })
+                .collect();
+            assert!(
+                found.is_empty(),
+                "{instance}: the caller was handed the secret's source {found:?}:\n{rendered}"
+            );
         }
     }
 }
@@ -6641,7 +6904,7 @@ async fn an_apply_carrying_a_malformed_agent_push_ca_is_refused_and_deliveries_k
         Some(pem_of(&tls.root)),
     );
 
-    rig::register_door(door(), instance).expect("the door binds and folds");
+    crate::dist_root_install::install();
     let text = format!(
         "store: {{module: memory}}\nproviders: {{}}\nmodels: {{}}\n{}:\n  planner: {{ url: \
          https://planner.example/rpc, pin: {{ mechanism: unpinned }} }}\nagent_push:\n  ca: \
@@ -6650,7 +6913,7 @@ async fn an_apply_carrying_a_malformed_agent_push_ca_is_refused_and_deliveries_k
     );
     let deploy = busbar_kernel::config::deploy_from_yaml_str(&text).expect("the config parses");
     let cfg = busbar_kernel::config::resolve(&deploy, &Default::default()).expect("resolves");
-    let rules = Arc::new(rig::Rules::default());
+    let rules = Arc::new(crate::root::door_steps::Rules::default());
     rules.hold_owned_anchors(&[root_facts::PUSH_TRUST_FROM]);
     let built = busbar_kernel::build_app_from_config(
         cfg,
@@ -7339,9 +7602,45 @@ async fn the_signature_is_taken_over_the_document_that_is_actually_served() {
     );
 }
 
+/// Exposition from the freshly built Prometheus product over the real kernel recorder.
+fn render_metrics() -> String {
+    use crate::root::loader::dispatch::kinds::export::Export;
+    use busbar_contract::export_calls::ExportCalls as _;
+    let path = std::path::PathBuf::from(
+        std::env::var_os("BUSBAR_TEST_PROMETHEUS_CDYLIB")
+            .expect("BUSBAR_TEST_PROMETHEUS_CDYLIB names the actual built exporter"),
+    );
+    let statement = rendering_of_library(&path)
+        .expect("the actual exporter statement reads")
+        .expect("the actual exporter states itself");
+    let dispatcher = Arc::new(Dispatcher::new(DispatchConfig::default()));
+    let plugin = load_dropped::<Export>(
+        &path,
+        &statement,
+        Bind {
+            instance: "a2a-root-metrics".into(),
+            max_inflight_cap: 64,
+            sink: Arc::new(NoSink),
+            dispatcher: dispatcher.adopter(),
+            conns: ConnTable::NoNeeds,
+        },
+    )
+    .expect("the actual exporter binds");
+    let exporter =
+        crate::root::loader::export_door::ExportInstance::open(plugin, dispatcher, b"{}")
+            .expect("the actual exporter opens");
+    let families = busbar_kernel::snapshot::snapshot().expect("the product recorder is installed");
+    String::from_utf8(
+        exporter
+            .scrape(&families)
+            .expect("the actual exporter scrapes"),
+    )
+    .expect("the actual exporter emits UTF-8")
+}
+
 /// The exposition lines of `family` whose `pool` label is `pool` and `lane` label is `lane`.
 fn series_of(family: &str, pool: &str, lane: &str) -> Vec<String> {
-    busbar_kernel_testkit::test_support::export_axis::render()
+    render_metrics()
         .lines()
         .filter(|l| l.starts_with(&format!("{family}{{")))
         .filter(|l| l.contains(&format!("pool=\"{pool}\"")))
@@ -7361,7 +7660,7 @@ fn total(lines: &[String]) -> f64 {
 /// Ported from busbar-a2a a2a/tests/relay_leg_metrics_tests.rs::a_relayed_task_counts_an_upstream_attempt_naming_the_agent_it_was_issued_to.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_relayed_task_counts_an_upstream_attempt_naming_the_agent_it_was_issued_to() {
-    busbar_kernel_testkit::test_support::metrics::init();
+    busbar_kernel::snapshot::init_for_test(std::time::Duration::from_secs(60));
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-metered";
     let mut agent = Agent::start(200, ANSWER).await;
@@ -7382,7 +7681,7 @@ async fn a_relayed_task_counts_an_upstream_attempt_naming_the_agent_it_was_issue
         !lines.is_empty(),
         "a relayed unit left no `{family}` series naming the agent it was issued to and its \
          binding: {}",
-        busbar_kernel_testkit::test_support::export_axis::render()
+        render_metrics()
     );
     assert!(
         total(&lines) > before,
@@ -7399,7 +7698,7 @@ async fn a_relayed_task_counts_an_upstream_attempt_naming_the_agent_it_was_issue
 /// Ported from busbar-a2a a2a/tests/relay_leg_metrics_tests.rs::a_backend_that_cannot_be_reached_is_counted_as_a_transient_upstream_failure.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_backend_that_cannot_be_reached_is_counted_as_a_transient_upstream_failure() {
-    busbar_kernel_testkit::test_support::metrics::init();
+    busbar_kernel::snapshot::init_for_test(std::time::Duration::from_secs(60));
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-unreachable";
     let mut agent = Agent::start(200, ANSWER).await;
@@ -7603,7 +7902,7 @@ fn pooled(entries: &str, members: &[&str]) -> String {
         },
     )]
     .into();
-    let sections = rig::with_pools([(key, section)].into(), &[(key, pools)]);
+    let sections = crate::root::serve::with_pools([(key, section)].into(), &[(key, pools)]);
     serde_yaml::to_string(&sections[key]).expect("the section writes")
 }
 
@@ -8468,36 +8767,8 @@ async fn a_config_apply_keeps_the_pool_walking() {
         map.remove(busbar_contract::section::RESERVED_POOLS_KEY);
     }
 
-    let row =
-        busbar_kernel::plane_driver::registry::plane_decl_for_config_section(surface("section"))
-            .expect("the registry holds the door's row");
-    let slot = busbar_kernel::plane_driver::door::DoorSlot {
-        section: busbar_kernel::plane_driver::door::DoorSection::new(
-            row.door,
-            surface("section"),
-            written,
-        ),
-        facing: busbar_contract::plane_calls::DoorFacing {
-            claims: Vec::new(),
-            admission: None,
-            listed: Vec::new(),
-        },
-        opened: true,
-    };
-
-    let mut next = busbar_kernel_testkit::test_support::TestApp::new()
-        .serve_tables(s.app.serve_tables.clone())
-        .keys_chain()
-        .admin_chain(vec![busbar_kernel::config::operator_provider().to_string()])
-        .governance(Arc::clone(&s.gov))
-        .cost(CostModel::flat(1))
-        .agent_pool("planner", &["planner-a", "planner-b"]);
-    next.install_plane_runtime(surface("plane_key"), Arc::new(slot));
-    let next = next.build();
-    {
-        let _registry = busbar_kernel_testkit::test_support::planes::TestRegistryIsolation::empty();
-        s.handle.swap(next);
-    }
+    let next = s.applied(written, true);
+    s.handle.swap(next);
     let mut log = Vec::new();
     let mut heard = || {
         hear(&mut agent, &mut log);
