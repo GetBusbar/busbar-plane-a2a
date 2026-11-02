@@ -4,8 +4,11 @@
 use super::*;
 use busbar_contract::abi::mechanism::call::{InHead, OutHead};
 use busbar_contract::abi::mechanism::lifecycle::{
-    slot as life, CancelIn, CancelOut, DriveIn, GenIn, OpenIn, OpenOut, RefreshIn, ReleaseIn,
-    TickIn, TickOut, ValidateIn,
+    slot as life, GenIn, RefreshIn, ReleaseIn, TickIn, TickOut, ValidateIn,
+};
+use busbar_contract::abi::plane::{
+    PlaneCancelIn, PlaneCancelOut, PlaneDriveIn, PlaneDriveOut, PlaneOpenIn, PlaneOpenOut,
+    PlaneRefreshOut,
 };
 use busbar_contract::abi::sdk::{Safe, SafeSlot};
 use busbar_test_kit::test_support::{fake::FakeHost, reply, test_in::TestIn, zeroed, DoorView};
@@ -36,25 +39,25 @@ mod probe {
         };
     }
     quiet!(Validate, ValidateIn, OutHead);
-    quiet!(Refresh, RefreshIn, OutHead);
+    quiet!(Refresh, RefreshIn, PlaneRefreshOut);
     quiet!(Retire, GenIn, OutHead);
     quiet!(Tick, TickIn, TickOut);
-    quiet!(Drive, DriveIn, OutHead);
-    quiet!(Cancel, CancelIn, CancelOut);
+    quiet!(Drive, PlaneDriveIn, PlaneDriveOut);
+    quiet!(Cancel, PlaneCancelIn, PlaneCancelOut);
     quiet!(Release, ReleaseIn, OutHead);
     quiet!(Close, InHead, OutHead);
 
     pub struct Open;
     impl SafeSlot for Open {
-        type In = OpenIn;
-        type Out = OpenOut;
+        type In = PlaneOpenIn;
+        type Out = PlaneOpenOut;
         type State = A2aDoor;
         fn call(
             instance: Instance<'_, A2aDoor>,
-            input: Lent<'_, OpenIn>,
-            _: Out<'_, OpenOut>,
+            input: Lent<'_, PlaneOpenIn>,
+            _: Out<'_, PlaneOpenOut>,
         ) -> Outcome {
-            let tables = input.host().unwrap();
+            let tables = input.open().host().unwrap();
             let plane = A2aDoor::listing_lifecycle_fixture(
                 busbar_contract::abi::sdk::conn::Host::of(tables),
                 Services::of(tables).unwrap(),
@@ -62,7 +65,7 @@ mod probe {
             plane.on_unit(1, |u| {
                 u.pass.served = true;
                 u.pass.audit = Some(("agent:planner".into(), true));
-                u.pass.response_only = input.settings().bytes() == b"refused";
+                u.pass.response_only = input.open().settings().bytes() == b"refused";
             });
             instance.open(plane);
             Outcome::Ready
@@ -138,7 +141,11 @@ mod probe {
     }
 }
 
-fn windows(refused: bool, mode: u32, capacity: usize) -> (Outcome, Vec<OnPieceOut>, Vec<u8>) {
+fn windows(
+    refused: bool,
+    mode: u32,
+    capacity: usize,
+) -> (Outcome, Vec<reply::PieceOutput>, Vec<u8>) {
     let fake = FakeHost::new();
     let view = DoorView::of(probe::MACRO_DOOR);
     let settings = if refused {
@@ -147,8 +154,8 @@ fn windows(refused: bool, mode: u32, capacity: usize) -> (Outcome, Vec<OnPieceOu
         b"observed".as_slice()
     };
     let open = fake.lend_in(
-        TestIn::<OpenIn>::new()
-            .set(|i| &i.head.op, life::OPEN)
+        TestIn::<PlaneOpenIn>::new()
+            .set(|i| &i.open.head.op, life::OPEN)
             .settings(settings),
     );
     let mut opened = reply::call_hosted_in(
@@ -156,7 +163,7 @@ fn windows(refused: bool, mode: u32, capacity: usize) -> (Outcome, Vec<OnPieceOu
             .unwrap(),
         None,
         &open,
-        zeroed::<OpenOut>(),
+        zeroed::<PlaneOpenOut>(),
     );
     assert_eq!(opened.outcome, Outcome::Ready, "{opened:?}");
     let instance = opened.take_instance().unwrap();
@@ -179,20 +186,20 @@ fn windows(refused: bool, mode: u32, capacity: usize) -> (Outcome, Vec<OnPieceOu
             .buffer(|i| &i.records_buf, |i| &i.records_cap, &mut records)
             .buffer(|i| &i.units_buf, |i| &i.units_cap, &mut units)
             .buffer(|i| &i.arena_buf, |i| &i.arena_cap, &mut arena);
-        let answer = reply::call_in(
+        let answer = reply::call_piece_in(
             view.op::<busbar_contract::abi::plane::Ops>(|t| &t.on_piece)
                 .unwrap(),
             Some(&instance),
             &input,
-            zeroed::<OnPieceOut>(),
         );
         outcome = answer.outcome;
         let output = answer.out;
+        let emitted = output.emitted as usize;
+        let finished = outcome != Outcome::Ready || output.more == 0;
         outputs.push(output);
-        drop(answer);
         drop(input);
-        body.extend_from_slice(&bytes[..output.emitted as usize]);
-        if outcome != Outcome::Ready || output.more == 0 {
+        body.extend_from_slice(&bytes[..emitted]);
+        if finished {
             break;
         }
     }
