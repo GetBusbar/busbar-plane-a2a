@@ -64,7 +64,7 @@ static SIGNATURE_CALLS: AtomicU64 = AtomicU64::new(0);
 extern "C" fn signed_card(_: HostCtx, input: *const c_void, out: *mut ServiceOut) -> RawOutcome {
     // SAFETY: the public door's SDK lends SignIn and its writable result regions for this call.
     let input = unsafe { input.cast::<SignIn>().read() };
-    if input.data.len() != 0 {
+    if !input.data.is_empty() {
         SIGNATURE_CALLS.fetch_add(1, Ordering::SeqCst);
         if FAIL_SIGNATURE.load(Ordering::SeqCst) {
             return answer(out, Outcome::Failed, 0, 0);
