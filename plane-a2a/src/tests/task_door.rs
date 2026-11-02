@@ -35,15 +35,22 @@ fn a_write_names_its_kind_by_the_tails_index() {
 use busbar_contract::abi::mechanism::ticket::{HostCtx, HostTables};
 use busbar_contract::abi::sdk::conn::Host;
 
-// These buffer/reservation cases never invoke a host slot; absence is explicit.
-fn no_task_services() -> HostTables {
+// Present but unarmed matches the original fixture: Via::issue requires Services before it
+// invokes the assertion-specific closure. No callback supplies an invented success result.
+static UNARMED_TASK_SERVICES: std::sync::LazyLock<busbar_contract::abi::host::service::HostSlots> =
+    std::sync::LazyLock::new(|| busbar_contract::abi::host::service::HostSlots {
+        size: std::mem::size_of::<busbar_contract::abi::host::service::HostSlots>() as u32,
+        slots: busbar_contract::abi::host::service::SERVICES,
+        ..busbar_contract::abi::sdk::test_support::zeroed()
+    });
+fn unarmed_task_services() -> HostTables {
     HostTables {
         size: std::mem::size_of::<HostTables>() as u32,
         _reserved: 0,
         ctx: HostCtx { handle: 0 },
         wake: None,
         conns: std::ptr::null(),
-        services: std::ptr::null(),
+        services: &*UNARMED_TASK_SERVICES,
         io: std::ptr::null(),
     }
 }
@@ -77,11 +84,11 @@ fn long_record(
 #[test]
 #[allow(unsafe_code)]
 fn a_short_records_answer_is_re_called_once_on_its_handle_at_the_named_size() {
-    let tables = no_task_services();
-    // SAFETY: this immutable complete table advertises only NULL nested tables. The SDK
-    // snapshots it immediately; no callback or context points at borrowed state.
+    let tables = unarmed_task_services();
+    // SAFETY: this complete immutable table advertises the full static service prefix.
+    // Every callback is None; no context or callback points at borrowed state.
     let host = unsafe { Host::from_raw(&tables) };
-    // SAFETY: same complete table and NULL service prefix; no callback can outlive this scope.
+    // SAFETY: same readable static service prefix, with every callback None.
     let services = unsafe { Services::from_raw(&tables) };
     let grown = Keyed::new();
     let mut via = Via::new(&host, services, TICKET, 0, &grown);
@@ -98,11 +105,11 @@ fn a_short_records_answer_is_re_called_once_on_its_handle_at_the_named_size() {
 #[test]
 #[allow(unsafe_code)]
 fn a_piece_run_again_issues_a_short_handle_at_the_size_already_named() {
-    let tables = no_task_services();
-    // SAFETY: this immutable complete table advertises only NULL nested tables. The SDK
-    // snapshots it immediately; no callback or context points at borrowed state.
+    let tables = unarmed_task_services();
+    // SAFETY: this complete immutable table advertises the full static service prefix.
+    // Every callback is None; no context or callback points at borrowed state.
     let host = unsafe { Host::from_raw(&tables) };
-    // SAFETY: same complete table and NULL service prefix; no callback can outlive this scope.
+    // SAFETY: same readable static service prefix, with every callback None.
     let services = unsafe { Services::from_raw(&tables) };
     let grown = Keyed::new();
     let mut log = Vec::new();
@@ -135,11 +142,11 @@ fn a_piece_run_again_issues_a_short_handle_at_the_size_already_named() {
 #[test]
 #[allow(unsafe_code)]
 fn a_second_short_answer_on_one_handle_is_a_broken_host() {
-    let tables = no_task_services();
-    // SAFETY: this immutable complete table advertises only NULL nested tables. The SDK
-    // snapshots it immediately; no callback or context points at borrowed state.
+    let tables = unarmed_task_services();
+    // SAFETY: this complete immutable table advertises the full static service prefix.
+    // Every callback is None; no context or callback points at borrowed state.
     let host = unsafe { Host::from_raw(&tables) };
-    // SAFETY: same complete table and NULL service prefix; no callback can outlive this scope.
+    // SAFETY: same readable static service prefix, with every callback None.
     let services = unsafe { Services::from_raw(&tables) };
     let grown = Keyed::new();
     let mut via = Via::new(&host, services, TICKET, 0, &grown);
@@ -156,9 +163,12 @@ fn a_second_short_answer_on_one_handle_is_a_broken_host() {
 #[test]
 #[allow(unsafe_code)]
 fn a_door_opened_with_no_services_reads_no_record() {
-    let tables = no_task_services();
-    // SAFETY: this immutable complete table advertises only NULL nested tables. The SDK
-    // snapshots it immediately; no callback or context points at borrowed state.
+    let tables = HostTables {
+        services: std::ptr::null(),
+        ..unarmed_task_services()
+    };
+    // SAFETY: the complete immutable table explicitly advertises no services or connectors.
+    // No context or callback points at borrowed state.
     let host = unsafe { Host::from_raw(&tables) };
     let grown = Keyed::new();
     let mut via = Via::new(&host, None, TICKET, 0, &grown);
@@ -171,11 +181,11 @@ fn a_door_opened_with_no_services_reads_no_record() {
 #[test]
 #[allow(unsafe_code)]
 fn the_sizes_book_is_bounded() {
-    let tables = no_task_services();
-    // SAFETY: this immutable complete table advertises only NULL nested tables. The SDK
-    // snapshots it immediately; no callback or context points at borrowed state.
+    let tables = unarmed_task_services();
+    // SAFETY: this complete immutable table advertises the full static service prefix.
+    // Every callback is None; no context or callback points at borrowed state.
     let host = unsafe { Host::from_raw(&tables) };
-    // SAFETY: same complete table and NULL service prefix; no callback can outlive this scope.
+    // SAFETY: same readable static service prefix, with every callback None.
     let services = unsafe { Services::from_raw(&tables) };
     let grown = Keyed::new();
     let via = Via::new(&host, services, TICKET, 0, &grown);

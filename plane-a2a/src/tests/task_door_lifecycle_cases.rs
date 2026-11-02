@@ -13,10 +13,10 @@ fn ticket(slot: u32) -> Ticket {
 #[test]
 #[allow(unsafe_code)]
 fn a_full_sizes_book_never_forgets_a_pending_tickets_short_answer() {
-    let unserved = no_task_services();
-    // SAFETY: complete immutable table has only NULL nested tables; SDK snapshots immediately.
+    let unserved = unarmed_task_services();
+    // SAFETY: complete immutable table advertises the full static unarmed service prefix.
     let host = unsafe { Host::from_raw(&unserved) };
-    // SAFETY: the same table has no services or borrowed callback state.
+    // SAFETY: same readable static service prefix; callbacks are None and borrow no state.
     let services = unsafe { Services::from_raw(&unserved) };
     let grown = Keyed::new();
     let first = ticket(1);
@@ -366,7 +366,7 @@ fn drive_listing() -> Vec<(tracing::Level, String)> {
     };
     let tables = HostTables {
         services: &slots,
-        ..no_task_services()
+        ..unarmed_task_services()
     };
     // SAFETY: the complete table and advertised immutable slot prefix are readable here. SDK
     // snapshots copy the slots; static callbacks use only the current thread's LISTING state.
@@ -466,10 +466,10 @@ fn a_real_mirror_setup_read_failure_is_reported_without_exposing_request_materia
 #[test]
 #[allow(unsafe_code)]
 fn a_full_book_refuses_an_untracked_handle_before_any_host_issue_even_on_reentry() {
-    let unserved = no_task_services();
-    // SAFETY: complete immutable table has only NULL nested tables; SDK snapshots immediately.
+    let unserved = unarmed_task_services();
+    // SAFETY: complete immutable table advertises the full static unarmed service prefix.
     let host = unsafe { Host::from_raw(&unserved) };
-    // SAFETY: the same table has no services or borrowed callback state.
+    // SAFETY: same readable static service prefix; callbacks are None and borrow no state.
     let services = unsafe { Services::from_raw(&unserved) };
     let grown = Keyed::new();
     let held = Via::new(&host, services, ticket(2), 0, &grown);
@@ -501,10 +501,10 @@ fn a_full_book_refuses_an_untracked_handle_before_any_host_issue_even_on_reentry
 #[test]
 #[allow(unsafe_code)]
 fn completed_records_calls_release_reservations_instead_of_consuming_the_growth_bound() {
-    let unserved = no_task_services();
-    // SAFETY: complete immutable table has only NULL nested tables; SDK snapshots immediately.
+    let unserved = unarmed_task_services();
+    // SAFETY: complete immutable table advertises the full static unarmed service prefix.
     let host = unsafe { Host::from_raw(&unserved) };
-    // SAFETY: the same table has no services or borrowed callback state.
+    // SAFETY: same readable static service prefix; callbacks are None and borrow no state.
     let services = unsafe { Services::from_raw(&unserved) };
     let grown = Keyed::new();
     let mut via = Via::new(&host, services, ticket(1), 0, &grown);
@@ -521,10 +521,10 @@ fn completed_records_calls_release_reservations_instead_of_consuming_the_growth_
 #[test]
 #[allow(unsafe_code)]
 fn an_already_pending_handle_can_grow_at_capacity_without_forgetting_another_ticket() {
-    let unserved = no_task_services();
-    // SAFETY: complete immutable table has only NULL nested tables; SDK snapshots immediately.
+    let unserved = unarmed_task_services();
+    // SAFETY: complete immutable table advertises the full static unarmed service prefix.
     let host = unsafe { Host::from_raw(&unserved) };
-    // SAFETY: the same table has no services or borrowed callback state.
+    // SAFETY: same readable static service prefix; callbacks are None and borrow no state.
     let services = unsafe { Services::from_raw(&unserved) };
     let grown = Keyed::new();
     let mut first = Via::new(&host, services, ticket(1), 0, &grown);
