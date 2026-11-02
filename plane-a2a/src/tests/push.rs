@@ -549,12 +549,12 @@ fn concurrent_push_charges_and_refunds_keep_the_exact_bound() {
 }
 
 #[test]
+#[allow(unsafe_code)] // This named test validates only its own compiled static descriptor.
 fn the_statement_declares_its_open_web_need_and_its_agent_member_need() {
     use crate::statement::{MEMBER_TARGET, NEEDS, NEED_AGENT, NEED_OPEN_WEB};
     use busbar_contract::abi::host::conn::connector::{
         DIRECTION_OUTBOUND, EGRESS_OPEN_WEB, EGRESS_PROVIDER,
     };
-    use busbar_test_kit::test_support::DoorView;
     let st = &crate::plane_door::STATEMENT;
     assert!(!st.needs_ptr().is_null());
 
@@ -570,9 +570,12 @@ fn the_statement_declares_its_open_web_need_and_its_agent_member_need() {
         MEMBER_TARGET.len(),
         "settings.*.url"
     );
-    assert!(DoorView::of(crate::plane_door::MACRO_DOOR)
-        .check_needs()
-        .is_ok());
+    // SAFETY: this is the actual SDK-generated static Statement of this compiled plane.
+    // Its counted Need array and every nested string/list come from the immutable NEEDS
+    // declaration; no external descriptor or caller-supplied pointer enters this test.
+    let declared = unsafe { std::slice::from_raw_parts(st.needs_ptr(), st.needs_len()) };
+    // SAFETY: the same static-storage proof covers the validator's nested counted fields.
+    assert!(unsafe { busbar_contract::abi::mechanism::check::check_needs(declared) }.is_ok());
     let need = NEEDS[NEED_OPEN_WEB as usize];
     assert_eq!(
         (need.direction, need.egress_class),
