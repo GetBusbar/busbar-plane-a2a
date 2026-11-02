@@ -59,6 +59,12 @@ The differential separates two things that must never be conflated:
   Reported with both values and the governing clause, for a human. Never a
   failure.
 
+The command also exits nonzero for incomplete evidence: missing or duplicate rows,
+different specification versions, an asserted-row shortfall in either report, or
+subject outcomes that make a normal run red (including NOT_CONFIGURED and required
+profile INAPPLICABLE). `--allow-red` preserves reports; it does not make their
+differential successful. Compare the same selected battery on both targets.
+
 ## Tiers
 
     --tier every-commit    fast, hermetic, no optional capabilities

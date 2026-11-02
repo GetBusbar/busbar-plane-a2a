@@ -210,8 +210,8 @@ def cmd_diff(args):
     if args.json:
         with open(args.json, "w") as fh:
             json.dump(diff, fh, indent=2, sort_keys=True)
-    defects = runner.print_differential(diff)
-    return 1 if defects else 0
+    failures = runner.print_differential(diff)
+    return 1 if failures else 0
 
 
 def cmd_baseline(args):

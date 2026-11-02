@@ -13,7 +13,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from a2aht import jcs, spec, tests_adversarial, tests_card, tests_client, tests_core, tests_hostile, transport
+from a2aht import jcs, runner, spec, tests_adversarial, tests_card, tests_client, tests_core, tests_hostile, transport
 from a2aht.model import NotConfigured
 from a2aht.target import Call
 from a2aht.fakes import FakePeer
@@ -34,6 +34,45 @@ class Context:
 
 
 class ProtocolRegressions(unittest.TestCase):
+    def test_differential_requires_complete_asserted_subject_evidence(self):
+        def report():
+            return {"target": "fixture", "spec": {"tag": "v1.0.1"}, "results": [
+                {"id": "fixture.%d" % i, "outcome": "PASS", "assertions": 1,
+                 "observations": {}, "clause": "fixture", "defect": "fixture",
+                 "detail": ""} for i in range(10)]}
+        control = report()
+        def fails(subject, ctl=control):
+            diff = runner.differential(ctl, subject)
+            output = io.StringIO()
+            self.assertGreater(runner.print_differential(diff, output), 0)
+            self.assertNotIn("NO DEFECTS", output.getvalue())
+            return diff
+        self.assertEqual(runner.print_differential(
+            runner.differential(control, report()), io.StringIO()), 0)
+        subject = report()
+        subject["results"] = []
+        fails(subject)
+        for outcome in ("NOT_CONFIGURED", "DEVIATION_CHANGED", "DEVIATION_FIXED"):
+            subject = report()
+            subject["results"][0]["outcome"] = outcome
+            fails(subject)
+        subject = report()
+        subject["results"][0].update(id="core.get_task_roundtrip", outcome="INAPPLICABLE")
+        fails(subject)
+        subject = report()
+        subject["results"].append(dict(subject["results"][0]))
+        fails(subject)
+        subject = report()
+        subject["spec"]["tag"] = "different"
+        fails(subject)
+        subject = report()
+        for row in subject["results"]:
+            row["assertions"] = 0
+        fails(subject)
+        subject = report()
+        subject["results"][0].update(id="missing.from.control", outcome="FAIL")
+        self.assertEqual(len(fails(subject)["defects"]), 1)
+
     def test_discovery_query_is_not_counted_as_an_operation(self):
         import urllib.request
         with FakePeer() as peer:
