@@ -49,7 +49,6 @@ fn the_door_driven_tests_restate_the_doors_own_constants() {
 mod root_stated;
 
 /// THE ROOT LEG'S RESTATED FACTS ARE THE DOOR'S OWN: each constant `tests/root/mod.rs` names is
-
 #[test]
 fn the_root_leg_restates_the_doors_own_constants() {
     use crate::statement as ds;
@@ -71,7 +70,6 @@ fn the_root_leg_restates_the_doors_own_constants() {
 }
 
 /// THE ROOT LEG'S PROTOBUF WORDS ARE THE GENERATED MESSAGES': the requests it writes decode, as the
-
 #[test]
 fn the_root_leg_writes_and_reads_the_generated_messages() {
     use crate::framed::{request_message, Rpc};

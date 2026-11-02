@@ -28,7 +28,6 @@ fn no_method_name_is_repeated() {
 }
 
 /// Both spellings of one operation agree on its class and on whether it streams.
-
 #[test]
 fn the_two_spellings_of_an_operation_agree() {
     for row in METHODS {
@@ -64,7 +63,6 @@ fn the_lookup_answers_the_table_and_nothing_else() {
 }
 
 /// Every multi-frame method is one of the two the codec's own multi-frame test recognises.
-
 #[test]
 fn the_multi_frame_set_matches_the_codecs_own_rule() {
     for row in METHODS {

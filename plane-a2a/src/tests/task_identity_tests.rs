@@ -185,7 +185,6 @@ fn the_codes_a_far_end_may_answer_keep_section_5_4s_statuses() {
 }
 
 /// The verbs that are ABOUT a task name it `taskId` (and A2A v1.0's JSON-RPC binding also accepts
-
 #[test]
 fn every_spelling_of_the_task_member_is_translated() {
     let back = |id: &str| (id == "busbar-t").then(|| "backend-t".to_string());
@@ -207,7 +206,6 @@ fn every_spelling_of_the_task_member_is_translated() {
 }
 
 /// Nothing degenerate is recorded: a far end that named no task id (an empty one) leaves nothing to
-
 #[test]
 fn a_degenerate_pair_is_not_recorded() {
     for result in [
@@ -225,7 +223,6 @@ fn a_degenerate_pair_is_not_recorded() {
 }
 
 /// A MESSAGE'S OWN `id` IS NOT A TASK ID and must never be rewritten as one: a translation that
-
 #[test]
 fn a_messages_own_id_member_is_left_alone() {
     let back = |id: &str| (id == "busbar-not-a-message-id").then(|| "backend-x".to_string());
@@ -268,7 +265,6 @@ fn the_codes_a_far_end_may_answer_keep_section_5_4s_status_table_row_for_row() {
 }
 
 /// Ported from busbar-a2a a2a/tests/rpcerror_tests.rs::push_notification_not_supported_and_extension_support_required_round_trip.
-
 #[test]
 fn push_notification_not_supported_and_extension_support_required_round_trip() {
     for (code, reason) in [
@@ -298,7 +294,6 @@ fn push_notification_not_supported_and_extension_support_required_round_trip() {
 }
 
 /// A TASK'S HISTORY leaves under busbar's identity too: every message in `history` that names the
-
 #[test]
 fn a_tasks_history_messages_take_busbars_identity() {
     let mut task = json!({ "task": { "id": "far-1", "contextId": "far-c",
@@ -327,7 +322,6 @@ fn a_tasks_history_messages_take_busbars_identity() {
 }
 
 /// A v1.0 PUSH-CONFIG VERB'S `id` IS THE CONFIG, NOT THE TASK (a2a.proto:716-733: `task_id = 2`,
-
 #[test]
 fn a_push_config_verbs_config_id_is_not_a_task() {
     for method in [
@@ -354,7 +348,6 @@ fn a_push_config_verbs_config_id_is_not_a_task() {
 }
 
 /// A TRANSLATED REQUEST IS THE CALLER'S OWN BYTES with only the translated ids spliced (Law 5):
-
 #[test]
 fn a_translated_request_keeps_the_callers_bytes_but_the_ids() {
     let back = |id: &str| (id == "a2a-p-1").then(|| "b-1".to_string());
@@ -372,7 +365,6 @@ fn a_translated_request_keeps_the_callers_bytes_but_the_ids() {
 }
 
 /// AN UNWRAPPED v0.3 RESULT NAMES ITS TASK BY THE MEMBER ITS `kind` SAYS: a task its `id`; a
-
 #[test]
 fn an_unwrapped_v0_3_result_names_its_task_by_the_member_its_kind_says() {
     for kind in ["status-update", "artifact-update"] {
@@ -407,7 +399,6 @@ fn an_unwrapped_v0_3_result_names_its_task_by_the_member_its_kind_says() {
 }
 
 /// A MESSAGE'S REFERENCED TASKS ARE TRANSLATED BOTH WAYS (`Message.reference_task_ids`,
-
 #[test]
 fn a_messages_referenced_tasks_are_translated_both_ways() {
     let back = |id: &str| (id == "a2a-p-1").then(|| "b-1".to_string());

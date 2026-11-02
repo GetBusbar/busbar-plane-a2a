@@ -24,11 +24,9 @@ pub fn mint(agent: &str, random: [u8; MINT_BYTES]) -> String {
 }
 
 /// The members of a request's `params` that name a task: `id` is `GetTask`/`CancelTask`'s
-
 pub const TASK_ID_MEMBERS: [&str; 3] = ["id", "taskId", "task_id"];
 
 /// The members of `envelope`'s `params` that name a task: [`TASK_ID_MEMBERS`], less `id` on a
-
 fn task_members(envelope: &Value) -> &'static [&'static str] {
     use crate::local::{verb_of, Dialect, LocalVerb};
     match envelope
@@ -47,7 +45,6 @@ fn task_members(envelope: &Value) -> &'static [&'static str] {
 }
 
 /// The task ids a request names at the top of its `params`, in [`TASK_ID_MEMBERS`] order: the
-
 #[must_use]
 pub fn named_tasks(envelope: &Value) -> Vec<&str> {
     let Some(params) = envelope.get("params").and_then(Value::as_object) else {
@@ -69,7 +66,6 @@ pub fn context_of(envelope: &Value) -> &str {
 }
 
 /// The task ids the caller's MESSAGE names (`params.message.taskId`, or `task_id`): how A2A v1.0
-
 #[must_use]
 pub fn message_tasks(envelope: &Value) -> Vec<&str> {
     let Some(message) = envelope
@@ -86,7 +82,6 @@ pub fn message_tasks(envelope: &Value) -> Vec<&str> {
 }
 
 /// Every task id a request ADDRESSES, and so every one [`translate_request`] may translate: the
-
 #[must_use]
 pub fn translatable(envelope: &Value) -> Vec<&str> {
     let mut ids = named_tasks(envelope);
@@ -95,7 +90,6 @@ pub fn translatable(envelope: &Value) -> Vec<&str> {
 }
 
 /// Every task a request's message REFERS to (`referenceTaskIds`, either spelling): translated with
-
 #[must_use]
 pub fn referenced_tasks(envelope: &Value) -> Vec<&str> {
     let Some(message) = envelope
@@ -113,7 +107,6 @@ pub fn referenced_tasks(envelope: &Value) -> Vec<&str> {
 }
 
 /// TRANSLATE every busbar task id in a request's `params` (and its message's, the tasks its message
-
 #[must_use]
 pub fn translate_request(
     envelope: &[u8],
@@ -129,7 +122,6 @@ pub fn translate_request(
 }
 
 /// The wrapper members an A2A v1.0 `result` puts its payload under, each with the member that
-
 pub(crate) const WRAPPERS: [(&str, &str); 4] = [
     ("task", "id"),
     ("message", "taskId"),
@@ -138,7 +130,6 @@ pub(crate) const WRAPPERS: [(&str, &str); 4] = [
 ];
 
 /// The `kind` an A2A v0.3 `result` names itself by when it is not wrapped, each with the member
-
 pub(crate) const KINDS: [(&str, &str); 4] = [
     ("task", "id"),
     ("message", "taskId"),
@@ -153,7 +144,6 @@ fn wrapper_of(result: &Value) -> Option<(&'static str, &'static str)> {
 }
 
 /// The wrapper a `result` puts its payload under (`None`: unwrapped) and the member naming the
-
 fn identity_of(result: &Value) -> (Option<&'static str>, &'static str) {
     if let Some((wrapper, member)) = wrapper_of(result) {
         return (Some(wrapper), member);
@@ -184,7 +174,6 @@ pub fn backend_task_id(result: &Value) -> Option<String> {
 }
 
 /// ONE READING OF A FAR END'S STATE TOKEN, in either A2A vocabulary (`input-required` or
-
 #[must_use]
 pub fn wire_state(token: &str) -> Option<TaskState> {
     if let Ok(state) = TaskState::parse(token) {
@@ -200,7 +189,6 @@ pub fn wire_state(token: &str) -> Option<TaskState> {
 }
 
 /// The task state a `result` reports; `None` when it reports none this build can read (an artifact
-
 #[must_use]
 pub fn reported_task_state(result: &Value) -> Option<TaskState> {
     payload_of(result)
@@ -210,7 +198,6 @@ pub fn reported_task_state(result: &Value) -> Option<TaskState> {
 }
 
 /// Whether a `result` is a MESSAGE THAT NAMES NO TASK (A2A v1.0 `SendMessageResponse.message`, or
-
 #[must_use]
 pub fn names_no_task(result: &Value) -> bool {
     let message = match wrapper_of(result) {
@@ -226,7 +213,6 @@ pub fn names_no_task(result: &Value) -> bool {
 pub const SKILL_METADATA_KEY: &str = "busbar/skill";
 
 /// SUBSTITUTE BUSBAR'S TASK IDENTITY onto a far end's `result`, leaving everything else alone: the
-
 #[must_use]
 pub fn rewrite_identity(
     result: &mut Value,
@@ -304,7 +290,6 @@ pub fn rewrite_identity(
 }
 
 /// Every task a message refers to (`referenceTaskIds`, either spelling) that `refer` knows, named
-
 fn refer_to_busbar(msg: &mut Map<String, Value>, refer: &dyn Fn(&str) -> Option<String>) {
     for member in crate::answer_bytes::REFERENCE_MEMBERS {
         let Some(ids) = msg.get_mut(member).and_then(Value::as_array_mut) else {
@@ -319,7 +304,6 @@ fn refer_to_busbar(msg: &mut Map<String, Value>, refer: &dyn Fn(&str) -> Option<
 }
 
 /// The task and context ids a message nested in a result names, replaced by busbar's, and the tasks
-
 fn rewrite_message_identity(
     msg: &mut Map<String, Value>,
     task_id: &str,
@@ -339,14 +323,12 @@ fn rewrite_message_identity(
 }
 
 /// The ProtoJSON type URL of `google.rpc.ResourceInfo`, which is how the task a refusal is about
-
 pub const RESOURCE_INFO_TYPE: &str = "type.googleapis.com/google.rpc.ResourceInfo";
 
 /// The resource type a task's `ResourceInfo` names.
 pub const TASK_RESOURCE_TYPE: &str = "a2a.busbar/task";
 
 /// The refusal's envelope, naming the task: its error carries a `ResourceInfo` for `task_id` after
-
 #[must_use]
 pub fn about_task(refusal: &AgentRefusal, task_id: &str) -> Value {
     let mut doc = refusal.envelope();
@@ -363,7 +345,6 @@ pub fn about_task(refusal: &AgentRefusal, task_id: &str) -> Value {
 }
 
 /// The HTTP status A2A section 5.4 binds an error `code` to, for the codes re-emitted from
-
 #[must_use]
 pub const fn status_of_code(code: i64) -> Option<u32> {
     Some(match code {

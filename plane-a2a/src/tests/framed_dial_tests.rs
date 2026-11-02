@@ -60,7 +60,6 @@ fn a_method_in_either_dialect_names_its_rpc() {
 }
 
 /// THE HOP'S PARAMS ARE THE REQUEST MESSAGE: a v1.0 send's content survives the transcode, and a
-
 #[test]
 fn the_params_are_written_as_the_rpcs_request_message() {
     let params = json!({
@@ -108,7 +107,6 @@ fn the_params_are_written_as_the_rpcs_request_message() {
 }
 
 /// EACH ANSWERED MESSAGE IS ITS RESULT: the rpc's response message read back as ProtoJSON; a
-
 #[test]
 fn an_answered_message_is_read_as_the_rpcs_result() {
     let task = crate::proto::custody::initialized::<pb::Task>(|__custody_message| {
@@ -166,7 +164,6 @@ fn block(fields: &[(&str, &str)]) -> Vec<u8> {
 }
 
 /// THE STATUS THE TRAILERS STATE: the code the host passes beside them (the kernel hands on the
-
 #[test]
 fn the_trailers_state_the_calls_status_and_its_error_info() {
     use base64::Engine as _;
@@ -214,7 +211,6 @@ fn the_trailers_state_the_calls_status_and_its_error_info() {
 }
 
 /// THE A2A CODE A STATUS CARRIES: the reason's, else the one section 5.4 binds to the status
-
 #[test]
 fn a_status_names_the_a2a_code_its_reason_or_its_row_binds() {
     let bare = |code: Code| Ended {

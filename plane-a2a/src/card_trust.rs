@@ -15,7 +15,6 @@ use crate::a2a::config::{AgentDefCfg, AgentPinCfg, PinMechanism};
 pub const WELL_KNOWN_CARD_PATH_LEGACY: &str = "/.well-known/agent.json";
 
 /// The largest card body accepted: a card is a small JSON document. This bounds what is PARSED; the
-
 pub const MAX_CARD_BYTES: usize = 512 * 1024;
 
 /// How long one card fetch may take: ten seconds.
@@ -70,11 +69,9 @@ pub struct CardObservation {
 }
 
 /// The last contact with an agent: the SDK's one shape of a sighting
-
 pub type Sighting = busbar_contract::abi::sdk::trust::Sighting<CardObservation>;
 
 /// The mechanism the OBSERVED identity of `sighting` names, or `unpinned` where nothing was
-
 fn sighted_mechanism(sighting: &Sighting) -> &'static str {
     sighting
         .seen()
@@ -123,7 +120,6 @@ pub struct Cadence {
 
 impl Cadence {
     /// The cadence `def` spells, its absent key at its declared default. The kernel judged the key
-
     #[must_use]
     pub fn of(def: &AgentDefCfg) -> Self {
         let secs = |text: &str| busbar_contract::duration::parse_duration_secs(text).ok();
@@ -139,7 +135,6 @@ impl Cadence {
     }
 
     /// Is a look due at `now_ms`? Never looked, a clock that
-
     #[must_use]
     pub fn due(&self, ledger: &Ledger, now_ms: u64) -> bool {
         ledger
@@ -148,7 +143,6 @@ impl Cadence {
     }
 
     /// RECORD one look: stamped on the ledger, and what it `observed` is the sighting now (a
-
     pub fn settle(&self, observed: Sighting, ledger: &mut Ledger, now_ms: u64) -> Sighting {
         ledger.last_checked_ms = Some(now_ms);
         observed
@@ -156,7 +150,6 @@ impl Cadence {
 }
 
 /// THE KERNEL'S VERDICT IN THE ADMISSION'S WORDS: a `trust.serves` answer (`DISTRUST_*`, the one
-
 #[must_use]
 pub fn verdict_state(distrust: u64) -> State {
     match distrust {
@@ -167,7 +160,6 @@ pub fn verdict_state(distrust: u64) -> State {
 }
 
 /// The refusal of a unit whose agent is not serving, at `status`:
-
 #[must_use]
 pub fn not_serving(
     addressed: Option<&str>,
@@ -184,11 +176,9 @@ pub fn not_serving(
 }
 
 /// The status a unit is refused with when the kernel's trust book does not trust its agent
-
 pub const UNTRUSTED_STATUS: u32 = 403;
 
 /// The two well-known discovery URLs of `endpoint`'s origin, canonical first.
-
 pub fn discovery_urls(endpoint: &str) -> Result<[String; 2], String> {
     let base = url::Url::parse(endpoint)
         .map_err(|_| format!("agent card URL is not a URL: `{}`", endpoint.trim()))?;
@@ -206,7 +196,6 @@ pub fn discovery_urls(endpoint: &str) -> Result<[String; 2], String> {
 }
 
 /// The refusal of a card URL a registration may not be fetched at: a scheme other than `https`,
-
 #[must_use]
 pub fn scheme_refusal(url: &str, allow_private: bool) -> Option<String> {
     let scheme = url
@@ -228,7 +217,6 @@ pub fn scheme_refusal(url: &str, allow_private: bool) -> Option<String> {
 pub const MAX_REDIRECTS: u8 = 3;
 
 /// The next hop of a card fetch that answered `status` at `url`: `None`
-
 pub fn next_hop(
     url: &str,
     status: u16,
@@ -257,7 +245,6 @@ pub fn next_hop(
 }
 
 /// The host a card URL names: an IPv6 literal unbracketed and a
-
 #[must_use]
 pub fn host_of(url: &str) -> Option<String> {
     let parsed = url::Url::parse(url).ok()?;
@@ -268,7 +255,6 @@ pub fn host_of(url: &str) -> Option<String> {
 }
 
 /// The guard's refusal of a card host by its name (the `DEST_*` verdict the destination judge gave
-
 #[must_use]
 pub fn refused_name(url: &str, verdict: u64) -> Option<String> {
     let host = host_of(url).unwrap_or_default();
@@ -301,7 +287,6 @@ pub fn refused_name(url: &str, verdict: u64) -> Option<String> {
 }
 
 /// The guard's refusal of an address a card host resolved to (a
-
 #[must_use]
 pub fn refused_address(url: &str, addr: &str) -> String {
     let host = host_of(url).unwrap_or_default();
@@ -313,7 +298,6 @@ pub fn refused_address(url: &str, addr: &str) -> String {
 }
 
 /// `host` as the URL a destination judge reads an address literal by; `None` when `host` is a
-
 #[must_use]
 pub fn literal_url(host: &str) -> Option<String> {
     match url::Host::parse(host).or_else(|_| url::Host::parse(&format!("[{host}]"))) {
@@ -333,7 +317,6 @@ pub fn no_addresses(host: &str) -> String {
 }
 
 /// A card host that did not resolve, naming the resolver's `reason` (none
-
 #[must_use]
 pub fn unresolvable(host: &str, reason: &str) -> String {
     if reason.is_empty() {
@@ -343,7 +326,6 @@ pub fn unresolvable(host: &str, reason: &str) -> String {
 }
 
 /// The guard's refusal of a card hop, from the destination judge's
-
 #[must_use]
 pub fn refused_judgement(url: &str, verdict: u64, detail: Option<&str>) -> String {
     let host = host_of(url).unwrap_or_default();
@@ -366,7 +348,6 @@ pub fn refused_judgement(url: &str, verdict: u64, detail: Option<&str>) -> Strin
 pub const HOP_DEADLINE_CAUSE: &str = "governed egress hop exceeded its deadline";
 
 /// The connection's failure in words: what the card fetch prints after
-
 #[must_use]
 pub fn transport_err(cause: u64, failure: &busbar_contract::abi::sdk::conn::ConnFailure) -> String {
     use busbar_contract::abi::host::conn::connector::{
@@ -384,7 +365,6 @@ pub fn transport_err(cause: u64, failure: &busbar_contract::abi::sdk::conn::Conn
 }
 
 /// THE CARD one fetch of `url` answered: `answer` is the far end's status and body, or why the
-
 pub fn read_card(url: &str, answer: Result<(u16, &[u8]), String>) -> Result<Value, String> {
     let (status, body) = answer.map_err(|e| format!("agent card fetch of `{url}` failed: {e}"))?;
     if !(200..300).contains(&status) {
@@ -418,7 +398,6 @@ pub struct Handshake {
 }
 
 /// The transport-layer root, checked. Returns the OBSERVED
-
 fn transport_pin(
     mechanism: &str,
     expected: &str,
@@ -457,7 +436,6 @@ const MUTUAL_TLS_NOT_PRESENTED: &str = "`pin.mechanism: mtls` requires busbar to
      `client_identity.key:`, or use `cert_spki` for a one-way binding.";
 
 /// THE REFUSAL A FAILED CARD FETCH OF A TRANSPORT-PINNED REGISTRATION READS AS, where the hop says
-
 #[must_use]
 pub fn hop_refusal(pin: &AgentPinCfg, hop: &Handshake, url: &str) -> Option<String> {
     if !matches!(
@@ -482,7 +460,6 @@ pub fn hop_refusal(pin: &AgentPinCfg, hop: &Handshake, url: &str) -> Option<Stri
 }
 
 /// What the kernel's `trust.verify` is handed for a signed card: the detached payload (the
-
 pub fn signed_parts(card: &Value) -> Result<(Vec<u8>, Vec<u8>), String> {
     let payload = card::signing_payload(card).map_err(|e| e.to_string())?;
     let signatures = card
@@ -493,7 +470,6 @@ pub fn signed_parts(card: &Value) -> Result<(Vec<u8>, Vec<u8>), String> {
 }
 
 /// The kernel's `SIGNED_*` verdict on `card`, in this plane's words: `None` when it verified;
-
 #[must_use]
 pub fn jws_refusal(verdict: u64, named: &str, card: &Value) -> Option<String> {
     Some(match verdict {
@@ -526,7 +502,6 @@ pub fn jws_refusal(verdict: u64, named: &str, card: &Value) -> Option<String> {
 }
 
 /// VERIFY one fetched card against the registration's declared pin. `signed` is the kernel's
-
 pub fn verify_card(
     pin: &AgentPinCfg,
     card: &Value,
@@ -604,7 +579,6 @@ struct AgentTrustView<'a> {
 }
 
 /// The drift queue of one sighting against what was approved: each
-
 fn skill_drift(
     approved: Option<&BTreeMap<String, String>>,
     sighting: &Sighting,
@@ -631,7 +605,6 @@ fn skill_drift(
 }
 
 /// The view, `state` being the state the verb answers and `distrust` the kernel's own verdict (a
-
 fn agent_view(
     name: &str,
     state: State,
@@ -663,7 +636,6 @@ fn agent_view(
 }
 
 /// `connect`'s answer: a PREVIEW of what the card presented (`sighting`, which this look sighted on
-
 #[must_use]
 pub fn connect_view(
     name: &str,
@@ -679,7 +651,6 @@ pub fn connect_view(
 }
 
 /// `approve`'s answer: the registration as it now stands on the kernel's trust book (`state`), its
-
 #[must_use]
 pub fn registration_view(
     name: &str,
@@ -691,7 +662,6 @@ pub fn registration_view(
 }
 
 /// DOES WHAT THE ENDPOINT SERVES NOW AGREE WITH WHAT THE OPERATOR SAYS THEY APPROVED? Every arm
-
 pub fn agrees(sighting: &Sighting, claimed: &str) -> Result<(), String> {
     if claimed.is_empty() {
         return Err(
@@ -722,7 +692,6 @@ pub fn agrees(sighting: &Sighting, claimed: &str) -> Result<(), String> {
 }
 
 /// The `approve` body, `{"fingerprint": "…"}`: a JSON media type first, then the one field and no other. The fingerprint, or the refusal.
-
 pub fn approve_body(content_type: Option<&str>, body: &[u8]) -> Result<String, String> {
     let refused = |e: String| {
         format!(
@@ -762,7 +731,6 @@ fn is_json_media_type(value: &str) -> bool {
 }
 
 /// The one field of the `approve` body, read with the path the reader was at when it failed
-
 struct ApproveSeed<'a>(&'a mut Option<&'static str>);
 
 impl<'de> serde::de::DeserializeSeed<'de> for ApproveSeed<'_> {

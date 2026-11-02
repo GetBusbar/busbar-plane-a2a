@@ -49,7 +49,6 @@ fn config() -> pb::TaskPushNotificationConfig {
 }
 
 /// `grpc_client_issues_create_task_push_notification_config`: busbar's own registration, as the
-
 #[test]
 fn grpc_client_issues_create_task_push_notification_config() {
     let r = issued(Binding::Grpc, method::CREATE_PUSH_CONFIG);
@@ -70,7 +69,6 @@ fn grpc_client_issues_create_task_push_notification_config() {
 }
 
 /// `grpc_client_issues_get_task_push_notification_config`, and its answer read back: the
-
 #[test]
 fn grpc_client_issues_get_task_push_notification_config() {
     let r = issued(Binding::Grpc, method::GET_PUSH_CONFIG);
@@ -95,7 +93,6 @@ fn grpc_client_issues_get_task_push_notification_config() {
 }
 
 /// `grpc_client_issues_list_task_push_notification_configs`, and a listing that does not hold
-
 #[test]
 fn grpc_client_issues_list_task_push_notification_configs() {
     let r = issued(Binding::Grpc, method::LIST_PUSH_CONFIGS);
@@ -128,7 +125,6 @@ fn grpc_client_issues_list_task_push_notification_configs() {
 }
 
 /// `grpc_client_issues_delete_task_push_notification_config`: the withdrawal's `Empty` answer (a
-
 #[test]
 fn grpc_client_issues_delete_task_push_notification_config() {
     let r = issued(Binding::Grpc, method::DELETE_PUSH_CONFIG);
@@ -153,7 +149,6 @@ fn grpc_client_issues_delete_task_push_notification_config() {
 }
 
 /// `grpc_client_issues_list_tasks`: the refresh's `ListTasks` as the rpc, and the agent's listing
-
 #[test]
 fn grpc_client_issues_list_tasks() {
     let r = request(Binding::Grpc, URL, "1.0", LIST_TASKS, &json!({})).expect("framed");
@@ -204,7 +199,6 @@ fn an_answer_on_another_binding_is_read_as_it_came() {
 }
 
 /// `jsonrpc_client_issues_list_tasks`: the refresh is a POST of the JSON-RPC envelope naming
-
 #[test]
 fn jsonrpc_client_issues_list_tasks() {
     let r = request(Binding::JsonRpc, URL, "1.0", LIST_TASKS, &json!({})).expect("framed");
@@ -228,7 +222,6 @@ fn http_json_client_issues_list_tasks() {
 }
 
 /// `http_json_client_issues_create_task_push_notification_config`: a POST to the task's config
-
 #[test]
 fn http_json_client_issues_create_task_push_notification_config() {
     let r = issued(Binding::HttpJson, method::CREATE_PUSH_CONFIG);
@@ -247,7 +240,6 @@ fn http_json_client_issues_create_task_push_notification_config() {
 }
 
 /// `http_json_client_issues_get_task_push_notification_config`: a GET of busbar's own config on
-
 #[test]
 fn http_json_client_issues_get_task_push_notification_config() {
     let r = issued(Binding::HttpJson, method::GET_PUSH_CONFIG);
@@ -263,7 +255,6 @@ fn http_json_client_issues_get_task_push_notification_config() {
 }
 
 /// `http_json_client_issues_list_task_push_notification_configs`: a GET of the collection, not of
-
 #[test]
 fn http_json_client_issues_list_task_push_notification_configs() {
     let r = issued(Binding::HttpJson, method::LIST_PUSH_CONFIGS);

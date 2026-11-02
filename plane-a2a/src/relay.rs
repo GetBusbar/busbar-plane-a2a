@@ -26,7 +26,6 @@ pub const H_CONTENT_TYPE: &str = "content-type";
 pub const H_ACCEPT: &str = "accept";
 
 /// The most reply bytes a hop reads: an unbounded read
-
 pub const MAX_REPLY_BYTES: usize = 512 * 1024;
 
 /// The status every refused hop answers with.
@@ -103,7 +102,6 @@ pub struct RelayReply {
 
 impl RelayReply {
     /// A refusal as the caller's whole answer, at the refusal's status: its envelope, naming the
-
     #[must_use]
     pub fn refused(refusal: &AgentRefusal, about: Option<&str>) -> Self {
         let body = match about {
@@ -203,7 +201,6 @@ impl HopRefusal {
     }
 
     /// The caller's sentence: fixed per arm, interpolating nothing a backend, its address or its
-
     #[must_use]
     pub fn client_text(self) -> String {
         let sentence = match self {
@@ -229,7 +226,6 @@ impl HopRefusal {
     }
 
     /// The operator's sentence: it names the
-
     #[must_use]
     pub fn operator(self, url: &str, status: Option<u32>) -> String {
         match self {
@@ -270,7 +266,6 @@ impl HopRefusal {
 }
 
 /// The far end's whole answer, read as the answer to `id`: the span of its `result` in `body`, or
-
 pub fn read_answer(
     status: u32,
     body: &[u8],
@@ -304,7 +299,6 @@ fn read_answer_document(body: &[u8], id: &Value) -> Result<std::ops::Range<usize
 }
 
 /// The caller's answer to a relayed `result` given as the far end's own bytes (spliced, never
-
 #[must_use]
 pub fn relayed_bytes(id: &Value, result: &[u8]) -> RelayReply {
     RelayReply {
@@ -315,7 +309,6 @@ pub fn relayed_bytes(id: &Value, result: &[u8]) -> RelayReply {
 }
 
 /// The target an attempt is sent at: the agent URL's path and query. The kernel joins it onto the
-
 #[must_use]
 pub fn target_of(url: &str) -> Option<String> {
     if let Some(target) = verbatim_target(url) {
@@ -331,7 +324,6 @@ pub fn target_of(url: &str) -> Option<String> {
 }
 
 /// [`target_of`] for the common url, read off its own bytes with no parse: an `http`/`https` url
-
 fn verbatim_target(url: &str) -> Option<String> {
     let rest = url
         .strip_prefix("https://")
@@ -515,7 +507,6 @@ impl Drop for RawBytes {
 mod raw_buffer_custody;
 
 /// The status table: the reading of an answer at a status outside `2xx`, its body unread.
-
 #[must_use]
 pub fn status_reading(status: u32) -> Reading {
     match status {
@@ -596,7 +587,6 @@ struct Events {
 }
 
 /// Whether a frame is an event: its first line is an event-stream field or a comment, never the
-
 fn is_event(frame: &str) -> bool {
     let first = frame.trim_start_matches(['\r', '\n']);
     [":", "data", "event", "id", "retry"]
@@ -622,7 +612,6 @@ pub struct TaskHop {
 }
 
 /// What reading a 2xx far-end piece's events answers: `None` while no event is framed; else the
-
 type EventsRead = Option<Result<RawBytes, (HopRefusal, RawBytes)>>;
 
 /// WHAT A TASK HOP'S ANSWER SAYS ABOUT ITS TASK, for the door to record.
@@ -666,21 +655,18 @@ impl HopRelay {
     }
 
     /// Name the agent this hop is for and its registered backend `url`, for the operator's journal
-
     pub fn name_backend(&mut self, agent: &str, url: &str) {
         self.agent = agent.to_string();
         self.url = url.to_string();
     }
 
     /// The operator's line for a refused hop: the backend's url and the reason, at debug. The
-
     fn journal(&self, refusal: HopRefusal, stream: bool) {
         let error = refusal.operator(&self.url, self.status);
         self.journal_reason(refusal.client_code(), &error, stream);
     }
 
     /// Operator-only reasons are fixed at the failure stage. Framing libraries' errors can
-
     fn journal_reason(&self, code: &str, error: &str, stream: bool) {
         let agent = self.agent.as_str();
         match (&self.task, stream || self.events.is_some()) {
@@ -722,7 +708,6 @@ impl HopRelay {
     }
 
     /// The reading of the far end's answer, once: on the piece that holds the whole answer, or on
-
     pub fn take_reading(&mut self) -> Option<Reading> {
         self.reading.take()
     }
@@ -742,7 +727,6 @@ impl HopRelay {
     }
 
     /// The hop's answer may be a stream of events (the engine's event-stream hop): its attempts
-
     pub fn expect_events(&mut self) {
         self.events = Some(Events::default());
     }
@@ -763,7 +747,6 @@ impl HopRelay {
     }
 
     /// The binding the next attempt speaks, for the request `envelope` (the
-
     pub fn bind(&mut self, binding: Binding, envelope: &Value) {
         let first = self.method.is_empty() && self.params.is_null();
         self.binding = binding;
@@ -789,7 +772,6 @@ impl HopRelay {
     }
 
     /// REFUSED BY NAME before the hop: the agent's card declares only `word`, a binding the plane
-
     pub fn refuse_unspeakable(&mut self, word: &str) -> PieceAnswer {
         self.answered = true;
         self.journal_reason(
@@ -801,7 +783,6 @@ impl HopRelay {
     }
 
     /// REFUSED AT THE HOP'S TRUST GATE: the agent was serving at admission and its re-verification
-
     pub fn refuse_demoted(&mut self) -> PieceAnswer {
         self.answered = true;
         self.journal(HopRefusal::NotServing, false);
@@ -830,7 +811,6 @@ impl HopRelay {
     }
 
     /// REFUSED AT THE RELAY'S GUARD: the agent's registered endpoint was refused before the hop
-
     pub fn refuse_endpoint(&mut self) -> PieceAnswer {
         self.answered = true;
         self.journal(HopRefusal::EndpointRefused, false);
@@ -839,7 +819,6 @@ impl HopRelay {
     }
 
     /// The caller's answer to this refused task hop ([`task_refusal`]), its task ended `failed`
-
     fn task_refused(&mut self, code: Option<i64>) -> Option<RelayReply> {
         let (reply, failed) = task_refusal(code, self.task.as_ref()?, &self.id);
         if failed {
@@ -849,7 +828,6 @@ impl HopRelay {
     }
 
     /// THE HOP LEFT AND NOTHING CAME BACK: the attempt went to the agent and the connection could
-
     #[must_use]
     pub fn refuse_transport(&mut self) -> (RelayReply, bool) {
         self.answered = true;
@@ -861,7 +839,6 @@ impl HopRelay {
     }
 
     /// REFUSED FOR BUSBAR'S OWN CREDENTIAL: the agent's `upstream_credential`, re-resolved for this
-
     #[must_use]
     pub fn refuse_credential(&mut self) -> (RelayReply, bool) {
         self.answered = true;
@@ -897,7 +874,6 @@ impl HopRelay {
     }
 
     /// The hop could not be framed on its binding: a task-less hop is refused by name; a task hop
-
     fn unframable(&mut self, cause: &str) -> PieceAnswer {
         self.answered = true;
         self.journal_reason("a2a.hop.unframable", cause, false);
@@ -974,7 +950,6 @@ impl HopRelay {
     }
 
     /// The hop is for `task`: its answer leaves under busbar's identity and its refusals name the
-
     pub fn for_task(&mut self, task: TaskHop) {
         self.task = Some(task);
     }
@@ -992,19 +967,16 @@ impl HopRelay {
     }
 
     /// Every attempt sends `body` in place of the caller's bytes (a request whose task ids were
-
     pub fn send_instead(&mut self, body: Vec<u8>) {
         self.instead = Some(body.into());
     }
 
     /// What the answer has said about the task since this was last asked, in order; empty before
-
     pub fn take_settled(&mut self) -> Vec<TaskSettled> {
         std::mem::take(&mut self.settled)
     }
 
     /// The payload bytes the hop has moved both ways, the request's and the reply's, once the far
-
     #[must_use]
     pub fn moved(&self) -> u64 {
         if self.status.is_some() {
@@ -1106,7 +1078,6 @@ impl HopRelay {
     }
 
     /// The kernel ended the answer with `PIECE_CUT`: complete events already received remain
-
     pub fn on_far_cut(&mut self, bytes: &[u8], status: Option<u32>) -> PieceAnswer {
         if self.answered {
             return PieceAnswer::Nothing;
@@ -1143,14 +1114,12 @@ impl HopRelay {
     }
 
     /// Keep `bytes` of a far end's answer read whole, only up to one byte past the ceiling: past it
-
     fn keep(&mut self, bytes: &[u8]) {
         let room = (MAX_REPLY_BYTES + 1).saturating_sub(self.far.len());
         self.far.extend_from_slice(&bytes[..bytes.len().min(room)]);
     }
 
     /// One 2xx far-end piece of a hop expecting events: `None` while the far end has framed no
-
     fn events_piece(&mut self, piece: &Piece<'_>) -> Option<PieceAnswer> {
         Some(match self.events_read(piece.bytes)? {
             Ok(body) => {
@@ -1164,7 +1133,6 @@ impl HopRelay {
     }
 
     /// The events a 2xx far-end piece's `bytes` finish, read ([`EventsRead`]): `None` while the far end has framed
-
     fn events_read(&mut self, bytes: &[u8]) -> EventsRead {
         let mut reader = std::mem::take(&mut self.events.as_mut()?.reader);
         reader.feed_from(&self.agent, bytes);
@@ -1268,7 +1236,6 @@ impl HopRelay {
     }
 
     /// A hop expecting events is refused for `refusal`: before its answer started (and with no
-
     fn events_refused(&mut self, refusal: HopRefusal, body: RawBytes) -> PieceAnswer {
         self.answered = true;
         self.reading = Some(self.answer_reading(if refusal == HopRefusal::BackendError {
@@ -1289,7 +1256,6 @@ impl HopRelay {
     }
 
     /// THE TRAILERS of the far end's answer (a field block after its body, `PIECE_FIELDS`), with
-
     pub fn on_far_fields(&mut self, bytes: &[u8], status: Option<u32>, last: bool) -> PieceAnswer {
         if self.answered {
             return PieceAnswer::Nothing;
@@ -1312,7 +1278,6 @@ impl HopRelay {
     }
 
     /// ONE PIECE OF A gRPC FAR END'S ANSWER (the grpc transport's: its head, with no status of its
-
     fn grpc_piece(&mut self, piece: &Piece<'_>) -> PieceAnswer {
         if let Some(status) = piece.status {
             self.status = Some(status);
@@ -1371,7 +1336,6 @@ impl HopRelay {
     }
 
     /// The whole messages `bytes` completes, each as one event-stream frame carrying the JSON-RPC
-
     fn grpc_events(&mut self, bytes: &[u8]) -> (RawBytes, bool) {
         self.grpc.pending.extend_from_slice(bytes);
         let Some(rpc) = crate::framed::Rpc::of_method(&self.method) else {
@@ -1406,7 +1370,6 @@ impl HopRelay {
     }
 
     /// The JSON-RPC error a gRPC call that ended with an error status answers: its A2A code, where
-
     fn grpc_error(&self) -> Option<RawBytes> {
         let ended = self.grpc.ended.as_ref().filter(|e| !e.ok())?;
         let code = ended.a2a_code().unwrap_or(CODE_INTERNAL);
@@ -1423,7 +1386,6 @@ impl HopRelay {
     }
 
     /// A gRPC far end's whole answer, as the JSON-RPC envelope the one reader reads: a call that
-
     fn grpc_envelope(&self) -> Option<RawBytes> {
         if self.far.len() > MAX_REPLY_BYTES {
             return Some(self.far.clone());
@@ -1568,7 +1530,6 @@ impl HopRelay {
 }
 
 /// An HTTP+JSON AIP-193 error's A2A identity. A carrier status alone is not an A2A code, and a
-
 fn http_json_error_code(body: &[u8]) -> Option<i64> {
     if body.len() > MAX_REPLY_BYTES {
         return None;
@@ -1590,7 +1551,6 @@ fn http_json_error_code(body: &[u8]) -> Option<i64> {
 }
 
 /// The far end's JSON-RPC error `code`, when it answered one A2A defines, read off the bytes of an
-
 fn backend_error_code(body: &[u8]) -> Option<i64> {
     match crate::answer_bytes::readable(body) {
         std::borrow::Cow::Borrowed(_) => {}
@@ -1609,7 +1569,6 @@ fn backend_error_code(body: &[u8]) -> Option<i64> {
 }
 
 /// The caller's answer to a refused task hop, and whether the task ends `failed`: the far end's own A2A error code travels, its prose never does, and the
-
 fn task_refusal(code: Option<i64>, task: &TaskHop, id: &Value) -> (RelayReply, bool) {
     let status = code
         .and_then(task_identity::status_of_code)

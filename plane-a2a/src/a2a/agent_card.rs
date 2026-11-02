@@ -158,7 +158,6 @@ where
 }
 
 /// Read the members busbar acts on; `None` when the document is not a card (not an object, or a
-
 #[must_use]
 pub fn parse(card: &Value) -> Option<AgentCard> {
     if !card.is_object() {

@@ -47,7 +47,6 @@ impl SseReader {
     }
 
     /// The events the last [`Self::feed`] finished, in order, each borrowed from the reader's
-
     pub fn frames(&self) -> impl Iterator<Item = &str> {
         self.frames
             .iter()
@@ -55,14 +54,12 @@ impl SseReader {
     }
 
     /// How many bytes are held waiting for a terminator. The ceiling check reads this: a backend
-
     pub fn pending(&self) -> usize {
         self.buf.pending()
     }
 }
 
 /// The `data:` payload of one SSE frame, concatenated across continuation lines as the specification
-
 pub fn sse_data(frame: &str) -> Option<String> {
     let mut data = crate::relay::RawBytes::default();
     let mut any = false;

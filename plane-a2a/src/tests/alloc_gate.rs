@@ -9,7 +9,6 @@ use crate::relay::{From, HopRelay, Piece, PieceAnswer};
 use busbar_test_kit::alloc_counter::allocations_of;
 
 /// One well-formed request of this protocol, carrying no task identifier to rewrite: the request
-
 const BODY: &[u8] =
     br#"{"jsonrpc":"2.0","id":"1","method":"message/send","params":{"message":{"role":"user"}}}"#;
 
@@ -17,11 +16,9 @@ const BODY: &[u8] =
 const URL: &str = "https://agent.example/a2a";
 
 /// COMMITTED BASELINE — the exact allocation count of ONE hop that rewrites nothing: the attempt's
-
 const RELAY_ALLOCS: u64 = 2;
 
 /// A JSON-RPC hop for [`BODY`], bound and named as the door binds and names one before its first
-
 fn hop() -> HopRelay {
     let envelope: serde_json::Value = serde_json::from_slice(BODY).expect("the request is JSON");
     let mut relay = HopRelay::new(serde_json::json!("1"), "0.3");
@@ -31,7 +28,6 @@ fn hop() -> HopRelay {
 }
 
 /// The relay's loop for one attempt: the kernel's ATTEMPT, then the caller's body, `plant` more
-
 fn relay_once(relay: &mut HopRelay, plant: usize) -> (PieceAnswer, PieceAnswer) {
     let attempt = relay.on_piece(Piece {
         from: From::Kernel(Some(URL)),
@@ -94,7 +90,6 @@ fn an_unrewritten_envelope_is_relayed_without_a_copy() {
 }
 
 /// G1-52: THE HOOK VIEW READS THE REQUEST ONCE: its projection, its invocation and its session are
-
 #[test]
 fn the_hook_view_parses_the_envelope_once() {
     let parts: Vec<serde_json::Value> = (0..1000)
@@ -122,7 +117,6 @@ fn the_hook_view_parses_the_envelope_once() {
 }
 
 /// G1-10: reading a card's members borrows the card. A card carrying a large member busbar does
-
 #[test]
 fn reading_a_card_does_not_copy_it() {
     let unmodelled: Vec<serde_json::Value> = (0..1000)
@@ -147,7 +141,6 @@ fn reading_a_card_does_not_copy_it() {
 }
 
 /// G1-16: A TASK HOP HOLDS ITS REQUEST ONCE: the envelope it opens the task from is the request it
-
 #[test]
 fn a_task_hop_does_not_copy_its_envelope() {
     let parts: Vec<serde_json::Value> = (0..1000)

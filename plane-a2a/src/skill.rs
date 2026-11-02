@@ -8,7 +8,6 @@ use serde_json::Value;
 use crate::a2a::agent_card::AgentCard;
 
 /// EVERY PLACE A2A SPELLS the push-callback config object, in both revisions: v0.3's
-
 pub const CALLBACK_CONFIG_POINTERS: [&str; 8] = [
     "/params/configuration/pushNotificationConfig",
     "/params/configuration/push_notification_config",
@@ -21,7 +20,6 @@ pub const CALLBACK_CONFIG_POINTERS: [&str; 8] = [
 ];
 
 /// DOES THIS METHOD NAME ASK FOR A STREAM? Both eras of the name: v0.3's `message/stream` and
-
 #[must_use]
 pub fn reads_as_stream(method: &str) -> bool {
     method.ends_with("/stream")
@@ -46,7 +44,6 @@ pub struct TaskShape {
 
 impl TaskShape {
     /// The shape an inbound envelope asks for. Send requests have their field types checked at
-
     #[must_use]
     pub fn of(envelope: &Value) -> Self {
         let params = envelope.get("params");
@@ -84,7 +81,6 @@ fn requested_output_modes(envelope: &Value) -> Option<&Value> {
 }
 
 /// Validate the request fields that structural fit reads, before a send request is routed.
-
 pub(crate) fn validate_fields(envelope: &Value) -> Result<(), &'static str> {
     if envelope
         .pointer("/params/metadata/skill")
@@ -151,7 +147,6 @@ pub enum Unreadable {
 }
 
 /// THE FIT of a held card DOCUMENT to `shape`: [`judge`] over the card read.
-
 pub fn fit(card: &Value, shape: &TaskShape) -> Result<Option<String>, Unfit> {
     let card =
         crate::a2a::agent_card::parse(card).ok_or(Unfit::Unreadable(Unreadable::NotAnObject))?;
@@ -162,7 +157,6 @@ pub fn fit(card: &Value, shape: &TaskShape) -> Result<Option<String>, Unfit> {
 pub const STATUS_UNFIT: u32 = 400;
 
 /// The refusal of a request an agent's held card does not fit:
-
 #[must_use]
 pub fn refusal(unfit: &Unfit) -> crate::agent_arrival::AgentRefusal {
     crate::agent_arrival::AgentRefusal::new(
@@ -174,7 +168,6 @@ pub fn refusal(unfit: &Unfit) -> crate::agent_arrival::AgentRefusal {
 }
 
 /// JUDGE WHETHER AN AGENT CARD FITS A TASK SHAPE: the matched skill id (`None` when the shape
-
 pub fn judge(card: &AgentCard, shape: &TaskShape) -> Result<Option<String>, Unfit> {
     if shape.requires_stream && !card.capabilities.is_stream {
         return Err(Unfit::CapabilityNotDeclared("streaming"));
@@ -205,7 +198,6 @@ fn pick<'a>(specific: &'a [String], fallback: &'a [String]) -> &'a [String] {
 }
 
 /// The caller must be able to RECEIVE something the agent produces; a side that names no modes
-
 fn check_modes(shape: &TaskShape, agent_outputs: &[String]) -> Result<(), Unfit> {
     let wanted = &shape.output_modes;
     if wanted.is_empty()
@@ -223,7 +215,6 @@ fn check_modes(shape: &TaskShape, agent_outputs: &[String]) -> Result<(), Unfit>
 }
 
 /// MIME type and subtype are case-insensitive; parameters do not change the structural mode.
-
 fn media_type(mode: &str) -> &str {
     mode.split(';').next().unwrap_or_default().trim()
 }

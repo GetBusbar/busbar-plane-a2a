@@ -4,7 +4,6 @@
 use super::*;
 
 /// The real HTTP connector reports CUT when the peer closes before its declared body length.
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_cut_after_a_working_event_reports_an_error_and_fails_the_task() {
     let _one = PUBLISHING.lock().await;

@@ -12,7 +12,6 @@ fn a_task() -> Task {
 }
 
 /// The listed state tokens round-trip. These strings are the store row, the audit row
-
 #[test]
 fn every_state_token_round_trips() {
     let all = [
@@ -52,7 +51,6 @@ fn every_state_token_round_trips() {
 }
 
 /// An unknown token is REFUSED, never defaulted. A row written by a newer engine must not be
-
 #[test]
 fn an_unknown_state_token_is_refused_not_defaulted() {
     assert_eq!(
@@ -103,7 +101,6 @@ fn the_transition_table_is_total_and_terminal_is_terminal() {
 }
 
 /// The two interrupt states reach each other DIRECTLY. Forcing an input-required task through
-
 #[test]
 fn an_interrupt_may_become_the_other_interrupt_without_pretending_to_work() {
     assert!(TaskState::InputRequired.can_transition_to(TaskState::AuthRequired));
@@ -111,7 +108,6 @@ fn an_interrupt_may_become_the_other_interrupt_without_pretending_to_work() {
 }
 
 /// A refused transition leaves the task COMPLETELY untouched, `updated_at` included. If a rejected
-
 #[test]
 fn a_refused_transition_changes_nothing_at_all() {
     let mut t = a_task();
@@ -131,7 +127,6 @@ fn a_refused_transition_changes_nothing_at_all() {
 }
 
 /// Identity is checked on the way IN. An empty principal is a task nobody can be shown and nobody
-
 #[test]
 fn a_task_without_identity_is_refused_at_construction() {
     assert_eq!(
@@ -149,7 +144,6 @@ fn a_task_without_identity_is_refused_at_construction() {
 }
 
 /// The store projection round-trips every field. A field added to `Task` and forgotten in `to_row`
-
 #[test]
 fn the_store_projection_round_trips_every_field() {
     let mut t = a_task();
@@ -167,7 +161,6 @@ fn the_store_projection_round_trips_every_field() {
 }
 
 /// An INTERRUPTED task is neither terminal nor "just running". The classification is load-bearing:
-
 #[test]
 fn an_interrupt_is_active_and_never_collectable() {
     for s in [TaskState::InputRequired, TaskState::AuthRequired] {

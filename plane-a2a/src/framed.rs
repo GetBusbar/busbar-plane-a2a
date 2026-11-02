@@ -213,11 +213,9 @@ mod rpc {
 pub const SERVICE_PATH: &str = "/lf.a2a.v1.A2AService";
 
 /// The A2A protocol version a call that names none speaks. The gRPC service descriptor IS the v1
-
 pub const DEFAULT_VERSION: &str = "1.0";
 
 /// The JSON-RPC id the composed request is framed under. gRPC has no correlation member, so there
-
 pub const COMPOSED_ID: i64 = 1;
 
 /// Every rpc of the service, by its name.
@@ -282,7 +280,6 @@ impl Rpc {
     }
 
     /// The rpc a call's target names (`/lf.a2a.v1.A2AService/<rpc>`, its query ignored); `None` for
-
     #[must_use]
     pub fn of_target(target: &str) -> Option<Self> {
         let path = target.split('?').next().unwrap_or_default();
@@ -298,14 +295,12 @@ impl Rpc {
 }
 
 /// The answer to a method the service does not have: `UNIMPLEMENTED` with no message, as the
-
 #[must_use]
 pub fn unimplemented() -> CallStatus {
     CallStatus::new(Code::Unimplemented, "")
 }
 
 /// PROTOBUF IN, the JSON-RPC request OUT: `message` decoded as `rpc`'s request message and framed
-
 pub fn compose(rpc: Rpc, message: &[u8]) -> Result<Vec<u8>, CallStatus> {
     let params = RequestJson::new(match rpc {
         Rpc::SendMessage | Rpc::SendStreamingMessage => {
@@ -339,7 +334,6 @@ pub fn compose(rpc: Rpc, message: &[u8]) -> Result<Vec<u8>, CallStatus> {
 }
 
 /// Legacy marker for a send with no message. [`compose`] now refuses that request before the
-
 #[must_use]
 pub fn mints_message_id(rpc: Rpc, message: &[u8]) -> bool {
     matches!(rpc, Rpc::SendMessage | Rpc::SendStreamingMessage)
@@ -347,7 +341,6 @@ pub fn mints_message_id(rpc: Rpc, message: &[u8]) -> bool {
 }
 
 /// A version-7 UUID (RFC 9562) over `unix_ms` and ten random bytes, as the SDK's model minted a
-
 #[must_use]
 pub fn message_id_v7(unix_ms: u64, random: &[u8; 10]) -> String {
     let mut b = [0_u8; 16];
@@ -367,7 +360,6 @@ pub fn message_id_v7(unix_ms: u64, random: &[u8; 10]) -> String {
 }
 
 /// Legacy splice helper: `envelope` with `id` as its message's `messageId`. The door validates
-
 #[must_use]
 pub fn with_message_id(envelope: &Value, id: &str) -> Value {
     let mut envelope = RequestJson::new(envelope.clone());
@@ -385,7 +377,6 @@ pub fn with_message_id(envelope: &Value, id: &str) -> Value {
 }
 
 /// PROTOBUF IN, CANONICAL JSON OUT: `message` decoded as `M` (a parse error is `INTERNAL` with the
-
 fn to_params<M>(message: &[u8]) -> Result<Value, CallStatus>
 where
     M: prost::Message + Default + Normal + serde::Serialize,
@@ -413,7 +404,6 @@ where
 }
 
 /// THE JSON-RPC ANSWER OUT, the rpc's response message IN ITS PROTOBUF BYTES: `body` is the whole
-
 pub fn answer_message(rpc: Rpc, status: u32, body: &[u8]) -> Result<Vec<u8>, CallStatus> {
     let Ok(envelope) = serde_json::from_slice::<RequestJson>(body) else {
         return Err(status_for_http(status));
@@ -447,7 +437,6 @@ pub fn answer_message(rpc: Rpc, status: u32, body: &[u8]) -> Result<Vec<u8>, Cal
 }
 
 /// ONE EVENT OF AN ANSWER IN EVENTS (one event-stream frame, its blank line excluded), as the
-
 #[must_use]
 pub fn event(frame: &str) -> Option<Result<Vec<u8>, CallStatus>> {
     let data = zeroize::Zeroizing::new(crate::sse::sse_data(frame)?);
@@ -460,11 +449,9 @@ pub fn event(frame: &str) -> Option<Result<Vec<u8>, CallStatus>> {
 }
 
 /// The reply head field the status details ride in, its value the details' base64 (unpadded, as
-
 pub const DETAILS_FIELD: &str = "grpc-status-details-bin";
 
 /// Whether `target` (a request target, its query ignored) is a call on the gRPC service: a path
-
 #[must_use]
 pub fn on_service(target: &str) -> bool {
     target
@@ -532,7 +519,6 @@ pub fn framed_reply(rpc: Rpc, status: u32, body: &[u8]) -> FramedReply {
 }
 
 /// A refusal the plane rendered as its JSON-RPC error envelope at neutral `status`, as the status
-
 #[must_use]
 pub fn refusal(envelope: &[u8], status: u32) -> FramedReply {
     let mut envelope = serde_json::from_slice::<RequestJson>(envelope).ok();
@@ -554,7 +540,6 @@ pub fn refusal(envelope: &[u8], status: u32) -> FramedReply {
 }
 
 /// A reply's status as a CLOSING BLOCK (field lines, `name: value` CRLF each): `grpc-status`, then
-
 #[must_use]
 pub fn status_block(reply: &FramedReply) -> Vec<u8> {
     use std::io::Write;
@@ -578,7 +563,6 @@ pub fn status_block(reply: &FramedReply) -> Vec<u8> {
 }
 
 /// AN ANSWER IN EVENTS, as the messages it carries: every whole event-stream frame of `buf` that
-
 #[must_use]
 pub fn event_messages(rpc: Rpc, buf: &[u8]) -> (Vec<Vec<u8>>, Option<CallStatus>) {
     if !rpc.streams() {
@@ -615,7 +599,6 @@ pub fn event_messages(rpc: Rpc, buf: &[u8]) -> (Vec<Vec<u8>>, Option<CallStatus>
 }
 
 /// Where the first complete event-stream frame of `buf` ends: the offset of the blank line that
-
 fn frame_end(buf: &[u8]) -> Option<(usize, usize)> {
     const TERMINATORS: [&[u8]; 3] = [b"\r\n\r\n", b"\n\n", b"\r\r"];
     (0..buf.len()).find_map(|at| {
@@ -630,7 +613,6 @@ fn frame_end(buf: &[u8]) -> Option<(usize, usize)> {
 const STATUS_INTERNAL: u32 = 500;
 
 /// THE STATUS FOR A JSON-RPC ERROR OBJECT, read off the code rather than the message: the code
-
 #[must_use]
 pub fn status_for_error(error: &Value, http: u32) -> CallStatus {
     let message = error
@@ -653,7 +635,6 @@ pub fn status_for_error(error: &Value, http: u32) -> CallStatus {
 }
 
 /// THE gRPC CODE section 5.4 binds an A2A or JSON-RPC error code to; `None` for a code A2A does
-
 #[must_use]
 pub fn grpc_code(code: i64) -> Option<Code> {
     Some(match code {
@@ -669,7 +650,6 @@ pub fn grpc_code(code: i64) -> Option<Code> {
 }
 
 /// THE `google.rpc.ErrorInfo` THIS ERROR ALREADY CARRIES, transcribed (never re-derived) into the
-
 fn error_info_of(error: &Value) -> Option<ErrorInfo> {
     let info = error
         .get("data")
@@ -701,7 +681,6 @@ fn error_info_of(error: &Value) -> Option<ErrorInfo> {
 }
 
 /// The status for an HTTP answer that is not a JSON-RPC answer: the standard gRPC
-
 #[must_use]
 pub fn status_for_http(status: u32) -> CallStatus {
     let code = match status {
@@ -717,7 +696,6 @@ pub fn status_for_http(status: u32) -> CallStatus {
 }
 
 /// THE MEMBERS OF BUSBAR'S OWN AGENT CARD THAT THE NORMATIVE `a2a.proto` DOES NOT MODEL, as
-
 const UNMODELLED_CARD_MEMBERS: &[(&str, &str)] = &[("capabilities", "stateTransitionHistory")];
 
 /// Busbar's card, narrowed to what a protobuf `AgentCard` can carry, and not reshaped.
@@ -740,16 +718,13 @@ fn narrowed_to_the_proto(card: Value) -> Value {
 pub const DIAL_CONTENT_TYPE: &str = "application/grpc+proto";
 
 /// The media type the gRPC line's answers carry, as the previous release's gRPC line (tonic)
-
 pub const REPLY_CONTENT_TYPE: &str = "application/grpc";
 
 /// The length prefix every message on the wire carries: one compression flag byte and a four-byte
-
 pub const MESSAGE_PREFIX: usize = 5;
 
 impl Rpc {
     /// The rpc a JSON-RPC `method` is, in either A2A dialect's spelling; `None` for a method the
-
     #[must_use]
     pub fn of_method(method: &str) -> Option<Self> {
         Some(match method {
@@ -779,7 +754,6 @@ impl Rpc {
     }
 
     /// The target a dialled call of this rpc is sent at: the service's own path, never joined onto
-
     #[must_use]
     pub fn target(self) -> String {
         format!("{SERVICE_PATH}/{}", self.name())
@@ -787,7 +761,6 @@ impl Rpc {
 }
 
 /// CANONICAL JSON IN, THE RPC'S REQUEST MESSAGE OUT: the hop's `params` read as `rpc`'s request
-
 pub fn request_message(rpc: Rpc, params: &Value) -> Result<Vec<u8>, String> {
     match rpc {
         Rpc::SendMessage | Rpc::SendStreamingMessage => encoded::<pb::SendMessageRequest>(params),
@@ -810,7 +783,6 @@ pub fn request_message(rpc: Rpc, params: &Value) -> Result<Vec<u8>, String> {
 }
 
 /// THE RPC'S RESPONSE MESSAGE IN, CANONICAL JSON OUT: one message the far end answered `rpc` with,
-
 pub fn response_result(rpc: Rpc, message: &[u8]) -> Result<Value, String> {
     match rpc {
         Rpc::SendMessage => decoded::<pb::SendMessageResponse>(message),
@@ -851,7 +823,6 @@ where
 }
 
 /// The message at the head of `buf`: its payload's length and how many bytes it takes with its
-
 pub fn take_message(buf: &[u8]) -> Result<Option<(usize, usize)>, String> {
     if buf.len() < MESSAGE_PREFIX {
         return Ok(None);
@@ -874,7 +845,6 @@ pub fn take_message(buf: &[u8]) -> Result<Option<(usize, usize)>, String> {
 }
 
 /// JSON-RPC's own error codes, beside A2A's ([`crate::ERRORS`]): the codes section 5.4's table
-
 const JSON_RPC_CODES: [i64; 5] = [-32700, -32600, -32601, -32602, -32603];
 
 /// HOW A DIALLED CALL ENDED, as its trailers say: the gRPC code, and the `google.rpc.ErrorInfo`
@@ -895,7 +865,6 @@ impl Ended {
     }
 
     /// THE A2A ERROR CODE it ended with: its `ErrorInfo` reason's in the protocol's own domain,
-
     #[must_use]
     pub fn a2a_code(&self) -> Option<i64> {
         if let Some(reason) = self
@@ -921,7 +890,6 @@ impl Ended {
 }
 
 /// HOW A DIALLED CALL ENDED (`block`, the field block the grpc transport hands back after the
-
 #[must_use]
 pub fn ended(block: &[u8], stated: Option<u32>) -> Option<Ended> {
     use base64::Engine as _;

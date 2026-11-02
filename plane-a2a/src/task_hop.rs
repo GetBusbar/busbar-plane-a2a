@@ -24,7 +24,6 @@ use crate::agent_arrival::{
     CODE_INTERNAL, CODE_INVALID_PARAMS, CODE_TASK_NOT_CANCELABLE, CODE_TASK_NOT_FOUND,
 };
 /// The status a callback busbar cannot honour, or a task verb naming no task, answers with: the
-
 const STATUS_BAD_REQUEST: u32 = 400;
 /// The plane's words for a task verb whose `params` name no task id as a string.
 pub const TASK_UNNAMED: &str = "a task verb must name its task: `params.id` is required, a string";
@@ -35,7 +34,6 @@ const STATUS_CONFLICT: u32 = 409;
 /// The words for a task that could not be recorded.
 pub const TASK_UNRECORDED: &str = "the task could not be recorded";
 /// The plane's words for a cancel of a task it holds as terminal (in the style of the subscribe
-
 pub const TASK_NOT_CANCELABLE: &str =
     "this task has reached a terminal state, so it cannot be canceled";
 /// The words for an interrupted task that could not be moved back to `working`.
@@ -51,10 +49,8 @@ pub fn conflicting_tasks(envelope: &Value) -> bool {
 }
 
 /// The host's reach opening a task needs beyond the records and the destination judge: the
-
 pub trait Mint: Reach {
     /// `random.fill` into `buf`.
-
     fn random(&mut self, buf: &mut [u8]) -> Result<(), Halt>;
 }
 
@@ -145,7 +141,6 @@ fn resumable(rows: Vec<TaskRow>, context_id: &str, member: &str) -> Option<TaskR
 }
 
 /// The member holding the task a request to a failover pool is about, read off the caller's task records: the `agent_id` of the task
-
 pub fn holder(
     reach: &mut dyn Records,
     envelope: &Value,
@@ -178,7 +173,6 @@ pub fn holder(
 }
 
 /// OPEN the task request `req` is for; its record writes go to `out`. `backends` answers the far
-
 pub fn open(
     reach: &mut dyn Mint,
     req: &Request<'_>,
@@ -442,13 +436,11 @@ fn config_value(
 }
 
 /// Whether `envelope` is ADDRESSED to a task, so that a task the caller does not hold refuses it:
-
 fn addresses_a_task(envelope: &Value) -> bool {
     is_task_verb(envelope) || !task_identity::message_tasks(envelope).is_empty()
 }
 
 /// Whether `envelope` is a task verb (`GetTask`, `CancelTask`, `SubscribeToTask`, either
-
 fn is_task_verb(envelope: &Value) -> bool {
     use crate::ops::{row_for, OP_TASK_CANCEL, OP_TASK_GET, OP_TASK_SUBSCRIBE};
     envelope
@@ -468,7 +460,6 @@ fn is_cancel(envelope: &Value) -> bool {
 }
 
 /// THE INLINE CONFIG OBJECT whose `url` is the callback: the first supported spelling that
-
 fn inline_config(envelope: &Value) -> Option<&Value> {
     CALLBACK_CONFIG_POINTERS.into_iter().find_map(|p| {
         envelope.pointer(p).filter(|cfg| {
@@ -480,7 +471,6 @@ fn inline_config(envelope: &Value) -> Option<&Value> {
 }
 
 /// THE PUSH CALLBACK `envelope` carries inline, judged: `Ok(None)` for none, the callback as it
-
 fn inline_callback(
     reach: &mut dyn Reach,
     envelope: &Value,
@@ -504,7 +494,6 @@ fn inline_callback(
 }
 
 /// The request with every task id the caller holds, and whose far-end id busbar learnt, sent on as
-
 fn translated(
     reach: &mut dyn Mint,
     req: &Request<'_>,
@@ -547,7 +536,6 @@ fn translated(
 }
 
 /// What [`translated`] answers: the request to send in place of the caller's bytes, when an id was
-
 type Translated = (Option<Vec<u8>>, Vec<(String, String)>);
 
 /// The error-once latches of the refused record writes, one per condition: a store outage persists across
@@ -577,7 +565,6 @@ macro_rules! latched {
 }
 
 /// A record write the store refused, reported and never fatal: the hop SUCCEEDED, the caller is
-
 pub(crate) enum WriteRefused {
     /// The unary hop's reported state.
     Relayed,
@@ -627,7 +614,6 @@ impl WriteRefused {
 }
 
 /// SETTLE `task` on what its answer said; the record writes go to `out`. A write the store refuses
-
 pub fn settle_on_answer(
     rec: &mut dyn Records,
     task: &TaskHop,

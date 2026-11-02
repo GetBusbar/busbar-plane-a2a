@@ -90,7 +90,6 @@ fn error_of(body: &Value) -> (i64, String) {
 }
 
 /// `ListTasks` answers the caller's own rows, newest first, one page at a time, with the engine's
-
 #[test]
 fn list_tasks_answers_the_callers_own_rows_a_page_at_a_time() {
     let mut desk = desk();
@@ -128,7 +127,6 @@ fn list_tasks_answers_the_callers_own_rows_a_page_at_a_time() {
 }
 
 /// A PAGE HOLDS AT MOST 100 TASKS, the protocol's maximum (`ListTasksRequest.page_size`, a2a.proto:
-
 #[test]
 fn list_tasks_pages_at_most_the_protocols_hundred() {
     let mut desk = desk();
@@ -143,7 +141,6 @@ fn list_tasks_pages_at_most_the_protocols_hundred() {
 }
 
 /// A config is created, read, listed and deleted as a record of its task, in each dialect's shape,
-
 #[test]
 fn a_push_config_lives_as_a_record_of_its_task() {
     let mut desk = desk();
@@ -270,7 +267,6 @@ fn the_stored_credential_rides_the_record_and_never_an_answer() {
 }
 
 /// A record written before the field existed still reads, and a config without a credential
-
 #[test]
 fn a_record_without_the_credential_field_reads_as_none() {
     let old: PushConfig =
@@ -310,7 +306,6 @@ fn another_callers_task_is_not_found() {
 }
 
 /// Refused callback configurations retain their error status/code and create no config record.
-
 #[test]
 fn refused_callback_configurations_are_not_persisted() {
     let cases: [(Value, u64, i64, &str); 7] = [
@@ -338,7 +333,6 @@ fn refused_callback_configurations_are_not_persisted() {
 }
 
 /// A subscribe to a task busbar did not issue to this caller is not found, to one it holds as
-
 #[test]
 fn a_subscribe_is_refused_only_where_busbar_knows_better() {
     let mut desk = desk();
@@ -370,7 +364,6 @@ fn a_subscribe_is_refused_only_where_busbar_knows_better() {
 }
 
 /// Exactly the task-store verbs are answered here; the submission and read verbs are the
-
 #[test]
 fn exactly_these_methods_are_answered_locally() {
     for m in [
@@ -437,7 +430,6 @@ fn the_push_verbs_carry_the_dialect_that_named_them() {
 }
 
 /// A config cannot be attached to another caller's task: the create is the absent-task refusal,
-
 #[test]
 fn a_push_config_cannot_be_attached_to_another_principals_task() {
     let mut desk = desk();
@@ -457,7 +449,6 @@ fn a_push_config_cannot_be_attached_to_another_principals_task() {
 }
 
 /// The list is answered for the owner; for anybody else it is the absent-task refusal, byte for
-
 #[test]
 fn list_push_configs_is_answered_for_the_owner_and_is_an_absent_task_for_everybody_else() {
     let mut desk = desk();
@@ -480,7 +471,6 @@ fn list_push_configs_is_answered_for_the_owner_and_is_an_absent_task_for_everybo
 }
 
 /// Another caller's delete cannot disarm the owner's callback: it answers as for an absent task and
-
 #[test]
 fn delete_push_config_cannot_disarm_another_principals_callback() {
     let mut desk = desk();
@@ -512,7 +502,6 @@ fn delete_push_config_cannot_disarm_another_principals_callback() {
 }
 
 /// A subscribe is relayed for the owner of a live task (no local refusal); for anybody else it is
-
 #[test]
 fn subscribe_is_relayed_for_the_owner_and_is_an_absent_task_for_everybody_else() {
     let mut desk = desk();
@@ -535,7 +524,6 @@ fn subscribe_is_relayed_for_the_owner_and_is_an_absent_task_for_everybody_else()
 }
 
 /// The v0.3 spelling is answered in the v0.3 shape: the config nested under
-
 #[test]
 fn the_v0_3_spelling_is_answered_in_the_v0_3_shape() {
     let mut desk = desk();
@@ -556,7 +544,6 @@ fn the_v0_3_spelling_is_answered_in_the_v0_3_shape() {
 }
 
 /// Every A2A method of the inventory is read the same way under its v1.0 and its v0.3 JSON-RPC
-
 #[test]
 fn every_a2a_method_is_read_identically_under_both_of_its_live_json_rpc_names() {
     let doc: Value = serde_json::from_str(METHOD_INVENTORY).expect("the inventory parses");
@@ -593,7 +580,6 @@ fn every_a2a_method_is_read_identically_under_both_of_its_live_json_rpc_names() 
 }
 
 /// A v0.3 set then a v0.3 delete naming the config by `pushNotificationConfigId` (the task by `id`)
-
 #[test]
 fn v03_delete_reads_pushnotificationconfigid_and_actually_clears() {
     let mut desk = desk();
@@ -625,7 +611,6 @@ fn v03_delete_reads_pushnotificationconfigid_and_actually_clears() {
 }
 
 /// The host judges callback destinations, and its refusal prevents the callback.
-
 #[test]
 fn an_internal_callback_is_refused_on_the_hosts_verdict_and_the_host_is_asked() {
     let url = "https://10.0.0.1/cb";
@@ -665,7 +650,6 @@ fn an_internal_callback_is_refused_on_the_hosts_verdict_and_the_host_is_asked() 
 }
 
 /// The callback consumes the host's DEST_OBFUSCATED verdict. Detection of the
-
 #[test]
 fn the_hosts_obfuscated_address_verdict_is_refused() {
     for host in [
@@ -696,7 +680,6 @@ fn the_hosts_obfuscated_address_verdict_is_refused() {
 }
 
 /// A URL whose authority names a user is malformed, refused rather than normalised, before the
-
 #[test]
 fn a_url_with_userinfo_is_refused_rather_than_normalised() {
     for (url, shown) in [
@@ -722,7 +705,6 @@ fn a_url_with_userinfo_is_refused_rather_than_normalised() {
 }
 
 /// A v1.0 PUSH-CONFIG VERB READS ITS TASK FROM `taskId` ALONE: `id` is the config's id, so a
-
 #[test]
 fn a_v10_push_config_verb_never_reads_its_config_id_as_the_task() {
     let mut desk = desk();
@@ -773,7 +755,6 @@ fn a_v10_push_config_verb_never_reads_its_config_id_as_the_task() {
 }
 
 /// A string that is not a URL is refused, and a scheme the host does not admit is refused in the
-
 #[test]
 fn malformed_urls_are_refused() {
     let words = |shown: &str| format!("push callback URL is malformed: `{shown}`");
@@ -816,7 +797,6 @@ fn malformed_urls_are_refused() {
 }
 
 /// THE ENGINE'S ANSWER SHOULD THE STORE REFUSE A PUSH-CONFIG VERB'S OWN WRITE (the kernel then ends
-
 #[test]
 fn a_push_config_write_the_store_refuses_answers_the_engines_internal_error() {
     let id = json!(7);

@@ -50,7 +50,6 @@ pub const DEFAULT_RECOVERY_BACKOFF: &str = "15m";
 const NONE: AbiStr = AbiStr::ABSENT;
 
 /// The push queue's counters, the Statement's metric families (a per-task ordered bounded queue,
-
 pub const FAMILIES: &[busbar_contract::abi::mechanism::door::MetricFamily] = &[
     counter(
         METRIC_PUSH_DROPPED,
@@ -88,7 +87,6 @@ const fn counter(
 }
 
 /// The plane's settings sections, as its Statement states them: `agents:` is the one it declares;
-
 pub const SECTIONS: &[Section] = &[
     Section {
         name: abi_str(crate::CONFIG_SECTION),
@@ -103,18 +101,15 @@ pub const SECTIONS: &[Section] = &[
 ];
 
 /// THE PLANE'S OWN `agent_push:` SECTION (new in 1.6.0; absent = public roots): `{ca: <PEM>}`, the operator
-
 pub const PUSH_SECTION: &str = "agent_push";
 
 /// The [`PUSH_SECTION`] key holding the operator CA, PEM text.
 pub const PUSH_CA_KEY: &str = "ca";
 
 /// WHERE [`NEED_OPEN_WEB`]'s TRUST ANCHOR COMES FROM: [`PUSH_SECTION`]`.`[`PUSH_CA_KEY`] in the
-
 pub const PUSH_TRUST_FROM: &str = "owned.agent_push.ca";
 
 /// Judge the [`PUSH_SECTION`] the plane's owned sections (`{section: value}`, JSON) write: absent
-
 pub fn read_push_section(owned: &[u8]) -> Result<(), String> {
     use serde_json::Value;
     if owned.is_empty() {
@@ -216,11 +211,9 @@ const RECORD_KINDS: &[AbiStr] = &[
 ];
 
 /// The retention rule of each held kind that is not purged by age: a task row is kept while it is
-
 const RECORD_RETENTIONS: &[RecordRetention] = &[record_retention(0, Retention::TerminalOnly)];
 
 /// The task chain: the task-event kind is chained, length-prefixed with its scope in the
-
 const RECORD_CHAINS: &[RecordChain] = &[RecordChain {
     kind: crate::records::TASK_EVENT_INDEX,
     framing: CHAIN_LENGTH_PREFIXED,
@@ -229,7 +222,6 @@ const RECORD_CHAINS: &[RecordChain] = &[RecordChain {
 }];
 
 /// The pin's four mechanisms; three are authenticity roots and `unpinned` is not. `cert_spki` and
-
 const PIN_MECHANISMS: &[PinMechanism] = &[
     PinMechanism {
         token: abi_str("jws_issuer_key"),
@@ -254,7 +246,6 @@ const PIN_MECHANISMS: &[PinMechanism] = &[
 ];
 
 /// The kernel-owned trust keys of one entry (the `pin:` object over this plane's four mechanisms,
-
 const TRUST_KEYS: &[TrustKey] = &[
     trust_key("pin", TRUST_PIN, PIN_FINGERPRINT, NONE).with_mechanisms(PIN_MECHANISMS),
     trust_key(
@@ -286,32 +277,25 @@ const fn trust_key(key: &'static str, role: u32, flags: u32, default: AbiStr) ->
 pub const PRIVATE_REACH_KEY: &str = "allow_private";
 
 /// The [`NEEDS`] index of the plane's own outbound hops to a caller's push callback, each to the
-
 pub const NEED_OPEN_WEB: u32 = 0;
 
 /// The [`NEEDS`] index of the relayed calls to the registered agents: one member route per agent,
-
 pub const NEED_AGENT: u32 = 1;
 
 /// The [`NEEDS`] index of the relayed calls to the registered agents whose card's binding is gRPC
-
 pub const NEED_GRPC: u32 = 2;
 
 /// THE MEMBER-TARGET PATH of [`NEED_AGENT`] (`busbar_contract::section::MEMBER_TARGET_PREFIX`): each
-
 pub const MEMBER_TARGET: &str = "settings.*.url";
 
 /// WHERE [`NEED_AGENT`]'s TRUST ANCHORS COME FROM, beside the agent's pin (Q-DEL-A2A-SPKI): each
-
 pub const CLIENT_IDENTITY_FROM: &str = "settings.*.client_identity";
 
 /// The far end's response fields the plane reads: the answer's media type (a JSON document or an
-
 const KEEP_RESPONSE_HEADERS: &[AbiStr] =
     &[abi_str(crate::relay::H_CONTENT_TYPE), abi_str("location")];
 
 /// The secret references its section holds, by settings path (`*` = every registered agent): the
-
 pub const SECRET_REFS: &[AbiStr] = &[
     abi_str("settings.*.upstream_credential.secret"),
     abi_str("settings.*.client_identity.cert"),
@@ -319,7 +303,6 @@ pub const SECRET_REFS: &[AbiStr] = &[
 ];
 
 /// THE PLANE'S CONNECTION NEEDS: its own outbound hops over http under the `open-web` class (public
-
 pub const NEEDS: &[Need] = &[
     need(
         EGRESS_OPEN_WEB,
@@ -399,11 +382,9 @@ pub const TAIL: &PlaneTail = &{
 };
 
 /// How long a unit whose answer streams may run (600 s): the plane's stated stream ceiling, which the kernel stamps as the unit's
-
 pub const STREAM_CEILING_SECS: u64 = 600;
 
 /// One path the plane answers on: the SDK's one route row ([`ServedRoute`]): the verb, the target
-
 pub type Route = ServedRoute;
 
 /// The carrier the document and target bindings arrive over.
@@ -428,11 +409,9 @@ const fn open(verb: &'static str, target: &'static str) -> Route {
 }
 
 /// ONE FRONTED AGENT'S JSON-RPC ENDPOINT, `POST /a2a/agents/{agent_id}`: a row of [`ROUTES`], and
-
 pub const AGENT_ENDPOINT: Route = keyed("POST", "/a2a/agents/{agent_id}");
 
 /// The plane's data routes, in declaration order: named operations and cards,
-
 pub const ROUTES: &[Route] = &[
     keyed("POST", "/a2a/message:send"),
     keyed("POST", "/a2a/message:stream"),
@@ -479,7 +458,6 @@ pub enum Line {
 
 impl Line {
     /// The [`DIALECTS`] index its refusals are rendered in; `None` for a card document, whose
-
     #[must_use]
     pub const fn dialect(self) -> Option<u32> {
         match self {
@@ -513,7 +491,6 @@ pub fn line_of(route: &Route) -> Line {
 }
 
 /// The trust verbs the plane serves on the kernel's admin mount, relative to it: `(verb, target)`;
-
 pub const ADMIN_VERBS: &[(&str, &str)] = &[
     ("POST", "/agents/{name}/connect"),
     ("POST", "/agents/{name}/approve"),
@@ -521,11 +498,9 @@ pub const ADMIN_VERBS: &[(&str, &str)] = &[
 ];
 
 /// BUSBAR'S OWN PUSH CALLBACK's index in [`ADMIN_VERBS`]: `POST /a2a/push`, a PUBLIC route
-
 pub const PUSH_ROUTE: usize = 2;
 
 /// The word the kernel's audit row names each [`ADMIN_VERBS`] request by: the audit verbs
-
 pub const ADMIN_AUDIT_VERBS: [&str; 3] = ["connect", "approve", ""];
 
 /// [`ADMIN_VERBS`] in the ABI's spelling, each audited under its [`ADMIN_AUDIT_VERBS`] word.
@@ -541,11 +516,9 @@ pub const ADMIN_ROUTES: &[AdminRoute] = &[
 ];
 
 /// The trust verbs' OpenAPI fragment, each path relative to the admin mount (the kernel keys it
-
 pub const ADMIN_OPENAPI: &str = include_str!("admin_openapi.json");
 
 /// THE TRUST VERBS' OpenAPI FRAGMENT ([`ADMIN_OPENAPI`]), each path keyed under `admin_prefix`
-
 #[must_use]
 pub fn openapi_fragment(admin_prefix: &str) -> serde_json::Value {
     let Ok(serde_json::Value::Object(paths)) = serde_json::from_str(ADMIN_OPENAPI) else {
@@ -566,7 +539,6 @@ pub fn openapi_fragment(admin_prefix: &str) -> serde_json::Value {
 }
 
 /// `validate` and `open`: the settings blob read as the `agents:` section. An empty blob is the
-
 pub fn read_agents_section(settings: &[u8]) -> Result<AgentsCfg, String> {
     if settings.is_empty() {
         return Ok(AgentsCfg::default());
@@ -584,7 +556,6 @@ pub fn read_agents_section(settings: &[u8]) -> Result<AgentsCfg, String> {
 type Pools = indexmap::IndexMap<String, Vec<String>>;
 
 /// The section's reserved `pools` key taken off `settings`: the rest of the section (its keys in
-
 fn lift_pools(settings: &[u8]) -> Option<(Vec<u8>, Pools)> {
     use busbar_contract::section::{POOL_MEMBERS_KEY, POOL_MEMBER_NAME_KEY, RESERVED_POOLS_KEY};
     let mut section: indexmap::IndexMap<String, serde_json::Value> =
@@ -628,7 +599,6 @@ fn read_section(settings: &[u8]) -> Result<AgentsCfg, String> {
 }
 
 /// THE SECTION A DEALT `validate` BLOB CARRIES. The boot's stage-3g deal hands a declared-verb
-
 #[must_use]
 pub fn dealt_section(settings: &[u8]) -> std::borrow::Cow<'_, [u8]> {
     match serde_json::from_slice::<serde_json::Map<String, serde_json::Value>>(settings) {
@@ -644,7 +614,6 @@ pub fn dealt_section(settings: &[u8]) -> std::borrow::Cow<'_, [u8]> {
 }
 
 /// ONE GENERATION'S SNAPSHOT, owned, for the SDK to publish until that generation's `retire`.
-
 #[must_use]
 pub fn agents_snapshot_spec(public_url: Option<&str>, agents: &[&str]) -> SnapshotSpec {
     let fronts = !agents.is_empty();
@@ -689,7 +658,6 @@ pub fn agents_snapshot_spec(public_url: Option<&str>, agents: &[&str]) -> Snapsh
 }
 
 /// The trailing-separator spelling of each fronted agent's endpoint: an A2A client joins its relative calls to the card's `url` and so arrives at
-
 #[must_use]
 pub fn agent_slash_claims(agents: &[&str]) -> Vec<ClaimSpec> {
     agents
@@ -725,7 +693,6 @@ fn plain_segment(name: &str) -> bool {
 }
 
 /// The route the kernel's claim index `claim` names: a row of [`ROUTES`], or past them one of the
-
 #[must_use]
 pub fn route_of_claim(claim: u32, agent_claims: impl FnOnce() -> usize) -> Option<&'static Route> {
     let i = usize::try_from(claim).ok()?;
@@ -741,7 +708,6 @@ pub fn agent_claim_count<'a>(agents: impl IntoIterator<Item = &'a str>) -> usize
 }
 
 /// A route as the snapshot's claim ([`ServedRoute::claim_spec`]: an open route takes no inbound
-
 fn dialect_claim(r: &Route) -> ClaimSpec {
     let mut spec = r.claim_spec();
     spec.refusal_dialect =
@@ -750,7 +716,6 @@ fn dialect_claim(r: &Route) -> ClaimSpec {
 }
 
 /// The audit row every admitted unit of this plane leaves, written as a `RECORD_AUDIT` record
-
 pub const AUDIT_ACTION: &str = "agent.call";
 
 /// The resource an agent's row names (the kernel's `agent_key`: `agent:<id>`).

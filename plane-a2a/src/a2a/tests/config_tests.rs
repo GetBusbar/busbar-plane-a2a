@@ -10,7 +10,6 @@ use busbar_contract::secret_ref::SecretRef;
 use serde_json::json;
 
 /// The reference config's sugar `{ word: value }` reads as, through the contract's own reading, so
-
 fn sugar(word: &str, value: &str) -> SecretRef {
     serde_json::from_value(serde_json::json!({ word: value })).expect("a sugar reference")
 }
@@ -62,7 +61,6 @@ fn serialized_pin_tokens_round_trip() {
 }
 
 /// The shape the design specifies parses, field for field.
-
 #[test]
 fn the_designed_entry_parses_as_written() {
     let cfg = parse(&json!({
@@ -112,7 +110,6 @@ fn registrations_require_explicit_pin_mechanisms_and_private_reach_is_opt_in() {
 }
 
 /// A typo'd key fails the parse rather than silently un-pinning an agent.
-
 #[test]
 fn an_unknown_key_is_refused_rather_than_ignored() {
     let err = parse(&json!({
@@ -130,7 +127,6 @@ fn an_unknown_key_is_refused_rather_than_ignored() {
 }
 
 /// A URL with no scheme, or an empty one, fails at parse rather than at a delegation later.
-
 #[test]
 fn a_url_without_a_scheme_fails_at_parse() {
     for url in ["", "   ", "a2a.vendor/planner", "ftp://a2a.vendor/"] {
@@ -158,7 +154,6 @@ fn a_url_without_a_scheme_fails_at_parse() {
 }
 
 /// THE REGISTRATION URL IS PARSED, NOT PREFIX-TESTED: one with no host is refused, and one whose
-
 #[test]
 fn a_registration_url_is_parsed_and_its_userinfo_never_repeated() {
     let d = def("https://", PinMechanism::Unpinned);
@@ -190,7 +185,6 @@ fn a_registration_url_is_parsed_and_its_userinfo_never_repeated() {
 }
 
 /// An agent may not be NAMED by a reserved word: every word in the one declaration is refused here.
-
 #[test]
 fn an_agent_may_not_be_named_by_a_reserved_word() {
     for reserved in busbar_contract::section::RESERVED_SECTION_KEYS {
@@ -208,7 +202,6 @@ fn an_agent_may_not_be_named_by_a_reserved_word() {
 }
 
 /// The section-level reserved keys still WORK as knobs, and are not agents.
-
 #[test]
 fn the_reserved_words_still_function_as_section_knobs() {
     let cfg = parse(&json!({
@@ -223,7 +216,6 @@ fn the_reserved_words_still_function_as_section_knobs() {
 }
 
 /// THE CALLER'S CREDENTIAL IS NEVER FORWARDED TO A DELEGATE: refused per entry and at the section
-
 #[test]
 fn passthrough_is_refused_at_the_section_level_as_well_as_per_entry() {
     let err = parse(&json!({
@@ -261,7 +253,6 @@ fn passthrough_is_refused_at_the_section_level_as_well_as_per_entry() {
 }
 
 /// An entry round-trips to a document and back unchanged, which is what the overlay's per-entry
-
 #[test]
 fn an_entry_round_trips_through_its_document_form() {
     let d = AgentDefCfg {
@@ -296,7 +287,6 @@ fn an_entry_round_trips_through_its_document_form() {
 }
 
 /// The registration an operator writes for a peer behind mutual TLS, parsed field for field: the
-
 #[test]
 fn a_mutual_tls_registration_names_its_client_certificate_by_reference() {
     let cfg = parse(&json!({
@@ -323,7 +313,6 @@ fn a_mutual_tls_registration_names_its_client_certificate_by_reference() {
 }
 
 /// `mtls` with nothing to present is refused at parse, naming the missing key and what the peer
-
 #[test]
 fn mutual_tls_without_a_client_identity_is_refused_at_parse() {
     let err = parse(&json!({
@@ -341,7 +330,6 @@ fn mutual_tls_without_a_client_identity_is_refused_at_parse() {
 }
 
 /// A client certificate over `http://` has no handshake to be presented in.
-
 #[test]
 fn a_client_identity_on_a_plaintext_endpoint_is_refused() {
     let err = parse(&json!({
@@ -362,7 +350,6 @@ fn a_client_identity_on_a_plaintext_endpoint_is_refused() {
 }
 
 /// A client certificate is legal under the OTHER mechanisms: only `mtls` REQUIRES it.
-
 #[test]
 fn a_client_identity_is_legal_alongside_a_signed_card() {
     parse(&json!({
@@ -379,7 +366,6 @@ fn a_client_identity_is_legal_alongside_a_signed_card() {
 }
 
 /// The admin write path runs the SAME rule: `validate_agent` is the one function both call.
-
 #[test]
 fn the_admin_write_path_refuses_mutual_tls_without_a_client_identity_too() {
     let mut d = def("https://a2a.vendor/planner", PinMechanism::MutualTls);
@@ -390,7 +376,6 @@ fn the_admin_write_path_refuses_mutual_tls_without_a_client_identity_too() {
 }
 
 /// The LEASE is a field rather than an adjective, so a lease that could never be presented is
-
 #[test]
 fn a_zero_lease_ttl_is_refused_at_parse() {
     let err = parse(&json!({
@@ -419,7 +404,6 @@ fn a_zero_lease_ttl_is_refused_at_parse() {
 }
 
 /// An empty egress scope grants nothing and READS as though it grants something, so a blank name
-
 #[test]
 fn an_empty_egress_scope_is_refused() {
     let err = parse(&json!({

@@ -26,7 +26,6 @@ pub enum Dialect {
 
 impl Dialect {
     /// The version a JSON-RPC method name is spelled in: v0.3's are slash paths
-
     #[must_use]
     pub fn of_method(method: &str) -> Self {
         if method.contains('/') {
@@ -84,7 +83,6 @@ pub fn verb_of(method: &str) -> Option<LocalVerb> {
 /// The host's reach the verbs need beyond the records: the destination judge.
 pub trait Reach: Records {
     /// `dest.judge` of `dest` under the open-web class, its name resolved and private reach
-
     fn judge(&mut self, dest: &str) -> Result<u64, Halt>;
 }
 
@@ -103,7 +101,6 @@ use crate::agent_arrival::{
 };
 
 /// The refusal every verb gives for a task id it does not hold for this caller: one string, so the
-
 pub const NO_SUCH_TASK: &str = "no task with that id is open for this caller";
 
 /// A JSON-RPC success under the caller's id.
@@ -144,12 +141,10 @@ fn err(rpc_id: &Value, code: i64, message: impl Into<String>) -> LocalAnswer {
 pub const CONFIG_UNRECORDED: &str = "the push notification config could not be recorded";
 
 /// The words when the store would not take a push config's removal: the config stays and the
-
 pub const CONFIG_UNDELETED: &str =
     "the push notification config could not be deleted; retry the delete";
 
 /// The answer when the store refuses verb `verb`'s own record write (the kernel ends its unit
-
 #[must_use]
 pub fn unrecorded(verb: LocalVerb, rpc_id: &Value) -> Option<AgentRefusal> {
     let message = match verb {
@@ -167,7 +162,6 @@ pub fn unreadable(rpc_id: &Value) -> LocalAnswer {
 }
 
 /// ANSWER local verb `verb` of `envelope` for `caller` at `now`; its writes go to `out`. `None`
-
 pub fn answer_local(
     reach: &mut dyn Reach,
     verb: LocalVerb,
@@ -208,7 +202,6 @@ pub fn answer_local(
 }
 
 /// `ListTasks`'s answer over `rec` (the refreshed rows, seen through the piece's own writes).
-
 pub(crate) fn list_answer(
     rec: &mut dyn Records,
     envelope: &Value,
@@ -248,7 +241,6 @@ pub fn task_json(task: &Task) -> Value {
 /// The page size a caller that asks for none gets.
 pub const DEFAULT_PAGE_SIZE: usize = 50;
 /// The largest page size: `ListTasksRequest.page_size` "The maximum value is 100" (a2a.proto); a
-
 pub const MAX_PAGE_SIZE: usize = 100;
 
 /// An integer that arrives as a number or, per the schema's `anyOf`, as a decimal string.
@@ -448,7 +440,6 @@ pub fn config_params(params: &Value) -> &Value {
 }
 
 /// THE CONFIG ID a get/delete names: `id` on v1.0, `pushNotificationConfigId` on v0.3 (where `id`
-
 #[must_use]
 pub fn config_id_wanted(dialect: Dialect, params: &Value) -> &str {
     match dialect {
@@ -460,7 +451,6 @@ pub fn config_id_wanted(dialect: Dialect, params: &Value) -> &str {
 }
 
 /// THE CREDENTIAL a config names, out of `{scheme, credentials}` or `{schemes: [..], credentials}`;
-
 pub fn delivery_auth(cfg: &Value) -> Result<Option<DeliveryAuth>, String> {
     let Some(auth) = cfg.get("authentication").filter(|v| !v.is_null()) else {
         return Ok(None);
@@ -523,7 +513,6 @@ pub fn delivery_auth(cfg: &Value) -> Result<Option<DeliveryAuth>, String> {
 }
 
 /// The callback floor: the push-notification guard, its words rendered here and its
-
 pub fn judge_callback(reach: &mut dyn Reach, url: &str) -> Result<Result<(), String>, Halt> {
     use busbar_contract::abi::host::service::{
         DEST_ALLOWED, DEST_INTERNAL, DEST_METADATA, DEST_NO_ADDRESSES, DEST_NO_HOST,
@@ -580,7 +569,6 @@ pub fn judge_callback(reach: &mut dyn Reach, url: &str) -> Result<Result<(), Str
 }
 
 /// THE TASK a push-config request names, through the same scoped read every verb uses: its
-
 pub(crate) fn addressed(
     rec: &mut dyn Records,
     dialect: Dialect,
@@ -618,7 +606,6 @@ pub(crate) fn held_config(
 }
 
 /// The refusal for a push config's non-null `token`, which no delivery presents. Shared with
-
 pub const TOKEN_UNCARRIED: &str =
     "busbar does not carry a push notification config `token`: there is no header or body \
      member the delivery puts it in, so storing it would promise the receiver a value it \
@@ -769,7 +756,6 @@ fn list_push_configs(
 }
 
 /// `DeleteTaskPushNotificationConfig` / `tasks/pushNotificationConfig/delete`. IDEMPOTENT: a
-
 fn delete_push_config(
     rec: &mut dyn Records,
     dialect: Dialect,

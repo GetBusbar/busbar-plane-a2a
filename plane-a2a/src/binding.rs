@@ -68,7 +68,6 @@ pub struct Selected<'a> {
 }
 
 /// Select HOW the configured endpoint speaks without changing WHERE the operator sends it.
-
 #[must_use]
 pub fn select<'a>(card: Option<&Value>, configured_url: &'a str) -> Selected<'a> {
     let word = match card {
@@ -131,7 +130,6 @@ pub fn select<'a>(card: Option<&Value>, configured_url: &'a str) -> Selected<'a>
 }
 
 /// Compare resolved URL references using the existing URL parser alone. Query order, path
-
 fn endpoint_matches(configured_url: &str, advertised: &str) -> bool {
     if advertised.is_empty() {
         return false;
@@ -145,7 +143,6 @@ fn endpoint_matches(configured_url: &str, advertised: &str) -> bool {
 }
 
 /// The binding at the card's primary endpoint. Consumers with an operator endpoint use
-
 #[must_use]
 pub fn binding_of(card: Option<&Value>) -> String {
     let endpoint = card
@@ -156,7 +153,6 @@ pub fn binding_of(card: Option<&Value>) -> String {
 }
 
 /// One untrusted word made safe for a caller's error body: at most 48 characters of an
-
 #[must_use]
 pub fn bounded_word(word: &str) -> String {
     const MAX: usize = 48;
@@ -191,7 +187,6 @@ pub fn unframable_text(method: &str, binding: &str) -> String {
 }
 
 /// One operation's place on the HTTP+JSON binding: its request line, the `params` members its query
-
 struct RestOp {
     verb: &'static str,
     path: &'static str,
@@ -282,7 +277,6 @@ impl Drop for Framed {
 }
 
 /// COMPOSE `method` with `params` on the HTTP+JSON binding under the agent URL `base` (A2A section
-
 pub fn compose(base: &str, method: &str, params: &Value) -> Result<Framed, String> {
     let op = rest_op(method).ok_or_else(|| {
         format!("`{method}` is not one of the eleven operations A2A's HTTP+JSON binding defines")
@@ -404,7 +398,6 @@ fn scalar(value: &Value) -> String {
 }
 
 /// Percent-encode one path segment against an allowlist, so no `/`, `?`, `#` or `%` in an id can
-
 fn percent(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     for b in raw.bytes() {

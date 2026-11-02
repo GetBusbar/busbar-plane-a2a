@@ -69,7 +69,6 @@ impl FakeService for Unavailable {
 }
 
 /// The connector: every dial is counted and fails (nothing listens), so the request is not
-
 struct Dial;
 impl FakeService for Dial {
     type In = EstablishIn;
@@ -154,7 +153,6 @@ fn list_dials(plane: &A2aDoor) -> usize {
 }
 
 /// A QUARANTINED agent is sent no mirrored push config: the mirror busbar originates is held to
-
 #[test]
 fn a_quarantined_agent_is_sent_no_mirrored_push_config() {
     let plane = door_over(quarantined_host());
@@ -177,7 +175,6 @@ fn a_quarantined_agent_is_asked_no_list_tasks_refresh() {
 }
 
 /// The control: an agent the trust book serves IS dialled for both, so the cases above see a dial
-
 #[test]
 fn a_serving_agent_is_dialled_for_its_mirror_and_its_refresh() {
     let plane = door_over(serving_host());

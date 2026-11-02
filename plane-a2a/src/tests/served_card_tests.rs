@@ -55,7 +55,6 @@ fn a_fronted_card_names_busbar_and_nothing_of_the_backend() {
 }
 
 /// A FRONTED AGENT'S CAPABILITIES ARE THE AGENT'S: busbar relays the agent's extended card read to
-
 #[test]
 fn a_fronted_card_carries_the_agents_own_capabilities_and_promises_no_extended_card() {
     let backend = "https://internal.corp.example/a2a";
@@ -244,7 +243,6 @@ fn the_extended_card_names_each_entitled_agent_once_and_omits_a_leaking_one() {
 }
 
 /// The card tells a caller where to send its request. If that string and the path the door claims
-
 #[test]
 fn the_served_endpoint_and_the_mounted_path_are_one_derivation() {
     let endpoint = agent_endpoint(PUBLIC, "planner").expect("an endpoint");
@@ -280,7 +278,6 @@ fn the_served_endpoint_and_the_mounted_path_are_one_derivation() {
 const BACKEND: &str = "https://internal.corp.example/a2a";
 
 /// A backend card rich enough for the ported cells: a vendor scheme, a vendor requirement, a vendor
-
 fn rich_backend_card() -> Value {
     json!({
         "protocolVersion": "0.3.0",
@@ -567,7 +564,6 @@ fn the_extended_card_publishes_one_skill_per_agent_and_never_a_duplicate_id() {
 }
 
 /// A deterministic stand-in for the host's card-signing service: 64 bytes that are a pure function
-
 fn stand_in_signature(input: &[u8]) -> Vec<u8> {
     use std::hash::{Hash, Hasher};
     (0u8..8)
@@ -610,7 +606,6 @@ enum NotVerified {
 }
 
 /// Verify `doc` the way the inbound verifier reads a card: signing input is
-
 fn verify_served(doc: &Value) -> Result<String, NotVerified> {
     use base64::Engine as _;
     let sig = doc["signatures"].get(0).ok_or(NotVerified::NoSignature)?;
@@ -738,7 +733,6 @@ fn the_signature_is_taken_over_the_document_that_is_actually_served() {
 }
 
 /// Ported from busbar-a2a a2a/tests/sign_tests.rs::the_card_signing_domain_derives_the_exact_pinned_bytes.
-
 #[test]
 fn the_card_signing_domain_derives_the_exact_pinned_bytes() {
     assert_eq!(
@@ -749,7 +743,6 @@ fn the_card_signing_domain_derives_the_exact_pinned_bytes() {
 }
 
 /// A v0.3 CARD'S `additionalInterfaces` AND `preferredTransport` name only what busbar serves at
-
 #[test]
 fn a_v03_cards_additional_interfaces_and_preferred_transport_name_only_what_busbar_serves_there() {
     let backend = json!({
@@ -779,7 +772,6 @@ fn a_v03_cards_additional_interfaces_and_preferred_transport_name_only_what_busb
 }
 
 /// ONE SERVABLE-BINDING RULE IN BOTH VERSIONS: a v0.3 card that prefers gRPC and offers no
-
 #[test]
 fn a_v03_card_offering_no_binding_busbar_serves_is_refused_like_a_v10_one() {
     let grpc_only = json!({
@@ -816,7 +808,6 @@ fn a_v03_card_offering_no_binding_busbar_serves_is_refused_like_a_v10_one() {
 }
 
 /// A v1.0 card's interfaces the rewrite points at the same address on the same binding are
-
 #[test]
 fn a_v10_cards_duplicate_interfaces_are_published_once() {
     let mut card = backend_card();
@@ -839,7 +830,6 @@ fn a_v10_cards_duplicate_interfaces_are_published_once() {
 }
 
 /// G1-4: A FRONTED v0.3 CARD ADVERTISES BUSBAR'S CREDENTIAL IN v0.3's OWN SPELLING (v0.3.0
-
 #[test]
 fn a_v03_cards_inbound_scheme_is_written_in_v03s_spelling() {
     for card in [
@@ -875,7 +865,6 @@ fn a_v03_cards_inbound_scheme_is_written_in_v03s_spelling() {
 }
 
 /// G1-5: THE BACKEND AUTHORITY IS MATCHED AS A NAME, NOT AS A SUBSTRING: a word that merely
-
 #[test]
 fn a_word_that_only_contains_the_backend_host_is_not_a_leak() {
     let card = |backend: &str, description: &str| {

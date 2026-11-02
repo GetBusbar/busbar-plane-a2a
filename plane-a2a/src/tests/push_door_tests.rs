@@ -42,7 +42,6 @@ fn config(url: &str, auth: Option<DeliveryAuth>) -> PushConfig {
 }
 
 /// A moved task whose caller registered a push config queues ONE notification, due at once, to
-
 #[test]
 fn a_moved_task_with_a_registered_config_queues_its_notification_to_that_config() {
     let mut book = Book::default();
@@ -71,7 +70,6 @@ fn a_moved_task_with_a_registered_config_queues_its_notification_to_that_config(
 }
 
 /// A legacy row URL supplies no durable credential authority; neither it nor an absent callback
-
 #[test]
 fn a_legacy_row_callback_without_durable_authority_queues_nothing() {
     let mut book = Book::default();
@@ -91,7 +89,6 @@ fn a_legacy_row_callback_without_durable_authority_queues_nothing() {
 }
 
 /// The config a moved task's notification goes to is read through the piece's records, under the
-
 #[test]
 fn the_config_is_read_under_the_callers_own_key() {
     let mut book = Book::default();
@@ -115,7 +112,6 @@ fn the_config_is_read_under_the_callers_own_key() {
 }
 
 /// What an attempt owes is filed on its task's chain as the attempt's record kind, with no request
-
 #[test]
 fn an_owed_outcome_is_filed_on_its_tasks_chain() {
     let mut book = Book::default();
@@ -181,7 +177,6 @@ type Scripted = Option<(u64, Vec<String>)>;
 type Fields = Vec<(Vec<u8>, Vec<u8>)>;
 
 /// A host whose judge answers each attempt from a script (the last answer repeats), and whose
-
 struct TestHost {
     verdicts: Vec<Scripted>,
     status: u16,
@@ -292,7 +287,6 @@ fn tick_once(d: &Deliveries, host: &mut TestHost, now_ns: u64) -> (Attempted, De
 }
 
 /// The base case: a completed task with a callback is POSTed to it once, and its delivered record is
-
 #[test]
 fn a_completed_task_with_a_callback_is_delivered() {
     let callback = "https://hook.caller.test/notify";
@@ -306,7 +300,6 @@ fn a_completed_task_with_a_callback_is_delivered() {
 }
 
 /// A callback that resolves to an internal address at DELIVERY (it passed at registration) is
-
 #[test]
 fn a_callback_that_became_internal_after_registration_is_refused_at_delivery() {
     let d = queued("https://hook.caller.test/notify");
@@ -322,7 +315,6 @@ fn a_callback_that_became_internal_after_registration_is_refused_at_delivery() {
 }
 
 /// THE CALLER'S OWN CREDENTIAL IS PRESENTED, and it is the caller's — not busbar's (ported from the
-
 #[test]
 fn the_callers_own_webhook_credential_is_presented_on_the_delivery() {
     let callback = "https://hook.caller.test/notify";
@@ -375,7 +367,6 @@ fn the_callers_own_webhook_credential_is_presented_on_the_delivery() {
 }
 
 /// A name that resolves to nothing at delivery, or a judgement that could not be made, is refused:
-
 #[test]
 fn a_name_that_resolves_to_nothing_at_delivery_time_is_refused() {
     for script in [Some((DEST_UNRESOLVABLE, &[][..])), None] {
@@ -395,7 +386,6 @@ fn a_name_that_resolves_to_nothing_at_delivery_time_is_refused() {
 }
 
 /// A private address is refused with no socket: no exchange is framed and nothing is sent, so the
-
 #[test]
 fn a_private_address_is_refused_with_no_socket() {
     let d = queued("https://hook.caller.test/notify");
@@ -412,7 +402,6 @@ fn a_private_address_is_refused_with_no_socket() {
 }
 
 /// A plaintext callback that reached a row is refused at DELIVERY on the host's verdict (the
-
 #[test]
 fn a_plaintext_callback_is_refused_at_delivery() {
     let callback = "http://hook.caller.test/notify";
@@ -426,7 +415,6 @@ fn a_plaintext_callback_is_refused_at_delivery() {
 }
 
 /// The judge is asked again on the retry: a receiver that failed with a `503` is retried, and the
-
 #[test]
 fn the_guard_is_re_run_on_the_retry() {
     let d = queued("https://hook.caller.test/notify");
@@ -450,7 +438,6 @@ fn the_guard_is_re_run_on_the_retry() {
 }
 
 /// A deleted config withdraws the queued attempt. An already borrowed delivery keeps its immutable
-
 #[test]
 fn a_deleted_config_withdraws_the_captured_delivery_before_it_can_be_sent() {
     let callback = "https://hook.caller.test/notify";
@@ -488,7 +475,6 @@ fn a_deleted_config_withdraws_the_captured_delivery_before_it_can_be_sent() {
 }
 
 /// A queued notification wakes the instance's driver ticket (R-PUSH), so the kernel ticks and
-
 #[test]
 fn a_queued_notification_wakes_the_driver_ticket() {
     let mut book = Book::default();
@@ -515,7 +501,6 @@ fn a_queued_notification_wakes_the_driver_ticket() {
 }
 
 /// The pushback path (`queue_moved`, the agent's own report of a task's move) wakes the driver
-
 #[test]
 fn queue_moved_wakes_the_driver_ticket() {
     let mut book = Book::default();
@@ -537,7 +522,6 @@ fn queue_moved_wakes_the_driver_ticket() {
 }
 
 /// A delivery is never sent twice (R-PUSH): a `tick` whose exchange pends holds the attempt, and a
-
 #[test]
 fn a_pending_attempt_is_delivered_once_whether_tick_or_drive_runs_first() {
     let callback = "https://hook.caller.test/notify";
@@ -567,7 +551,6 @@ fn a_pending_attempt_is_delivered_once_whether_tick_or_drive_runs_first() {
 }
 
 /// A lost wake still ends in exactly one delivery (R-PUSH, coordinator option (b)): an attempt left
-
 #[test]
 fn a_dropped_wake_ends_in_exactly_one_delivery_after_the_timeout() {
     let callback = "https://hook.caller.test/notify";
@@ -616,7 +599,6 @@ fn a_dropped_wake_ends_in_exactly_one_delivery_after_the_timeout() {
 }
 
 /// An attempt cancelled by abandonment never also completes: the connection it held is closed, and
-
 #[test]
 fn an_abandoned_attempt_never_also_completes() {
     let callback = "https://hook.caller.test/notify";
@@ -646,7 +628,6 @@ fn an_abandoned_attempt_never_also_completes() {
 }
 
 /// A RETRY'S WAIT IS COUNTED FROM WHEN THE ATTEMPT ENDED (spec l.391-392: three attempts, two
-
 #[test]
 fn a_retry_waits_from_when_a_pended_attempt_ended() {
     let callback = "https://hook.caller.test/notify";
@@ -680,7 +661,6 @@ fn a_retry_waits_from_when_a_pended_attempt_ended() {
 }
 
 /// A RECEIVER WHOSE ADDRESSES CHANGED IS STILL DELIVERED TO: the destination judge runs on every
-
 #[test]
 fn a_receiver_whose_addresses_changed_is_still_delivered() {
     let callback = "https://hook.caller.test/notify";
@@ -733,7 +713,6 @@ fn terminal_task_without_durable_config_queues_nothing() {
 }
 
 /// AN ENDED TASK SPENDS ITS CALLBACK TOKEN, whichever move ended it: the token busbar registered
-
 #[test]
 fn an_ended_task_spends_its_callback_token() {
     let mut book = Book::default();
@@ -754,7 +733,6 @@ fn an_ended_task_spends_its_callback_token() {
 }
 
 /// A NOTIFICATION QUEUED WHILE AN ATTEMPT IS HELD DOES NOT WAKE THE DRIVER TICKET: the wake would
-
 #[test]
 fn a_notification_queued_during_a_held_attempt_waits_for_that_attempts_own_wake() {
     let callback = "https://hook.caller.test/notify";
@@ -795,7 +773,6 @@ fn a_notification_queued_during_a_held_attempt_waits_for_that_attempts_own_wake(
 }
 
 /// A silent receiver can delay another task's delivery by at most one attempt deadline.
-
 #[test]
 fn a_silent_receiver_delays_another_tasks_delivery_by_one_deadline_at_most() {
     let silent = "https://silent.caller.test/notify";
@@ -836,7 +813,6 @@ fn a_silent_receiver_delays_another_tasks_delivery_by_one_deadline_at_most() {
 }
 
 /// The ten-second deadline bounds the whole attempt from the tick that began it.
-
 #[test]
 fn the_whole_attempt_is_abandoned_at_ten_seconds_as_a_transport_error() {
     let d = queued("https://hook.caller.test/notify");
@@ -867,7 +843,6 @@ fn the_whole_attempt_is_abandoned_at_ten_seconds_as_a_transport_error() {
 }
 
 /// WHILE AN ATTEMPT IS HELD THE TICK IS ASKED FOR ONLY AT ITS ABANDONMENT, never at once for a
-
 #[test]
 fn a_held_attempt_asks_for_no_tick_before_its_deadline() {
     let d = queued("https://hook.caller.test/notify");

@@ -23,7 +23,6 @@ pub enum CredentialPlacement {
 }
 
 /// THE TWO SPELLINGS the section grammar states (`busbar_contract::section`, `placement:`):
-
 impl<'de> serde::Deserialize<'de> for CredentialPlacement {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         struct Placement;

@@ -22,7 +22,6 @@ enum Answer {
 }
 
 /// A callback's replayed host handles and its explicitly driven conditional exchange. Keeping
-
 struct Call {
     host: Rc<RefCell<Book>>,
     answers: Vec<Answer>,

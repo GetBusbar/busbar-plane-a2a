@@ -68,7 +68,6 @@ impl Cards {
     }
 
     /// The card held for `agent` under `generation`; `None` when none is, or it was held under
-
     #[must_use]
     pub fn at(&self, agent: &str, generation: u64) -> Option<Arc<Value>> {
         self.by_agent.with(&agent.to_string(), |held| {

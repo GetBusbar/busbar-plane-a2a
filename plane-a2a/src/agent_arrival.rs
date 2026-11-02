@@ -123,7 +123,6 @@ impl AgentRefusal {
     }
 
     /// The words a refused `arrive` carries in its `head.error`, read back by [`AgentRefusal::from_words`]:
-
     #[must_use]
     pub fn words(&self) -> String {
         let id = self
@@ -182,7 +181,6 @@ impl AgentRefusal {
 }
 
 /// A JSON-RPC `error` object at `http_status` as the AIP-193 error document the HTTP+JSON line
-
 #[must_use]
 pub fn aip193(http_status: u32, error: &Value) -> Value {
     let message = error
@@ -208,7 +206,6 @@ pub fn aip193(http_status: u32, error: &Value) -> Value {
 }
 
 /// The `ErrorInfo` reason an A2A-defined code carries ([`crate::ERRORS`]); JSON-RPC's own codes
-
 #[must_use]
 pub fn reason_of(code: i64) -> Option<&'static str> {
     crate::ERRORS
@@ -218,7 +215,6 @@ pub fn reason_of(code: i64) -> Option<&'static str> {
 }
 
 /// The canonical status name a known code maps to: the `gRPC Status` column of A2A section 5.4,
-
 #[must_use]
 pub fn status_name_of(code: i64) -> Option<&'static str> {
     Some(match code {
@@ -303,7 +299,6 @@ impl AgentDisposition {
     }
 
     /// The operation class an admitted arrival is a unit of: its row's, or for a method the
-
     #[must_use]
     pub fn op_class(&self) -> Option<busbar_contract::ids::OpClassId> {
         match self {
@@ -318,7 +313,6 @@ impl AgentDisposition {
 }
 
 /// Whether a declared media type is one this endpoint reads: `application/json`, or any RFC 6839
-
 #[must_use]
 pub fn is_json_media_type(media: &str) -> bool {
     media.eq_ignore_ascii_case(JSON_MEDIA_TYPE)
@@ -337,7 +331,6 @@ fn major_minor(asked: &str) -> String {
 }
 
 /// The request line's refusal, judged before the body: the media type, then the version. `Ok`
-
 pub fn head_refusal<'a>(
     field: impl Fn(&str) -> Option<&'a str>,
 ) -> Result<&'static str, AgentRefusal> {
@@ -373,7 +366,6 @@ pub fn head_refusal<'a>(
 }
 
 /// The `Origin` refusal: a request driven from a browser origin that is neither loopback nor one
-
 pub fn origin_refusal<'a>(field: impl Fn(&str) -> Option<&'a str>) -> Result<(), AgentRefusal> {
     match field(H_ORIGIN) {
         Some(origin) if !busbar_contract::jsonrpc::origin_admitted(origin, &[]) => Err(
@@ -384,7 +376,6 @@ pub fn origin_refusal<'a>(field: impl Fn(&str) -> Option<&'a str>) -> Result<(),
 }
 
 /// Read a head field without treating an unreadable value as an absent field.
-
 pub(crate) fn read_head_field<'a>(
     name: &str,
     value: Option<&'a [u8]>,
@@ -410,7 +401,6 @@ pub(crate) fn read_head_field<'a>(
 }
 
 /// DECIDE ONE ARRIVAL on the JSON-RPC line, and hand back the body as the JSON it was read as
-
 pub fn decide_and_read<'a>(
     body: &[u8],
     field: impl Fn(&str) -> Option<&'a str> + Copy,
@@ -486,7 +476,6 @@ pub enum Dialect {
 }
 
 /// Render `refusal` in `dialect`. `own_status` is whether the status is the plane's own (a refused
-
 #[must_use]
 pub fn render(dialect: Dialect, refusal: &AgentRefusal, own_status: bool) -> Rendered {
     let doc = match dialect {
@@ -501,7 +490,6 @@ pub fn render(dialect: Dialect, refusal: &AgentRefusal, own_status: bool) -> Ren
 }
 
 /// Render `refusal` in `dialect`, naming the task it is about (`task_id`): its `ResourceInfo` after the `ErrorInfo` in `error.data`, which the
-
 #[must_use]
 pub fn render_about_task(dialect: Dialect, refusal: &AgentRefusal, task_id: &str) -> Rendered {
     let doc = crate::task_identity::about_task(refusal, task_id);
@@ -520,14 +508,12 @@ pub fn render_about_task(dialect: Dialect, refusal: &AgentRefusal, task_id: &str
 pub const BUDGET_SPENT: &str = "this key's budget is spent";
 
 /// A refusal the kernel made (a key not live, a scope not held, a budget spent, a gate's no), as
-
 #[must_use]
 pub fn kernel_refusal(status: u32, text: &str) -> AgentRefusal {
     AgentRefusal::unnamed(status, CODE_UNSUPPORTED_OPERATION, text)
 }
 
 /// THE CLASS-TO-WIRE TABLE (the P-item "refusal-reason collapse"): the JSON-RPC code a kernel
-
 #[must_use]
 pub const fn class_code(class: busbar_contract::abi::plane::RefusalClass) -> i64 {
     use busbar_contract::abi::plane::RefusalClass as C;
@@ -549,7 +535,6 @@ pub const fn class_code(class: busbar_contract::abi::plane::RefusalClass) -> i64
 }
 
 /// A KERNEL REFUSAL OF WIRE REASON `reason` at `status` in the words `text`: [`kernel_refusal`]
-
 #[must_use]
 pub fn kernel_refusal_of(reason: u32, status: u32, text: &str) -> AgentRefusal {
     let code = busbar_contract::abi::plane::RefusalCode::of(reason)
@@ -558,7 +543,6 @@ pub fn kernel_refusal_of(reason: u32, status: u32, text: &str) -> AgentRefusal {
 }
 
 /// The ungranted caller's sentence: the caller's grant does not reach `resource` (`agent:<id>`).
-
 #[must_use]
 pub fn not_granted_sentence(resource: &str) -> String {
     format!("this key is not granted `{resource}`")
@@ -568,7 +552,6 @@ pub fn not_granted_sentence(resource: &str) -> String {
 pub const STATUS_NO_SUCH_AGENT: u32 = 404;
 
 /// The unknown agent's refusal: `404`, `-32004`, no id,
-
 #[must_use]
 pub fn no_such_agent(agent: &str) -> AgentRefusal {
     kernel_refusal(STATUS_NO_SUCH_AGENT, &format!("no fronted agent `{agent}`"))
@@ -578,18 +561,15 @@ pub fn no_such_agent(agent: &str) -> AgentRefusal {
 pub const STATUS_NOT_LIVE: u32 = 401;
 
 /// The caller whose key is no longer live: `401`, `-32004`, no id. It says `this key` rather than
-
 #[must_use]
 pub fn not_live() -> AgentRefusal {
     kernel_refusal(STATUS_NOT_LIVE, "this key is not live")
 }
 
 /// The status an arrival is refused with while the instance holds as many live units as it keeps
-
 pub const STATUS_TOO_MANY_REQUESTS: u32 = 429;
 
 /// The full instance's refusal: every unit the instance keeps is live work, and none is ever pushed
-
 #[must_use]
 pub fn units_full() -> AgentRefusal {
     kernel_refusal(
@@ -602,7 +582,6 @@ pub fn units_full() -> AgentRefusal {
 pub const STATUS_UNAVAILABLE: u32 = 503;
 
 /// The open breaker's refusal: the agent `agent` the unit addressed is not dialled while its breaker is open,
-
 #[must_use]
 pub fn breaker_refusal(agent: &str, id: Option<Value>, retry_after_s: u32) -> AgentRefusal {
     AgentRefusal::new(
@@ -618,7 +597,6 @@ pub fn breaker_refusal(agent: &str, id: Option<Value>, retry_after_s: u32) -> Ag
 }
 
 /// The pooled agent's card read, refused: a pool's members are
-
 #[must_use]
 pub fn pooled_card(id: Value) -> AgentRefusal {
     AgentRefusal::new(
@@ -632,7 +610,6 @@ pub fn pooled_card(id: Value) -> AgentRefusal {
 }
 
 /// The pinned hop's grant refusal: a
-
 #[must_use]
 pub fn pinned_ungranted(id: Value, resource: &str, live: bool) -> AgentRefusal {
     let message = if live {
@@ -653,7 +630,6 @@ pub fn pinned_ungranted(id: Value, resource: &str, live: bool) -> AgentRefusal {
 }
 
 /// The walk's words for a pool member not interchangeable with its primary: their approved card fingerprints differ (or one has
-
 #[must_use]
 pub fn not_interchangeable(
     pool: &str,
@@ -673,7 +649,6 @@ pub fn not_interchangeable(
 pub const CODE_INVALID_PARAMS: i64 = -32602;
 
 /// The unaddressed unit's refusal: `reachable` is
-
 #[must_use]
 pub fn scope_refusal(reachable: &str) -> AgentRefusal {
     let ids: Vec<&str> = reachable

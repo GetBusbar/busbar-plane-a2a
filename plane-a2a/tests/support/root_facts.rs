@@ -85,7 +85,6 @@ pub fn get_task_request(id: &str) -> Vec<u8> {
 }
 
 /// Every field of one message, in wire order.
-
 pub fn fields(mut bytes: &[u8]) -> Result<Vec<(u32, Field)>, String> {
     fn varint(bytes: &mut &[u8]) -> Result<u64, String> {
         let mut v = 0u64;
@@ -143,7 +142,6 @@ pub struct SentMessage {
 }
 
 /// Read a `SendMessageRequest`'s message.
-
 pub fn read_send_message_request(request: &[u8]) -> Result<SentMessage, String> {
     let message = bytes_of(request, 2)?.ok_or("the request carries no message")?;
     let mut read = SentMessage {
@@ -167,7 +165,6 @@ pub fn read_send_message_request(request: &[u8]) -> Result<SentMessage, String> 
 }
 
 /// The `TaskState` number of the task a `SendMessageResponse` carried.
-
 pub fn send_message_response_task_state(response: &[u8]) -> Result<u64, String> {
     let task = bytes_of(response, 1)?.ok_or("the response carries no task")?;
     let status = bytes_of(&task, 3)?.ok_or("the task carries no status")?;

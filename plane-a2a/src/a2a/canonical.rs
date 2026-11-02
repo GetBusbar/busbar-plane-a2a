@@ -99,7 +99,6 @@ fn utf16_units(s: &str) -> Vec<u16> {
 }
 
 /// RFC 8785 section 3.2.2.2: the SHORTEST escape wins, `\u` only below U+0020, and every other
-
 fn write_string(s: &str, out: &mut String) {
     out.push('"');
     for c in s.chars() {
@@ -119,7 +118,6 @@ fn write_string(s: &str, out: &mut String) {
 }
 
 /// RFC 8785 section 3.2.2.3: EVERY number is an IEEE-754 double, printed as ECMAScript
-
 fn number(n: &serde_json::Number) -> Result<String, CanonicalError> {
     let f = if let Some(i) = n.as_i64() {
         i as f64
@@ -135,7 +133,6 @@ fn number(n: &serde_json::Number) -> Result<String, CanonicalError> {
 }
 
 /// ECMAScript `Number::toString` for a finite double (ECMA-262 Number::toString steps 5-12).
-
 fn ecmascript_number(f: f64) -> String {
     if f == 0.0 {
         return "0".to_string();
@@ -174,7 +171,6 @@ fn ecmascript_number(f: f64) -> String {
 }
 
 /// The shortest decimal digit string that round-trips to `abs` (a finite positive double) and the
-
 fn shortest_digits(abs: f64) -> (String, i32) {
     let (digits, exp) = split_scientific(&format!("{abs:e}"));
 

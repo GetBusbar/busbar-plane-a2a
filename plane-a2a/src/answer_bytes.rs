@@ -40,7 +40,6 @@ fn past_blank(b: &[u8], mut i: usize) -> usize {
 }
 
 /// The span of the JSON value at `i` (whitespace before it allowed), read by the contract's one
-
 fn value_at(b: &[u8], i: usize) -> Option<Range<usize>> {
     let rest = b.get(i..)?;
     match resolve_pointer(rest, "") {
@@ -105,7 +104,6 @@ fn last<'m>(members: &'m [ObjectMember], key: &str) -> Option<&'m ObjectMember> 
 }
 
 /// THE READING COPY of `b`: `b` itself, unless a number in it lies past `f64`'s range, which is
-
 #[must_use]
 pub fn readable(b: &[u8]) -> Cow<'_, [u8]> {
     let mut out: Option<RawBytes> = None;
@@ -164,7 +162,6 @@ pub fn member_span(doc: &[u8], key: &str) -> Option<Range<usize>> {
 }
 
 /// WHETHER `b` IS THE JSON A PARSE TO A VALUE READS (every token, every string, the parse's depth
-
 #[must_use]
 pub fn is_json(b: &[u8]) -> bool {
     serde_json::from_slice::<Shape>(b).is_ok()
@@ -213,7 +210,6 @@ impl<'de> serde::de::Visitor<'de> for Shape {
 }
 
 /// THE JSON-RPC ANSWER `envelope` AS THE CONTRACT'S READER JUDGES IT, read off its bytes: its
-
 #[must_use]
 pub fn envelope_reading(envelope: &[u8]) -> Option<(Value, Option<Range<usize>>)> {
     let members = object_members(envelope, &document(envelope)?)?;
@@ -258,7 +254,6 @@ pub fn result_reply(id: &Value, result: &[u8]) -> Vec<u8> {
 }
 
 /// An HTTP+JSON answer `body` re-framed as the JSON-RPC envelope answering `id`, its `result` the
-
 pub fn rewrap(body: &[u8], id: &Value) -> Result<Vec<u8>, String> {
     if body.iter().all(u8::is_ascii_whitespace) {
         return Ok(result_reply(id, b"null"));
@@ -283,7 +278,6 @@ impl Edits {
     }
 
     /// Set `key` of the object `obj` (its members `ms`) to `value`: every occurrence replaced, or
-
     fn put(
         &mut self,
         b: &[u8],
@@ -382,11 +376,9 @@ fn translate_list(
 }
 
 /// The members a message names the tasks it refers to under (A2A `Message.reference_task_ids`,
-
 pub const REFERENCE_MEMBERS: [&str; 2] = ["referenceTaskIds", "reference_task_ids"];
 
 /// A message's identity: its `taskId` and `contextId`, where it names them, are busbar's, and every
-
 fn message_identity(
     b: &[u8],
     msg: &Range<usize>,
@@ -408,11 +400,9 @@ fn message_identity(
 }
 
 /// A table of `(name, identity member)` pairs: [`crate::task_identity::WRAPPERS`] (a wrapper and
-
 pub type IdMembers<'a> = &'a [(&'a str, &'a str)];
 
 /// THE BYTE TWIN OF `task_identity::rewrite_identity`: the far end's `result` bytes with busbar's
-
 #[must_use]
 pub fn rewrite_identity(
     result: &[u8],
@@ -516,7 +506,6 @@ pub fn rewrite_identity(
 }
 
 /// THE CALLER'S REQUEST `envelope` WITH THE TASK IDS `to` ANSWERS FOR SPLICED IN, every other byte
-
 #[must_use]
 pub fn translate_ids(
     envelope: &[u8],

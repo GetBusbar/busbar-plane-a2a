@@ -61,7 +61,6 @@ fn an_rpc_is_named_by_its_target_alone() {
 }
 
 /// A REQUEST MESSAGE IS THE v1.0 JSON-RPC REQUEST IT IS: the rpc's name as the method, its
-
 #[test]
 fn a_request_message_composes_the_json_rpc_request_it_is() {
     let message = crate::proto::custody::initialized::<pb::GetTaskRequest>(|__custody_message| {
@@ -243,7 +242,6 @@ fn an_http_refusal_takes_the_grpc_specifications_own_mapping() {
 }
 
 /// AN A2A REFUSAL CARRIES ITS `google.rpc.ErrorInfo` IN THE STATUS DETAILS (A2A 10.6, TCK
-
 #[test]
 fn an_a2a_refusal_carries_error_info_in_the_status_details() {
     let err = serde_json::json!({
@@ -377,7 +375,6 @@ fn take_frame(buf: &mut Vec<u8>) -> Option<String> {
 }
 
 /// SSE FRAMES ARE TAKEN WHOLE OR NOT AT ALL (the engine's `grpc_tests.rs`, ported): a frame split
-
 #[test]
 fn a_frame_is_taken_only_once_it_is_complete() {
     let mut buf = b"data: {\"a\":1}\n\ndata: {\"b\"".to_vec();
@@ -389,7 +386,6 @@ fn a_frame_is_taken_only_once_it_is_complete() {
 }
 
 /// AND IN EVERY LINE ENDING THE SSE GRAMMAR ALLOWS (the engine's `grpc_tests.rs`, ported): a
-
 #[test]
 fn every_sse_frame_terminator_is_recognised() {
     for terminator in ["\r\n\r\n", "\n\n", "\r\r"] {
@@ -402,7 +398,6 @@ fn every_sse_frame_terminator_is_recognised() {
     }
 }
 /// Ported from busbar-a2a a2a/tests/served_methods_tests.rs::the_extended_card_is_served_over_grpc_at_the_path_the_proto_defines.
-
 #[test]
 fn the_extended_card_is_served_over_grpc_at_the_path_the_proto_defines() {
     let target = format!("{SERVICE_PATH}/GetExtendedAgentCard");

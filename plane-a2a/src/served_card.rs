@@ -18,11 +18,9 @@ pub const INBOUND_AUTH_SCHEME: &str = "Bearer";
 pub const CREDENTIAL_KIND_A2A_INBOUND: &str = "a2a_inbound";
 
 /// THE BINDINGS BUSBAR SERVES AT THE PLANE'S OWN MOUNT, in the card's spelling (the plane's
-
 pub const SERVABLE_BINDINGS: &[&str] = &["JSONRPC", "HTTP+JSON", "GRPC"];
 
 /// THE BINDINGS BUSBAR SERVES AT ONE FRONTED AGENT'S ADDRESS (`/a2a/agents/{id}`): the JSON-RPC
-
 pub const AGENT_ADDRESS_BINDINGS: &[&str] = &["JSONRPC"];
 
 use crate::binding::BINDING_GRPC as GRPC_BINDING;
@@ -52,7 +50,6 @@ pub fn b64url(bytes: &[u8]) -> String {
 }
 
 /// SIGN `card` with busbar's key: the card with busbar's signature under `signatures`, any earlier
-
 pub fn sign_card(card: &Value, signer: &mut dyn Signer) -> Result<Value, String> {
     let Some(kid) = signer.kid() else {
         return Ok(card.clone());
@@ -90,7 +87,6 @@ pub fn grpc_endpoint(public_url: &str) -> Option<String> {
 }
 
 /// The URL a served card publishes for one binding: gRPC takes the authority, every other binding
-
 fn binding_url(binding: &str, public_url: &str, http_endpoint: &str) -> Option<String> {
     if binding.eq_ignore_ascii_case(GRPC_BINDING) {
         return grpc_endpoint(public_url);
@@ -117,7 +113,6 @@ fn inbound_description() -> String {
 }
 
 /// THE ONE DESCRIPTION of how a caller authenticates to this plane (proto `SecurityScheme`, a
-
 fn inbound_security_schemes() -> Map<String, Value> {
     let mut schemes = Map::new();
     schemes.insert(
@@ -133,7 +128,6 @@ fn inbound_security_schemes() -> Map<String, Value> {
 }
 
 /// The same scheme in v0.3's spelling (v0.3.0 `types.ts` `HTTPAuthSecurityScheme`:
-
 fn inbound_security_schemes_v03() -> Map<String, Value> {
     let mut schemes = Map::new();
     schemes.insert(
@@ -153,7 +147,6 @@ fn inbound_security_requirement() -> Value {
 }
 
 /// THE INTERFACES BUSBAR PUBLISHES: every binding it serves, at every protocol version it admits,
-
 fn published_interfaces(public_url: &str) -> Option<Vec<Value>> {
     let http_endpoint = crate::a2a::public::absolute(public_url, crate::MOUNT_PATH)?;
     let mut versions: Vec<&str> = crate::agent_arrival::SUPPORTED_VERSIONS.to_vec();
@@ -173,7 +166,6 @@ fn published_interfaces(public_url: &str) -> Option<Vec<Value>> {
 }
 
 /// BUSBAR'S OWN CARD AS A DOCUMENT, before signing, with `skills`: the public card carries none
-
 #[must_use]
 pub fn self_card_document(public_url: &str, skills: Vec<Value>) -> Option<Value> {
     Some(json!({
@@ -210,7 +202,6 @@ pub enum ServeError {
 }
 
 /// Keep each interface entry once, in the order first offered: two entries a rewrite pointed at the
-
 fn dedup(interfaces: &mut Vec<Value>) {
     let mut kept: Vec<Value> = Vec::with_capacity(interfaces.len());
     for iface in interfaces.drain(..) {
@@ -222,7 +213,6 @@ fn dedup(interfaces: &mut Vec<Value>) {
 }
 
 /// REWRITE a fronted agent's backend card into the card busbar serves (before signing).
-
 pub fn rewrite_card(
     backend_card: &Value,
     backend_url: &str,
@@ -357,7 +347,6 @@ pub struct EntitledAgent<'a> {
 }
 
 /// BUSBAR'S EXTENDED CARD (before signing): busbar's own card with one skill per agent the caller
-
 #[must_use]
 pub fn extended_card_document(public_url: &str, entitled: &[EntitledAgent<'_>]) -> Option<Value> {
     let skills = entitled.iter().filter_map(agent_skill).collect();
@@ -387,7 +376,6 @@ fn agent_skill(agent: &EntitledAgent<'_>) -> Option<Value> {
 }
 
 /// Replace every URL-shaped string whose host is the backend's with busbar's endpoint, at every
-
 fn rewrite_backend_urls(v: &mut Value, backend_host: &str, endpoint: &str) {
     match v {
         Value::String(s) => {
@@ -410,7 +398,6 @@ fn rewrite_backend_urls(v: &mut Value, backend_host: &str, endpoint: &str) {
 }
 
 /// Whether `text` names the backend `host` (lowercase): an occurrence bounded by characters no
-
 fn names_host(text: &str, host: &str) -> bool {
     let text = text.to_lowercase();
     let b = text.as_bytes();
@@ -438,7 +425,6 @@ fn names_host(text: &str, host: &str) -> bool {
 }
 
 /// Every remaining mention of the backend host ([`names_host`]), with its JSON path; busbar's own
-
 fn collect_mentions(v: &Value, backend_host: &str, ours: &str, out: &mut Vec<String>) {
     fn walk(v: &Value, host: &str, ours: &str, path: &str, out: &mut Vec<String>) {
         match v {

@@ -13,7 +13,6 @@ fn fed(r: &mut SseReader, chunk: &[u8]) -> Vec<String> {
 }
 
 /// The spec's LF, CR and CRLF line terminators end a line. Each distinct two-line boundary ends a frame —
-
 #[test]
 fn every_spec_line_terminator_pairing_ends_a_frame() {
     let cases: &[(&str, &str)] = &[
@@ -40,7 +39,6 @@ fn every_spec_line_terminator_pairing_ends_a_frame() {
 }
 
 /// The cursor rewind must not let a terminator SPLIT across a chunk boundary slip past: the longest
-
 #[test]
 fn test_terminator_split_across_chunks_still_frames() {
     for (head, tail, framed, leftover) in [
@@ -70,7 +68,6 @@ fn test_terminator_split_across_chunks_still_frames() {
 }
 
 /// A frame that was framed by a bare-CR terminator must still split into fields on a bare-CR line
-
 #[test]
 fn test_sse_data_splits_on_bare_cr() {
     assert_eq!(
@@ -94,7 +91,6 @@ fn test_sse_data_splits_on_bare_cr() {
 }
 
 /// Ported from busbar-a2a tests/sse_tests.rs::test_non_utf8_frame_drop_carries_diag_code.
-
 #[test]
 fn test_non_utf8_frame_drop_carries_diag_code() {
     let (sent, heard) = std::sync::mpsc::channel();

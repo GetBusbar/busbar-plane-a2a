@@ -29,7 +29,6 @@ impl FakeService for Dial {
 }
 
 /// A card fetch of `planner` by a door that holds a connector and NO host services is refused,
-
 #[test]
 fn a_card_fetch_without_host_services_is_refused() {
     let fake: &'static FakeHost = Box::leak(Box::new(FakeHost::new().serve(conn::ESTABLISH, Dial)));
@@ -101,7 +100,6 @@ thread_local! {
 }
 
 /// The destination judgement: the first host it is asked about is a loopback name, every later one
-
 struct LoopbackThenUnresolvable;
 impl FakeService for LoopbackThenUnresolvable {
     type In = busbar_contract::abi::host::service::DestJudgeIn;
@@ -128,7 +126,6 @@ fn planner_def(url: &str) -> crate::a2a::config::AgentDefCfg {
 }
 
 /// G1-45: THE CANONICAL PATH'S REFUSAL IS NOT LOST TO THE LEGACY PATH'S: a card whose canonical
-
 #[test]
 fn the_canonical_paths_refusal_survives_the_legacy_paths() {
     let fake: &'static FakeHost = Box::leak(Box::new(

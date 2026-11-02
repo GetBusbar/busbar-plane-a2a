@@ -7,14 +7,12 @@ use busbar_contract::section::split_section;
 use serde::{Deserialize, Serialize};
 
 /// The default MAX VERIFICATION STALENESS for a registration that names none: five seconds.
-
 pub const DEFAULT_REVERIFY_TTL: &str = "5s";
 
 /// WHAT ONE `agents:` ENTRY IS CALLED in the section's refusals and in the plane's declaration.
 pub const SUBJECT_NOUN: &str = "fronted agent";
 
 /// THE REFUSAL FOR `upstream_credentials: passthrough` ON THIS PLANE, written once so the per-entry
-
 pub const REFUSE_PASSTHROUGH_SECTION: &str =
     "`upstream_credentials: passthrough` is refused on the `agents:` plane. busbar delegates AS \
      ITSELF: the caller's key authenticated them to busbar and means nothing to a third-party \
@@ -43,7 +41,6 @@ pub enum PinMechanism {
 
 impl PinMechanism {
     /// The config token, for diagnostics, pin renderings and audit rows. Deliberately the same
-
     pub fn token(self) -> &'static str {
         match self {
             PinMechanism::JwsIssuerKey => "jws_issuer_key",
@@ -204,7 +201,6 @@ pub struct AgentsCfg {
 
 impl AgentsCfg {
     /// Report accepted-but-ignored version settings once when the successfully judged section
-
     pub(crate) fn warn_ignored_protocol_versions(&self) {
         let agents: Vec<&str> = self
             .agents
@@ -222,7 +218,6 @@ impl AgentsCfg {
     }
 
     /// The pool `agent` is a member of, by name, and its members in declared order: the first pool
-
     #[must_use]
     pub fn pool_of(&self, agent: &str) -> Option<(&str, &[String])> {
         self.pools
@@ -259,7 +254,6 @@ impl<'de> Deserialize<'de> for AgentsCfg {
 }
 
 /// `url` as a refusal may repeat it: any userinfo in its authority (everything before the last `@`
-
 #[must_use]
 pub fn without_userinfo(url: &str) -> std::borrow::Cow<'_, str> {
     if busbar_contract::net::parse_url(url).is_err() {
@@ -276,7 +270,6 @@ pub fn without_userinfo(url: &str) -> std::borrow::Cow<'_, str> {
 }
 
 /// THE VALUE-LEVEL RULES for one `agents:` entry.
-
 pub fn validate_agent(name: &str, def: &AgentDefCfg) -> Result<(), String> {
     let at = format!("`agents.{name}`");
 

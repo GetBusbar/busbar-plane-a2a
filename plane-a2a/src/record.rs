@@ -4,15 +4,12 @@
 //! THE A2A PLANE'S OWN DURABLE RECORD TYPES: the task row and the task-event row, each the JSON
 
 /// DIGEST FRAMING VERSION 1 — the LEGACY ambiguous pipe-join (`{prev_hash}|{task_id}|…|{state}`). The
-
 pub const DIGEST_VERSION_LEGACY_PIPE: u8 = 1;
 
 /// DIGEST FRAMING VERSION 2 — the INJECTIVE length-prefixed framing every new event is sealed under:
-
 pub const DIGEST_VERSION_LEN_PREFIXED: u8 = 2;
 
 /// The framing a row that predates the versioned digest is read under: rows persisted before the fix
-
 fn default_digest_version() -> u8 {
     DIGEST_VERSION_LEGACY_PIPE
 }

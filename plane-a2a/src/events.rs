@@ -53,7 +53,6 @@ fn json_event(value: &Value) -> Vec<u8> {
 }
 
 /// `payload` as one complete event: each of its lines a `data:` line of its own, as the
-
 fn data_event(payload: &[u8]) -> Vec<u8> {
     let mut out = RawBytes::default();
     for line in payload.split(|b| *b == b'\n') {
@@ -66,7 +65,6 @@ fn data_event(payload: &[u8]) -> Vec<u8> {
 }
 
 /// READ ONE FAR-END EVENT `frame_text` and frame it for the caller of request `rpc_id`, under
-
 pub fn read_event(
     frame_text: &str,
     rpc_id: &Value,
@@ -166,7 +164,6 @@ pub fn read_event(
 }
 
 /// AN HTTP+JSON FAR END'S FRAME, wrapped back into the one dialect: its `data:` payload is the
-
 #[must_use]
 pub fn rewrap<'f>(frame_text: &'f str, rpc_id: &Value) -> Cow<'f, str> {
     sse_data(frame_text)
@@ -181,7 +178,6 @@ pub fn rewrap<'f>(frame_text: &'f str, rpc_id: &Value) -> Cow<'f, str> {
 }
 
 /// THE HTTP+JSON LINE'S EVENTS: every event of `buf` whose data is a JSON-RPC `result` becomes the
-
 #[must_use]
 pub fn reframe_events(buf: &[u8]) -> Vec<u8> {
     let Ok(text) = std::str::from_utf8(buf) else {
@@ -210,7 +206,6 @@ fn data_field(line: &str) -> Option<&str> {
 }
 
 /// One event's `lines` (each with its terminator) onto `out`: its data lines replaced, where they
-
 fn reframe_event(lines: &[&str], out: &mut RawBytes) {
     let data: Vec<&str> = lines.iter().copied().filter_map(data_field).collect();
     let joined = zeroize::Zeroizing::new(data.join("\n"));

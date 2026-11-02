@@ -210,7 +210,6 @@ fn researcher() -> Value {
 }
 
 /// A protocol capability the task requires and the card does not declare excludes the agent, on
-
 #[test]
 fn a_required_protocol_capability_the_card_does_not_declare_excludes_the_agent() {
     let streams = TaskShape {
@@ -234,7 +233,6 @@ fn a_required_protocol_capability_the_card_does_not_declare_excludes_the_agent()
 }
 
 /// The caller must be able to read what the agent produces: an output-mode mismatch excludes it,
-
 #[test]
 fn output_modes_must_be_compatible() {
     let wants_pdf = TaskShape {
@@ -250,7 +248,6 @@ fn output_modes_must_be_compatible() {
 }
 
 /// CONTENT-BLINDNESS BY CONSTRUCTION: the shape the fit reads holds typed metadata only. An
-
 #[test]
 fn the_task_shape_carries_no_channel_for_prose() {
     let TaskShape {
@@ -265,7 +262,6 @@ fn the_task_shape_carries_no_channel_for_prose() {
 }
 
 /// A JSON `null` MEMBER OF A HELD CARD READS AS ABSENT, as the gRPC line's messages read it
-
 #[test]
 fn a_held_card_with_null_members_reads_as_absent() {
     let card = json!({

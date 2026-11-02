@@ -70,7 +70,6 @@ pub const PUSH_TRUST_FROM: &str = "owned.agent_push.ca";
 pub const HELD_KINDS: &[&str] = &["task", "task_event", "push_config", "card", "card_approval"];
 
 /// `statement::ROUTES` as `(verb, target)`, in order: a route's index is the claim an arrival
-
 pub const ROUTES: &[(&str, &str)] = &[
     ("POST", "/a2a/message:send"),
     ("POST", "/a2a/message:stream"),
@@ -96,7 +95,6 @@ pub const ROUTES: &[(&str, &str)] = &[
 ];
 
 /// The claim (route index) of `(verb, target)`.
-
 #[must_use]
 pub fn claim(verb: &str, target: &str) -> u32 {
     let i = ROUTES

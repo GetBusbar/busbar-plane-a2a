@@ -12,11 +12,9 @@ use crate::request_json::RequestJson;
 use crate::statement::Route;
 
 /// THE JSON-RPC ID OF A COMPOSED ENVELOPE. A JSON-RPC id is a correlation handle for a channel
-
 pub const REST_RPC_ID: &str = "a2a-http-json";
 
 /// THE METHOD NAMES, in A2A v1.0's spelling. Both supported revisions define HTTP+JSON;
-
 pub mod method {
     /// `POST /message:send`.
     pub const SEND_MESSAGE: &str = "SendMessage";
@@ -43,12 +41,10 @@ pub mod method {
 }
 
 /// The two operations `POST /tasks/{id}:<verb>` spells. The verb is a suffix INSIDE the captured
-
 const VERB_CANCEL: &str = "cancel";
 const VERB_SUBSCRIBE: &str = "subscribe";
 
 /// `404`: the status of a `POST /tasks/…` naming no verb this binding defines, of an arrival no
-
 pub(crate) const STATUS_NOT_FOUND: u32 = 404;
 
 use crate::agent_arrival::CODE_METHOD_NOT_FOUND;
@@ -81,7 +77,6 @@ impl Params {
     }
 
     /// Set `name` only if the caller supplied it: typed by [`json_scalar`] where the proto's field
-
     #[must_use]
     pub fn maybe(mut self, name: &str, value: Option<&String>) -> Self {
         if let Some(v) = value {
@@ -96,7 +91,6 @@ impl Params {
     }
 
     /// Merge a request body in, VERBATIM (the REST body IS the `params`). A path-derived member is
-
     #[must_use]
     pub fn merge(mut self, body: &Value) -> Self {
         if let Some(obj) = body.as_object() {
@@ -121,11 +115,9 @@ impl Drop for Params {
 }
 
 /// THE QUERY MEMBERS WHOSE PROTO FIELD IS NOT A STRING (`ListTasksRequest`'s `page_size`,
-
 pub const TYPED_QUERY_MEMBERS: &[&str] = &["pageSize", "historyLength", "includeArtifacts"];
 
 /// A QUERY-STRING VALUE, TYPED THE WAY THE ENVELOPE WANTS IT: an integer is a number, `true` and
-
 #[must_use]
 pub fn json_scalar(raw: &str) -> Value {
     if let Ok(n) = raw.parse::<i64>() {
@@ -139,7 +131,6 @@ pub fn json_scalar(raw: &str) -> Value {
 }
 
 /// THE QUERY STRING AS A `name -> value` MAP, decoded as `application/x-www-form-urlencoded`
-
 #[must_use]
 pub fn query_map(query: Option<&str>) -> Option<HashMap<String, String>> {
     let mut map = HashMap::new();
@@ -154,7 +145,6 @@ pub fn query_map(query: Option<&str>) -> Option<HashMap<String, String>> {
 }
 
 /// Decode ONE `application/x-www-form-urlencoded` component: `+` is a space, `%XX` the byte,
-
 #[must_use]
 pub fn form_decode(s: &str) -> Option<String> {
     let bytes = s.as_bytes();
@@ -191,7 +181,6 @@ fn hex(b: u8) -> Option<u8> {
 }
 
 /// One path capture, percent-decoded as the router decoded it (`%XX` is the byte; `+` stays a
-
 #[must_use]
 pub fn path_decode(s: &str) -> Option<String> {
     let bytes = s.as_bytes();
@@ -212,7 +201,6 @@ pub fn path_decode(s: &str) -> Option<String> {
 }
 
 /// A request object's `params`, or the empty object when no body was supplied. Malformed
-
 pub fn json_body(body: &[u8]) -> Result<Value, AgentRefusal> {
     if body.is_empty() {
         return Ok(json!({}));
@@ -250,7 +238,6 @@ fn without(body: &Value, members: &[&str]) -> Value {
 }
 
 /// The refusal for a `POST /tasks/…` that names no verb this binding defines: `404` +
-
 #[must_use]
 pub fn not_a_verb(addressed: &str) -> AgentRefusal {
     AgentRefusal::new(
@@ -265,7 +252,6 @@ pub fn not_a_verb(addressed: &str) -> AgentRefusal {
 }
 
 /// The path variables `target` binds against `route`'s pattern, by name, each decoded as the
-
 pub fn captures(
     route: &Route,
     target: &str,
@@ -308,7 +294,6 @@ fn query_of(target: &str) -> Option<&str> {
 }
 
 /// Compose the envelope a request on the HTTP+JSON line spells: `route` is the line's route the
-
 pub fn compose(route: &Route, target: &str, body: &[u8]) -> Result<Option<Vec<u8>>, AgentRefusal> {
     let Some(vars) = captures(route, target)? else {
         return Ok(None);
@@ -323,7 +308,6 @@ pub fn compose(route: &Route, target: &str, body: &[u8]) -> Result<Option<Vec<u8
 }
 
 /// [`compose`] over captures a router already decoded: `var` answers a path capture by name (the
-
 pub fn compose_from(
     route: &Route,
     var: impl Fn(&str) -> String,
@@ -442,7 +426,6 @@ pub fn compose_from(
 }
 
 /// Re-frame a JSON-RPC answer for the HTTP+JSON line, by what it is:
-
 #[must_use]
 pub fn reframe(status: u32, body: &[u8]) -> Vec<u8> {
     use crate::answer_bytes::{is_json, member_span, result_span, with_readable};

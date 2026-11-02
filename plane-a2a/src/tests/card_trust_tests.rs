@@ -182,7 +182,6 @@ fn skills_of(card: &Value) -> BTreeMap<String, String> {
 }
 
 /// A FIRST `connect` previews a card nobody approved: every skill it presents is `added` (predev
-
 #[test]
 fn the_connect_view_is_a_preview_of_the_card_under_the_key_s_state() {
     let s = seen(&card("plans"));
@@ -250,7 +249,6 @@ fn the_connect_view_is_a_preview_of_the_card_under_the_key_s_state() {
 }
 
 /// Ported from busbar-a2a registry_tests.rs::the_records_trust_answers_are_the_machines_answers_and_not_a_second_opinion
-
 #[test]
 fn the_records_trust_answers_are_the_machines_answers_and_not_a_second_opinion() {
     let seen_at = |skills: &[(&str, &str)]| {
@@ -299,7 +297,6 @@ fn the_records_trust_answers_are_the_machines_answers_and_not_a_second_opinion()
 }
 
 /// Ported from busbar-a2a verbs_tests.rs::connect_reports_what_moved_when_an_approved_card_has_changed.
-
 #[test]
 fn connect_reports_what_moved_when_an_approved_card_has_changed() {
     let original = card("makes plans");
@@ -322,7 +319,6 @@ fn connect_reports_what_moved_when_an_approved_card_has_changed() {
 }
 
 /// Ported from busbar-a2a verbs_tests.rs::connect_never_reports_approved_even_when_the_card_matches_a_locked_pin.
-
 #[test]
 fn connect_never_reports_approved_even_when_the_card_matches_a_locked_pin() {
     let raw = card("makes plans");
@@ -347,7 +343,6 @@ fn connect_never_reports_approved_even_when_the_card_matches_a_locked_pin() {
 }
 
 /// Each axis in the served engine's order (predev `busbar-kernel/src/trust/mod.rs:310-327`): a
-
 #[test]
 fn the_drift_lists_are_the_sighted_skills_against_the_approved_ones() {
     let offered = json!({
@@ -586,7 +581,6 @@ fn the_guard_s_verdicts_are_worded_as_the_engine_worded_them() {
 }
 
 /// A card-trust refusal preserves the 1.5.5 client text naming the address or resolver failure.
-
 #[test]
 fn a_judged_refusal_names_the_address_or_the_resolvers_reason() {
     let named = "https://card.example/.well-known/agent-card.json";
@@ -635,7 +629,6 @@ fn an_address_literal_is_read_as_one_and_a_name_is_not() {
 }
 
 /// THE CONNECTION'S FAILURE IN predev's WORDS: the engine's HTTP client error with its cause
-
 #[test]
 fn a_failed_card_hop_is_named_as_the_engines_client_named_it() {
     use busbar_contract::abi::host::conn::connector::{
@@ -681,7 +674,6 @@ fn hop(peer_key_pin: Option<&str>, client_identity_offered: bool) -> Handshake {
 }
 
 /// THE TRANSPORT PIN (Q-DEL-A2A-SPKI), the served engine's verdicts and words: the connector's
-
 #[test]
 fn a_transport_pin_is_observed_approvable_and_enforced_as_the_engine_judged_it() {
     let c = card("plans");
@@ -738,7 +730,6 @@ fn a_transport_pin_is_observed_approvable_and_enforced_as_the_engine_judged_it()
 }
 
 /// A card fetch the connector refused for the pinned key reads as the pin's refusal (the key it
-
 #[test]
 fn a_refused_hop_of_a_transport_pinned_registration_reads_as_the_pin_s_refusal() {
     let key = "R2V0IHRoZSBrZXkgcmlnaHQ=";
@@ -761,7 +752,6 @@ fn a_refused_hop_of_a_transport_pinned_registration_reads_as_the_pin_s_refusal()
 }
 
 /// `file:` and `data:` are the two that turn a fetch into a local read. Neither is reachable by
-
 #[test]
 fn a_non_http_scheme_is_refused_however_the_plaintext_knob_is_set() {
     for allow_private in [false, true] {
@@ -784,7 +774,6 @@ fn a_non_http_scheme_is_refused_however_the_plaintext_knob_is_set() {
 }
 
 /// The redirect target is an ordinary-looking public NAME; only judging what it RESOLVED to catches
-
 #[test]
 fn a_redirect_to_a_name_that_resolves_internally_is_refused_on_the_answer() {
     let next = next_hop(
@@ -804,7 +793,6 @@ fn a_redirect_to_a_name_that_resolves_internally_is_refused_on_the_answer() {
     );
 }
 /// THE RATCHET (predev `verify_tests::the_cadence_grammar_has_no_knob_that_slows_detection_or_delays_demotion`):
-
 #[test]
 fn the_cadence_grammar_has_no_knob_that_slows_detection_or_delays_demotion() {
     let code = |s: &str| -> String {
@@ -894,7 +882,6 @@ fn the_mechanism_is_part_of_the_identity_not_a_label_beside_it() {
 }
 
 /// G1-7: `pin_changed` says the kernel quarantined a MOVED card, whatever the latest fetch did: a
-
 #[test]
 fn a_moved_cards_pin_changed_survives_a_failed_look() {
     let failed = Sighting::Failed("down".to_string());

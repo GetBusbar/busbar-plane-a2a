@@ -39,7 +39,6 @@ pub const OP_PUSH_CONFIG_DELETE: OpClassId = OpClassId::new("push_config_delete"
 pub const OP_AGENT_CARD: OpClassId = OpClassId::new("agent_card");
 
 /// One push event arriving from an agent this node dialled.
-
 pub const OP_PUSH_EVENT: OpClassId = OpClassId::new("push_event");
 
 /// Every operation class this plane's units can be, in declaration order.
@@ -84,7 +83,6 @@ pub struct MethodRow {
 }
 
 /// Every method name this plane reads, in the order the vocabulary tables list them.
-
 pub const METHODS: &[MethodRow] = &[
     MethodRow {
         method: "message/send",
@@ -227,11 +225,9 @@ pub fn row_for(method: &str) -> Option<&'static MethodRow> {
 }
 
 /// The suffix a method the vocabulary does not list reads as a stream by: such a method is
-
 pub const STREAM_SUFFIX: &str = "/stream";
 
 /// The class a method is relayed as: its row's, or for a method the vocabulary does not list, the
-
 #[must_use]
 pub fn relay_class(method: &str) -> OpClassId {
     match row_for(method) {

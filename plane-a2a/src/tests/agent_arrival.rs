@@ -362,7 +362,6 @@ fn a_kernel_refusal_keeps_the_kernels_status_and_is_worded_as_an_unsupported_ope
 }
 
 /// THE WORDS NEVER OVERFLOW THE ABI CAP (spec ruling log 2026-09-30, new-plane refusals follow
-
 #[test]
 fn the_words_of_a_head_refusal_echoing_the_largest_admitted_field_line_fit_the_abi_cap() {
     use busbar_contract::abi::plane::{LARGEST_ADMITTED_FIELD_LINE, MAX_REFUSAL_TEXT};
@@ -386,7 +385,6 @@ fn the_words_of_a_head_refusal_echoing_the_largest_admitted_field_line_fit_the_a
 }
 
 /// AN `Origin` IS JUDGED FIRST, as the engine's sequence judged it before every request-line rule:
-
 #[test]
 fn an_origin_that_is_not_loopback_is_refused_before_every_other_rule() {
     for origin in [
@@ -426,7 +424,6 @@ fn an_origin_that_is_not_loopback_is_refused_before_every_other_rule() {
 }
 
 /// A METHOD THE VOCABULARY DOES NOT LIST IS RELAYED, NEVER REFUSED: classed as the hop the engine
-
 #[test]
 fn an_unlisted_method_is_classed_as_the_hop_the_engine_relays_it_on() {
     use crate::ops::{OP_MESSAGE_SEND, OP_MESSAGE_STREAM, OP_TASK_GET};
@@ -453,7 +450,6 @@ fn an_unlisted_method_is_classed_as_the_hop_the_engine_relays_it_on() {
 }
 
 /// THE gRPC LINE'S RENDERING is the JSON-RPC envelope at the refusal's neutral status, the bytes
-
 #[test]
 fn the_grpc_rendering_is_the_envelope_at_the_neutral_status() {
     let own = refused(decide_arrival(b"", head(Some("text/plain"), None)));
@@ -469,7 +465,6 @@ fn the_grpc_rendering_is_the_envelope_at_the_neutral_status() {
 }
 
 /// THE OPEN BREAKER'S REFUSAL is 1.5.5's `BreakerOpen` client text: `503`, `-32004`, the agent
-
 #[test]
 fn an_open_breaker_refusal_names_the_agent_and_the_seconds_to_wait() {
     let refusal = breaker_refusal("probe", Some(serde_json::json!(7)), 12);
@@ -489,7 +484,6 @@ fn an_open_breaker_refusal_names_the_agent_and_the_seconds_to_wait() {
 }
 
 /// A BREAKER REFUSAL NAMING ITS REJECTED TASK is the plain refusal plus the task's `ResourceInfo`
-
 #[test]
 fn a_breaker_refusal_names_the_task_it_rejected_on_every_line() {
     let refusal = breaker_refusal("probe", Some(serde_json::json!(7)), 12);
@@ -528,7 +522,6 @@ fn an_ungranted_caller_is_told_the_scope_it_does_not_hold() {
 }
 
 /// A KEY THAT IS NOT LIVE IS REFUSED `401`, HOWEVER IT IS NOT LIVE (1.5.5's `KeyNotLive`). Which
-
 #[test]
 fn a_key_that_is_not_live_is_refused_401_however_it_is_not_live() {
     let refusal = not_live();
@@ -541,7 +534,6 @@ fn a_key_that_is_not_live_is_refused_401_however_it_is_not_live() {
 }
 
 /// AN AGENT THIS DEPLOYMENT DOES NOT FRONT is a `404` in 1.5.5's words (`NoSuchAgent`), never an
-
 #[test]
 fn an_unknown_agent_is_a_404_in_1_5_5_words() {
     let rendered = render(Dialect::JsonRpc, &no_such_agent("nonexistent"), true);
@@ -553,7 +545,6 @@ fn an_unknown_agent_is_a_404_in_1_5_5_words() {
 }
 
 /// A request with `"id": null` is never answered with a success: it is an Invalid Request (`-32600`)
-
 #[test]
 fn a_null_id_is_never_answered_with_a_success_result() {
     let body = br#"{"jsonrpc":"2.0","id":null,"method":"SendMessage","params":{}}"#;
@@ -580,7 +571,6 @@ fn a_null_id_is_never_answered_with_a_success_result() {
 }
 
 /// A request method with no `id` member is a notification: acknowledged, never answered (JSON-RPC
-
 #[test]
 fn a_request_method_with_no_id_is_a_notification_and_gets_no_response_body() {
     let d = decide_arrival(
@@ -604,7 +594,6 @@ fn a_request_method_with_no_id_is_a_notification_and_gets_no_response_body() {
 }
 
 /// A tripped agent rejects a fresh submission on each line with 503 and `-32004`, naming the agent
-
 #[test]
 fn a_tripped_agent_rejects_fresh_submissions_on_every_binding() {
     let refusal = breaker_refusal("planner", Some(serde_json::json!(1)), 30);
@@ -638,7 +627,6 @@ fn a_tripped_agent_rejects_fresh_submissions_on_every_binding() {
 }
 
 /// Only node faults use the internal refusal class; each refusal class has one consistent answer.
-
 #[test]
 fn p_item_refusal_reason_collapse_only_a_node_fault_is_internal_and_one_class_one_answer() {
     use busbar_contract::abi::plane::{RefusalClass, RefusalCode};

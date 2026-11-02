@@ -44,7 +44,6 @@ pub const RATE_LIMITED: &str = "this task's push volume has exceeded its window 
 const JSON_FIELDS: &[(&str, &str)] = &[("content-type", crate::agent_arrival::JSON_MEDIA_TYPE)];
 
 /// A refusal in the one shape this endpoint speaks: `{"error":{"message":...}}`, not a JSON-RPC
-
 fn refused(
     input: &Lent<'_, ServeIn>,
     out: &mut Out<'_, ServeOut>,
@@ -59,7 +58,6 @@ fn refused(
 }
 
 /// `202`, with no document: the report was taken, the move it recorded written to the task's
-
 fn accepted(input: &Lent<'_, ServeIn>, out: &mut Out<'_, ServeOut>, writes: &[Write]) -> Outcome {
     crate::plane_door::verb_answer(input, out, (202, &[], b""), AUDIT_NONE, writes)
 }
@@ -121,7 +119,6 @@ fn unavailable(
 }
 
 /// The synchronous signer retains the service's Short/failure distinction. A failed signer is
-
 fn signature(
     plane: &A2aDoor,
     ticket: busbar_contract::abi::mechanism::ticket::Ticket,
@@ -172,7 +169,6 @@ fn finish_prepared(
 }
 
 /// THE MOVE A PUSHED `document` ASKS OF A TASK IN `held`: the state it reports, when it reports one
-
 pub(crate) fn push_move(held: TaskState, document: &Value) -> Option<TaskState> {
     crate::task_identity::reported_task_state(document).filter(|reported| *reported != held)
 }

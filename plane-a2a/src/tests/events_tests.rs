@@ -20,7 +20,6 @@ fn data_of(sse: &[u8]) -> Value {
 }
 
 /// An event leaves under busbar's identity, with the matched skill; the far end's own ids are read
-
 #[test]
 fn an_event_leaves_under_busbars_identity() {
     let ev = read_event(
@@ -113,7 +112,6 @@ fn malformed_or_nonresponse_event_data_refuses_the_hop() {
 }
 
 /// A frame answering another request refuses the hop; an `error` frame is relayed under the
-
 #[test]
 fn an_uncorrelated_frame_is_refused_and_an_error_frame_relayed() {
     let other = "data: {\"jsonrpc\":\"2.0\",\"id\":99,\"result\":{}}\n\n";
@@ -129,7 +127,6 @@ fn an_uncorrelated_frame_is_refused_and_an_error_frame_relayed() {
 }
 
 /// An HTTP+JSON far end's frame carries the bare event: it is wrapped as the result of the caller's
-
 #[test]
 fn a_bare_event_is_wrapped_as_the_result_of_the_request() {
     let wrapped = rewrap("data: {\"kind\":\"status-update\"}\n\n", &json!("rest"));
@@ -142,7 +139,6 @@ fn a_bare_event_is_wrapped_as_the_result_of_the_request() {
 }
 
 /// The HTTP+JSON line answers each event's bare result; an error frame and a keep-alive pass, and
-
 #[test]
 fn the_target_line_answers_each_events_bare_result() {
     let events = b"data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"a\":1}}\r\n\r\n: ping\n\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":1}}\n\n";
@@ -153,7 +149,6 @@ fn the_target_line_answers_each_events_bare_result() {
 }
 
 /// Ported from busbar-a2a a2a/tests/rest_tests.rs::non_response_frames_are_passed_through.
-
 #[test]
 fn non_response_frames_are_passed_through() {
     for frame in [
@@ -171,7 +166,6 @@ fn non_response_frames_are_passed_through() {
 }
 
 /// A `result` that is no object is no event about a task: the hop is refused as one whose answer
-
 #[test]
 fn an_event_whose_result_is_no_object_refuses_the_hop() {
     for result in [json!("done"), json!([1]), json!(3), json!(null)] {
@@ -184,7 +178,6 @@ fn an_event_whose_result_is_no_object_refuses_the_hop() {
 }
 
 /// THE FAR END'S EVENT BYTES, KEPT: member order, an integer past 64 bits and a number past
-
 #[test]
 fn an_event_keeps_the_far_ends_bytes_and_its_lines() {
     let frame = "data: {\"jsonrpc\":\"2.0\",\"id\":11,\"result\":{\"taskId\":\"far\",\ndata:  \"n\":123456789012345678901234567890,\"kind\":\"status-update\",\"big\":1e400}}\n\n";
@@ -197,7 +190,6 @@ fn an_event_keeps_the_far_ends_bytes_and_its_lines() {
 }
 
 /// AN HTTP+JSON FAR END'S BARE EVENT IS WRAPPED AROUND ITS OWN BYTES. RED: it was re-serialised
-
 #[test]
 fn a_bare_event_is_wrapped_around_its_own_bytes() {
     let bare = "data: {\"z\":1,\"kind\":\"status-update\",\"n\":123456789012345678901234567890,\"big\":1e400}\n\n";
@@ -209,7 +201,6 @@ fn a_bare_event_is_wrapped_around_its_own_bytes() {
 }
 
 /// THE HTTP+JSON LINE'S EVENT IS THE RESULT'S OWN BYTES, cut out of the JSON-RPC event, over as
-
 #[test]
 fn the_target_lines_event_is_the_results_own_bytes() {
     let events = b"data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"z\":1,\"a\":123456789012345678901234567890,\"big\":1e400}}\n\nid: 4\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"z\":1,\ndata: \"a\":2}}\n\n";

@@ -14,20 +14,16 @@ use crate::{TaskEventRow, TaskRow};
 /// How long a terminal task stays readable after its terminal transition, in seconds.
 pub const TERMINAL_TTL_SECS: u64 = 300;
 /// The most terminal tasks kept; past it the oldest go first. An active task is never counted
-
 pub const MAX_RETAINED: usize = 4096;
 /// The existing replay-token TTL, retained for legacy claim callers. Task publication and
-
 #[cfg(test)]
 pub const CLAIM_TTL_MS: u64 = 60_000;
 /// How many times a change rereads after a definitive atomic condition conflict.
 const TRIES: usize = 3;
 /// The most settled tasks one submit's [`retention_sweep`] retires: a submit opens one task, so a
-
 pub const SWEEP_BUDGET: usize = 32;
 
 /// How long a sweep that left nothing behind holds off the next one, in seconds: the sweep reads
-
 pub const SWEEP_INTERVAL_SECS: u64 = 30;
 
 /// WHEN THE NEXT [`retention_sweep`] IS DUE, per instance: at once while the last one spent its
@@ -66,20 +62,15 @@ pub enum Halt {
 }
 
 /// The host records as the store reaches them. Every call is made in the same order on every entry
-
 pub trait Records {
     /// The record of `kind` under `key`; `None` when absent or a tombstone.
-
     fn get(&mut self, kind: &str, key: &str) -> Result<Option<Vec<u8>>, Halt>;
     /// Every live record of `kind` whose key starts with `prefix`, in key order.
-
     fn list(&mut self, kind: &str, prefix: &str) -> Result<Vec<(String, Vec<u8>)>, Halt>;
     /// Put `key` of `kind` if absent, for `ttl_ms`: `true` when this call made the claim.
-
     fn claim(&mut self, kind: &str, key: &str, ttl_ms: u64) -> Result<bool, Halt>;
 
     /// Compare every predicate and publish all writes in one host transaction. `true` means
-
     fn publish(
         &mut self,
         _predicates: &[Predicate],
@@ -92,7 +83,6 @@ pub trait Records {
     }
 
     /// Observe the chain incarnation before reading the task for a mutation. Replayed reads
-
     fn observe_chain_life(&mut self, _kind: &str, _scope: &str) -> Result<Option<Vec<u8>>, Halt> {
         Err(Halt::Failed(
             "conditional chain observation unavailable".into(),
@@ -149,7 +139,6 @@ fn observe(rec: &mut dyn Records, key: &str) -> Result<ChainLife, Halt> {
 }
 
 /// THE RECORDS AS ONE PIECE SEES THEM ONCE IT HAS WRITTEN: a read of a record the piece already
-
 pub struct Staged<'r> {
     rec: &'r mut dyn Records,
     written: &'r [Write],
@@ -163,7 +152,6 @@ impl<'r> Staged<'r> {
 }
 
 /// Whether `kind` is the chained kind: its writes are appends the host seals once the store took
-
 fn chained(kind: &str) -> bool {
     kind == KIND_TASK_EVENT
 }
@@ -276,7 +264,6 @@ pub fn task_key(caller: &str, task: &str) -> String {
 }
 
 /// The key of event `seq` of `caller`'s task `task`: the host's listed key of record `seq` of the
-
 #[must_use]
 #[cfg(test)]
 pub fn event_key(caller: &str, task: &str, seq: u64) -> String {
@@ -298,13 +285,11 @@ fn terminal(state: &str) -> bool {
 }
 
 /// The cutoff of the task kind's purge at `now`: a row unchanged since before it is past its
-
 fn cutoff(now: u64) -> u64 {
     now.saturating_sub(TERMINAL_TTL_SECS)
 }
 
 /// Whether a held task is past its window at `now`: the task kind's rule
-
 #[must_use]
 pub fn expired(row: &TaskRow, now: u64) -> bool {
     retention_of(KIND_TASK).drops(row.updated_at, cutoff(now), terminal(&row.state))
@@ -319,7 +304,6 @@ fn encode<T: Serialize>(v: &T) -> Result<Vec<u8>, Halt> {
 }
 
 /// One event's own bytes on its task's chain, in the declared length-prefixed framing: `ts` (its eight big-endian bytes), `kind`, `context_id`,
-
 #[must_use]
 pub fn suffix(ev: &TaskEventRow) -> Vec<u8> {
     let mut out = Vec::new();
@@ -341,7 +325,6 @@ pub fn suffix(ev: &TaskEventRow) -> Vec<u8> {
 }
 
 /// Event `kind` over `row` at `held`'s chain position, stamped `ts`; its chain fields are the
-
 fn seal_event(
     held: &HeldTask,
     row: &TaskRow,
@@ -366,7 +349,6 @@ fn seal_event(
 }
 
 /// `caller`'s task `task` as held, or `None`: absent, another caller's, unreadable, or past its
-
 pub fn get(
     rec: &mut dyn Records,
     caller: &str,
@@ -383,7 +365,6 @@ pub fn get(
 }
 
 /// Every task `caller` holds at `now`, by task id.
-
 pub fn list(rec: &mut dyn Records, caller: &str, now: u64) -> Result<Vec<TaskRow>, Halt> {
     if !is_caller(caller) {
         return Ok(Vec::new());
@@ -416,7 +397,6 @@ pub struct Restored {
 }
 
 /// The restore, over host records: every task row read and
-
 pub fn restore(rec: &mut dyn Records) -> Result<Restored, Halt> {
     let mut out = Restored::default();
     let mut active = Vec::new();
@@ -473,7 +453,6 @@ pub struct Stamp<'a> {
 }
 
 /// Compare the exact prior bytes and atomically publish the next task row and its event.
-
 fn commit(
     rec: &mut dyn Records,
     at: &Stamp<'_>,
@@ -548,7 +527,6 @@ fn submit_held(
 }
 
 /// Open a relayed task with one atomic publication: the final row and the submitted/delegated
-
 #[cfg(test)]
 pub fn open(
     rec: &mut dyn Records,
@@ -649,14 +627,12 @@ pub(crate) fn open_configured(
 }
 
 /// What a change does to one held row: the new row and its event, `None` for nothing to do, or the
-
 pub type Planned = Result<Option<(TaskRow, &'static str)>, String>;
 
 /// A change's plan over the held row.
 pub type Plan<'p> = dyn FnMut(&TaskRow) -> Planned + 'p;
 
 /// Change task `task` by `plan`: read exact bytes, plan and atomically compare/publish.
-
 pub fn change(
     rec: &mut dyn Records,
     at: &Stamp<'_>,
@@ -712,7 +688,6 @@ pub(crate) fn change_configured(
 }
 
 /// TRANSITION task `task` to `to`, with the event the move names.
-
 pub fn transition(
     rec: &mut dyn Records,
     at: &Stamp<'_>,
@@ -725,7 +700,6 @@ pub fn transition(
 }
 
 /// ADVANCE the artifact cursor by one chunk, with a `task.artifact` event, per
-
 pub fn bump_cursor(
     rec: &mut dyn Records,
     at: &Stamp<'_>,
@@ -742,7 +716,6 @@ pub fn bump_cursor(
 }
 
 /// RECORD one push delivery outcome `kind` on the task's chain; the row itself is unchanged.
-
 pub fn record_push_delivery(
     rec: &mut dyn Records,
     at: &Stamp<'_>,
@@ -755,7 +728,6 @@ pub fn record_push_delivery(
 }
 
 /// THE RETENTION SWEEP at `now`, the plane's own purge of the task kind under its rule
-
 pub fn retention_sweep(
     rec: &mut dyn Records,
     now: u64,
@@ -819,7 +791,6 @@ fn forget(
 }
 
 /// Atomically replace or delete a config only while its task still has the exact observed row.
-
 pub(crate) fn write_config(
     rec: &mut dyn Records,
     at: &Stamp<'_>,

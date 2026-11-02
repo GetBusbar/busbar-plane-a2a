@@ -93,7 +93,6 @@ extern "C" fn clock_now(_: HostCtx, input: *const c_void, out: *mut ServiceOut) 
 }
 
 /// EVERY HANDLE THE HOST WAS HANDED, `(ticket slot, ticket generation, seq)`, with the service it
-
 static HANDLES: Mutex<Vec<Handed>> = Mutex::new(Vec::new());
 
 /// One handle the host was handed, `(ticket slot, ticket generation, seq)`, and its service.
@@ -159,7 +158,6 @@ extern "C" fn judged(_: HostCtx, input: *const c_void, out: *mut ServiceOut) -> 
 }
 
 /// THE STORE the host keeps for the plane, across instances: what the plane's answers wrote, as
-
 static STORE: Mutex<Vec<(String, String, Vec<u8>)>> = Mutex::new(Vec::new());
 
 fn store() -> MutexGuard<'static, Vec<(String, String, Vec<u8>)>> {
@@ -167,7 +165,6 @@ fn store() -> MutexGuard<'static, Vec<(String, String, Vec<u8>)>> {
 }
 
 /// `records.list`: kind/prefix matching records in key order, strictly after the cursor.
-
 static LIST_PENDS: AtomicBool = AtomicBool::new(false);
 
 /// While set, `records.list` is refused (the store is unavailable): FAILED, nothing listed.
@@ -323,7 +320,6 @@ const CARD: &[u8] = br#"{"protocolVersion":"0.3.0","name":"vendor","description"
 static LONG_CARD: AtomicBool = AtomicBool::new(false);
 
 /// [`CARD`] with a description long enough that the card is past the host's record ceiling
-
 fn long_card() -> Vec<u8> {
     let description = "a vendor agent ".repeat(48);
     let skills: Vec<String> = (0..12)
@@ -522,7 +518,6 @@ const SECTION: &[u8] =
     br#"{"vendor": {"url": "https://vendor.example/agent", "pin": {"mechanism": "unpinned"}}}"#;
 
 /// The same agent, its card verified against an out-of-band issuer key (the kernel's
-
 const SIGNED_SECTION: &[u8] =
     br#"{"vendor": {"url": "https://vendor.example/agent", "pin": {"mechanism": "jws_issuer_key", "key": "issuer"}}}"#;
 
@@ -716,7 +711,6 @@ impl Door {
     }
 
     /// Whether busbar's own card read under `unit` is admitted (`arrive` answers READY; a full
-
     fn arrives_own_card(&self, unit: u64) -> bool {
         let route = ("GET", door_facts::WELL_KNOWN_CARD_PATH);
         let (outcome, _) = self.arrive(unit, route, door_facts::WELL_KNOWN_CARD_PATH, b"");
@@ -851,7 +845,6 @@ impl Door {
     }
 
     /// `serve` of the trust verb `approve` for `agent`, naming `fingerprint`: its outcome, status
-
     fn approve(&self, agent: &str, fingerprint: &str) -> (Outcome, u32, String) {
         let body = format!(r#"{{"fingerprint": "{fingerprint}"}}"#);
         let fields = [Field {
@@ -867,7 +860,6 @@ impl Door {
     }
 
     /// `serve` of the admin verb at `route` on `target`, with the head `fields` and `body`: its
-
     fn verb(
         &self,
         route: u32,
@@ -1023,7 +1015,6 @@ impl Door {
     }
 
     /// The host's own cancel of `unit`, naming it by the key `arrive` kept it under as well as by
-
     fn cancel_unit(&self, unit: u64) -> Outcome {
         let mut i: PlaneCancelIn = z();
         i.cancel = CancelIn {
@@ -1043,7 +1034,6 @@ impl Door {
     }
 
     /// The host's own cancel of `unit` (by its key and its ticket): the disposition the door
-
     fn cancel_disposition(&self, unit: u64) -> u32 {
         let mut i: PlaneCancelIn = z();
         i.cancel = CancelIn {
@@ -1064,7 +1054,6 @@ impl Door {
     }
 
     /// Busbar's own card read on `unit`, its first window written into a reply buffer too small
-
     fn begin_own_card(&self, unit: u64) {
         self.arrive_own_card(unit);
         let first = self.piece(unit, Given::caller(b""), 8);
@@ -1077,7 +1066,6 @@ impl Door {
     }
 
     /// Whether `unit`, begun by [`Self::begin_own_card`], is still held: its next window is
-
     fn still_answers(&self, unit: u64) -> bool {
         self.piece(unit, Given::more(), 8).outcome == Some(Outcome::Ready)
     }
@@ -1093,7 +1081,6 @@ mod card_generation_custody_cases;
 mod verification_custody_cases;
 
 /// A UNIT WHOSE ANSWER IS WHOLLY WRITTEN IS FORGOTTEN: busbar's own card read, answered to its last
-
 #[test]
 fn units_whose_answer_is_written_never_push_a_live_unit_out() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1116,7 +1103,6 @@ fn units_whose_answer_is_written_never_push_a_live_unit_out() {
 }
 
 /// A UNIT WHOSE REFUSAL IS RENDERED IS FORGOTTEN: the kernel refused it after `arrive` (a spent
-
 #[test]
 fn units_whose_refusal_is_rendered_never_push_a_live_unit_out() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1138,7 +1124,6 @@ fn units_whose_refusal_is_rendered_never_push_a_live_unit_out() {
 }
 
 /// A CANCELLED UNIT GOES FIRST: when the instance is full, the cancelled units make room, never a
-
 #[test]
 fn cancelled_units_make_room_before_a_live_unit_does() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1155,7 +1140,6 @@ fn cancelled_units_make_room_before_a_live_unit_does() {
 }
 
 /// An instance at live-unit capacity refuses the next arrival without evicting active units.
-
 #[test]
 fn an_instance_full_of_live_units_refuses_the_next_arrival_and_evicts_none() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1178,7 +1162,6 @@ fn an_instance_full_of_live_units_refuses_the_next_arrival_and_evicts_none() {
 }
 
 /// A UNIT CANCELLED BEFORE ITS FIRST PIECE IS OVER: the host's cancel names it by the key `arrive`
-
 #[test]
 fn a_unit_cancelled_before_its_first_piece_makes_room() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1205,7 +1188,6 @@ fn a_unit_cancelled_before_its_first_piece_makes_room() {
 }
 
 /// A FINISHED HOP'S UNIT IS STILL READ BY A REFUSAL OF ITS ANSWER: the hop's last piece wrote the
-
 #[test]
 fn a_refusal_after_a_finished_hop_still_reads_its_unit() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1245,7 +1227,6 @@ fn a_refusal_after_a_finished_hop_still_reads_its_unit() {
 }
 
 /// A CANCEL SAYS HOW FAR THE HOP GOT (owner billing rule R21: the ledger records what the dialect
-
 #[test]
 fn a_cancel_after_the_agent_answered_is_partial() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1281,7 +1262,6 @@ fn a_cancel_after_the_agent_answered_is_partial() {
 }
 
 /// A HOP REFUSED FOR THE AGENT'S CREDENTIAL BEFORE IT WAS DIALLED LEDGERS NOTHING
-
 #[test]
 fn a_hop_refused_for_its_credential_before_the_dial_reports_its_fee_and_bytes_at_zero() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1343,7 +1323,6 @@ fn a_hop_refused_for_its_credential_before_the_dial_reports_its_fee_and_bytes_at
 }
 
 /// AN EMPTY ENVELOPE FROM A REACHED AGENT IS CHARGED AS THE HOP THAT REACHED IT (coordinator
-
 #[test]
 fn an_empty_envelope_from_a_reached_agent_reports_the_hops_fee_and_bytes() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1390,7 +1369,6 @@ fn an_empty_envelope_from_a_reached_agent_reports_the_hops_fee_and_bytes() {
 }
 
 /// A CARD PAST THE HOST'S RECORD CEILING IS HELD, NEVER WRITTEN AS A RECORD THE HOST CANNOT KEEP
-
 #[test]
 fn a_card_past_the_hosts_record_ceiling_is_held_and_never_written_as_a_record() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1432,7 +1410,6 @@ fn a_card_past_the_hosts_record_ceiling_is_held_and_never_written_as_a_record() 
 }
 
 /// THE CARD WARM ON A UNIT'S TICKET NEVER SHARES A HANDLE WITH THE UNIT'S OWN CALLS
-
 #[test]
 fn the_card_warm_on_a_units_ticket_never_shares_a_handle_with_the_units_own_calls() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1485,7 +1462,6 @@ fn the_card_warm_on_a_units_ticket_never_shares_a_handle_with_the_units_own_call
 }
 
 /// A restarted instance serves agents from the approved cards it previously recorded.
-
 #[test]
 fn a_restarted_instance_serves_an_agent_from_its_recorded_card() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1515,7 +1491,6 @@ fn a_restarted_instance_serves_an_agent_from_its_recorded_card() {
 }
 
 /// A TICK WHOSE CARD WARM PENDS ENDS PENDING, AND THE `drive` ITS WAKE RUNS LANDS THE WARM
-
 #[test]
 fn a_tick_whose_card_warm_pends_ends_pending_and_its_drive_lands_the_warm() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1557,7 +1532,6 @@ fn a_tick_whose_card_warm_pends_ends_pending_and_its_drive_lands_the_warm() {
 }
 
 /// A restart preserves the skills approved by the operator.
-
 #[test]
 fn a_restarted_instance_keeps_the_skills_its_operator_approved() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1603,7 +1577,6 @@ fn a_restarted_instance_keeps_the_skills_its_operator_approved() {
 }
 
 /// A RESTART SERVES A CARD PAST THE HOST'S RECORD CEILING AND KEEPS ITS APPROVED SKILLS
-
 #[test]
 fn a_restarted_instance_serves_a_card_past_the_record_ceiling_and_keeps_its_approved_skills() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1672,7 +1645,6 @@ fn a_restarted_instance_serves_a_card_past_the_record_ceiling_and_keeps_its_appr
 }
 
 /// A KERNEL REFUSAL WITH NO UNIT ANSWERS THE BASELINE BYTES: the kernel refused the request before
-
 #[test]
 fn a_kernel_refusal_with_no_unit_answers_the_baseline_json_rpc_bytes() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1700,7 +1672,6 @@ fn a_kernel_refusal_with_no_unit_answers_the_baseline_json_rpc_bytes() {
 }
 
 /// A CARD LISTING THE HOST REFUSED IS LISTED AGAIN: the cards are warmed only once both their
-
 #[test]
 fn a_card_listing_the_host_refused_is_listed_again() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1738,11 +1709,9 @@ fn a_card_listing_the_host_refused_is_listed_again() {
 }
 
 /// What one addressed READY arrival allocates on a warmed instance (the agent's card held, its
-
 const READY_ARRIVAL_ALLOCATIONS: u64 = 56;
 
 /// A warmed ready arrival matches its pinned allocation count.
-
 #[test]
 fn a_warmed_ready_arrival_allocates_its_pinned_count() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1771,7 +1740,6 @@ fn a_warmed_ready_arrival_allocates_its_pinned_count() {
 }
 
 /// EVERY REFUSED TRUST VERB IS AUDITED AS REJECTED (docs/a2a.md: both verbs audited, refusals as
-
 #[test]
 fn a_malformed_or_unknown_approval_is_audited_rejected() {
     use busbar_contract::abi::plane::AUDIT_REJECTED;

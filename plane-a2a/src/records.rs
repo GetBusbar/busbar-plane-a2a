@@ -13,15 +13,12 @@ pub const KIND_TASK_EVENT: &str = "task_event";
 pub const KIND_PUSH_CONFIG: &str = "push_config";
 
 /// The `card` kind — an agent's verified card, keyed by agent id under the operator's scope (no
-
 pub const KIND_CARD: &str = "card";
 
 /// The `card_approval` kind — the skills (`id -> digest`) of the card the operator approved for an
-
 pub const KIND_CARD_APPROVAL: &str = "card_approval";
 
 /// The host-record kinds the door's tail states (`PlaneTail::record_kinds`), in order: a record
-
 pub const HELD_KINDS: &[&str] = &[
     KIND_TASK,
     KIND_TASK_EVENT,
@@ -46,7 +43,6 @@ pub enum Retention {
 
 impl Retention {
     /// Whether a purge under this rule drops a row stamped `ts` against the cutoff `before`, the
-
     #[must_use]
     pub const fn drops(self, ts: u64, before: u64, terminal: bool) -> bool {
         ts < before && self.reaches(terminal)
@@ -63,11 +59,9 @@ impl Retention {
 }
 
 /// The retention rule of each held kind that is not purged by age: a task row is kept while it is
-
 pub const RECORD_RETENTIONS: &[(&str, Retention)] = &[(KIND_TASK, Retention::TerminalOnly)];
 
 /// The retention rule of held kind `kind`: its [`RECORD_RETENTIONS`] entry, [`Retention::Age`] for
-
 #[must_use]
 pub fn retention_of(kind: &str) -> Retention {
     RECORD_RETENTIONS

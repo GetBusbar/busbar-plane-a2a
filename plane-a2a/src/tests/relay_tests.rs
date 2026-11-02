@@ -112,7 +112,6 @@ fn an_agent_url_with_no_path_is_posted_to_at_its_root() {
 }
 
 /// The target read off a url's own bytes is the one a parse serializes, for every url the fast
-
 #[test]
 fn a_target_read_without_a_parse_is_the_parsed_target() {
     let parsed = |url: &str| {
@@ -247,7 +246,6 @@ fn a_reply_that_is_not_a_json_rpc_answer_is_refused() {
 }
 
 /// A REDIRECTING RELAY PEER IS A FAILURE, NEVER FOLLOWED (docs/security.md: no surface follows an
-
 #[test]
 fn a_redirecting_relay_peer_is_a_failure() {
     for status in [301, 302, 303, 307, 308] {
@@ -328,7 +326,6 @@ fn a_last_far_end_piece_with_no_status_is_refused() {
 }
 
 /// An answer closes once, an empty envelope never closes, and a stream closes at its last frame.
-
 #[test]
 fn p_item_unary_empty_terminality_an_answer_closes_once_an_empty_envelope_never_and_a_stream_at_its_last_frame(
 ) {
@@ -473,7 +470,6 @@ fn a_task_hops_answer_leaves_under_busbars_identity_and_says_what_the_far_end_re
 }
 
 /// The engine's task-hop refusal body: `code`, `message`, its `ErrorInfo` when A2A defines the code,
-
 fn about(code: i64, reason: &str, message: &str) -> serde_json::Value {
     json!({ "jsonrpc": "2.0", "id": 7, "error": { "code": code, "message": message,
         "data": [
@@ -804,7 +800,6 @@ fn an_events_attempt_accepts_an_event_stream_or_one_document() {
 }
 
 /// Each event goes out as it is framed, under busbar's identity: the first starts the caller's
-
 #[test]
 fn events_are_answered_as_they_come_and_settled_as_they_pass() {
     let (mut r, _) = events_sent();
@@ -858,7 +853,6 @@ fn events_are_answered_as_they_come_and_settled_as_they_pass() {
 }
 
 /// AN ERROR FRAME MID-STREAM PASSES THROUGH AND THE STREAM ENDS WHERE THE FAR END CLOSES IT
-
 #[test]
 fn an_error_frame_mid_stream_passes_through_and_the_stream_ends_where_the_far_end_closes() {
     let (mut r, _) = events_sent();
@@ -927,7 +921,6 @@ fn one_document_to_an_events_hop_is_the_unary_answer() {
 }
 
 /// A frame answering another request refuses the hop before its answer started, the task failed;
-
 #[test]
 fn an_uncorrelated_event_refuses_before_the_answer_and_ends_it_after() {
     let other = b"data: {\"jsonrpc\":\"2.0\",\"id\":99,\"result\":{}}\n\n";
@@ -1014,7 +1007,6 @@ fn an_http_json_far_ends_bare_events_are_read_as_results() {
 }
 
 /// The plane states the breaker-health classification of the far end's complete answer.
-
 #[test]
 fn the_far_ends_whole_answer_states_the_breakers_reading() {
     let not_found =
@@ -1062,7 +1054,6 @@ fn the_far_ends_whole_answer_states_the_breakers_reading() {
 }
 
 /// A HOP THE KERNEL REFUSED FOR BUSBAR'S OWN CREDENTIAL (`credential_unavailable`: the agent's
-
 #[test]
 fn a_hop_refused_for_busbars_own_credential_answers_in_the_engines_words() {
     for addressed in [false, true] {
@@ -1099,7 +1090,6 @@ fn a_hop_refused_for_busbars_own_credential_answers_in_the_engines_words() {
 }
 
 /// Ported from busbar-a2a a2a/tests/rpcerror_tests.rs::push_notification_not_supported_and_extension_support_required_round_trip.
-
 #[test]
 fn a_far_ends_push_and_extension_refusals_are_relayed_as_themselves() {
     for (code, reason) in [
@@ -1129,7 +1119,6 @@ fn reply_text(reply: &RelayReply) -> String {
 }
 
 /// Ported from busbar-a2a a2a/tests/transport_tests.rs::a_buffered_hop_that_dies_mid_answer_bills_its_request_and_the_bytes_received.
-
 #[test]
 fn a_buffered_hop_that_dies_mid_answer_bills_its_request_and_the_bytes_received() {
     const DELIVERED: usize = 300;
@@ -1208,7 +1197,6 @@ fn answer_of_len(len: usize) -> Vec<u8> {
 }
 
 /// Ported from busbar-a2a a2a/tests/transport_tests.rs::an_oversized_body_is_cut_one_byte_past_the_ceiling_so_the_driver_can_refuse_it.
-
 #[test]
 fn an_oversized_body_is_cut_one_byte_past_the_ceiling_so_the_driver_can_refuse_it() {
     let at_cap = answer_of_len(MAX_REPLY_BYTES);
@@ -1257,7 +1245,6 @@ fn journaled(run: impl FnOnce() -> RelayReply) -> (RelayReply, Vec<(tracing::Lev
 }
 
 /// Ported from origin/predev `crates/busbar-a2a/src/a2a/tests/refusal_leak_tests.rs`
-
 #[test]
 fn a_refused_hops_journal_line_names_the_backend_and_the_callers_answer_does_not() {
     let host = "vendor.example";
@@ -1329,7 +1316,6 @@ fn a_refused_hops_journal_line_names_the_backend_and_the_callers_answer_does_not
 }
 
 /// A MESSAGE-ONLY ANSWER SETTLES THE TASK THE HOP OPENED `completed`: a server message names a
-
 #[test]
 fn a_message_only_answer_settles_the_opened_task_completed() {
     for far in [
@@ -1385,7 +1371,6 @@ fn a_message_only_answer_settles_the_opened_task_completed() {
 }
 
 /// THE FAR END'S RESULT LEAVES AS ITS OWN BYTES, BUSBAR'S IDENTITY SPLICED IN (Law 5: a relay sends
-
 #[test]
 fn a_relayed_result_is_the_far_ends_bytes_with_busbars_identity_spliced_in() {
     let mut r = task_sent(false);
@@ -1410,7 +1395,6 @@ fn a_relayed_result_is_the_far_ends_bytes_with_busbars_identity_spliced_in() {
 }
 
 /// A RESULT THAT IS NO OBJECT IS NO ANSWER ABOUT A TASK (Law 11: no invented answer): the plane
-
 #[test]
 fn a_task_hops_result_that_is_no_object_is_refused_not_invented() {
     for result in ["\"done\"", "[1]", "7", "null"] {

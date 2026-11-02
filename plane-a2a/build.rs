@@ -126,7 +126,6 @@ fn main() -> Result<(), Box<dyn Error>> {
 }
 
 /// How many fields named `name` the proto source `proto` declares `repeated`: every line
-
 fn repeated_fields(proto: &str, name: &str) -> usize {
     proto
         .lines()
@@ -142,7 +141,6 @@ fn repeated_fields(proto: &str, name: &str) -> usize {
 }
 
 /// `text` with every `needle` that starts a whole identifier replaced by `with`, and how many were:
-
 fn replace_whole(text: &str, needle: &str, with: &str) -> (String, usize) {
     let mut out = String::with_capacity(text.len());
     let (mut at, mut hits) = (0, 0);

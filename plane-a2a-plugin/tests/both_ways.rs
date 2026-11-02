@@ -4,7 +4,6 @@
 //! THE DOOR, BOTH WAYS, OP BY OP: the logic crate's `door` linked and this crate's
 
 /// Loads the same door for linked and dropped-in behavior checks.
-
 fn loaded_door() -> busbar_plugin_loader::dispatch::LoadedDoor {
     busbar_plugin_loader::dispatch::LoadedDoor::from(
         busbar_plane_a2a::door as busbar_contract::abi::mechanism::door::DoorFn,
@@ -12,7 +11,6 @@ fn loaded_door() -> busbar_plugin_loader::dispatch::LoadedDoor {
 }
 
 /// The door's private facts this script names, restated as data in the logic crate's
-
 #[path = "../../plane-a2a/tests/support/door_facts.rs"]
 #[allow(dead_code)]
 mod door_facts;
@@ -145,7 +143,6 @@ mod both_ways {
     }
 
     /// `arrive` of `body` at `target` on claim `(verb, route)` with `fields`: one line, and the
-
     fn arrive(
         p: &Plugin<Plane>,
         unit: u64,
@@ -158,7 +155,6 @@ mod both_ways {
     }
 
     /// `arrive` on the snapshot's claim `index`, which may be one past the route table (an agent's
-
     fn arrive_on(
         p: &Plugin<Plane>,
         unit: u64,
@@ -229,7 +225,6 @@ mod both_ways {
     }
 
     /// `project` of `body` at `target` on claim `(verb, route)`, with a request-stage `rewrite`:
-
     fn project(
         p: &Plugin<Plane>,
         unit: u64,
@@ -495,7 +490,6 @@ mod both_ways {
     }
 
     /// A `SendMessage` call's request message, as a gRPC client encodes it: `SendMessageRequest {
-
     fn grpc_send() -> Vec<u8> {
         let mut bytes = vec![0x12, 0x14];
         bytes.extend_from_slice(&[0x0a, 0x02]);
@@ -515,7 +509,6 @@ mod both_ways {
     }
 
     /// This crate's dropped-in image, the `busbar_plane_a2a_plugin` cdylib `cargo test` builds
-
     fn dropped(d: &Dispatcher) -> Plugin<Plane> {
         let exe = std::env::current_exe().expect("the test binary has a path");
         let deps = exe.parent().expect("target/<profile>/deps");
@@ -554,7 +547,6 @@ mod both_ways {
     }
 
     /// THE gRPC NEED, AS THE DOOR STATES IT (spec line 2026-09-30, the a2a door's third need): the
-
     #[test]
     fn the_door_states_its_agents_over_http_and_over_grpc_alike() {
         let rendered = LinkedRow::of_loaded(crate::loaded_door())
@@ -579,7 +571,6 @@ mod both_ways {
     }
 
     /// The door declares that its push need trusts the owned `agent_push.ca` material.
-
     #[test]
     fn the_door_states_its_push_need_trusting_the_owned_agent_push_ca() {
         let rendered = LinkedRow::of_loaded(crate::loaded_door())
@@ -597,7 +588,6 @@ mod both_ways {
     }
 
     /// `refresh` of [`GOOD`] to `generation`, the applied document's other owned sections `owned`
-
     fn refresh_owning(p: &Plugin<Plane>, generation: u64, owned: &[u8]) -> String {
         use busbar_contract::abi::mechanism::call::Blob;
         let extensions = if owned.is_empty() {
@@ -627,7 +617,6 @@ mod both_ways {
     }
 
     /// AN APPLY CARRYING A MALFORMED `agent_push:` IS REFUSED AT `refresh`, in the push section's
-
     #[test]
     fn an_apply_carrying_a_malformed_agent_push_section_is_refused_at_refresh() {
         let d = Dispatcher::new(DispatchConfig::default());
@@ -805,7 +794,6 @@ mod both_ways {
     }
 
     /// `project`: the `{tool, arguments}` view of the request (the envelope the HTTP+JSON line's
-
     #[test]
     fn project_writes_the_hook_view_of_the_request() {
         let d = Dispatcher::new(DispatchConfig::default());
@@ -840,7 +828,6 @@ mod both_ways {
     }
 
     /// A request-stage rewrite replaces the parameters before projecting the rewritten request.
-
     #[test]
     fn a_rewrite_replaces_the_params_and_the_rewritten_request_is_projected() {
         let d = Dispatcher::new(DispatchConfig::default());
@@ -910,7 +897,6 @@ mod both_ways {
     }
 
     /// A HOST WHOSE STORE HOLDS ONE STRAY CARD PART: `records.list` of the `card` kind answers one
-
     struct CardRecords;
 
     impl ServicesDouble for CardRecords {
@@ -948,7 +934,6 @@ mod both_ways {
     }
 
     /// `open` over [`GOOD`] on `d`, then `ready` (the held cards warmed from the host's `card`
-
     fn ready_lines(d: &Dispatcher, dropped_in: bool) -> Vec<String> {
         let log = Arc::new(HostLog::default());
         let bound = Bind {
@@ -985,7 +970,6 @@ mod both_ways {
     }
 
     /// Plane log events reach the host log through both linked and dropped-in doors.
-
     #[test]
     fn a_stray_card_part_line_reaches_the_host_log_dropped_in_as_linked() {
         let stray = |l: &String| l.contains("part records that no whole record names were found");

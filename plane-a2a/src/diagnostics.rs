@@ -6,7 +6,6 @@
 use busbar_contract::diagnostic::{Class, Diagnostic, Severity};
 
 /// A restored A2A task's per-task provenance chain failed verification at boot — tamper evidence.
-
 pub const A2A_TASK_CHAIN_VERIFY_FAILED: Diagnostic = Diagnostic {
     code: 2030,
     class: Class::Audit,
@@ -171,7 +170,6 @@ pub const A2A_TASK_STATE_UNREAD: Diagnostic = Diagnostic {
 };
 
 /// A split card or approval record was not read back whole at the card warm: the agent is looked
-
 pub const A2A_SPLIT_RECORD_UNREAD: Diagnostic = Diagnostic {
     code: 7031,
     class: Class::Plane,
@@ -193,7 +191,6 @@ pub const A2A_SPLIT_RECORD_UNREAD: Diagnostic = Diagnostic {
 };
 
 /// Part records of a split card or approval that no whole record names were found at the card
-
 pub const A2A_SPLIT_RECORD_STRAY_PARTS: Diagnostic = Diagnostic {
     code: 7032,
     class: Class::Plane,
@@ -358,7 +355,6 @@ pub const A2A_PROTOCOL_VERSION_IGNORED: Diagnostic = Diagnostic {
 };
 
 /// A relayed SSE frame was not valid UTF-8 and was dropped. Frozen: `BUSBAR-7104`, the published
-
 pub const PLANE_SSE_FRAME_NOT_UTF8: Diagnostic = Diagnostic {
     code: 7104,
     class: Class::Plane,
@@ -379,7 +375,6 @@ pub const PLANE_SSE_FRAME_NOT_UTF8: Diagnostic = Diagnostic {
 };
 
 /// THE CODES THE PLANE RAISES, ascending by code: every entry its source reports through
-
 #[cfg(test)]
 pub const DIAGNOSTICS: &[&Diagnostic] = &[
     &A2A_TASK_CHAIN_VERIFY_FAILED,

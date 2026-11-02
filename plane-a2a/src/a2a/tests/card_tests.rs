@@ -7,7 +7,6 @@ use super::*;
 use serde_json::json;
 
 /// A card with the members busbar actually acts on, plus one member busbar does not model. The
-
 fn a_card() -> Value {
     json!({
         "protocolVersion": "0.3.0",
@@ -52,7 +51,6 @@ fn a_card() -> Value {
 }
 
 /// THE LOAD-BEARING ONE. The fingerprint is taken over the RECEIVED document, so a change to a
-
 #[test]
 fn the_fingerprint_covers_members_busbar_does_not_model() {
     let plain = a_card();
@@ -69,7 +67,6 @@ fn the_fingerprint_covers_members_busbar_does_not_model() {
 }
 
 /// The other half of the same property: a card that was merely RE-SERIALIZED is the same card. A
-
 #[test]
 fn two_spellings_of_one_card_have_one_fingerprint() {
     let terse = a_card();
@@ -83,7 +80,6 @@ fn two_spellings_of_one_card_have_one_fingerprint() {
 }
 
 /// A signature cannot cover itself, so the JWS payload excludes `signatures`. The pinned fingerprint
-
 #[test]
 fn the_signing_payload_excludes_signatures_and_the_fingerprint_does_not() {
     let card = a_card();
@@ -108,7 +104,6 @@ fn the_signing_payload_excludes_signatures_and_the_fingerprint_does_not() {
 }
 
 /// REMOVING a member is not EMPTYING it. A signer that hashed `"signatures":[]` and a verifier that
-
 #[test]
 fn removing_signatures_is_not_the_same_as_emptying_them() {
     let mut emptied = a_card();
@@ -130,7 +125,6 @@ fn removing_signatures_is_not_the_same_as_emptying_them() {
 }
 
 /// Digests are PER SKILL, keyed by the id an operator approves by, so editing one skill moves one
-
 #[test]
 fn one_edited_skill_moves_exactly_one_digest() {
     let before = skill_digests(&a_card()).expect("digests");
@@ -169,7 +163,6 @@ fn one_edited_skill_moves_exactly_one_digest() {
 }
 
 /// Approval is keyed by the skill ID, so re-ordering the array moves nothing. Keying by array index
-
 #[test]
 fn reordering_the_skills_array_moves_no_digest() {
     let mut reordered = a_card();
@@ -187,7 +180,6 @@ fn reordering_the_skills_array_moves_no_digest() {
 }
 
 /// A skill with no `id` has nothing for an operator to approve it BY, and falling back to its array
-
 #[test]
 fn a_skill_with_no_id_is_refused_rather_than_indexed() {
     let mut card = a_card();
@@ -203,7 +195,6 @@ fn a_skill_with_no_id_is_refused_rather_than_indexed() {
 }
 
 /// Two skills under one id make "approved `plan` at this digest" ambiguous. Silently keeping the
-
 #[test]
 fn a_duplicate_skill_id_is_refused_rather_than_resolved() {
     let mut card = a_card();
@@ -225,7 +216,6 @@ fn a_document_that_is_not_an_object_has_no_hash() {
 }
 
 /// The reader maps the protocol's camelCase wire names onto busbar's own field names, and an absent
-
 #[test]
 fn the_reader_mirrors_the_wire_names_and_tolerates_absent_members() {
     use crate::a2a::agent_card::parse as read;
@@ -248,7 +238,6 @@ fn the_reader_mirrors_the_wire_names_and_tolerates_absent_members() {
 }
 
 /// An unknown member does not make a card unreadable. An upstream that adds one on a newer protocol
-
 #[test]
 fn an_unknown_member_does_not_make_a_card_unreadable() {
     let mut card = a_card();
@@ -269,7 +258,6 @@ fn unsigned_card() -> Value {
 }
 
 /// SIGNATURE TRANSPLANT. A signature that is genuinely the operator's, over a DIFFERENT card, moved
-
 #[test]
 fn a_valid_signature_lifted_from_another_card_does_not_verify() {
     let mut other = unsigned_card();
@@ -288,7 +276,6 @@ fn a_valid_signature_lifted_from_another_card_does_not_verify() {
 }
 
 /// THE RUG PULL, at the signature layer. One field edited after signing moves the signed payload,
-
 #[test]
 fn editing_a_signed_card_invalidates_its_signature() {
     let signed = a_card();
@@ -302,7 +289,6 @@ fn editing_a_signed_card_invalidates_its_signature() {
 }
 
 /// Adding a member busbar does not even model still moves the signed payload, because it is the
-
 #[test]
 fn adding_an_unmodelled_member_to_a_signed_card_invalidates_its_signature() {
     let signed = a_card();
@@ -318,7 +304,6 @@ fn adding_an_unmodelled_member_to_a_signed_card_invalidates_its_signature() {
 }
 
 /// G1-3: A2A v1.0 §8.4.1 (rule 1, field presence per §5.7) and §8.4.3 (verifier steps 3-5): the
-
 #[test]
 fn the_signing_payload_omits_default_valued_members_as_the_v1_specification_shows() {
     let card = serde_json::json!({
@@ -342,7 +327,6 @@ fn the_signing_payload_omits_default_valued_members_as_the_v1_specification_show
 }
 
 /// G1-3: a `REQUIRED` member is kept even at its default (the v1.0.0 tag's example: `""` and
-
 #[test]
 fn the_signing_payload_keeps_required_and_optional_members_at_their_defaults() {
     let card = serde_json::json!({
@@ -371,7 +355,6 @@ fn the_signing_payload_keeps_required_and_optional_members_at_their_defaults() {
 }
 
 /// G1-3: a v0.3 card (no `supportedInterfaces`) keeps today's payload: v0.3 states no
-
 #[test]
 fn a_v03_cards_signing_payload_removes_only_its_signatures() {
     let card = serde_json::json!({

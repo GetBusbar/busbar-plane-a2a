@@ -4,7 +4,6 @@
 //! THE DEPLOYMENT'S PUBLIC BASE, READ ONE WAY: the absolute URLs this plane publishes (its
 
 /// One reading of `public_url`: parse it, replace the path wholesale, drop query and fragment.
-
 pub fn absolute(public_url: &str, path: &str) -> Option<String> {
     let mut u = url::Url::parse(public_url).ok()?;
     if !matches!(u.scheme(), "http" | "https") || u.host_str().is_none() {

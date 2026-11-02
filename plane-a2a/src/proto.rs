@@ -41,7 +41,6 @@ impl std::fmt::Display for MissingPayload {
 /// THE MODEL'S ROUND TRIP over one message, in place.
 pub trait Normal {
     /// Apply it.
-
     fn normal(&mut self) -> Result<(), MissingPayload>;
 }
 

@@ -122,7 +122,6 @@ fn a_result_that_is_no_object_takes_no_identity() {
 }
 
 /// AN UNWRAPPED v0.3 UPDATE takes busbar's id in the `taskId` its `kind` names it by, at that
-
 #[test]
 fn an_unwrapped_update_takes_busbars_id_where_its_kind_names_its_task() {
     assert_eq!(
@@ -171,7 +170,6 @@ fn the_result_span_and_the_rewrap_keep_the_far_ends_bytes() {
 }
 
 /// THE CALLER'S REQUEST, TRANSLATED BY SPLICE: only the ids `to` answers for change, at their own
-
 #[test]
 fn a_request_is_translated_at_its_ids_spans_only() {
     let to = |id: &str| (id == "busbar-t").then(|| "far-t".to_string());

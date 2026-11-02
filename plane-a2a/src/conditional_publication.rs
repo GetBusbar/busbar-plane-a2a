@@ -601,7 +601,6 @@ impl Journal {
     }
 
     /// An emitted later observation replaced the prior definitive commit at the host. Its
-
     pub(crate) fn cancelled_without_receipt(&self) -> bool {
         self.0.with(&(), |state| {
             state.is_some_and(|state| {
@@ -755,7 +754,6 @@ impl Journal {
     }
 
     /// Complete only the batch this caller owns, after every outside-Book obligation returns.
-
     pub(crate) fn effects_finished(&self, owner: Option<Arc<()>>) {
         let Some(owner) = owner else {
             return;

@@ -81,7 +81,6 @@ impl Drop for Pass {
 }
 
 /// A finished listing: the handle the piece's calls count on from after it, and its answer's status
-
 type Listed = (u32, crate::binding::Binding, Option<(u16, Vec<u8>)>);
 
 /// A local answer held across the mirror's PENDING entries.
@@ -104,7 +103,6 @@ struct Entry {
 }
 
 /// THE HOST RECORDS AND THE DESTINATION JUDGE, for one piece: its connector, and the host services
-
 pub struct Via<'h> {
     host: &'h StaticHost,
     services: Option<StaticServices>,
@@ -121,7 +119,6 @@ pub struct Via<'h> {
 
 impl<'h> Via<'h> {
     /// The piece's calls, counting on from the `issued` its unit's finished pieces made; `grown` is
-
     pub fn new(
         host: &'h StaticHost,
         services: Option<StaticServices>,
@@ -164,7 +161,6 @@ impl<'h> Via<'h> {
     }
 
     /// The buffer sizes to issue `handle` at: what a short answer on it already named, else
-
     fn sized(&self, handle: CompletionHandle, bytes: usize, items: usize) -> (usize, usize) {
         match self.grown.get(&grown_key(handle)) {
             Some(size) => (
@@ -176,7 +172,6 @@ impl<'h> Via<'h> {
     }
 
     /// A short answer on `handle` named `bytes` and `items`: kept, so every entry of the piece
-
     fn grow(&self, handle: CompletionHandle, bytes: u64, items: u64) -> Result<(), Halt> {
         self.grown.with_all(|m| {
             let key = grown_key(handle);
@@ -196,7 +191,6 @@ impl<'h> Via<'h> {
     }
 
     /// Reserve room atomically before issuing a new handle: a later SHORT must be recordable,
-
     fn reserve(&self, handle: CompletionHandle, bytes: usize, items: usize) -> Result<(), Halt> {
         self.grown.with_all(|sizes| {
             let key = grown_key(handle);
@@ -219,7 +213,6 @@ impl<'h> Via<'h> {
     }
 
     /// A call that never answered SHORT and has finished needs no replay size. Its original
-
     fn unreserve(&self, handle: CompletionHandle) {
         self.grown.with_all(|sizes| {
             let key = grown_key(handle);
@@ -235,7 +228,6 @@ impl<'h> Via<'h> {
     }
 
     /// `random.fill` into `buf`, under this piece's next handle.
-
     pub fn random(&mut self, buf: &mut [u8]) -> Result<(), Halt> {
         let Some(services) = self.services else {
             return Err(Halt::Failed(format!("{:?}", ServiceError::Unserved)));
@@ -264,7 +256,6 @@ pub(crate) const fn handle(ticket: Ticket, seq: u32) -> CompletionHandle {
 }
 
 /// THE SIZES SHORT RECORDS ANSWERS NAMED, and pending calls' reservations, per handle
-
 pub type Grown = Keyed<(u32, u32, u32), RecordSize>;
 
 /// A reserved records call's initial room, or the room its SHORT answer named. Reservations
@@ -280,7 +271,6 @@ pub struct RecordSize {
 const GROWN_MAX: usize = 4096;
 
 /// Room for one record on its first read: a task row with its history and artifacts. A longer one
-
 const RECORD_BYTES: usize = 64 * 1024;
 
 /// The records one page of a listing asks for; a page that comes back full asks for the next.
@@ -334,7 +324,6 @@ impl<T> Issued<T> {
 
 impl Via<'_> {
     /// The piece's buffers, `bytes` and `items` of them, grown when a call asks for more than
-
     fn buffers(&mut self, bytes: usize, items: usize) -> (&mut [u8], &mut [ItemSpan]) {
         if self.scratch.len() < bytes {
             self.scratch.grow_zeroed(bytes);
@@ -349,7 +338,6 @@ impl Via<'_> {
     }
 
     /// One records call under this piece's next handle, issued at `(bytes, items)` (or the size a
-
     fn issue<T>(
         &mut self,
         (bytes, items): (usize, usize),
@@ -522,7 +510,6 @@ const JUDGED_BYTES: usize = 512;
 const JUDGED_ADDRESSES: usize = 16;
 
 /// The open-web judgement of a caller-named destination (a push callback) on `handle`: its
-
 pub(crate) fn judge_open_web(
     services: &StaticServices,
     handle: CompletionHandle,
@@ -565,7 +552,6 @@ impl Reach for Via<'_> {
 }
 
 /// The instance's restore is either owned by one live unit or has finished reporting.
-
 pub(crate) type Restore = Keyed<(), RestoreState>;
 
 #[derive(Debug, Clone, Copy)]
@@ -605,7 +591,6 @@ fn forget_sizes(grown: &Grown, ticket: Ticket) {
 }
 
 /// Release only the cancelled unit's pending restore and replay sizes. Called after the
-
 pub(crate) fn cancelled(plane: &A2aDoor, cancel: busbar_contract::abi::sdk::plane::UnitCancel) {
     let mut publications = Vec::new();
     let named = (cancel.unit != 0)
@@ -656,7 +641,6 @@ pub(crate) fn cancelled(plane: &A2aDoor, cancel: busbar_contract::abi::sdk::plan
 }
 
 /// Say what the restore found, once per unit: the counts, a row
-
 fn report_restore(plane: &A2aDoor, unit: u64, restored: Result<tasks::Restored, Halt>) {
     let first = plane.units.with(&unit, |u| {
         u.is_some_and(|u| !std::mem::replace(&mut u.pass.restore_reported, true))
@@ -702,7 +686,6 @@ fn report_restore(plane: &A2aDoor, unit: u64, restored: Result<tasks::Restored, 
 }
 
 /// The answer a NOTIFICATION gets: received, never answered (JSON-RPC 2.0 section 4.1: the server
-
 pub(crate) const fn notice_answer() -> (u32, &'static [u8]) {
     (crate::agent_arrival::STATUS_ACCEPTED, b"")
 }
@@ -1041,7 +1024,6 @@ fn local_piece(
 }
 
 /// Refresh what busbar last saw from the agent doing the work: the caller's live rows on this agent whose agent ids busbar
-
 #[allow(clippy::too_many_arguments)]
 fn refresh_listed<'h>(
     plane: &'h A2aDoor,
@@ -1187,7 +1169,6 @@ pub(crate) fn listed_backend_ids(
 }
 
 /// THE MIRROR a successful push-config verb owes ([`crate::mirror`]), or `None` when it owes none:
-
 fn mirror_flight(
     plane: &A2aDoor,
     instance: &Instance<'_, A2aDoor>,
@@ -1288,7 +1269,6 @@ fn mirror_flight_inner(
 }
 
 /// The caller's local answer, written for its line: the gRPC line's message or status, the
-
 #[allow(clippy::too_many_arguments)]
 fn answered_window(
     plane: &A2aDoor,
@@ -1363,7 +1343,6 @@ pub(crate) fn kind_index(kind: &str) -> u32 {
 }
 
 /// Answer one window of a local reply: as many bytes as the reply buffer holds, and on the first
-
 fn window(
     plane: &A2aDoor,
     unit: u64,
@@ -1398,7 +1377,6 @@ fn window_with(
 }
 
 /// A WHOLE REPLY ON THE gRPC LINE ([`crate::framed::FramedReply`]): its status in the line's own
-
 fn framed_window(
     plane: &A2aDoor,
     unit: u64,
@@ -1429,7 +1407,6 @@ fn framed_window(
 }
 
 /// The first window's head: its fields, whether it states its length, and whether its body is one
-
 struct WindowHead<'h> {
     fields: &'h [(&'h str, &'h str)],
     length: bool,
@@ -1577,7 +1554,6 @@ fn window_core(
 }
 
 /// THE HOST'S SIGNING SERVICE as a card's [`crate::served_card::Signer`]: the key id read with a
-
 pub(crate) struct HostSigner<'a> {
     pub(crate) services: Option<&'a StaticServices>,
     pub(crate) ticket: Ticket,
@@ -1598,7 +1574,6 @@ impl HostSigner<'_> {
 
 impl HostSigner<'_> {
     /// `entitlement.check` of the unit's caller for `target` (`<scope kind>:<name>`), on the next
-
     fn entitled(&mut self, target: &str) -> bool {
         let Some(services) = self.services else {
             return false;
@@ -1620,7 +1595,6 @@ impl crate::served_card::Signer for HostSigner<'_> {
 }
 
 /// Busbar's extended card for the unit's caller: one
-
 fn extended_card(
     plane: &A2aDoor,
     signer: &mut HostSigner<'_>,
@@ -1694,7 +1668,6 @@ fn card_error(code: &str, message: &str) -> Vec<u8> {
 }
 
 /// `on_piece` for a card read ([`crate::agent_arrival::CardAsk`]): its first piece (the caller's, for
-
 pub fn card_piece(
     plane: &A2aDoor,
     instance: &Instance<'_, A2aDoor>,

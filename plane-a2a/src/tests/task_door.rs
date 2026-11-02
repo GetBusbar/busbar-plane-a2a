@@ -6,7 +6,6 @@
 use super::*;
 
 /// The instance's very first local verb runs its restore, and no local verb after it does, whatever
-
 #[test]
 fn only_the_first_local_verb_restores_and_none_sweeps() {
     let restored = Keyed::new();
@@ -45,7 +44,6 @@ const TICKET: Ticket = Ticket {
 const LONG: u64 = RECORD_BYTES as u64 + 1;
 
 /// A host that holds one long record: a buffer short of it is answered short at its size, one that
-
 fn long_record(
     log: &mut Vec<(u32, usize)>,
     handle: CompletionHandle,
@@ -80,7 +78,6 @@ fn a_short_records_answer_is_re_called_once_on_its_handle_at_the_named_size() {
 }
 
 /// A piece that answers PENDING runs again from the top: the handle a short answer already sized is
-
 #[test]
 fn a_piece_run_again_issues_a_short_handle_at_the_size_already_named() {
     let fake: &'static FakeHost = Box::leak(Box::new(FakeHost::new()));

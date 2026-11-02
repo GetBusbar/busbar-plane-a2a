@@ -20,7 +20,6 @@ impl Deliveries {
     }
 
     /// The deliveries to attempt now: each task's head, when its time has come and no attempt on
-
     #[must_use]
     pub(crate) fn due(&self, now_ns: u64) -> Vec<Delivery> {
         self.with(|b| {
@@ -53,7 +52,6 @@ use busbar_contract::abi::sdk::test_support::chip::{cred, framed_head};
 const MS: u64 = 1_000_000;
 
 /// The bytes `seal` puts on the wire: the value of the one sealed field an exchange frames for it
-
 pub(crate) fn sealed_bytes(seal: Seal) -> Vec<u8> {
     let head = framed_head(
         &Exchange::request_sealed(Request::default(), vec![(0, b"x".to_vec(), seal)])
@@ -234,7 +232,6 @@ fn a_full_queue_drops_its_oldest_waiting_notification_and_counts_it() {
 }
 
 /// THE REQUEST AS IT WAS BEFORE THE CHIP (plane-a2a dev at 28bd001, `push::request` and
-
 fn legacy_request(delivery: &Delivery, auth: Option<(&str, &str)>) -> Request {
     let target = url::Url::parse(&delivery.url).map_or_else(
         |_| "/".to_string(),
@@ -298,7 +295,6 @@ fn the_request_is_a_post_to_the_callbacks_path_with_the_credential_only_once_hel
 }
 
 /// THE WIRE IS THE ONE THE PLANE SENT BEFORE THE CHIP: for every shape of credential a caller
-
 #[test]
 fn the_sealed_request_frames_the_bytes_the_plain_one_did() {
     let shapes: [Option<(&str, &str)>; 5] = [
@@ -395,7 +391,6 @@ fn the_notification_is_the_task_nested_under_task_with_an_rfc3339_timestamp() {
 }
 
 /// THE NOTIFICATION TAKES THE SHAPE OF THE VERSION ITS CALLBACK WAS REGISTERED UNDER (Q128 a2a M13,
-
 #[test]
 fn the_notification_is_the_registered_versions_shape() {
     let mut t = task("t1", TaskState::Completed);
@@ -477,7 +472,6 @@ fn tokens_are_bounded() {
 }
 
 /// 1.5.5's push-volume bound: 60 per task per fixed 60 s window, other tasks untouched, a fresh
-
 #[test]
 fn the_push_volume_bound_is_one_point_five_point_fives() {
     let limiter = PushLimiter::default();
@@ -545,7 +539,6 @@ fn the_statement_declares_its_open_web_need_and_its_agent_member_need() {
 }
 
 /// Push trust names the plane's owned `agent_push.ca` setting.
-
 #[test]
 fn the_push_trust_path_names_the_owned_agent_push_section() {
     use crate::statement::{PUSH_CA_KEY, PUSH_SECTION, PUSH_TRUST_FROM, SECTIONS};
@@ -567,7 +560,6 @@ fn the_push_trust_path_names_the_owned_agent_push_section() {
 }
 
 /// THE `agent_push:` SECTION'S SHAPE, as the plane judges it at `open` and `refresh`: absent (or
-
 #[test]
 fn the_agent_push_section_holds_its_ca_alone() {
     use crate::statement::read_push_section;
@@ -655,7 +647,6 @@ fn the_credential_round_trips_through_the_record_and_stays_redacted() {
 }
 
 /// A `serde_json` line of the credential (a log line, an assert message) is refused and quotes
-
 #[test]
 fn the_credential_serializes_into_the_record_and_nowhere_else() {
     let a = auth("Bearer", "s3cret");
@@ -665,7 +656,6 @@ fn the_credential_serializes_into_the_record_and_nowhere_else() {
 }
 
 /// One `tick` op attempts one notification: the next task's head in turn (task-id order), marked
-
 #[test]
 fn the_next_due_is_one_head_at_a_time_each_task_in_turn() {
     let d = Deliveries::default();
@@ -695,7 +685,6 @@ fn a_delivery_names_the_caller_holding_its_task() {
 }
 
 /// What an attempt owes its chain is taken by its caller only, at most one per task and never for
-
 #[test]
 fn owed_outcomes_are_taken_per_caller_one_per_task() {
     let d = Deliveries::default();
@@ -747,7 +736,6 @@ fn the_owed_book_is_bounded_and_counts_what_it_drops() {
 }
 
 /// `the_callback_mac_is_compared_in_constant_time` (the engine's source-shape guard, ported): the
-
 #[test]
 fn the_callback_mac_is_compared_in_constant_time() {
     let source = include_str!("../push.rs");
@@ -769,7 +757,6 @@ fn the_callback_mac_is_compared_in_constant_time() {
 }
 
 /// The push credential reaches the authorization field without appearing in logs, debug output, metrics, audit records, or error text.
-
 #[test]
 fn the_push_credential_reaches_the_authorization_field_and_no_debug_or_error_text() {
     let secret = "s3cret-webhook-tok";
@@ -797,7 +784,6 @@ fn the_push_credential_reaches_the_authorization_field_and_no_debug_or_error_tex
 }
 
 /// The request deadline bounds each push-delivery attempt.
-
 #[test]
 fn a_delivery_attempt_is_bounded_by_the_request_deadline() {
     assert_eq!(
@@ -808,7 +794,6 @@ fn a_delivery_attempt_is_bounded_by_the_request_deadline() {
 }
 
 /// The pump serves task queues in turn, with at most one attempt per task per turn.
-
 #[test]
 fn the_pump_serves_each_tasks_queue_in_turn() {
     let d = Deliveries::default();
@@ -828,7 +813,6 @@ fn the_pump_serves_each_tasks_queue_in_turn() {
 }
 
 /// AN AGENT'S PUSH MOVES ITS TASK ONLY TO A STATE IT REPORTS, AND ONLY WHEN THE TASK IS NOT ALREADY
-
 #[test]
 fn a_push_moves_its_task_only_to_a_new_state_it_reports() {
     use crate::push_serve::push_move;

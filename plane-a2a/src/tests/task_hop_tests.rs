@@ -358,7 +358,6 @@ fn refusal_of(opened: Opened) -> (u32, i64, String) {
 }
 
 /// A callback the floor refuses refuses the request `400` (InvalidParams) in the floor's words,
-
 #[test]
 fn an_inline_callback_the_floor_refuses_refuses_the_request_before_anything_opens() {
     for (url, verdict, words) in [
@@ -411,7 +410,6 @@ fn an_inline_credential_busbar_cannot_present_refuses_the_request() {
 }
 
 /// A callback that passes is the push callback on the task the request opens, and its credential
-
 #[test]
 fn an_inline_callback_that_passes_is_the_opened_tasks_callback() {
     let mut desk = desk();
@@ -449,7 +447,6 @@ fn an_inline_callback_that_passes_is_the_opened_tasks_callback() {
 }
 
 /// A request addressing a task the caller holds registers the callback as THAT task's push config,
-
 #[test]
 fn an_inline_callback_on_an_addressed_task_is_its_push_config_without_an_event() {
     let mut desk = desk();
@@ -487,19 +484,16 @@ fn a_request_with_no_inline_callback_registers_none() {
 }
 
 /// A `backends` answer that knows a far-end id for every busbar id asked about, so the only thing
-
 fn far(id: &str) -> Option<String> {
     Some(format!("far-{id}"))
 }
 
 /// What `ALICE`'s request opens over a fresh desk (Alice holds `t1`, Bob `t2`): the task it is for
-
 fn alice_sends(envelope: &Value) -> (TaskHop, Option<Vec<u8>>) {
     hop(opened_with(&mut desk(), envelope, ALICE, &far))
 }
 
 /// EVERY SPELLING OF THE ADDRESSING MEMBER, for the non-owner: the boundary must not depend on
-
 #[test]
 fn no_spelling_of_the_task_member_crosses_the_boundary() {
     for (member, method) in [
@@ -536,7 +530,6 @@ fn no_spelling_of_the_task_member_crosses_the_boundary() {
 }
 
 /// THE WRITE THROUGH THE SECOND TURN. `params.message.taskId` is how a caller continues a
-
 #[test]
 fn the_second_turns_task_id_cannot_be_pointed_at_another_principals_conversation() {
     let turn = |id: &str| {
@@ -565,7 +558,6 @@ fn the_second_turns_task_id_cannot_be_pointed_at_another_principals_conversation
 }
 
 /// EVERY SPELLING OF THE INLINE CALLBACK IS FOUND, so every spelling is judged by the floor: v0.3's
-
 #[test]
 fn every_spelling_of_the_callback_is_found_so_every_spelling_is_guarded() {
     let spellings = |url: &str| {
@@ -628,7 +620,6 @@ fn every_spelling_of_the_callback_is_found_so_every_spelling_is_guarded() {
 }
 
 /// A far end that issued the SAME id busbar did needs no translation: the caller's bytes go on
-
 #[test]
 fn a_far_end_id_equal_to_busbars_needs_no_translation() {
     let mut desk = desk();
@@ -658,7 +649,6 @@ fn opened_writing(desk: &mut Desk, envelope: &Value) -> (Opened, Vec<Write>) {
 }
 
 /// End the refused hop's `task` failed, as the door ends it on the refused piece, on the unit's
-
 fn ended_on_refusal(d: &mut Desk, task: &TaskHop) -> Vec<Write> {
     let mut out = Vec::new();
     settle_on_answer(
@@ -675,7 +665,6 @@ fn ended_on_refusal(d: &mut Desk, task: &TaskHop) -> Vec<Write> {
 }
 
 /// A HOP REFUSED FOR AN UNAVAILABLE CREDENTIAL ENDS ITS TASK WITHOUT LOSING ANOTHER WRITER'S
-
 #[test]
 fn a_refused_hops_task_end_keeps_a_concurrent_writers_change() {
     let mut d = desk();
@@ -742,7 +731,6 @@ fn walk(desk: &mut Desk, caller: &str, task: &str, states: &[TaskState]) {
 }
 
 /// Ported from busbar-a2a a2a/tests/relay_stream_tests.rs::an_interrupt_from_the_backend_is_relayed_transparently_and_pauses_the_task.
-
 #[test]
 fn an_interrupt_from_the_backend_is_relayed_transparently_and_pauses_the_task() {
     use crate::relay::{From as Side, HopRelay, Piece, PieceAnswer};
@@ -904,7 +892,6 @@ fn a_streamed_artifact_advances_the_durable_resume_cursor() {
 }
 
 /// A HOP THAT LEFT AND HEARD NOTHING BACK ENDS THE TASK IT OPENED WITHOUT LOSING ANOTHER WRITER'S
-
 #[test]
 fn a_hop_that_heard_nothing_back_ends_its_task_keeping_a_concurrent_writers_change() {
     let mut d = desk();
@@ -950,7 +937,6 @@ fn a_hop_that_heard_nothing_back_ends_its_task_keeping_a_concurrent_writers_chan
 }
 
 /// Settle `how` on Alice's task as BOB, who holds no such task: the store refuses the write.
-
 fn refused_settle(how: &TaskSettled) -> (Result<Option<TaskRow>, Halt>, usize, Vec<String>) {
     let mut desk = desk();
     let (task, _) = hop(opened(&mut desk, &send(json!({})), ALICE));
@@ -978,7 +964,6 @@ fn refused_settle(how: &TaskSettled) -> (Result<Option<TaskRow>, Halt>, usize, V
 }
 
 /// **A REFUSED CURSOR WRITE IS SURFACED, AND THE ANSWER STANDS.** Ported from origin/predev
-
 #[test]
 fn a_resume_cursor_the_store_refuses_is_surfaced_and_the_answer_stands() {
     let artifact = TaskSettled::Event {
@@ -1001,7 +986,6 @@ fn a_resume_cursor_the_store_refuses_is_surfaced_and_the_answer_stands() {
 }
 
 /// **A REFUSED STATE TRANSITION IS SURFACED, AND THE ANSWER STANDS**, each arm under predev's
-
 #[test]
 fn a_transition_the_store_refuses_is_surfaced_and_the_answer_stands() {
     let reported = TaskSettled::Reported {
@@ -1052,7 +1036,6 @@ fn a_transition_the_store_refuses_is_surfaced_and_the_answer_stands() {
 }
 
 /// **WARNING ONCE, THEN DEBUG**, per condition, as the diagnostic catalog declares: the
-
 #[test]
 fn a_refused_write_is_a_warning_the_first_time_and_debug_after() {
     use tracing::Level;
@@ -1073,7 +1056,6 @@ fn a_refused_write_is_a_warning_the_first_time_and_debug_after() {
 }
 
 /// THE ENGINE'S ANSWER SHOULD THE STORE REFUSE THE OPENING'S WRITES (the kernel then ends the unit
-
 #[test]
 fn an_opening_states_the_engines_answer_should_the_store_refuse_its_writes() {
     let unrecorded = |opened: Opened| match opened {
@@ -1140,7 +1122,6 @@ fn an_opening_states_the_engines_answer_should_the_store_refuse_its_writes() {
 }
 
 /// A GetTask, CancelTask or second-turn SendMessage naming a task the caller does NOT hold is
-
 #[test]
 fn a_task_verb_naming_a_task_the_caller_does_not_hold_is_refused_task_not_found() {
     let requests = |id: &str| {
@@ -1200,7 +1181,6 @@ fn a_task_verb_naming_a_task_the_caller_does_not_hold_is_refused_task_not_found(
 }
 
 /// A SECOND TURN (`params.message.taskId`, A2A v1.0 `Message.task_id`) naming a task the caller
-
 #[test]
 fn a_second_turn_naming_a_held_task_in_its_message_addresses_that_task() {
     let mut d = desk();
@@ -1229,7 +1209,6 @@ fn a_second_turn_naming_a_held_task_in_its_message_addresses_that_task() {
 }
 
 /// The writes opening `envelope` for Alice makes at 300, NOT applied: what the piece's answer
-
 fn writes_of(desk: &mut Desk, envelope: &Value) -> Vec<Write> {
     let mut out = Vec::new();
     let req = Request {
@@ -1248,7 +1227,6 @@ fn writes_of(desk: &mut Desk, envelope: &Value) -> Vec<Write> {
 }
 
 /// AN INLINE CALLBACK ON AN ADDRESSED TASK IS A PUSH-CONFIG SET, last writer wins: two sets read
-
 #[test]
 fn two_inline_callbacks_on_an_addressed_task_leave_the_later_and_never_regress_the_task() {
     let mut d = desk();
@@ -1297,7 +1275,6 @@ fn two_inline_callbacks_on_an_addressed_task_leave_the_later_and_never_regress_t
 }
 
 /// A CANCEL OF A TASK BUSBAR HOLDS AS TERMINAL is answered by busbar, never relayed: A2A's
-
 #[test]
 fn a_cancel_of_a_task_held_as_terminal_is_refused_not_cancelable() {
     for method in ["CancelTask", "tasks/cancel"] {
@@ -1326,7 +1303,6 @@ fn a_cancel_of_a_task_held_as_terminal_is_refused_not_cancelable() {
 }
 
 /// A TASK VERB WHOSE `params` NAME NO TASK AS A STRING (absent, a number, `null`, no `params` at
-
 #[test]
 fn a_task_verb_naming_no_task_is_refused_invalid_params_and_opens_nothing() {
     for method in [
@@ -1392,7 +1368,6 @@ fn held_tasks(d: &mut Desk) -> usize {
 }
 
 /// UNDER SUBMIT-ONLY TRAFFIC THE SETTLED TASKS ARE RETIRED AND THE STORE STAYS BOUNDED: each fresh
-
 #[test]
 fn submit_only_traffic_retires_settled_tasks_and_keeps_the_store_bounded() {
     let mut d = desk();
@@ -1448,7 +1423,6 @@ fn submit_only_traffic_retires_settled_tasks_and_keeps_the_store_bounded() {
 }
 
 /// A READ NEVER SWEEPS: a `GetTask` of a settled task past its window answers it as missing and
-
 #[test]
 fn a_read_or_an_addressed_turn_never_sweeps() {
     let mut d = desk();

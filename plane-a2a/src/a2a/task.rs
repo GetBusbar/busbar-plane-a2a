@@ -21,7 +21,6 @@ pub enum Direction {
 
 impl Direction {
     /// The stable wire/store token. Config, admin responses, audit rows and store rows all spell it
-
     pub fn as_str(self) -> &'static str {
         match self {
             Direction::Inbound => "inbound",
@@ -30,7 +29,6 @@ impl Direction {
     }
 
     /// Parse a stored token. An UNKNOWN token is an error rather than a default, because defaulting
-
     pub fn parse(s: &str) -> Result<Self, TaskError> {
         match s {
             "inbound" => Ok(Direction::Inbound),
@@ -78,7 +76,6 @@ impl TaskState {
     }
 
     /// Parse a stored token, refusing an unknown one.
-
     pub fn parse(s: &str) -> Result<Self, TaskError> {
         match s {
             "submitted" => Ok(TaskState::Submitted),
@@ -102,13 +99,11 @@ impl TaskState {
     }
 
     /// PAUSED awaiting the caller. Distinct from terminal AND from active: an interrupted task
-
     pub fn is_interrupted(self) -> bool {
         matches!(self, TaskState::InputRequired | TaskState::AuthRequired)
     }
 
     /// Is `to` a legal move from `self`?
-
     pub fn can_transition_to(self, to: TaskState) -> bool {
         use TaskState::*;
         match self {
@@ -210,7 +205,6 @@ pub struct Task {
 
 impl Task {
     /// A freshly SUBMITTED task. The only constructor that invents a state, so every other path has
-
     pub fn submitted(
         task_id: impl Into<String>,
         context_id: impl Into<String>,
@@ -249,7 +243,6 @@ impl Task {
     }
 
     /// Move to `to`, or refuse. `updated_at` moves only on a move that was ACCEPTED, so the
-
     pub fn transition_to(&mut self, to: TaskState, now: u64) -> Result<(), TaskError> {
         if !self.state.can_transition_to(to) {
             return Err(TaskError::IllegalTransition {
@@ -280,7 +273,6 @@ impl Task {
     }
 
     /// Read back from the store seam, validating every field that has a closed domain. A row that
-
     pub fn from_row(row: &crate::TaskRow) -> Result<Self, TaskError> {
         let task = Task {
             task_id: row.task_id.clone(),
@@ -305,7 +297,6 @@ impl Task {
 }
 
 /// Map an A2A state transition to its provenance event kind. The neutral core only hash-chains and
-
 pub fn event_kind_for_transition(from: TaskState, to: TaskState) -> &'static str {
     use busbar_contract::vocab::{EV_INTERRUPTED, EV_RESUMED, EV_TERMINAL, EV_WORKING};
     match to {
@@ -320,7 +311,6 @@ pub fn event_kind_for_transition(from: TaskState, to: TaskState) -> &'static str
 }
 
 /// THE TRANSITION PLAN the neutral engine applies under its working-set lock. Given the CURRENT
-
 pub fn plan_transition(
     to: TaskState,
     now: u64,
@@ -335,7 +325,6 @@ pub fn plan_transition(
 }
 
 /// The restore-row readability predicate the neutral rehydrate consults. Answers `Ok(())`
-
 pub fn readable_row(row: &crate::TaskRow) -> Result<(), String> {
     Task::from_row(row).map(|_| ()).map_err(|e| e.to_string())
 }

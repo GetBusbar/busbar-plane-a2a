@@ -22,11 +22,9 @@ pub mod method {
 }
 
 /// The id every busbar-originated request carries: busbar originated the hop, so there is no
-
 pub const ORIGINATED_RPC_ID: &str = "busbar-originated";
 
 /// The verb busbar issues when a caller uses `verb`; `None` for a local verb that mirrors onto
-
 #[must_use]
 pub fn mirrored_verb(verb: LocalVerb) -> Option<&'static str> {
     Some(match verb {
@@ -39,7 +37,6 @@ pub fn mirrored_verb(verb: LocalVerb) -> Option<&'static str> {
 }
 
 /// Busbar's own callback address for `public_url`, or `None` where busbar offers none: no
-
 #[must_use]
 pub fn callback_url(public_url: &str) -> Option<String> {
     let url = url::Url::parse(public_url).ok()?;
@@ -77,7 +74,6 @@ pub fn params_for(method: &str, backend_task: &str, create: &Value) -> Value {
 }
 
 /// One originated request, framed for the agent's binding as a relayed one is: its verb, target,
-
 #[must_use]
 pub fn request(
     binding: Binding,
@@ -175,7 +171,6 @@ fn v03_request<'a>(method: &'a str, params: &Value) -> Option<(&'a str, Value)> 
 }
 
 /// THE ANSWER TO ONE ORIGINATED REQUEST, as the readers below read it: its status and body as the
-
 #[must_use]
 pub fn answered(
     binding: Binding,
@@ -208,11 +203,9 @@ pub fn answered(
 pub struct Unleased;
 
 /// What one originated request came to: its status and body (`None` when it was not answered),
-
 pub type Landed = Result<Option<(u16, Vec<u8>)>, Unleased>;
 
 /// What one originated request came to, out of its exchange's `answer`: the status and body
-
 pub fn landed(
     binding: Binding,
     agent: &str,
@@ -247,7 +240,6 @@ pub fn landed(
 }
 
 /// Whether a read's answer leaves busbar's registration drifted (gone at the agent): an answer that
-
 #[must_use]
 pub fn drifted(binding: Binding, answered: Option<(u16, &[u8])>, config_id: &str) -> bool {
     let Some((status, body)) = answered else {
@@ -273,7 +265,6 @@ pub fn drifted(binding: Binding, answered: Option<(u16, &[u8])>, config_id: &str
 }
 
 /// Whether `found` holds the config `config_id`, compared whole on its `id` member: a config itself
-
 fn holds_config(found: &Value, config_id: &str) -> bool {
     match found {
         Value::Array(items) => items.iter().any(|i| holds_config(i, config_id)),
@@ -299,7 +290,6 @@ pub enum Stage {
 }
 
 /// ONE REQUEST BUSBAR ORIGINATES to an agent, across its piece's PENDING entries: the agent (its
-
 pub struct Originated {
     /// The agent's registration name: the dial names it ([`Exchange::as_member`]).
     pub agent: String,
@@ -328,7 +318,6 @@ impl std::fmt::Debug for Originated {
 }
 
 /// ONE MIRROR: where it stands, the verb it mirrors, the agent's own id for the task, the create a
-
 pub struct Flight {
     /// Where it stands.
     pub stage: Stage,
@@ -376,7 +365,6 @@ impl Flight {
     }
 
     /// The stage after this one's request came to `landed`: an [`Unleased`] request ends the mirror
-
     pub fn land(&mut self, landed: Result<Option<(u16, &[u8])>, Unleased>) {
         match landed {
             Err(Unleased) => self.stage = Stage::Done,
@@ -385,7 +373,6 @@ impl Flight {
     }
 
     /// The stage after this one's request was answered (`answered` = its status and body, `None`
-
     pub fn advance(&mut self, answered: Option<(u16, &[u8])>) {
         self.stage = match self.stage {
             Stage::Mirror => {
@@ -408,7 +395,6 @@ impl Flight {
 pub const LIST_TASKS: &str = "ListTasks";
 
 /// WHAT A LISTING TAUGHT BUSBAR: for each entry of the agent's answer whose id is the agent's own
-
 #[must_use]
 pub fn listed_states(
     binding: Binding,

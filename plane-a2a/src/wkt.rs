@@ -424,7 +424,6 @@ fn date(year: i64, month: u32, day: u32) -> Option<i64> {
 }
 
 /// The UTC date and time of `(seconds, nanos)`, when the calendar holds it (`chrono`'s
-
 fn civil(seconds: i64, nanos: i32) -> Option<(i64, u32, u32, u32, u32)> {
     let nanos = u32::try_from(nanos).ok()?;
     let days = seconds.div_euclid(SECS_PER_DAY);
@@ -447,7 +446,6 @@ pub fn representable(seconds: i64, nanos: i32) -> bool {
 
 impl Timestamp {
     /// Its protobuf JSON form: a four-digit year in 0001–9999, the fraction in 0, 3, 6 or 9
-
     fn rfc3339(self) -> Result<String, &'static str> {
         if !representable(self.seconds, self.nanos) {
             return Err("timestamp is outside the protobuf seconds or nanoseconds range");
@@ -551,7 +549,6 @@ fn fraction(s: &str) -> Result<(&str, u32), ParseError> {
 }
 
 /// The offset (`Z`, or `±HH:MM`; `chrono`'s `timezone_offset` with zulu and the minus sign
-
 fn offset(mut s: &str) -> Result<(&str, i32), ParseError> {
     if let Some(b'Z' | b'z') = s.as_bytes().first() {
         return Ok((&s[1..], 0));

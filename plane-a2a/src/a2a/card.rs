@@ -56,7 +56,6 @@ impl From<CanonicalError> for CardError {
 }
 
 /// THE PINNED FINGERPRINT: a hash of the canonical WHOLE card, signatures included.
-
 pub fn fingerprint(card: &Value) -> Result<String, CardError> {
     if !card.is_object() {
         return Err(CardError::NotAnObject);
@@ -65,7 +64,6 @@ pub fn fingerprint(card: &Value) -> Result<String, CardError> {
 }
 
 /// THE JWS PAYLOAD: the canonical card with `signatures` removed, because a signature cannot cover
-
 pub fn signing_payload(card: &Value) -> Result<String, CardError> {
     let mut stripped = card.clone();
     let obj = stripped.as_object_mut().ok_or(CardError::NotAnObject)?;
@@ -134,7 +132,6 @@ const SCHEME: Message = &[
     ("mtlsSecurityScheme", Member::Of(DESCRIBED)),
 ];
 /// `APIKeySecurityScheme`, `OpenIdConnectSecurityScheme`, `MutualTlsSecurityScheme`: only
-
 const DESCRIBED: Message = &[("description", Member::Implicit)];
 /// `HTTPAuthSecurityScheme`.
 const HTTP_AUTH: Message = &[
@@ -222,7 +219,6 @@ fn omit_defaults(v: &mut Value, message: Message) {
 }
 
 /// The capability set the plane-neutral machine compares: skill id to a digest of that skill's
-
 pub fn skill_digests(card: &Value) -> Result<BTreeMap<String, String>, CardError> {
     let skills = match card
         .as_object()

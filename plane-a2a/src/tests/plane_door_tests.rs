@@ -25,7 +25,6 @@ fn body_of(answer: PieceAnswer) -> (u32, Value) {
 }
 
 /// On the HTTP+JSON line a relayed answer leaves as its bare `result` (A2A section 11.3), and a
-
 #[test]
 fn the_target_line_answers_the_bare_result_and_an_aip193_refusal() {
     let task =
@@ -43,7 +42,6 @@ fn the_target_line_answers_the_bare_result_and_an_aip193_refusal() {
 }
 
 /// On the JSON-RPC line the answer is the relay's, byte for byte; and a piece that is not the
-
 #[test]
 fn the_document_line_and_a_partial_answer_are_left_alone() {
     let ok = json!({ "jsonrpc": "2.0", "id": 7, "result": { "kind": "task" } });
@@ -114,7 +112,6 @@ fn envelope(method: &str) -> Value {
 }
 
 /// A request whose answer is events gets an events hop about its task: the vocabulary's
-
 #[test]
 fn a_request_whose_answer_is_events_gets_an_events_hop() {
     for method in ["message/stream", "tasks/resubscribe"] {
@@ -168,7 +165,6 @@ fn a_request_whose_answer_is_events_gets_an_events_hop() {
 }
 
 /// THE ARRIVAL'S REQUEST IS READ ONCE AND NEVER COPIED: a hop takes the envelope the arrival was
-
 #[test]
 fn a_hop_takes_the_request_and_no_hop_leaves_it() {
     let mut sent = Some(envelope("message/send"));
@@ -185,7 +181,6 @@ fn a_hop_takes_the_request_and_no_hop_leaves_it() {
 }
 
 /// A BLANK `a2a-version` ON THE gRPC LINE NAMES NO VERSION: the line's own (`1.0`) stands, as for
-
 #[test]
 fn a_blank_a2a_version_on_the_grpc_line_reads_as_the_lines_own_version() {
     use crate::agent_arrival::{decide_and_read, H_VERSION};
@@ -208,7 +203,6 @@ fn a_blank_a2a_version_on_the_grpc_line_reads_as_the_lines_own_version() {
 }
 
 /// Streamed hops declare streaming and the 600-second stream ceiling.
-
 #[test]
 fn a_streamed_hop_states_a_stream_and_the_tail_predevs_600_second_ceiling() {
     assert_eq!(crate::statement::TAIL.stream_ceiling_secs, 600);
@@ -237,7 +231,6 @@ fn a_streamed_hop_states_a_stream_and_the_tail_predevs_600_second_ceiling() {
 }
 
 /// The hook projection is the engine gate's: the method as the tool and `params` verbatim as the
-
 #[test]
 fn the_hook_projection_is_the_method_and_its_params() {
     let send = br#"{"jsonrpc":"2.0","id":7,"method":"message/send","params":{"message":{"parts":[{"kind":"text","text":"hi"}]}}}"#;
@@ -256,7 +249,6 @@ fn the_hook_projection_is_the_method_and_its_params() {
 }
 
 /// THE INVOKE REWRITE CONTRACT, as the served engine applied a `prompt: rw` hook's reply to an A2A
-
 #[test]
 fn a_rewrite_replaces_the_params_by_the_invoke_contract() {
     let params = |reply: Value| rewritten_params(&serde_json::to_vec(&reply).unwrap());
@@ -304,7 +296,6 @@ fn a_rewrite_replaces_the_params_by_the_invoke_contract() {
 }
 
 /// On the HTTP+JSON line the body the kernel keeps is the params where the line's body is the
-
 #[test]
 fn the_target_line_keeps_the_rewritten_params_as_its_body() {
     let route = |verb: &str, suffix: &str| {
@@ -411,7 +402,6 @@ fn an_abandoned_look_releases_its_flight_and_wakes_every_waiter_at_once() {
 }
 
 /// Ported from busbar-a2a ingress_tests.rs::a_panicking_reverify_reraises_and_latches_unreachable_never_swallowed.
-
 #[test]
 fn a_panicking_look_surfaces_and_releases_its_flight_never_swallowed() {
     let flights = Flights::default();
@@ -442,7 +432,6 @@ fn a_panicking_look_surfaces_and_releases_its_flight_never_swallowed() {
 }
 
 /// A LOOK THAT RETURNS KEEPS ITS FLIGHT for the caller to land: the unwinding guard is disarmed,
-
 #[test]
 fn a_returning_look_keeps_its_flight_for_the_caller_to_land() {
     let flights = Flights::default();
@@ -465,7 +454,6 @@ fn a_returning_look_keeps_its_flight_for_the_caller_to_land() {
 }
 
 /// THE gRPC LINE'S OUTBOX: a whole answer is the rpc's one message at `OK` (no media type, no
-
 #[test]
 fn the_framed_line_answers_messages_and_statuses() {
     use crate::framed::{Rpc, DETAILS_FIELD};
@@ -548,7 +536,6 @@ fn the_framed_line_answers_messages_and_statuses() {
 }
 
 /// A STATUS ON THE gRPC LINE CLOSES AS ITS BLOCK, in the bytes and order predev's gRPC line closed a
-
 #[test]
 fn a_framed_status_closes_as_its_block() {
     use crate::framed::{status_block, FramedReply};
@@ -581,7 +568,6 @@ fn a_framed_status_closes_as_its_block() {
 }
 
 /// THE gRPC LINE'S BOUNDARIES (SEAM-4l): a whole OK answer is one message, a status's text is no
-
 #[test]
 fn the_framed_line_marks_its_messages_and_a_late_failure() {
     use crate::framed::Rpc;
@@ -626,7 +612,6 @@ fn the_framed_line_marks_its_messages_and_a_late_failure() {
 }
 
 /// A long-running task streams many events and re-records the same pair each time. Re-recording a
-
 #[test]
 fn re_recording_the_same_pair_does_not_churn_the_map() {
     let map = BackendIds::default();
@@ -651,7 +636,6 @@ fn re_recording_the_same_pair_does_not_churn_the_map() {
 }
 
 /// THE FAR END'S TASK IDS ARE FORGOTTEN OLDEST FIRST, never by how the callers' references sort:
-
 #[test]
 fn the_far_end_task_ids_are_forgotten_oldest_first_never_by_the_callers_name() {
     let map = BackendIds::default();
@@ -673,7 +657,6 @@ fn the_far_end_task_ids_are_forgotten_oldest_first_never_by_the_callers_name() {
 }
 
 /// A COMMITTED REWRITE BUSBAR CANNOT READ BACK REFUSES THE SUBMISSION — it does not fall back to the
-
 #[test]
 fn a_committed_rewrite_busbar_cannot_read_back_is_refused_rather_than_silently_undone() {
     let ok = rewritten_params(
@@ -708,7 +691,6 @@ fn a_committed_rewrite_busbar_cannot_read_back_is_refused_rather_than_silently_u
 }
 
 /// THE REFUSAL AN A2A CLIENT ACTUALLY READS (predev
-
 #[test]
 fn the_unreadable_rewrite_refusal_is_a_conformant_a2a_internal_error() {
     let id = json!("req-7");
@@ -743,7 +725,6 @@ fn the_unreadable_rewrite_refusal_is_a_conformant_a2a_internal_error() {
 }
 
 /// A NOTIFICATION is the plane's own to acknowledge wherever it arrives, never relayed: `202` and
-
 #[test]
 fn a_notification_is_acknowledged_here_with_a_202_and_no_body() {
     let notice = AgentDisposition::Notice {
@@ -762,7 +743,6 @@ fn a_notification_is_acknowledged_here_with_a_202_and_no_body() {
     assert_eq!(crate::agent_arrival::STATUS_ACCEPTED, 202);
 }
 /// `jsonrpc_client_issues_get_extended_agent_card`: a caller that addresses ONE agent and asks for
-
 #[test]
 fn an_addressed_extended_card_read_is_relayed_as_a_task_less_hop() {
     let row = crate::ops::row_for("GetExtendedAgentCard").expect("a row");
@@ -802,14 +782,12 @@ fn an_addressed_extended_card_read_is_relayed_as_a_task_less_hop() {
 }
 
 /// THE VERSION THE STATEMENT NAMES IS THE CRATE'S: [`VERSION`] is written out (the purity rules
-
 #[test]
 fn the_statement_names_the_crates_version() {
     assert_eq!(VERSION, env!("CARGO_PKG_VERSION"));
 }
 
 /// G1-22: THE PARTS A KEY'S EARLIER VALUES RETIRED DO NOT ACCUMULATE: an agent whose over-ceiling
-
 #[test]
 fn the_tombstones_of_a_changing_split_record_stay_bounded() {
     let plane = A2aDoor::default();
@@ -836,7 +814,6 @@ fn the_tombstones_of_a_changing_split_record_stay_bounded() {
 }
 
 /// G1-25: AN APPROVAL MADE BETWEEN A REFRESH AND ITS PUBLICATION IS KEPT: the trust reset the
-
 #[test]
 fn an_approval_made_while_a_refresh_publishes_is_kept() {
     let section =
@@ -874,7 +851,6 @@ fn diags_of<R>(f: impl FnOnce() -> R) -> (R, Vec<String>) {
 }
 
 /// A rewrite yielding no object leaves the original request intact and reports that it was not applied.
-
 #[test]
 fn a_rewrite_that_yields_no_object_is_not_applied_and_says_so() {
     let reply = br#"{"messages": [{"role": "user", "content": "[REDACTED]"}]}"#;
@@ -890,7 +866,6 @@ fn a_rewrite_that_yields_no_object_is_not_applied_and_says_so() {
 }
 
 /// G1-54: A COMMITTED REWRITE BUSBAR CANNOT READ BACK IS REFUSED WITH ITS REASON NAMED: the caller
-
 #[test]
 fn an_unreadable_rewrite_names_its_reason() {
     let (read, lines) = diags_of(|| rewritten_params(b"not json"));
@@ -912,7 +887,6 @@ fn an_unreadable_rewrite_names_its_reason() {
 }
 
 /// G1-2: THE FAR END'S TASK ID IS UNTRUSTED INPUT, BOUNDED IN BYTES as the map is in entries: an id
-
 #[test]
 fn a_far_end_task_id_past_the_byte_bound_is_not_held() {
     let map = BackendIds::default();

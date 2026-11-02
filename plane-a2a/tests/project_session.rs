@@ -19,7 +19,6 @@ fn ops() -> &'static Ops {
 }
 
 /// One `project` of `body` arriving on claim `claim` at `target`, through the door's own entry,
-
 fn project_session(claim: usize, target: &str, body: &[u8]) -> (Outcome, Option<String>) {
     let (outcome, session, _) = project_view(claim, target, body);
     (outcome, session)
@@ -139,7 +138,6 @@ fn claim_of(verb: &str, target: &str) -> usize {
 }
 
 /// The projected session is the message's context id.
-
 #[test]
 fn project_writes_the_messages_context_id_as_the_session() {
     let document = claim_of("POST", "/a2a/agents/{agent_id}");

@@ -82,7 +82,6 @@ fn the_tail_passes_the_dispatchers_check() {
 }
 
 /// RED before ruling B1: the door declared no chain, so the host framed none. The task-event kind
-
 #[test]
 fn the_tail_declares_the_task_chain() {
     assert_eq!(TAIL.record_chains_len(), 1);
@@ -160,7 +159,6 @@ fn a_generation_with_no_readable_public_base_claims_nothing() {
 }
 
 /// Ported from busbar-a2a plane_tests.rs::a_section_carrying_only_the_reserved_keys_is_still_no_plane
-
 #[test]
 fn a_section_carrying_only_the_reserved_keys_states_no_route_and_no_card() {
     use busbar_contract::abi::plane::ROUTE_PUBLIC;
@@ -221,7 +219,6 @@ fn exactly_the_discovery_documents_are_open_claims() {
 }
 
 /// The push callback is the plane's only public route, served through `serve`.
-
 #[test]
 fn the_push_callback_is_a_public_route_and_no_claim() {
     use busbar_contract::abi::plane::{ROUTE_CARRIES_OWN_TOKEN, ROUTE_PUBLIC};
@@ -257,7 +254,6 @@ fn the_openapi_fragment_keys_its_paths_under_the_prefix_given() {
 }
 
 /// Each trust verb's OpenAPI `200` response names its own body schema.
-
 #[test]
 fn the_admin_openapi_blob_states_every_body_its_verbs_name() {
     fn refs(v: &serde_json::Value, out: &mut Vec<String>) {
@@ -318,7 +314,6 @@ fn a_valid_section_reads_and_a_bad_entry_is_refused_in_the_grammars_words() {
 }
 
 /// THE HOST'S FAILOVER POOLS at the section's reserved `pools` key (the neutral top-level `pools:`
-
 #[test]
 fn the_hosts_failover_pools_are_lifted_off_the_section_in_declared_order() {
     let (b, a) = (
@@ -379,7 +374,6 @@ fn every_route_is_one_line_of_the_dialect_in_mount_order() {
 }
 
 /// THE DEALT VALIDATE BLOB: the boot's deal hands `{agents: <section>}`, which is unwrapped to the
-
 #[test]
 fn a_dealt_validate_blob_is_unwrapped_to_its_section() {
     let dealt =
@@ -396,7 +390,6 @@ fn a_dealt_validate_blob_is_unwrapped_to_its_section() {
 }
 
 /// Two constants, and both are wire-visible: the credential kind appears on a stored credential row
-
 #[test]
 fn the_credential_kind_and_the_scope_kind_are_the_spellings_the_rest_of_the_tree_uses() {
     assert_eq!(
@@ -407,7 +400,6 @@ fn the_credential_kind_and_the_scope_kind_are_the_spellings_the_rest_of_the_tree
     assert_eq!(s(TAIL.scope), "agent");
 }
 /// THE AGENT FEE (the engine's `agents.fees`): the door counts `per_request` and only it, so the
-
 #[test]
 fn the_door_counts_the_per_request_fee_and_never_a_per_session_one() {
     let same = |a: AbiStr, b: &str| a.ptr() == b.as_ptr() && a.len() == b.len();
@@ -421,7 +413,6 @@ fn the_door_counts_the_per_request_fee_and_never_a_per_session_one() {
     ));
 }
 /// Ported from `busbar-a2a` `creds_tests::the_callers_credential_has_no_path_to_a_delegate`, its
-
 #[test]
 fn the_callers_credential_has_no_path_to_a_delegate() {
     let def = |extra: serde_json::Value| -> crate::a2a::config::AgentDefCfg {
@@ -463,7 +454,6 @@ fn the_callers_credential_has_no_path_to_a_delegate() {
     assert!(err.contains("placement.header"), "{err}");
 }
 /// RED: the grammar's object spelling of a named-header placement, `placement: {header: <name>}`
-
 #[test]
 fn a_named_header_placement_reads_through_the_section() {
     use crate::a2a::creds::CredentialPlacement;
@@ -590,7 +580,6 @@ fn the_plane_declares_its_published_identity_and_its_claims_speak_its_wire_forma
 }
 
 /// The Statement declares counters for the drop-oldest push queue.
-
 #[test]
 fn the_statement_declares_the_push_queue_counters() {
     let st = crate::plane_door::STATEMENT;
@@ -611,7 +600,6 @@ fn the_statement_declares_the_push_queue_counters() {
 }
 
 /// Every configured agent claims its endpoint with a trailing separator.
-
 #[test]
 fn each_fronted_agent_claims_its_endpoint_with_a_trailing_separator() {
     let spec = agents_snapshot_spec(Some(&endpoint("gw", "")), &["vendor", "other"]);

@@ -17,7 +17,6 @@ mod task_sweep_gate;
 mod task_conditional_publication;
 
 /// SUBMIT `row` for the caller: the task, and its chain's genesis event, stamped with the row's
-
 pub(crate) fn submit(
     rec: &mut dyn Records,
     at: &Stamp<'_>,
@@ -40,7 +39,6 @@ pub(crate) fn submit(
 }
 
 /// DISPATCH: record the agent the task went to, with a `task.delegated` event.
-
 pub(crate) fn dispatch(
     rec: &mut dyn Records,
     at: &Stamp<'_>,
@@ -58,7 +56,6 @@ pub(crate) fn dispatch(
 }
 
 /// ADVANCE the artifact cursor to `cursor`, monotonic, with a `task.artifact` event; nothing when it
-
 pub(crate) fn advance_cursor(
     rec: &mut dyn Records,
     at: &Stamp<'_>,
@@ -97,7 +94,6 @@ fn framed(out: &mut Vec<u8>, bytes: &[u8]) {
 }
 
 /// The host's digest of event `e` on the chain `scope`: the length-prefixed prelude
-
 pub(crate) fn host_digest(scope: &str, e: &TaskEventRow) -> String {
     let mut input = Vec::new();
     framed(&mut input, e.prev_hash.as_bytes());
@@ -127,7 +123,6 @@ fn chain_of(key: &str) -> Option<(String, u64)> {
 
 impl Book {
     /// Apply an answer's writes: a put, or an empty value's tombstone; on the chained kind, an
-
     pub(crate) fn apply(&mut self, writes: &[Write]) {
         for w in writes {
             if w.kind == KIND_TASK_EVENT {
@@ -144,7 +139,6 @@ impl Book {
     }
 
     /// THE HOST'S APPEND to the chain `scope` (`<caller>/<task>`): the next sequence, the tail's
-
     fn chain(&mut self, scope: &str, own: &[u8]) {
         let held: Vec<(String, String)> = self
             .rows
@@ -200,7 +194,6 @@ impl Book {
     }
 
     /// THE HOST'S VERIFIED READ of the chains under `prefix`: each chain's records, and ahead of
-
     fn chains(&self, prefix: &str) -> Vec<(String, Vec<u8>)> {
         let mut by_chain: BTreeMap<String, Vec<(String, TaskEventRow)>> = BTreeMap::new();
         for at in self.rows.keys() {
@@ -381,7 +374,6 @@ fn event(book: &Book, caller: &str, task: &str, seq: u64) -> TaskEventRow {
 }
 
 /// A real inbound task leaves a chain that RECOMPUTES from the persisted rows: opening a relayed
-
 #[test]
 fn an_inbound_task_leaves_a_verifying_chain_in_the_store_the_front_door_wrote_it_to() {
     let mut book = Book::default();
@@ -443,7 +435,6 @@ fn an_inbound_task_leaves_a_verifying_chain_in_the_store_the_front_door_wrote_it
 }
 
 /// A task is held under its caller's prefix: its caller reads it back, another caller reads the same
-
 #[test]
 fn a_task_is_read_back_by_its_caller_only() {
     let mut book = Book::default();
@@ -471,7 +462,6 @@ fn a_task_is_read_back_by_its_caller_only() {
 }
 
 /// A change chains its event onto the tail the task record carries, under the digest, and a second
-
 #[test]
 fn a_change_chains_its_event_onto_the_tail() {
     let mut book = Book::default();
@@ -520,7 +510,6 @@ fn a_change_chains_its_event_onto_the_tail() {
 }
 
 /// RACE-SAFE: a writer that loses its sequence to another writer re-reads and takes the next one,
-
 #[test]
 fn a_change_that_loses_its_sequence_takes_the_next() {
     let mut book = Book::default();
@@ -618,7 +607,6 @@ fn a_terminal_task_past_its_window_reads_as_absent() {
 }
 
 /// THE SWEEP: an expired terminal task goes as tombstones (its row, its events, its push config),
-
 #[test]
 fn the_sweep_tombstones_the_expired_and_leaves_the_idle_active() {
     let mut book = Book::default();
@@ -668,7 +656,6 @@ fn the_sweep_tombstones_the_expired_and_leaves_the_idle_active() {
 }
 
 /// Retention sweeping preserves active tasks and their push tokens.
-
 #[test]
 fn an_idle_active_task_survives_the_sweep_with_its_push_token() {
     let mut book = Book::default();
@@ -697,7 +684,6 @@ fn an_idle_active_task_survives_the_sweep_with_its_push_token() {
 }
 
 /// THE CAP: while MAX_RETAINED or more TERMINAL tasks are held, the oldest go; active tasks are
-
 #[test]
 fn the_sweep_holds_the_cap_with_terminal_tasks_only() {
     let mut book = Book::default();
@@ -744,7 +730,6 @@ fn moved_to(book: &mut Book, task: &str, to: TaskState, now: u64) {
 }
 
 /// Ported from busbar-a2a a2a/tests/taskstore_tests.rs::an_interrupt_resumes_after_a_restart_and_its_chain_continues.
-
 #[test]
 fn an_interrupt_resumes_after_a_restart_and_its_chain_continues() {
     let mut book = Book::default();
@@ -892,7 +877,6 @@ fn an_illegal_transition_writes_neither_a_row_nor_an_event() {
 }
 
 /// "Process 1" (the engine's `process_one`): ALICE's `t-work` taken to `working`; BOB's
-
 fn process_one() -> Book {
     let mut book = Book::default();
     submitted(&mut book, ALICE, "t-work", 100);
@@ -922,7 +906,6 @@ fn process_one() -> Book {
 }
 
 /// Ported from busbar-a2a a2a/tests/taskstore_tests.rs::the_ram_default_loses_every_in_flight_task_and_the_registry_says_so.
-
 #[test]
 fn the_ram_default_loses_every_in_flight_task_and_the_registry_says_so() {
     let mut process_1 = process_one();
@@ -945,7 +928,6 @@ fn the_ram_default_loses_every_in_flight_task_and_the_registry_says_so() {
 }
 
 /// Ported from busbar-a2a a2a/tests/taskstore_tests.rs::a_tampered_chain_is_reported_on_restore_and_the_task_is_still_restored.
-
 #[test]
 fn a_tampered_chain_is_reported_on_restore_and_the_task_is_still_restored() {
     let mut book = process_one();
@@ -971,7 +953,6 @@ fn a_tampered_chain_is_reported_on_restore_and_the_task_is_still_restored() {
 }
 
 /// ENTRIES CUT FROM THE END ARE CAUGHT. Dropping a chain's last events leaves every remaining link
-
 #[test]
 fn dropping_the_last_event_is_a_reported_break() {
     let mut book = process_one();
@@ -999,7 +980,6 @@ fn dropping_the_last_event_is_a_reported_break() {
 }
 
 /// An in-flight task whose WHOLE chain is gone is a cut chain too: its row committed events the
-
 #[test]
 fn dropping_every_event_of_an_in_flight_task_is_a_reported_break() {
     let mut book = process_one();
@@ -1020,7 +1000,6 @@ fn dropping_every_event_of_an_in_flight_task_is_a_reported_break() {
 }
 
 /// An untouched store still restores clean: a chain whose last event is the one its task row
-
 #[test]
 fn a_whole_chain_is_no_break_whatever_its_neighbours() {
     let mut book = process_one();
@@ -1033,7 +1012,6 @@ fn a_whole_chain_is_no_break_whatever_its_neighbours() {
 }
 
 /// Ported from busbar-a2a a2a/tests/taskstore_tests.rs::a_terminal_task_is_counted_on_restore_and_deliberately_not_loaded.
-
 #[test]
 fn a_terminal_task_is_counted_on_restore_and_deliberately_not_loaded() {
     let mut book = process_one();
@@ -1052,7 +1030,6 @@ fn a_terminal_task_is_counted_on_restore_and_deliberately_not_loaded() {
 }
 
 /// Ported from busbar-a2a a2a/tests/taskstore_tests.rs::an_unreadable_row_is_counted_rather_than_silently_dropped.
-
 #[test]
 fn an_unreadable_row_is_counted_rather_than_silently_dropped() {
     let mut book = process_one();
@@ -1065,7 +1042,6 @@ fn an_unreadable_row_is_counted_rather_than_silently_dropped() {
 }
 
 /// Ported from busbar-a2a a2a/tests/chain_golden.rs::one_undecodable_record_does_not_drop_the_others_on_restore
-
 #[test]
 fn one_undecodable_task_row_does_not_drop_the_others_on_restore() {
     let mut book = process_one();
@@ -1080,7 +1056,6 @@ fn one_undecodable_task_row_does_not_drop_the_others_on_restore() {
 }
 
 /// Ported from busbar-a2a a2a/tests/front_door_chain_tests.rs::editing_a_persisted_event_breaks_the_chain_the_front_door_wrote.
-
 #[test]
 fn editing_a_persisted_event_breaks_the_chain_the_front_door_wrote() {
     let mut book = Book::default();
@@ -1111,7 +1086,6 @@ fn editing_a_persisted_event_breaks_the_chain_the_front_door_wrote() {
 }
 
 /// The sweep drops an expired task's chain whole: one empty append on the chain's scope, never a
-
 #[test]
 fn the_sweep_drops_an_expired_tasks_chain_whole() {
     let mut book = Book::default();
@@ -1138,7 +1112,6 @@ fn the_sweep_drops_an_expired_tasks_chain_whole() {
 }
 
 /// B1 RULING 1 (coordinator 2026-10-07): MOVING BYTES BETWEEN CONTEXT, PRINCIPAL AND AGENT BREAKS
-
 #[test]
 fn moving_bytes_between_context_principal_and_agent_breaks_verification() {
     let at = |context: &str, principal: &str, agent: &str| TaskEventRow {
@@ -1184,7 +1157,6 @@ fn moving_bytes_between_context_principal_and_agent_breaks_verification() {
 }
 
 /// Task record-chain scopes use the caller's opaque reference and task identity without exposing the principal or key id.
-
 #[test]
 fn the_chain_scope_is_the_callers_opaque_reference_and_the_task() {
     const PRINCIPAL: &str = "acct:alice@example.com";
@@ -1236,7 +1208,6 @@ fn the_chain_scope_is_the_callers_opaque_reference_and_the_task() {
 }
 
 /// THE TASK KIND IS TERMINAL-ONLY, and the plane's records layer is what keeps it so. At f608d7d5
-
 #[test]
 fn the_records_layer_declares_the_task_kind_as_terminal_only() {
     use crate::records::{retention_of, Retention, HELD_KINDS};
@@ -1316,7 +1287,6 @@ impl Records for Listed<'_> {
 }
 
 /// THE RESTORE READS ONLY THE IN-FLIGHT TASKS' CHAINS: each one listed under its own scope, and a
-
 #[test]
 fn the_restore_reads_only_the_in_flight_tasks_chains() {
     let mut book = process_one();

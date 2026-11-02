@@ -7,7 +7,6 @@ use super::*;
 use busbar_contract::abi::sdk::conn::ConnFailure;
 
 /// A warn capture: every WARN event's fields, rendered, sent down a channel (the door holds no
-
 struct WarnCapture(std::sync::mpsc::Sender<String>);
 
 struct Render<'a>(&'a mut String);
@@ -38,7 +37,6 @@ impl tracing::Subscriber for WarnCapture {
 }
 
 /// What `answer` lands as for the agent `planner`, and every WARN line it logged. Landed twice:
-
 fn landing(
     answer: impl Fn() -> Result<busbar_contract::abi::sdk::exchange::ExchangeResponse, ConnFailure>,
 ) -> (Landed, Vec<String>) {
@@ -52,7 +50,6 @@ fn landing(
 }
 
 /// A request the host refused for an unavailable credential lands [`Unleased`] and is logged with
-
 #[test]
 fn an_unavailable_credential_lands_unleased_and_is_logged_as_the_engine_logged_it() {
     let banner = crate::diagnostics::A2A_OUTBOUND_CRED_UNLEASED
@@ -113,7 +110,6 @@ fn read_flight() -> Flight {
 }
 
 /// An UNLEASED read ends the mirror: no re-arm is issued, as the engine's `mirror_push_config`
-
 #[test]
 fn an_unleased_read_ends_the_mirror_without_a_rearm() {
     let mut unleased = read_flight();

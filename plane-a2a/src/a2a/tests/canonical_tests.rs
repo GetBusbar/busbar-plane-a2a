@@ -11,7 +11,6 @@ fn c(v: &Value) -> String {
 }
 
 /// RFC 8785 section 3.2.3: members are sorted on the UTF-16 code units of their NAMES, and the
-
 #[test]
 fn object_members_sort_by_name() {
     let v = json!({
@@ -48,7 +47,6 @@ fn object_members_sort_by_name() {
 }
 
 /// UTF-16 order is not code-point order, and the disagreement is the reason this is not left to the
-
 #[test]
 fn a_supplementary_name_sorts_below_a_high_bmp_name() {
     let out = c(&json!({ "\u{fffd}": 1, "\u{10000}": 2 }));
@@ -61,7 +59,6 @@ fn a_supplementary_name_sorts_below_a_high_bmp_name() {
 }
 
 /// RFC 8785 section 3.2.2.2: the two-character escapes are used where they exist, `\u` only below
-
 #[test]
 fn strings_use_the_shortest_escape_and_nothing_more() {
     assert_eq!(
@@ -74,7 +71,6 @@ fn strings_use_the_shortest_escape_and_nothing_more() {
 }
 
 /// RFC 8785 section 3.2.2.3 defers to ECMAScript `Number.prototype.toString`, where a whole number
-
 #[allow(clippy::excessive_precision)]
 #[test]
 fn numbers_print_as_ecmascript() {
@@ -92,7 +88,6 @@ fn numbers_print_as_ecmascript() {
 }
 
 /// RFC 8785 section 3.2.2.3: a number is an IEEE-754 double whatever its spelling, so an integer
-
 #[test]
 fn a_large_integer_canonicalizes_as_its_double() {
     assert_eq!(c(&json!(9007199254740992u64)), "9007199254740992");
@@ -105,7 +100,6 @@ fn a_large_integer_canonicalizes_as_its_double() {
 }
 
 /// RFC 8785 Appendix B, the IEEE-754 to ECMAScript table, one row per vector. The hex is the double's
-
 #[test]
 fn rfc8785_appendix_b_number_vectors() {
     let rows: &[(u64, &str)] = &[
@@ -142,7 +136,6 @@ fn rfc8785_appendix_b_number_vectors() {
 }
 
 /// The same table reached through the PARSER, since that is the path a card takes: text to `Value`
-
 #[test]
 fn parsed_number_spellings_canonicalize_as_doubles() {
     for (text, want) in [
@@ -161,7 +154,6 @@ fn parsed_number_spellings_canonicalize_as_doubles() {
 }
 
 /// Whitespace is not canonical, and neither is anything decorative. The canonical form of a
-
 #[test]
 fn two_spellings_of_one_document_canonicalize_identically() {
     let pretty: Value =
@@ -173,7 +165,6 @@ fn two_spellings_of_one_document_canonicalize_identically() {
 }
 
 /// ARRAY order is data, not presentation, so it is preserved exactly. Sorting an array would make
-
 #[test]
 fn array_order_is_preserved() {
     assert_eq!(c(&json!([3, 1, 2])), "[3,1,2]");
@@ -181,7 +172,6 @@ fn array_order_is_preserved() {
 }
 
 /// NON-FINITE NUMBERS ARE UNREPRESENTABLE BEFORE THEY REACH THE CANONICALIZER — which is the honest
-
 #[test]
 fn a_non_finite_number_cannot_be_built_into_a_value_at_all() {
     assert!(serde_json::Number::from_f64(f64::NAN).is_none());
@@ -209,7 +199,6 @@ fn a_non_finite_number_cannot_be_built_into_a_value_at_all() {
 }
 
 /// Empty containers still canonicalize, and an absent member is not an empty one. A card that
-
 #[test]
 fn empty_containers_are_distinct_from_absent_ones() {
     assert_eq!(c(&json!({})), "{}");

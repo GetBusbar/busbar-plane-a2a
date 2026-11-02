@@ -468,7 +468,6 @@ const A2A_PUSH_REARM_FAILED: Diagnostic = Diagnostic {
 };
 
 /// THE CODES THE PLANE'S PREDECESSOR REGISTERED AND THE PLANE NO LONGER RAISES, ascending by code:
-
 const RESERVED: &[&Diagnostic] = &[
     &A2A_EXTENDED_CARD_AGENT_OMITTED,
     &A2A_PUSH_CONFIG_UNRECORDED,
@@ -499,7 +498,6 @@ const RESERVED: &[&Diagnostic] = &[
 ];
 
 /// THE CATALOG IS NOT EMPTY, AND NOT ENTIRELY RETIRED.
-
 #[test]
 fn the_catalog_is_not_empty() {
     assert!(
@@ -577,7 +575,6 @@ fn slugs_are_unique_and_kebab_case() {
 }
 
 /// THE PLANE'S `declares.json` STATES ITS CATALOGUE: the `diagnostics` the door's Statement carries
-
 #[test]
 fn the_declares_file_states_the_catalogue() {
     let declared: serde_json::Value =

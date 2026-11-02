@@ -4,7 +4,6 @@ use crate::agent_arrival::{self, AgentDisposition};
 use crate::ops;
 
 /// The rig's own vocabulary table, read out of the file the rig imports it from.
-
 fn rig_vocabulary(table: &str) -> Vec<(String, String)> {
     let rig =
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../testing/a2a-supplement");
@@ -38,7 +37,6 @@ fn request(id: &str, method: &str) -> Vec<u8> {
 }
 
 /// Drive one body through the door's arrival (the JSON-RPC line, no head fields) and hand back the
-
 fn decode(body: &[u8]) -> Result<(ops::MethodRow, serde_json::Value), String> {
     match agent_arrival::decide_and_read(body, |_| None).0 {
         AgentDisposition::Request { row, id, .. } => Ok((*row, id)),
@@ -76,7 +74,6 @@ fn every_method_of_the_earlier_vocabulary_decodes() {
 }
 
 /// The two vocabularies agree slot for slot on the class the unit is.
-
 #[test]
 fn the_two_vocabularies_agree_slot_for_slot() {
     let later = rig_vocabulary("METHODS_1_0");

@@ -6,7 +6,6 @@
 use super::*;
 
 /// The task rows round-trip through serde unchanged. They cross a plugin ABI, so a field whose
-
 #[test]
 fn task_rows_round_trip_through_the_store_seam_encoding() {
     let task = TaskRow {

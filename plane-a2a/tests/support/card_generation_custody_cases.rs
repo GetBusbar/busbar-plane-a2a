@@ -353,7 +353,6 @@ fn a_refresh_inside_the_preview_verdict_cannot_publish_stale_card_records() {
 }
 
 /// G1-48: a wake only permits replay. The actual sighting answer must land successfully before
-
 #[test]
 fn a_failed_sighting_completion_cannot_publish_or_approve_the_card() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);

@@ -25,11 +25,9 @@ use crate::tasks::{self, Halt, Records, Stamp, Write};
 use crate::TaskRow;
 
 /// The jitter byte that moves a retry's wait by nothing: used when the host lends no random byte
-
 const NO_JITTER: u8 = 128;
 
 /// QUEUE the notification `row`'s move owes: to `config` (the push_config record of the task) when
-
 pub(crate) fn captured(row: &TaskRow, config: Option<&PushConfig>) -> Option<Delivery> {
     let mut task = Task::from_row(row).ok()?;
     let Some(cfg) = config else {
@@ -61,7 +59,6 @@ pub fn queue(deliveries: &Deliveries, row: &TaskRow, config: Option<&PushConfig>
 }
 
 /// RELEASE busbar's own callback token for `row`'s task once the move has ENDED it, whichever way
-
 pub fn ended(tokens: &Tokens, row: &TaskRow) {
     if Task::from_row(row).is_ok_and(|t| t.state.is_terminal()) {
         tokens.forget(&row.task_id);
@@ -69,7 +66,6 @@ pub fn ended(tokens: &Tokens, row: &TaskRow) {
 }
 
 /// Forget what every push config `writes` deletes for `caller` (the tombstone of its task's config
-
 pub fn forget_deleted(deliveries: &Deliveries, writes: &[Write]) {
     for w in writes
         .iter()
@@ -162,7 +158,6 @@ pub(crate) fn settle_publications<T: busbar_contract::abi::sdk::door::AbiOut>(
 }
 
 /// [`queue`] for a relayed piece of `caller`'s that moved `row`: the task's push_config record read
-
 pub fn queue_moved(
     deliveries: &Deliveries,
     rec: &mut dyn Records,
@@ -180,7 +175,6 @@ pub fn queue_moved(
 }
 
 /// Preserve a move's notification intent when its config could not be read. The existing
-
 pub(crate) fn defer(deliveries: &Deliveries, row: &TaskRow) {
     deliveries.enqueue(deferred(row), 0);
     busbar_contract::diag_warn!(
@@ -204,7 +198,6 @@ pub(crate) fn deferred(row: &TaskRow) -> Delivery {
 }
 
 /// File `owed` on the chains it names, for `caller`, stamped `now_s`; the writes go to `out`. One
-
 #[cfg(test)]
 pub fn file_owed(
     rec: &mut dyn Records,
@@ -227,7 +220,6 @@ pub fn file_owed(
 }
 
 /// The callback's conditional filing keeps ownership in the delivery book until each exact
-
 pub(crate) fn file_owed_committed(
     via: &mut crate::task_door::Via<'_>,
     journal: &crate::conditional_publication::Journal,
@@ -269,7 +261,6 @@ struct Flight {
 }
 
 /// The host calls one attempt makes, in their one order: the random byte (handle `0`), the judge
-
 struct Calls<'h> {
     host: &'h StaticHost,
     services: StaticServices,
@@ -294,7 +285,6 @@ impl Calls<'_> {
 }
 
 /// WHAT ONE ATTEMPT ASKS OF THE HOST after its jitter byte, in its one order: the destination judge
-
 type Judgement = (u64, String);
 
 trait Line {
@@ -302,15 +292,12 @@ trait Line {
         Err(Halt::Failed("config service unavailable".into()))
     }
     /// The destination judge over `url`: its `DEST_*` verdict and the set a dial must land within;
-
     fn judge(&mut self, url: &str) -> Poll<Option<Judgement>>;
     /// One exchange of `ex` to `url`: the receiver's status; `None` when the connection or the
-
     fn send(&mut self, ex: &mut Exchange, url: &str) -> Poll<Option<u16>>;
     /// The jitter byte of a retry's wait.
     fn jitter(&mut self) -> u8;
     /// GIVE UP the connection of an attempt abandoned at its timeout: the host closes `stream` (when
-
     fn abandon(&mut self, stream: Option<u64>);
 }
 
@@ -362,7 +349,6 @@ impl Line for Calls<'_> {
 }
 
 /// One attempt of `flight` over `line`: its end once known. The destination is judged afresh on
-
 fn attempt(line: &mut dyn Line, deliveries: &Deliveries, flight: &mut Flight) -> Poll<Attempted> {
     let url = flight.delivery.url.clone();
     let (verdict, within) = match line.judge(&url) {
@@ -422,11 +408,9 @@ impl Attempting {
 }
 
 /// The time a whole delivery attempt may take, from the tick that began it: judge, open, write and
-
 const DELIVERY_TIMEOUT_NS: u64 = crate::push::ATTEMPT_TIMEOUT_MS * 1_000_000;
 
 /// When the lifecycle tick is next wanted: while an attempt is held, ONLY the moment it is
-
 pub(crate) fn next_tick_ns(deliveries: &Deliveries, attempting: &Attempting) -> u64 {
     match attempting.deadline_ns() {
         0 => deliveries.next_tick_ns(),
@@ -435,7 +419,6 @@ pub(crate) fn next_tick_ns(deliveries: &Deliveries, attempting: &Attempting) -> 
 }
 
 /// `tick`: ONE due notification attempted (see the module note); PENDING while its exchange is,
-
 pub(crate) fn tick_deliveries(
     plane: &A2aDoor,
     instance: &Instance<'_, A2aDoor>,
@@ -449,7 +432,6 @@ pub(crate) fn tick_deliveries(
 }
 
 /// ARM the wake of the instance's driver ticket, the one a `tick` runs on, once: a queued
-
 pub(crate) fn arm(plane: &A2aDoor, instance: &Instance<'_, A2aDoor>) {
     let ticket = instance.ticket();
     if let (Some(host), false) = (plane.host, ticket.is_none()) {
@@ -458,7 +440,6 @@ pub(crate) fn arm(plane: &A2aDoor, instance: &Instance<'_, A2aDoor>) {
 }
 
 /// `drive`: the attempt a `tick` left PENDING goes on, the wake on the driver ticket being its
-
 pub(crate) fn drive(plane: &A2aDoor, instance: &Instance<'_, A2aDoor>) -> Outcome {
     match calls_of(plane, instance) {
         Some((_, mut calls)) => drive_over(&mut calls, &plane.deliveries, &plane.attempting),
@@ -467,7 +448,6 @@ pub(crate) fn drive(plane: &A2aDoor, instance: &Instance<'_, A2aDoor>) -> Outcom
 }
 
 /// The driver ticket this op runs on and the host calls it makes, when the door has the host it
-
 fn calls_of<'p>(
     plane: &'p A2aDoor,
     instance: &Instance<'_, A2aDoor>,
@@ -542,7 +522,6 @@ fn drive_over(line: &mut dyn Line, deliveries: &Deliveries, attempting: &Attempt
 }
 
 /// One entry of `flight`'s attempt, begun at `started_ns`: held again while its exchange pends,
-
 fn advance_attempt(
     line: &mut dyn Line,
     deliveries: &Deliveries,

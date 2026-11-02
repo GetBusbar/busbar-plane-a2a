@@ -199,7 +199,6 @@ fn a_listing_moves_only_what_busbar_can_match() {
 }
 
 /// BUSBAR'S OWN CALLBACK IS READ FROM `public_url` THE ONE WAY every published URL is
-
 #[test]
 fn busbars_callback_replaces_the_public_urls_path_as_every_published_url_does() {
     assert_eq!(
@@ -217,7 +216,6 @@ fn busbars_callback_replaces_the_public_urls_path_as_every_published_url_does() 
 }
 
 /// A READ FINDS BUSBAR'S REGISTRATION BY ITS WHOLE `id`, never by a substring: `busbar-t10` is not
-
 #[test]
 fn a_read_names_busbars_config_by_its_whole_id() {
     let read = |result: Value| {

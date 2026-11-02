@@ -9,7 +9,6 @@ use busbar_contract::bounded::MAX_RECORD_BYTES;
 use crate::tasks::Write;
 
 /// What a head record's value starts with: a split value's head, never a value the plane writes
-
 pub const HEAD_TAG: &str = "split/1 ";
 
 /// How many hex digits of the whole value's digest a part key carries.
@@ -33,7 +32,6 @@ fn part_key(key: &str, hex: &str, n: usize) -> String {
 }
 
 /// The records that keep `value` under `key` of `kind`, in the order they are to be written: the
-
 #[must_use]
 pub fn split_value(kind: &'static str, key: &str, value: &[u8]) -> Vec<Write> {
     if value.len() <= MAX_RECORD_BYTES {
@@ -74,7 +72,6 @@ pub struct Joined {
 }
 
 /// One kind's `rows` (`(key, value)`, as `records.list` answers them) read back: each value
-
 #[must_use]
 pub fn rejoin(rows: Vec<(String, Vec<u8>)>) -> Joined {
     let (parts, heads): (Vec<_>, Vec<_>) = rows.into_iter().partition(|(key, _)| is_part(key));
@@ -95,7 +92,6 @@ pub fn rejoin(rows: Vec<(String, Vec<u8>)>) -> Joined {
 }
 
 /// The value the head `head` (past its tag) of `key` names, its parts taken out of `parts` once it
-
 fn assemble(
     key: &str,
     head: &[u8],
