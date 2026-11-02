@@ -965,7 +965,7 @@ fn served_core(
     // installs it (DECL-FOLD): the admin router mounts the door's stated admin routes off it.
     rig::register_door(door(), "serve-agent-row").expect("the door binds and folds");
     rig::install_root_auth();
-    let mut builder = busbar_kernel::test_support::TestApp::new()
+    let mut builder = busbar_kernel_testkit::test_support::TestApp::new()
         .serve_tables(tables.clone())
         .keys_chain()
         .admin_chain(vec![busbar_kernel::config::operator_provider().to_string()])
@@ -2000,7 +2000,7 @@ async fn an_agent_sections_per_request_fee_validates_and_per_session_is_refused(
     // installs the linked declarations itself, as the root's other config-fixture cells do.
     rig::register_linked_protocols();
     let with_fees = |per_request: i64, per_session: i64| {
-        let mut cfg = busbar_kernel::test_support::cfg_with_provider_api_key(
+        let mut cfg = busbar_kernel_testkit::test_support::cfg_with_provider_api_key(
             busbar_kernel::config::SecretRef::none(),
         );
         cfg.plane_fees = [(
@@ -2411,8 +2411,8 @@ async fn a_hop_refused_before_the_socket_keeps_no_fee() {
 fn a_present_agents_card_silent_about_an_agent_refuses_the_config() {
     let folded =
         rig::folded_door(door(), "serve-agent-card-row").expect("the door binds and folds");
-    let _registry = busbar_kernel::test_support::planes::TestRegistryIsolation::seeded(&[
-        busbar_kernel::test_support::neutral_fallback_plane(),
+    let _registry = busbar_kernel_testkit::test_support::planes::TestRegistryIsolation::seeded(&[
+        busbar_kernel_testkit::test_support::neutral_fallback_plane(),
         folded,
     ]);
     let (section, kind) = (surface("section"), surface("resource_kind"));
@@ -3541,7 +3541,7 @@ async fn a_config_apply_keeps_the_operators_approval() {
             },
             opened: true,
         };
-        let mut next = busbar_kernel::test_support::TestApp::new()
+        let mut next = busbar_kernel_testkit::test_support::TestApp::new()
             .serve_tables(s.app.serve_tables.clone())
             .keys_chain()
             .admin_chain(vec![busbar_kernel::config::operator_provider().to_string()])
@@ -3553,7 +3553,7 @@ async fn a_config_apply_keeps_the_operators_approval() {
             !Arc::ptr_eq(&s.app, &next),
             "a distinct serving App is applied"
         );
-        let _registry = busbar_kernel::test_support::planes::TestRegistryIsolation::empty();
+        let _registry = busbar_kernel_testkit::test_support::planes::TestRegistryIsolation::empty();
         s.handle.swap(next);
     };
     apply(&format!(
@@ -9109,7 +9109,7 @@ async fn a_config_apply_keeps_the_pool_walking() {
     };
     // It carries the running generation's admin table, as every generation an apply builds
     // carries its prior's.
-    let mut next = busbar_kernel::test_support::TestApp::new()
+    let mut next = busbar_kernel_testkit::test_support::TestApp::new()
         .serve_tables(s.app.serve_tables.clone())
         .keys_chain()
         .admin_chain(vec![busbar_kernel::config::operator_provider().to_string()])
@@ -9119,7 +9119,7 @@ async fn a_config_apply_keeps_the_pool_walking() {
     next.install_plane_runtime(surface("plane_key"), Arc::new(slot));
     let next = next.build();
     {
-        let _registry = busbar_kernel::test_support::planes::TestRegistryIsolation::empty();
+        let _registry = busbar_kernel_testkit::test_support::planes::TestRegistryIsolation::empty();
         s.handle.swap(next);
     }
     let mut log = Vec::new();
