@@ -143,6 +143,9 @@ def card_signing_mutations() -> None:
         ("kid", {"alg": "EdDSA"}),
         ("alg", {"kid": "k"}),
         ("alg is 'none'", {"alg": "none", "kid": "k"}),
+        ("numeric kid", {"alg": "EdDSA", "kid": 7}),
+        ("object kid", {"alg": "EdDSA", "kid": {"name": "k"}}),
+        ("numeric alg", {"alg": 7, "kid": "k"}),
     ):
         mutated = copy.deepcopy(base_card)
         mutated["signatures"] = [_sign(canonicalize(base_card), header, private)]
@@ -158,6 +161,8 @@ def card_signing_mutations() -> None:
     )
 
     for header in ({"alg": "RS256", "kid": "k"},
+                   {"alg": "EdDSA", "kid": 7},
+                   {"alg": "EdDSA", "kid": {"name": "k"}},
                    {"alg": "EdDSA", "kid": "k", "crit": ["unknown"]},
                    {"alg": "EdDSA", "kid": "k", "b64": False, "crit": ["b64"]}):
         confused = copy.deepcopy(base_card)

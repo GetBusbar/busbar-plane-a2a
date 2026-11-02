@@ -101,6 +101,10 @@ def verify_jws(signature_obj, canonical_payload, jwks=None, timeout=10.0):
         return out
     out["alg"] = header.get("alg")
     out["kid"] = header.get("kid")
+    if any(not isinstance(header.get(name), str) or not header[name].strip()
+           for name in ("alg", "kid")):
+        out.update(verified=False, reason="alg and kid must be nonempty strings")
+        return out
 
     if header.get("alg") == "none":
         out["verified"] = False

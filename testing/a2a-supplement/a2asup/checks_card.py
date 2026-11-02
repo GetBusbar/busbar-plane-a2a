@@ -80,7 +80,9 @@ def _verify_signature(public_key, signature: dict, payload_text: str) -> bool:
     from a2aht.jcs import crit_is_understood  # noqa: PLC0415
 
     header = json.loads(b64url_decode(signature["protected"]))
-    if not isinstance(header, dict) or not header.get("kid") or not crit_is_understood(header):
+    if (not isinstance(header, dict) or
+            any(not isinstance(header.get(name), str) or not header[name].strip()
+                for name in ("alg", "kid")) or not crit_is_understood(header)):
         return False
     return _verify(public_key, header.get("alg"),
                    _signing_input(signature["protected"], payload_text),
@@ -266,9 +268,10 @@ def check_card_sign_003(target: Target) -> Result:
             failures.append(f"signatures[{index}].protected decodes to {type(header).__name__}")
             continue
         evidence.append(f"signatures[{index}] protected header = {short(header)}")
-        missing = [m for m in ("alg", "kid") if not header.get(m)]
+        missing = [m for m in ("alg", "kid")
+                   if not isinstance(header.get(m), str) or not header[m].strip()]
         if missing:
-            failures.append(f"signatures[{index}] protected header lacks {missing}")
+            failures.append(f"signatures[{index}] protected header needs nonempty strings for {missing}")
         if header.get("alg") == "none":
             failures.append(
                 f"signatures[{index}] declares alg 'none', which is an unsigned JWS wearing the "
