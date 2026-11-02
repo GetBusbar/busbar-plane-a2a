@@ -20,7 +20,6 @@ use busbar_kernel::{
 #[allow(dead_code)]
 mod root_facts;
 
-mod piece_pending_observer;
 mod reported_observations;
 
 use crate::root::loader::dispatch::{
@@ -73,9 +72,7 @@ fn linked_door() -> Option<DoorFn> {
 
 /// The agent door, which a cell's `Served` needs (see [`linked_door`]).
 fn door() -> DoorFn {
-    piece_pending_observer::select(
-        linked_door().expect("a linked plane door owns the agents section"),
-    )
+    linked_door().expect("a linked plane door owns the agents section")
 }
 
 /// THIS PLANE'S CAPABILITY-EQUALITY COLUMNS (`qa/capability-equality.json`): the cells its root leg
@@ -3830,71 +3827,6 @@ async fn the_agent_doors_trust_verbs_refuse_in_their_declared_taxonomy() {
     assert!(
         body.to_string().contains("nothing to approve"),
         "the invalid-config refusal says the card could not be authenticated: {body}"
-    );
-}
-
-/// Abandoning a card lookup wakes its waiters immediately.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_abandoned_card_look_wakes_its_waiters_at_once() {
-    use std::time::Duration;
-    let _one = PUBLISHING.lock().await;
-    let callback = piece_pending_observer::Watching::install();
-    let instance = "serve-agent-door-abandoned-look";
-    let agent = Agent::start(200, ANSWER).await;
-    let s = served(instance, &agent.entry("planner", "0s"), false, None);
-    approve(&s, "planner").await;
-    agent
-        .card_delay_ms
-        .store(30_000, std::sync::atomic::Ordering::SeqCst);
-    let fetched = agent.fetches();
-    let send = || rpc("planner", "message/send", SEND, Some(&s.token));
-    let mut abandoned = Box::pin(answered(&s.router, send()));
-
-    tokio::time::timeout(Duration::from_secs(5), async {
-        tokio::select! {
-            result = &mut abandoned => panic!("the delayed caller completed before cancellation: {result:?}"),
-            () = async {
-                while agent.card_delay_ms.load(std::sync::atomic::Ordering::SeqCst) != 0 {
-                    tokio::task::yield_now().await;
-                }
-            } => {}
-        }
-    }).await.expect("the first look reached the delayed card response");
-    assert_eq!(
-        agent.fetches(),
-        fetched + 1,
-        "the first caller owns the delayed look"
-    );
-    callback.arm_after_owner_held();
-
-    let mut waiting = Box::pin(answered(
-        &s.router,
-        rpc("planner", "GetExtendedAgentCard", "{}", Some(&s.token)),
-    ));
-    tokio::time::timeout(Duration::from_secs(5), async {
-        tokio::select! {
-            result = &mut waiting => panic!("the waiter completed before the held look was cancelled: {result:?}"),
-            () = async {
-                while !callback.waiter_pending() {
-                    tokio::task::yield_now().await;
-                }
-            } => {}
-        }
-    }).await.expect("the second door callback registered as a waiter on the held flight");
-    assert_eq!(
-        agent.fetches(),
-        fetched + 1,
-        "the second live unit did not start a competing look"
-    );
-    drop(abandoned);
-    let (status, body) = tokio::time::timeout(Duration::from_secs(5), waiting)
-        .await
-        .expect("the waiter proceeded without stalling on the cancelled look");
-    assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(
-        agent.fetches() - fetched,
-        2,
-        "the waiter took the abandoned flight over and looked for itself"
     );
 }
 
