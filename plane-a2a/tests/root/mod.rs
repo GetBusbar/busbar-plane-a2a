@@ -5334,9 +5334,10 @@ async fn a_key_that_is_no_longer_live_sees_no_agent_at_all() {
             }
             _ => {
                 let mut row = key.clone();
-                // Keep the expired fixture chronologically valid under the actual Store schema.
-                row.created_at = 0;
-                row.expires_at = Some(1);
+                // Creation is immutable in the actual Store. This caller was minted at the
+                // fixture's historical epoch, so a later expiry is valid and already past.
+                row.expires_at = Some(row.created_at.saturating_add(1));
+                assert!(row.expires_at.unwrap() < busbar_kernel::store::now());
                 s.gov.store().put_key(&row).expect("expired");
                 s.gov.refresh().expect("the book reloads");
             }
