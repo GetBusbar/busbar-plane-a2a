@@ -1597,7 +1597,7 @@ async fn a_relayed_agent_unit_is_audited_on_the_chain_and_posts_one_line_once() 
     let mut agent = Agent::start(200, ANSWER).await;
     let s = served(instance, &agent.entry("auditor", "1h"), false, None);
     approve(&s, "auditor").await;
-    let resource = format!("{}:auditor", surface("resource_kind"));
+    let destination = crate::root::door_steps::plane_lane(surface("plane_key"), "auditor");
     let before = chain(&s).last().map_or(0, |e| e.seq);
     let (status, body) = answered(
         &s.router,
@@ -1609,7 +1609,7 @@ async fn a_relayed_agent_unit_is_audited_on_the_chain_and_posts_one_line_once() 
     let all = chain(&s);
     let rows: Vec<_> = all
         .iter()
-        .filter(|e| e.seq > before && e.what.destination.as_deref() == Some(resource.as_str()))
+        .filter(|e| e.seq > before && e.what.destination.as_deref() == Some(destination.as_str()))
         .collect();
     assert_eq!(
         rows.len(),
@@ -8629,10 +8629,10 @@ async fn an_unaddressed_unit_whose_one_agent_is_pooled_is_walked_over_the_pool()
 
 /// The audit rows the kernel's chain holds past `before` for `agent`'s resource.
 fn audited(s: &Served, before: u64, agent: &str) -> usize {
-    let resource = format!("{}:{agent}", surface("resource_kind"));
+    let destination = crate::root::door_steps::plane_lane(surface("plane_key"), agent);
     chain(s)
         .iter()
-        .filter(|e| e.seq > before && e.what.destination.as_deref() == Some(resource.as_str()))
+        .filter(|e| e.seq > before && e.what.destination.as_deref() == Some(destination.as_str()))
         .count()
 }
 
