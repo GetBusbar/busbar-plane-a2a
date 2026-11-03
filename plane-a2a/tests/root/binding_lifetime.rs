@@ -46,11 +46,8 @@ async fn fetch(
     target: &str,
 ) -> Result<Vec<u8>, ConnError> {
     let body = br#"{"jsonrpc":"2.0","id":1,"method":"message/send","params":{}}"#;
-    let length = body.len().to_string();
-    let fields: &[(&str, &[u8])] = &[
-        ("content-type", b"application/json"),
-        ("content-length", length.as_bytes()),
-    ];
+    // The actual HTTP framer owns content-length and transfer-encoding.
+    let fields: &[(&str, &[u8])] = &[("content-type", b"application/json")];
     let conn = conns.open_with_security(
         owner,
         need,
