@@ -793,7 +793,7 @@ fn served_core(
         .collect();
     crate::dist_root_install::install();
     crate::root::connector::install_io_reactor();
-    let live: Arc<std::sync::OnceLock<Arc<busbar_kernel::state::App>>> = Arc::default();
+    let live: Arc<std::sync::OnceLock<Arc<busbar_kernel::state::AppHandle>>> = Arc::default();
     let observed_destinations = Arc::new(reported_observations::Destinations::new(
         crate::root::connector::guard_for(&destinations).expect("the production destination guard"),
     ));
@@ -1167,7 +1167,7 @@ fn served_core(
             let live = live.clone();
             move || {
                 busbar_kernel::plane_driver::engine_host(
-                    live.get().expect("the serving App is built"),
+                    &live.get().expect("the serving handle is built").load(),
                 )
             }
         }),
@@ -1197,16 +1197,16 @@ fn served_core(
         composed.spawn_ticks();
     }
     let app = Arc::new(app);
-    assert!(
-        live.set(app.clone()).is_ok(),
-        "the serving App is installed once"
-    );
     let appliers = composed.appliers();
     let doors = crate::root::serve::door_routes(composed, || CARD.pin(), &[], &[])
         .expect("the actual root mounts the declared claims");
     let routes = doors.iter().map(|r| r.path.clone()).collect();
     let (router, admin, handle) =
         busbar_kernel::build_split_routers_serving(app.clone(), doors, 1 << 20, 0, false);
+    assert!(
+        live.set(handle.clone()).is_ok(),
+        "the serving handle is installed before any request runs"
+    );
     services
         .kernel()
         .expect("the actual host is installed")
