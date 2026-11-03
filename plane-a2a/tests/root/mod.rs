@@ -1186,7 +1186,7 @@ fn served_core(
         gov,
         app,
         key,
-        token: token.expose(&busbar_kernel::seal::lend()).to_string(),
+        token: caller_resource_token(token.expose(&busbar_kernel::seal::lend())),
         handle,
         book: book.durability.clone(),
         post,
@@ -4762,11 +4762,35 @@ fn rpc_presenting(
     req
 }
 
+/// Present a genuine Store-minted caller binding to this fixture's advertised resource.
+/// Normal root composition publishes the audience for every configured A2A front, so positive
+/// ingress calls need that audience as well as the durable key's exact minted generation.
+fn caller_resource_token(token: &str) -> String {
+    let signer = TokenSigner::from_secret_bytes(&[9u8; 32], DEFAULT_KID);
+    let claims = busbar_kernel::governance::signing::TokenVerifier::single(
+        signer.kid(),
+        signer.verifying_key(),
+    )
+    .verify(token, 1_700_000_000, None)
+    .expect("the actual Store-minted caller binding verifies before resource binding");
+    signer.mint_for_audience(
+        &claims.sub,
+        claims.exp,
+        claims.generation.as_deref(),
+        &format!("https://gw.example{}", mount()),
+        None,
+    )
+}
+
 /// The cell's own token's binding generation, as the book minted it.
 fn generation_of(s: &Served) -> Option<String> {
     let signer = TokenSigner::from_secret_bytes(&[9u8; 32], DEFAULT_KID);
     busbar_kernel::governance::signing::TokenVerifier::single(signer.kid(), signer.verifying_key())
-        .verify(&s.token, 1_700_000_000, None)
+        .verify(
+            &s.token,
+            1_700_000_000,
+            Some(&format!("https://gw.example{}", mount())),
+        )
         .expect("the cell's own token verifies")
         .generation
 }
@@ -4813,7 +4837,10 @@ fn another_caller(s: &Served, name: &str, scopes: Option<Vec<ScopeRef>>) -> (Vir
     row.allowed_scopes = scopes;
     s.gov.store().put_key(&row).expect("the grant is written");
     s.gov.refresh().expect("the book reloads");
-    (row, token.expose(&busbar_kernel::seal::lend()).to_string())
+    (
+        row,
+        caller_resource_token(token.expose(&busbar_kernel::seal::lend())),
+    )
 }
 
 /// The agents busbar's extended card names for the caller presenting `token`: its status, and
