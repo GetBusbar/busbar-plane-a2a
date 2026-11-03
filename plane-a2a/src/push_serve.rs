@@ -66,6 +66,7 @@ fn accepted(input: &Lent<'_, ServeIn>, out: &mut Out<'_, ServeOut>, writes: &[Wr
 /// so a re-entry does not spend it twice.
 #[derive(Default)]
 struct Admitted {
+    observed_at: Option<u64>,
     charge: Option<crate::push::PushCharge>,
     publication: crate::conditional_publication::Journal,
     prepared: Option<Prepared>,
@@ -246,15 +247,24 @@ pub(crate) fn serve(
     let Some(host) = plane.host.as_ref() else {
         return unavailable(instance, &input, &mut out, state, "host-binding");
     };
-    let reading = match host.connector_from(ticket, 1).clock_now() {
-        Poll::Pending => {
-            instance.park(state);
-            return Outcome::Pending;
+    let now = match state.observed_at {
+        Some(now) => now,
+        None => {
+            let reading = match host.connector_from(ticket, 1).clock_now() {
+                Poll::Pending => {
+                    instance.park(state);
+                    return Outcome::Pending;
+                }
+                Poll::Ready(Err(_)) => {
+                    return unavailable(instance, &input, &mut out, state, "clock");
+                }
+                Poll::Ready(Ok(reading)) => reading,
+            };
+            let now = reading.wall_ns / 1_000_000_000;
+            state.observed_at = Some(now);
+            now
         }
-        Poll::Ready(Err(_)) => return unavailable(instance, &input, &mut out, state, "clock"),
-        Poll::Ready(Ok(reading)) => reading,
     };
-    let now = reading.wall_ns / 1_000_000_000;
 
     if state.charge.is_none() {
         let Some(charge) = plane.pushes.charge(&task_id, now) else {

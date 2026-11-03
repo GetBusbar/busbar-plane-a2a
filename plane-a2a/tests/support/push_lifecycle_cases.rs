@@ -15,6 +15,8 @@ mod refusal_output_cases;
 struct Script {
     conditional: conditional_host::Host,
     sign_failed: bool,
+    wall_ns: u64,
+    clock_step_ns: u64,
     read_failed: bool,
     publish_failed: bool,
     read_pending: bool,
@@ -56,8 +58,13 @@ impl Drop for Reset {
 extern "C" fn fixed_clock(_: HostCtx, input: *const c_void, out: *mut ServiceOut) -> RawOutcome {
     // SAFETY: SDK lends ClockNowIn and its live reading slot.
     let i = unsafe { input.cast::<ClockNowIn>().read() };
+    let wall_ns = script(|s| {
+        let now = s.wall_ns.max(1_800_000_000_000_000_000);
+        s.wall_ns = now.saturating_add(s.clock_step_ns);
+        now
+    });
     unsafe {
-        (*i.reading).wall_ns = 1_800_000_000_000_000_000;
+        (*i.reading).wall_ns = wall_ns;
         (*i.reading).mono_ns = 5_000_000_000;
     }
     answer(out, Outcome::Ready, 0, 0)
@@ -1119,6 +1126,26 @@ fn callback_signer_read_and_transition_faults_are_retryable_and_distinct_from_ba
     store().retain(|(kind, _, _)| kind != "task");
     assert_eq!(serve(&door, 606, &auth, WORKING, 4096).status, 401);
 }
+#[test]
+fn a_pending_push_retains_its_original_timestamp_across_the_publication_receipts() {
+    let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+    let (_reset, door) = open_scripted();
+    let auth = registered(&door);
+    let before = script(|s| s.conditional.events.len());
+    script(|s| s.clock_step_ns = 1_000_000_000);
+    let answer = serve(&door, 699, &auth, COMPLETED, 4096);
+    assert_eq!(
+        (answer.outcome, answer.status),
+        (Outcome::Ready, 202),
+        "{answer:?}"
+    );
+    assert_eq!(task_state()["state"], "completed");
+    assert_eq!(task_state()["updated_at"], 1_800_000_000_u64);
+    assert!(script(|s| s.wall_ns) > 1_800_000_000_000_000_000);
+    assert_eq!(script(|s| s.conditional.events.len()), before + 1);
+    assert!(!door.pending_serves.borrow().contains_key(&ticket(699)));
+}
+
 #[test]
 fn callback_pending_and_short_refusals_preserve_one_budget_charge_and_one_warning() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
