@@ -784,6 +784,9 @@ fn served_core(
         "{instance}-{}",
         busbar_kernel::door::op_id().counter(),
     ));
+    // A signed dropped Store must have its own product identity, even when the surrounding
+    // test binary uses its compiled-in memory Store for unrelated cases.
+    let sqlite_image = std::env::var_os("BUSBAR_TEST_SQLITE_CDYLIB");
     let mut store_module = None;
     let mut hook_module = None;
     let mut fetch = Vec::new();
@@ -794,7 +797,15 @@ fn served_core(
         if kind == "hook" && hooks.is_none() {
             continue;
         }
-        let path = std::path::PathBuf::from(std::env::var_os(variable).expect(variable));
+        let path = std::path::PathBuf::from(
+            if kind == "store" {
+                sqlite_image.clone()
+            } else {
+                None
+            }
+            .or_else(|| std::env::var_os(variable))
+            .expect(variable),
+        );
         assert!(
             path.is_absolute() && path.is_file(),
             "{variable} is an actual image"
@@ -834,7 +845,9 @@ fn served_core(
     )
     .expect("the actual Store settings are JSON");
     // Independent deployments must not inherit another cell's durable virtual keys or groups.
-    if settings.get("db_path").is_some() {
+    if sqlite_image.is_some() {
+        settings = serde_json::json!({"db_path": directory.join("governance.sqlite")});
+    } else if settings.get("db_path").is_some() {
         settings["db_path"] = serde_json::json!(directory.join("governance.sqlite"));
     }
     let operator_file = directory.join("operator.token");
@@ -957,6 +970,15 @@ fn served_core(
     let mut config = busbar_kernel::config::resolve(&deploy, &Default::default())
         .expect("the deployment resolves through the normal root");
     config.groups = groups.clone();
+    // Feed the door the same normal deployment projection as production: ledger-owned fees
+    // and rate cards are lifted, while the declared failover pools retain their operator grammar.
+    if let Some(section) = deploy.door_sections().remove(surface("section")) {
+        sections.insert(surface("section"), section);
+    }
+    sections = crate::root::serve::with_pools(
+        sections,
+        &crate::root::serve::door_pools(&config.plane_pools),
+    );
     let mut plugins = busbar_kernel::config::PluginsCfg {
         enabled: true,
         dir: directory.to_string_lossy().into_owned(),
@@ -7574,7 +7596,7 @@ async fn the_signature_is_taken_over_the_document_that_is_actually_served() {
 }
 
 /// Exposition from the freshly built Prometheus product over the real kernel recorder.
-fn render_metrics() -> String {
+fn render_metrics(s: &Served) -> String {
     use crate::root::loader::dispatch::kinds::export::Export;
     use busbar_contract::export_calls::ExportCalls as _;
     let path = std::path::PathBuf::from(
@@ -7593,7 +7615,7 @@ fn render_metrics() -> String {
             max_inflight_cap: 64,
             sink: Arc::new(NoSink),
             dispatcher: dispatcher.adopter(),
-            conns: ConnTable::NoNeeds,
+            conns: ConnTable::Host(s.riding.inner.clone()),
         },
     )
     .expect("the actual exporter binds");
@@ -7610,8 +7632,8 @@ fn render_metrics() -> String {
 }
 
 /// The exposition lines of `family` whose `pool` label is `pool` and `lane` label is `lane`.
-fn series_of(family: &str, pool: &str, lane: &str) -> Vec<String> {
-    render_metrics()
+fn series_of(s: &Served, family: &str, pool: &str, lane: &str) -> Vec<String> {
+    render_metrics(s)
         .lines()
         .filter(|l| l.starts_with(&format!("{family}{{")))
         .filter(|l| l.contains(&format!("pool=\"{pool}\"")))
@@ -7639,7 +7661,7 @@ async fn a_relayed_task_counts_an_upstream_attempt_naming_the_agent_it_was_issue
     approve(&s, "metered").await;
     let family = busbar_kernel::telemetry::UPSTREAM_ATTEMPTS_TOTAL;
     let jsonrpc = surface("binding_document");
-    let before = total(&series_of(family, "metered", jsonrpc));
+    let before = total(&series_of(&s, family, "metered", jsonrpc));
     let (status, body) = answered(
         &s.router,
         rpc("metered", "message/send", SEND, Some(&s.token)),
@@ -7647,12 +7669,12 @@ async fn a_relayed_task_counts_an_upstream_attempt_naming_the_agent_it_was_issue
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(agent.relayed(), "the unit reached the agent");
-    let lines = series_of(family, "metered", jsonrpc);
+    let lines = series_of(&s, family, "metered", jsonrpc);
     assert!(
         !lines.is_empty(),
         "a relayed unit left no `{family}` series naming the agent it was issued to and its \
          binding: {}",
-        render_metrics()
+        render_metrics(&s)
     );
     assert!(
         total(&lines) > before,
@@ -7686,7 +7708,7 @@ async fn a_backend_that_cannot_be_reached_is_counted_as_a_transient_upstream_fai
     agent.go_down();
     let family = busbar_kernel::telemetry::UPSTREAM_FAILURES_TOTAL;
     let jsonrpc = surface("binding_document");
-    let before = total(&series_of(family, "unreached", jsonrpc));
+    let before = total(&series_of(&s, family, "unreached", jsonrpc));
     let (status, body) = answered(
         &s.router,
         rpc("unreached", "message/send", SEND, Some(&s.token)),
@@ -7697,7 +7719,7 @@ async fn a_backend_that_cannot_be_reached_is_counted_as_a_transient_upstream_fai
         StatusCode::OK,
         "a hop that never reached the agent: {body}"
     );
-    let lines = series_of(family, "unreached", jsonrpc);
+    let lines = series_of(&s, family, "unreached", jsonrpc);
     assert!(
         total(&lines) > before,
         "the backend was unreachable and left no `{family}` count for its lane: {lines:?}"
