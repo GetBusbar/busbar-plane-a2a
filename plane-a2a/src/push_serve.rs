@@ -116,12 +116,13 @@ fn unavailable(
     input: &Lent<'_, ServeIn>,
     out: &mut Out<'_, ServeOut>,
     state: Admitted,
+    stage: &'static str,
 ) -> Outcome {
     let outcome = cached_refusal(instance, input, out, state, 503, UNAVAILABLE);
     if outcome == Outcome::Ready {
         busbar_contract::diag_warn!(
             crate::diagnostics::A2A_PUSH_CHECK_UNAVAILABLE,
-            "a2a: push check or task store unavailable; answered 503 for retry"
+            "a2a: push {stage} unavailable; answered 503 for retry"
         );
     }
     outcome
@@ -237,20 +238,20 @@ pub(crate) fn serve(
     };
     let signed = match signature(plane, ticket, &task_id) {
         Ok(signature) => signature,
-        Err(_) => return unavailable(instance, &input, &mut out, state),
+        Err(_) => return unavailable(instance, &input, &mut out, state, "capability-signature"),
     };
     if !crate::push::verified(&signed, presented) {
         return cached_refusal(instance, &input, &mut out, state, 401, UNAUTHORISED);
     }
     let Some(host) = plane.host.as_ref() else {
-        return unavailable(instance, &input, &mut out, state);
+        return unavailable(instance, &input, &mut out, state, "host-binding");
     };
     let reading = match host.connector_from(ticket, 1).clock_now() {
         Poll::Pending => {
             instance.park(state);
             return Outcome::Pending;
         }
-        Poll::Ready(Err(_)) => return unavailable(instance, &input, &mut out, state),
+        Poll::Ready(Err(_)) => return unavailable(instance, &input, &mut out, state, "clock"),
         Poll::Ready(Ok(reading)) => reading,
     };
     let now = reading.wall_ns / 1_000_000_000;
@@ -297,7 +298,9 @@ pub(crate) fn serve(
     };
     let held = match tasks::get(&mut via, &caller, &task_id, now) {
         Err(Halt::Pending) => return pend(state, &mut out),
-        Err(Halt::Failed(_)) => return unavailable(instance, &input, &mut out, state),
+        Err(Halt::Failed(_)) => {
+            return unavailable(instance, &input, &mut out, state, "task-lookup")
+        }
         Ok(None) => return cached_refusal(instance, &input, &mut out, state, 401, UNAUTHORISED),
         Ok(Some(held)) => held,
     };
@@ -357,7 +360,9 @@ pub(crate) fn serve(
     match tasks::change(&mut via, &at, &task_id, &mut plan, &mut writes) {
         Err(Halt::Pending) => return pend(state, &mut out),
 
-        Err(Halt::Failed(_)) => return unavailable(instance, &input, &mut out, state),
+        Err(Halt::Failed(_)) => {
+            return unavailable(instance, &input, &mut out, state, "task-transition")
+        }
         Ok(None) => {
             let outcome = accepted(&input, &mut out, &[]);
             if outcome == Outcome::Ready {
