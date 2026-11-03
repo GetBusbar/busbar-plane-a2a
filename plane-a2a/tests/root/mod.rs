@@ -1555,12 +1555,9 @@ async fn a_relayed_agent_unit_charges_the_presenting_key() {
     );
 }
 
-/// The audit rows of the kernel's one chain, oldest first.
-fn chain() -> Vec<busbar_kernel::audit_ring::AuditEntry> {
-    let mut rows =
-        busbar_kernel::audit::auditlog::AUDIT_LOG.list_filtered(0, usize::MAX, None, None);
-    rows.reverse();
-    rows
+/// The sealed audit rows of this node's actual durable book, oldest first.
+fn chain(s: &Served) -> Vec<busbar_kernel_audit::AuditRecord> {
+    s.book.lock().expect("unpoisoned").audit_records.clone()
 }
 
 /// The root cells `audit-chain × a2a`, and the teller steps AUDIT, METER and EXIT over the
@@ -1572,7 +1569,7 @@ async fn a_relayed_agent_unit_is_audited_on_the_chain_and_posts_one_line_once() 
     let s = served(instance, &agent.entry("auditor", "1h"), false, None);
     approve(&s, "auditor").await;
     let resource = format!("{}:auditor", surface("resource_kind"));
-    let before = chain().last().map_or(0, |e| e.seq);
+    let before = chain(&s).last().map_or(0, |e| e.seq);
     let (status, body) = answered(
         &s.router,
         rpc("auditor", "message/send", SEND, Some(&s.token)),
@@ -1580,10 +1577,10 @@ async fn a_relayed_agent_unit_is_audited_on_the_chain_and_posts_one_line_once() 
     .await;
     assert_eq!(status, StatusCode::OK, "relayed through the door: {body}");
     agent.heard.recv().await.expect("the far agent was dialled");
-    let all = chain();
+    let all = chain(&s);
     let rows: Vec<_> = all
         .iter()
-        .filter(|e| e.seq > before && e.resource == resource)
+        .filter(|e| e.seq > before && e.what.destination.as_deref() == Some(resource.as_str()))
         .collect();
     assert_eq!(
         rows.len(),
@@ -1591,8 +1588,17 @@ async fn a_relayed_agent_unit_is_audited_on_the_chain_and_posts_one_line_once() 
         "exactly one audit row for the unit: {rows:?}"
     );
     let row = rows[0];
-    assert_eq!(row.action, surface("audit_action"), "{row:?}");
-    assert_eq!(row.outcome, "applied", "a served unit is applied: {row:?}");
+    assert_eq!(row.what.op_class.as_str(), "message_send", "{row:?}");
+    assert_eq!(
+        row.outcome.unit_end,
+        busbar_contract::caps::Outcome::Completed,
+        "a served unit completes: {row:?}"
+    );
+    assert_eq!(
+        row.outcome.finish,
+        busbar_kernel_audit::FinishClass::Complete,
+        "the complete answer was delivered: {row:?}"
+    );
     assert!(!row.hash.is_empty(), "the row is sealed: {row:?}");
     if let Some(prev) = all.iter().find(|e| e.seq + 1 == row.seq) {
         assert_eq!(
@@ -7620,9 +7626,12 @@ fn render_metrics(s: &Served) -> String {
         },
     )
     .expect("the actual exporter binds");
-    let exporter =
-        crate::root::loader::export_door::ExportInstance::open(plugin, dispatcher, br#"{"buffer_seconds":60}"#)
-            .expect("the actual exporter opens");
+    let exporter = crate::root::loader::export_door::ExportInstance::open(
+        plugin,
+        dispatcher,
+        br#"{"buffer_seconds":60}"#,
+    )
+    .expect("the actual exporter opens");
     let families = busbar_kernel::snapshot::snapshot().expect("the product recorder is installed");
     String::from_utf8(
         exporter
@@ -8584,11 +8593,11 @@ async fn an_unaddressed_unit_whose_one_agent_is_pooled_is_walked_over_the_pool()
 }
 
 /// The audit rows the kernel's chain holds past `before` for `agent`'s resource.
-fn audited(before: u64, agent: &str) -> usize {
+fn audited(s: &Served, before: u64, agent: &str) -> usize {
     let resource = format!("{}:{agent}", surface("resource_kind"));
-    chain()
+    chain(s)
         .iter()
-        .filter(|e| e.seq > before && e.resource == resource)
+        .filter(|e| e.seq > before && e.what.destination.as_deref() == Some(resource.as_str()))
         .count()
 }
 
@@ -8638,7 +8647,7 @@ async fn an_unaddressed_local_verb_is_answered_at_the_tripped_agent_its_grant_re
     s.gov.refresh().expect("the book reloads");
     let mut log = Vec::new();
     hear(&mut agent, &mut log);
-    let before = chain().last().map_or(0, |e| e.seq);
+    let before = chain(&s).last().map_or(0, |e| e.seq);
 
     let (status, body) = answered(&s.router, rpc("", "tasks/list", "{}", Some(&token))).await;
     assert_eq!(status, StatusCode::OK, "answered by busbar itself: {body}");
@@ -8657,7 +8666,10 @@ async fn an_unaddressed_local_verb_is_answered_at_the_tripped_agent_its_grant_re
         "no refresh reaches the twin, and the tripped primary is not dialled: {heard:?}"
     );
     assert_eq!(
-        (audited(before, "planner-a"), audited(before, "planner-b")),
+        (
+            audited(&s, before, "planner-a"),
+            audited(&s, before, "planner-b")
+        ),
         (1, 0),
         "audited under the agent the caller's grant reaches"
     );
@@ -8675,7 +8687,7 @@ async fn an_unaddressed_local_verb_never_walks_to_a_healthy_primary_outside_the_
     let (_, token) = another_caller(&s, "local-healthy", Some(vec![agent_scope("planner-b")]));
     let mut log = Vec::new();
     hear(&mut agent, &mut log);
-    let before = chain().last().map_or(0, |e| e.seq);
+    let before = chain(&s).last().map_or(0, |e| e.seq);
     let fetched = agent.fetches();
 
     let (status, body) = answered(&s.router, rpc("", "tasks/list", "{}", Some(&token))).await;
@@ -8690,7 +8702,10 @@ async fn an_unaddressed_local_verb_never_walks_to_a_healthy_primary_outside_the_
     assert!(heard.is_empty(), "no egress at all: {heard:?}");
     assert_eq!(agent.fetches(), fetched, "no card was fetched either");
     assert_eq!(
-        (audited(before, "planner-a"), audited(before, "planner-b")),
+        (
+            audited(&s, before, "planner-a"),
+            audited(&s, before, "planner-b")
+        ),
         (0, 1),
         "audited under the twin, the one agent the caller's grant reaches"
     );
