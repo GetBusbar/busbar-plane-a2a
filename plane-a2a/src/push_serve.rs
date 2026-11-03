@@ -360,8 +360,13 @@ pub(crate) fn serve(
     match tasks::change(&mut via, &at, &task_id, &mut plan, &mut writes) {
         Err(Halt::Pending) => return pend(state, &mut out),
 
-        Err(Halt::Failed(_)) => {
-            return unavailable(instance, &input, &mut out, state, "task-transition")
+        Err(Halt::Failed(error)) => {
+            busbar_contract::diag_warn!(
+                crate::diagnostics::A2A_PUSH_CHECK_UNAVAILABLE,
+                error = ?error,
+                "a2a: task transition could not publish the push report"
+            );
+            return unavailable(instance, &input, &mut out, state, "task-transition");
         }
         Ok(None) => {
             let outcome = accepted(&input, &mut out, &[]);
