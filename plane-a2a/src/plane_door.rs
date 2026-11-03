@@ -4600,7 +4600,14 @@ slot!(
         };
         let target = input.target().as_str().unwrap_or_default();
         let body = input.body().bytes();
-        let line = statement::line_of(route);
+        // An acknowledged notification selects no agent and binds no agent's request hooks.
+        // Its neutral view must agree with the ROUTE_LOCAL arrival, even on an agent's URL.
+        let notice = plane.is_some_and(|plane| {
+            plane.units.with(&input.unit(), |unit| {
+                unit.is_some_and(|unit| matches!(&unit.disposition, AgentDisposition::Notice { .. }))
+            })
+        });
+        let line = if notice { Line::Open } else { statement::line_of(route) };
         let envelope = match line {
             Line::Document => body.to_vec(),
             Line::Target => match crate::rest::compose(route, target, body) {
@@ -4615,8 +4622,8 @@ slot!(
                     None => return Outcome::Refused,
                 }
             }
-            // A card read on the open line carries no request to screen (no
-            // hook is in the way): its view names no entry and no turn, so no entry's hooks bind.
+            // A card read or acknowledged notification carries no agent request to screen:
+            // its view names no entry and no turn, so no agent's hooks bind.
             Line::Open => {
                 let mut arena = input.arena_buf();
                 let dialect = arena.span(crate::PLANE_KEY.as_bytes());

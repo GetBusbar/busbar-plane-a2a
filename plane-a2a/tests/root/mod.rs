@@ -1848,19 +1848,22 @@ async fn an_agent_notification_is_acknowledged_202_with_no_body_and_dials_nothin
     let mut agent = Agent::start(200, ANSWER).await;
     let s = served(instance, &agent.entry("notified", "1h"), false, None);
     approve(&s, "notified").await;
-    let req = axum::http::Request::builder()
-        .method("POST")
-        .uri(format!("{}/agents/notified", mount()))
-        .header("content-type", "application/json")
-        .header("authorization", format!("Bearer {}", s.token))
-        .body(axum::body::Body::from(format!(
-            r#"{{"jsonrpc":"2.0","method":"message/send","params":{SEND}}}"#
-        )))
-        .expect("a request");
-    let (status, body) = answered(&s.router, req).await;
-    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
-    assert!(body.is_empty(), "a notification is never answered: {body}");
-    assert!(!agent.relayed(), "nothing was relayed");
+    for target in [format!("{}/agents/notified", mount()), mount().to_string()] {
+        let req = axum::http::Request::builder()
+            .method("POST")
+            .uri(&target)
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", s.token))
+            .body(axum::body::Body::from(format!(
+                r#"{{"jsonrpc":"2.0","method":"message/send","params":{SEND}}}"#
+            )))
+            .expect("a request");
+        let (status, body) = answered(&s.router, req).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{target}: {body}");
+        assert!(body.is_empty(), "a notification is never answered: {body}");
+        assert!(!agent.relayed(), "nothing was relayed");
+        assert_eq!(admitted(&s), 0, "a notification accrues no request");
+    }
 }
 
 /// An unaddressed unit selects the one agent reached by the caller's grant.
