@@ -29,6 +29,25 @@ use crate::root::loader::dispatch::{
 use crate::root::plane_node::{Node, NodeEndPost};
 use crate::root::PUBLISHING;
 
+/// Keep actual host and plugin refusals visible when a root fixture fails.
+struct FixtureDiagnostics;
+
+impl crate::root::loader::dispatch::EnvelopeSink for FixtureDiagnostics {
+    fn metric(&self, _: crate::root::loader::dispatch::Metric<'_>) {}
+
+    fn diag(&self, diagnostic: crate::root::loader::dispatch::Diagnostic<'_>) {
+        eprintln!("A2A fixture diagnostic: {diagnostic:?}");
+    }
+
+    fn dropped(&self, why: crate::root::loader::dispatch::Dropped) {
+        eprintln!("A2A fixture dropped diagnostic: {why:?}");
+    }
+
+    fn refused(&self, instance: &str, why: crate::root::loader::observe::BindRefusal<'_>) {
+        eprintln!("A2A fixture {instance} refused: {why:?}");
+    }
+}
+
 /// The deployment's dated card history, billing off (one entry, no price).
 static CARD: std::sync::LazyLock<crate::root::kernel::RootHistory> =
     std::sync::LazyLock::new(|| {
@@ -744,6 +763,10 @@ fn served_core(
     ticking: bool,
     push_ca: Option<String>,
 ) -> Served {
+    let _ = tracing_subscriber::fmt()
+        .with_test_writer()
+        .with_max_level(tracing::Level::WARN)
+        .try_init();
     let groups: BTreeMap<String, busbar_kernel::config::GroupCfg> = requests
         .map(|amount| (busbar_kernel::config::groups::LimitMetric::Requests, amount))
         .or_else(|| priced.map(|p| (busbar_kernel::config::groups::LimitMetric::Budget, p.budget)))
@@ -1104,7 +1127,7 @@ fn served_core(
             Bind {
                 instance: Arc::from(instance),
                 max_inflight_cap: 64,
-                sink: Arc::new(NoSink),
+                sink: Arc::new(FixtureDiagnostics),
                 dispatcher: dispatcher.adopter(),
                 conns: ConnTable::Host(connector.clone()),
             },
