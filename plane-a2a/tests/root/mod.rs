@@ -3583,7 +3583,8 @@ async fn a_config_apply_keeps_the_operators_approval() {
     assert_eq!(
         status,
         StatusCode::OK,
-        "the approval outlives the apply: {body}"
+        "the approval outlives the apply: {body}; trust: {:?}",
+        admin_get(&s, "/trust").await
     );
     assert!(
         agent.relayed(),
@@ -7978,7 +7979,12 @@ async fn reroute_battery(
     first: StatusCode,
 ) {
     let (s1, b1) = answered(&s.router, rpc("planner-a", method, params, Some(&s.token))).await;
-    assert_eq!(s1, first, "the first failure is the hop's: {b1}");
+    assert_eq!(
+        s1,
+        first,
+        "the first failure is the hop's: {b1}; trust: {:?}",
+        admin_get(s, "/trust").await
+    );
     assert_eq!(heard(), (1, 0), "the primary was dialled, the twin not");
     let t0 = std::time::Instant::now();
     let (s2, b2) = answered(&s.router, rpc("planner-a", method, params, Some(&s.token))).await;
