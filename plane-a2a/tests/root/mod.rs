@@ -5364,16 +5364,23 @@ async fn a_key_that_is_no_longer_live_sees_no_agent_at_all() {
         .await;
         assert_eq!(status, StatusCode::UNAUTHORIZED, "{what}: {body}");
         if what == "expired" {
+            let (control, control_token) = another_caller(&s, "expired-refusal-control", None);
+            s.gov
+                .delete_key(&control.id)
+                .expect("the control key is deleted");
             let (bad_status, bad_body) = answered(
                 &s.router,
-                rpc("planner", "message/send", SEND, Some("not-a-minted-key")),
+                rpc("planner", "message/send", SEND, Some(&control_token)),
             )
             .await;
             assert_eq!(bad_status, StatusCode::UNAUTHORIZED);
             let mut doc: serde_json::Value = serde_json::from_str(&body).expect("an envelope");
             let mut bad: serde_json::Value = serde_json::from_str(&bad_body).expect("an envelope");
             for answer in [&mut doc, &mut bad] {
-                answer.as_object_mut().expect("an error object").remove("request_id");
+                answer
+                    .as_object_mut()
+                    .expect("an error object")
+                    .remove("request_id");
             }
             assert_eq!(doc, bad, "stored expiry uses the opaque credential refusal");
         }
