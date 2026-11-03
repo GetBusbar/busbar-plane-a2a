@@ -20,6 +20,7 @@ use busbar_kernel::{
 #[allow(dead_code)]
 mod root_facts;
 
+mod binding_lifetime;
 mod reported_observations;
 
 use crate::root::loader::dispatch::{
@@ -202,6 +203,8 @@ struct Served {
     deployment: serde_json::Value,
     plugins: busbar_kernel::config::PluginsCfg,
     rules: Arc<dyn busbar_kernel::appbuild::RootRules>,
+    /// Retain the actual root appliers for generation-lifetime regression controls.
+    appliers: crate::root::serve::DoorAppliers,
     hook_peers: Vec<tokio::task::JoinHandle<()>>,
 }
 
@@ -1229,7 +1232,8 @@ fn served_core(
         &services,
         crate::root::adapters::BreakerPolicy::new(),
     );
-    handle.on_apply(Box::new(move |app| appliers.apply(app)));
+    let applied_planes = appliers.clone();
+    handle.on_apply(Box::new(move |app| applied_planes.apply(app)));
     Served {
         router,
         admin,
@@ -1247,6 +1251,7 @@ fn served_core(
         deployment,
         plugins,
         rules,
+        appliers,
         hook_peers,
     }
 }
