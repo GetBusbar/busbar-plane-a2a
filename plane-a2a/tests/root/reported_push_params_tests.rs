@@ -94,7 +94,7 @@ async fn push_config_verbs_distinguish_malformed_task_ids_from_unheld_string_ids
         4,
         "each valid list mirrors and re-arms once"
     );
-    for pair in mirrored.chunks_exact(2) {
+    for pair in mirrored.as_chunks::<2>().0 {
         let documents: Vec<serde_json::Value> = pair
             .iter()
             .map(|request| {
