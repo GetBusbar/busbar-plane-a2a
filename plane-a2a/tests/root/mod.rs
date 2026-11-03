@@ -829,10 +829,14 @@ fn served_core(
         std::fs::write(directory.join(filename), archive).expect("stage the signed actual product");
     }
     let module = store_module.expect("the fixture always stages the actual Store");
-    let settings: serde_json::Value = serde_json::from_str(
+    let mut settings: serde_json::Value = serde_json::from_str(
         &std::env::var("BUSBAR_GOVERNANCE_TEST_STORE_SETTINGS").unwrap_or_else(|_| "{}".into()),
     )
     .expect("the actual Store settings are JSON");
+    // Independent deployments must not inherit another cell's durable virtual keys or groups.
+    if settings.get("db_path").is_some() {
+        settings["db_path"] = serde_json::json!(directory.join("governance.sqlite"));
+    }
     let operator_file = directory.join("operator.token");
     std::fs::write(&operator_file, ADMIN_TOKEN).expect("the normal operator credential");
     let signing_file = directory.join("signing.key");
