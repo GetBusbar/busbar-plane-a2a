@@ -1087,8 +1087,13 @@ fn fault(reply: &Served) {
         (Outcome::Ready, 503),
         "{reply:?}"
     );
-    assert!(
-        reply.diags.iter().any(|d| d.contains("BUSBAR-7050")),
+    assert_eq!(
+        reply
+            .diags
+            .iter()
+            .filter(|d| d.contains("BUSBAR-7050"))
+            .count(),
+        1,
         "{reply:?}"
     );
     assert_eq!(reply.writes, 0);
