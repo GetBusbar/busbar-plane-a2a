@@ -7831,8 +7831,7 @@ const TASK_ANSWER: &str = r#"{"jsonrpc":"2.0","id":1,"result":{"kind":"task","id
 /// The `agents:` section `entries`, with the pool `planner` of `members` (in that order) handed
 #[allow(clippy::needless_update)]
 fn pooled(entries: &str, members: &[&str]) -> String {
-    let key = surface("section");
-    let section: serde_yaml::Value = serde_yaml::from_str(entries).expect("a section");
+    let mut section: serde_yaml::Value = serde_yaml::from_str(entries).expect("a section");
     let pools: BTreeMap<String, busbar_kernel::config::pools::CandidatePoolCfg> = [(
         "planner".to_string(),
         busbar_kernel::config::pools::CandidatePoolCfg {
@@ -7842,8 +7841,11 @@ fn pooled(entries: &str, members: &[&str]) -> String {
         },
     )]
     .into();
-    let sections = crate::root::serve::with_pools([(key, section)].into(), &[(key, pools)]);
-    serde_yaml::to_string(&sections[key]).expect("the section writes")
+    // This is operator configuration, not the runtime door projection. Normal resolution
+    // retains these pools; the production builder adds member-grant metadata at the door.
+    section[busbar_contract::section::RESERVED_POOLS_KEY] =
+        serde_yaml::to_value(pools).expect("the configured candidate pools write");
+    serde_yaml::to_string(&section).expect("the section writes")
 }
 
 /// ONE AGENT REGISTERED TWICE, `planner-a` then `planner-b` at its paths `/planner-a` and
