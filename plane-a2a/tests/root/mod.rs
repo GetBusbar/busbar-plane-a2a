@@ -1614,7 +1614,7 @@ async fn a_relayed_agent_unit_is_audited_on_the_chain_and_posts_one_line_once() 
     assert_eq!(
         rows.len(),
         1,
-        "exactly one audit row for the unit: {rows:?}"
+        "exactly one audit row for the unit: {rows:?}; actual durable chain: {all:?}"
     );
     let row = rows[0];
     assert_eq!(row.what.op_class.as_str(), "message_send", "{row:?}");
@@ -8706,7 +8706,8 @@ async fn an_unaddressed_local_verb_is_answered_at_the_tripped_agent_its_grant_re
             audited(&s, before, "planner-b")
         ),
         (1, 0),
-        "audited under the agent the caller's grant reaches"
+        "audited under the agent the caller's grant reaches; actual durable chain: {:?}",
+        chain(&s)
     );
 }
 
@@ -8742,7 +8743,8 @@ async fn an_unaddressed_local_verb_never_walks_to_a_healthy_primary_outside_the_
             audited(&s, before, "planner-b")
         ),
         (0, 1),
-        "audited under the twin, the one agent the caller's grant reaches"
+        "audited under the twin, the one agent the caller's grant reaches; actual durable chain: {:?}",
+        chain(&s)
     );
 }
 
