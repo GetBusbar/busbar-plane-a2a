@@ -4978,7 +4978,7 @@ async fn a_section_carrying_only_the_reserved_keys_is_still_no_plane() {
     let reserved = "serve-agent-door-reserved-keys-only";
     let s = served_facing(
         reserved,
-        "hooks: [audit]\nupstream_credentials: own",
+        "hooks: []\nupstream_credentials: own",
         Facing::Routes,
     );
     let mounted: Vec<&String> = s
