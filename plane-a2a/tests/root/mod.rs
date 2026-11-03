@@ -793,7 +793,8 @@ fn served_core(
         .collect();
     crate::dist_root_install::install();
     crate::root::connector::install_io_reactor();
-    let live: Arc<std::sync::OnceLock<Arc<busbar_kernel::state::AppHandle>>> = Arc::default();
+    let live: Arc<std::sync::OnceLock<std::sync::Weak<busbar_kernel::state::AppHandle>>> =
+        Arc::default();
     let observed_destinations = Arc::new(reported_observations::Destinations::new(
         crate::root::connector::guard_for(&destinations).expect("the production destination guard"),
     ));
@@ -1167,7 +1168,12 @@ fn served_core(
             let live = live.clone();
             move || {
                 busbar_kernel::plane_driver::engine_host(
-                    &live.get().expect("the serving handle is built").load(),
+                    &live
+                        .get()
+                        .expect("the serving handle is built")
+                        .upgrade()
+                        .expect("the serving handle outlives its request")
+                        .load(),
                 )
             }
         }),
@@ -1204,7 +1210,7 @@ fn served_core(
     let (router, admin, handle) =
         busbar_kernel::build_split_routers_serving(app.clone(), doors, 1 << 20, 0, false);
     assert!(
-        live.set(handle.clone()).is_ok(),
+        live.set(Arc::downgrade(&handle)).is_ok(),
         "the serving handle is installed before any request runs"
     );
     services
