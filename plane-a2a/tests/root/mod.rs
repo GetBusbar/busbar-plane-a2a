@@ -805,11 +805,7 @@ fn served_core(
         let name = busbar_contract::abi::mechanism::rendering::read(&statement)
             .expect("the actual product statement is valid")
             .name;
-        let mut manifest = crate::root::test_plugins::manifest(
-            kind,
-            &name,
-            crate::root::loader::sign::FIRST_PARTY_PUBLISHER,
-        );
+        let mut manifest = crate::root::test_plugins::manifest(kind, &name, "third-party");
         manifest.statement = Some(hex::encode(statement));
         if kind == "hook" {
             manifest.needs.prompt = busbar_contract::plugin_rows::NeedLevel::Rw;
@@ -819,7 +815,7 @@ fn served_core(
             store_module = Some(name);
         }
         let archive = crate::root::test_plugins::signed(
-            &crate::dist_root_install::release_key(),
+            &crate::root::test_plugins::key(0x33),
             manifest,
             &std::fs::read(path).expect("the actual image reads"),
         );
@@ -957,12 +953,23 @@ fn served_core(
     let mut config = busbar_kernel::config::resolve(&deploy, &Default::default())
         .expect("the deployment resolves through the normal root");
     config.groups = groups.clone();
-    let plugins = busbar_kernel::config::PluginsCfg {
+    let mut plugins = busbar_kernel::config::PluginsCfg {
         enabled: true,
         dir: directory.to_string_lossy().into_owned(),
         fetch,
         ..Default::default()
     };
+    plugins
+        .trust
+        .publishers
+        .push(busbar_kernel::config::PluginPublisher {
+            name: "third-party".into(),
+            public_key: hex::encode(
+                crate::root::test_plugins::key(0x33)
+                    .verifying_key()
+                    .as_bytes(),
+            ),
+        });
     for step in crate::ROOT_UNITS.iter().filter_map(|unit| unit.on_config) {
         step(&config.limits);
     }
