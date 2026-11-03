@@ -5350,11 +5350,7 @@ async fn a_key_that_is_no_longer_live_sees_no_agent_at_all() {
                 s.gov.refresh().expect("the book reloads");
             }
         }
-        let catalogue_read = if what == "expired" {
-            StatusCode::OK
-        } else {
-            StatusCode::UNAUTHORIZED
-        };
+        let catalogue_read = StatusCode::UNAUTHORIZED;
         let (status, seen) = agents_seen(&s, &token).await;
         assert_eq!(
             (status, seen),
@@ -5368,10 +5364,18 @@ async fn a_key_that_is_no_longer_live_sees_no_agent_at_all() {
         .await;
         assert_eq!(status, StatusCode::UNAUTHORIZED, "{what}: {body}");
         if what == "expired" {
-            let doc: serde_json::Value = serde_json::from_str(&body).expect("an envelope");
-            assert_eq!(doc["error"]["code"], -32004, "{body}");
-            assert_eq!(doc["error"]["message"], "this key is not live", "{body}");
-            assert_eq!(doc["id"], serde_json::Value::Null, "{body}");
+            let (bad_status, bad_body) = answered(
+                &s.router,
+                rpc("planner", "message/send", SEND, Some("not-a-minted-key")),
+            )
+            .await;
+            assert_eq!(bad_status, StatusCode::UNAUTHORIZED);
+            let mut doc: serde_json::Value = serde_json::from_str(&body).expect("an envelope");
+            let mut bad: serde_json::Value = serde_json::from_str(&bad_body).expect("an envelope");
+            for answer in [&mut doc, &mut bad] {
+                answer.as_object_mut().expect("an error object").remove("request_id");
+            }
+            assert_eq!(doc, bad, "stored expiry uses the opaque credential refusal");
         }
         assert!(!agent.relayed(), "{what}: nothing was dialled");
     }
