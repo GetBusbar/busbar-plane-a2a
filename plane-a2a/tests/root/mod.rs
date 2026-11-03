@@ -5298,6 +5298,8 @@ async fn a_key_that_is_no_longer_live_sees_no_agent_at_all() {
             }
             _ => {
                 let mut row = key.clone();
+                // Keep the expired fixture chronologically valid under the actual Store schema.
+                row.created_at = 0;
                 row.expires_at = Some(1);
                 s.gov.store().put_key(&row).expect("expired");
                 s.gov.refresh().expect("the book reloads");
@@ -7619,7 +7621,7 @@ fn render_metrics(s: &Served) -> String {
     )
     .expect("the actual exporter binds");
     let exporter =
-        crate::root::loader::export_door::ExportInstance::open(plugin, dispatcher, b"{}")
+        crate::root::loader::export_door::ExportInstance::open(plugin, dispatcher, br#"{"buffer_seconds":60}"#)
             .expect("the actual exporter opens");
     let families = busbar_kernel::snapshot::snapshot().expect("the product recorder is installed");
     String::from_utf8(
