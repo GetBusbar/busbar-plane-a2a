@@ -11,9 +11,9 @@ use busbar_contract::abi::host::conn::connector::{self, ConnectorSlots, Establis
 use busbar_contract::abi::host::service::{self as svc, ServiceHead, ServiceOut};
 use busbar_contract::abi::mechanism::call::{Outcome, RawOutcome};
 use busbar_contract::abi::mechanism::ticket::{HostCtx, HostTables, Ticket};
-use busbar_contract::abi::sdk::Services;
 use busbar_contract::abi::sdk::conn::Host;
 use busbar_contract::abi::sdk::test_support::zeroed;
+use busbar_contract::abi::sdk::Services;
 
 use super::*;
 
