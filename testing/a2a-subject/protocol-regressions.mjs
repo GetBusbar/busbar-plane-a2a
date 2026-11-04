@@ -35,6 +35,17 @@ async function unusedPort() {
   await new Promise(resolve => server.close(resolve));
   return port;
 }
+async function httpStatus(url, headers) {
+  return new Promise((resolve, reject) => {
+    const request = http.request(url, { headers }, response => {
+      response.resume();
+      response.once('end', () => resolve(response.statusCode));
+    });
+    request.once('error', reject);
+    request.setTimeout(3000, () => request.destroy(new Error('HTTP probe timed out')));
+    request.end();
+  });
+}
 async function start(script, port, ...args) {
   const credential = script === 'binding-shim.mjs' ? args.pop() : null;
   if (credential !== null) args.push('-');
@@ -99,7 +110,21 @@ try {
   assert.equal((await fetch(local, { headers: { authorization: 'Bearer explicit' } })).status, 200);
   assert.equal(received.at(-1).authorization, 'Bearer explicit');
   const beforeRefusal = received.length;
-  assert.equal((await fetch(local, { headers: { host: 'attacker.invalid' } })).status, 403);
+  // Observe the probe's actual wire header independently: fetch can replace an explicit Host.
+  let observedHost;
+  const observer = http.createServer((request, response) => {
+    observedHost = request.headers.host;
+    response.writeHead(204);
+    response.end();
+  });
+  try {
+    const observerPort = await listen(observer);
+    assert.equal(await httpStatus(`http://127.0.0.1:${observerPort}`, { host: 'attacker.invalid' }), 204);
+    assert.equal(observedHost, 'attacker.invalid', 'the hostile Host must reach the wire');
+  } finally {
+    await new Promise(resolve => observer.close(resolve));
+  }
+  assert.equal(await httpStatus(local, { host: 'attacker.invalid' }), 403);
   assert.equal((await fetch(local, { headers: { origin: 'https://attacker.invalid' } })).status, 403);
   assert.equal(received.length, beforeRefusal, 'rejected HTTP/1 requests must never reach upstream');
   const session = http2.connect(local);
