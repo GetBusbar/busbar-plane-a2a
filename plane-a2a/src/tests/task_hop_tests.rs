@@ -431,6 +431,7 @@ fn an_inline_callback_that_passes_is_the_opened_tasks_callback() {
     assert_eq!(
         callback
             .authentication
+            .as_ref()
             .map(|a| crate::push::tests::sealed_bytes(
                 a.authorization("https://hook.example/cb?k=v")
             )),
@@ -601,7 +602,7 @@ fn every_spelling_of_the_callback_is_found_so_every_spelling_is_guarded() {
         assert_eq!(
             local::held_config(&mut desk.book, ALICE, &task.task_id)
                 .unwrap()
-                .map(|c| c.url)
+                .map(|mut c| std::mem::take(&mut c.url))
                 .as_deref(),
             Some("https://hook.example/a"),
             "{label}"

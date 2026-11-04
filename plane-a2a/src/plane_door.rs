@@ -734,7 +734,7 @@ impl A2aDoor {
         let cfg = agents_section(settings)?;
         statement::read_push_section(owned).map_err(Refusal::refused)?;
         let names: Vec<&str> = cfg.agents.keys().map(String::as_str).collect();
-        let spec = statement::agents_snapshot_spec(plane.public_url, &names);
+        let spec = statement::agents_snapshot_spec(plane.public_url.as_deref(), &names);
 
         let held_at = plane.newest();
         let before = plane.generations.at(held_at);
@@ -1311,7 +1311,7 @@ impl PlaneLife for A2aDoor {
             ..A2aDoor::default()
         };
         let names: Vec<&str> = cfg.agents.keys().map(String::as_str).collect();
-        let spec = statement::agents_snapshot_spec(plane.public_url, &names);
+        let spec = statement::agents_snapshot_spec(plane.public_url.as_deref(), &names);
         Ok(plane_life::Opened {
             plane,
             first: Published { spec, held: cfg },
@@ -2017,14 +2017,14 @@ fn open_task(
             Err(Halt::Failed(_)) => Some(crate::local::unreadable(hop.relay.id())),
             Ok(answer) => answer,
         };
-        if let Some(answer) = refused {
+        if let Some(mut answer) = refused {
             pass.issued = via.issued();
             hop.opening = false;
             hop.now = None;
             return Ok(Some(relay::RelayReply {
                 status: answer.status,
                 content_type: crate::agent_arrival::JSON_MEDIA_TYPE,
-                body: answer.body,
+                body: std::mem::take(&mut answer.body),
             }));
         }
     }
@@ -2575,7 +2575,7 @@ fn entitlement_unavailable(id: Option<serde_json::Value>) -> agent_arrival::Agen
         503,
         id,
         -32603,
-        "the entitlement service is unavailable; retry this request".into(),
+        "the entitlement service is unavailable; retry this request",
     )
 }
 
