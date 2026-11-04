@@ -1024,6 +1024,7 @@ impl HopRelay {
         self.instead = Some(body.into());
     }
 
+    #[cfg(test)]
     pub(crate) fn send_shared_instead(&mut self, body: RawBytes) {
         self.instead = Some(body);
     }

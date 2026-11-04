@@ -145,7 +145,7 @@ pub(crate) fn with_readable<T>(bytes: &[u8], read: impl FnOnce(&[u8]) -> T) -> T
 
 /// Parse a reading copy directly into the DOM's wiping owner.
 pub(crate) fn read_json(bytes: &[u8]) -> Result<RequestJson, serde_json::Error> {
-    with_readable(bytes, |bytes| crate::request_json::parse(bytes))
+    with_readable(bytes, crate::request_json::parse)
 }
 
 /// The span of `result` in the JSON-RPC envelope `envelope` (its last `result` member).

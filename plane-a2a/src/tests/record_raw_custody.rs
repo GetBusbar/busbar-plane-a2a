@@ -107,7 +107,8 @@ fn canary_book() -> tests::Book {
 /// retires them through the wiping owner.
 #[test]
 fn task_row_bytes_every_read_path_takes_are_wiped() {
-    let reads: [(&str, fn(&mut tests::Book)); 4] = [
+    type ReadPath = fn(&mut tests::Book);
+    let reads: [(&str, ReadPath); 4] = [
         ("get", |book| {
             assert!(get(book, tests::ALICE, "task", 100).unwrap().is_some());
         }),

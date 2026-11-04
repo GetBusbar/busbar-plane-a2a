@@ -124,7 +124,7 @@ pub fn select<'a>(card: Option<&Value>, configured_url: &'a str) -> Selected<'a>
                 let primary_matches = card
                     .get("url")
                     .and_then(Value::as_str)
-                    .is_none_or(|url| endpoint_matches(url));
+                    .is_none_or(&endpoint_matches);
                 if primary_matches && speakable(preferred).is_some() {
                     preferred.to_string()
                 } else {

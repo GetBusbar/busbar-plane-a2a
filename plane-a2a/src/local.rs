@@ -434,7 +434,7 @@ fn list_tasks(
     Ok(ok(
         rpc_id,
         json!({
-            "tasks": page.iter().map(|t| task_json(t)).collect::<Vec<_>>(),
+            "tasks": page.iter().map(task_json).collect::<Vec<_>>(),
             "nextPageToken": next,
             "pageSize": i32::try_from(page_size).unwrap_or(i32::MAX),
             "totalSize": i32::try_from(rows.len()).unwrap_or(i32::MAX),
