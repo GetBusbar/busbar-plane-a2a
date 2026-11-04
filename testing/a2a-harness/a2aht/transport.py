@@ -301,15 +301,23 @@ def raw_connect_and_stall(url, seconds, timeout=DEFAULT_TIMEOUT, insecure=False,
         sock.sendall(body_bytes)
         if while_stalled is not None:
             while_stalled()
-        sock.settimeout(seconds)
         started = time.time()
+        deadline = started + seconds
         try:
-            chunk = sock.recv(4096)
-            if not chunk:
-                return time.time() - started
-            return time.time() - started
+            # Only an empty recv is a close: a peer that answers (a 408, a
+            # 400) but keeps the connection open has not closed on us.
+            while True:
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    return None
+                sock.settimeout(remaining)
+                if not sock.recv(4096):
+                    return time.time() - started
         except socket.timeout:
             return None
+        except OSError:
+            # A reset is the peer closing the connection.
+            return time.time() - started
     finally:
         try:
             sock.close()

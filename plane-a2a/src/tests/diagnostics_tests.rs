@@ -1,10 +1,35 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! Per-plane diagnostics-catalog invariants for the A2A plane: code/slug uniqueness, the
+//! Per-plane diagnostics-catalog invariants for the A2A plane: code/slug uniqueness, the class↔code thousands-digit contract, and the live-entry documentation floor.
 
 use super::*;
 use busbar_contract::diagnostic::{Class, Severity};
+
+/// THE CODES THE PLANE RAISES, ascending by code: every entry its source reports through
+/// `diag_*!`; `declares.json` carries the catalogue the host installs in either build.
+const DIAGNOSTICS: &[&Diagnostic] = &[
+    &A2A_TASK_CHAIN_VERIFY_FAILED,
+    &A2A_POOL_NOT_INTERCHANGEABLE,
+    &A2A_OUTBOUND_CRED_UNLEASED,
+    &A2A_RELAYED_STREAM_REFUSED,
+    &A2A_RELAYED_OUTCOME_UNRECORDED,
+    &A2A_RELAYED_SUBMISSION_FAILED,
+    &A2A_FAILURE_UNRECORDED,
+    &A2A_TASK_ROWS_UNREADABLE,
+    &A2A_TASK_STATE_UNREAD,
+    &A2A_SPLIT_RECORD_UNREAD,
+    &A2A_SPLIT_RECORD_STRAY_PARTS,
+    &A2A_BACKEND_TASK_ID_UNHELD,
+    &A2A_RELAY_ENDPOINT_REFUSED,
+    &A2A_TRUST_SIGHTING_UNRECORDED,
+    &A2A_CARD_RECORD_UNREAD,
+    &A2A_HOOK_REWRITE_NOT_APPLIED,
+    &A2A_HOOK_REWRITE_UNREADABLE,
+    &A2A_PUSH_CHECK_UNAVAILABLE,
+    &A2A_PROTOCOL_VERSION_IGNORED,
+    &PLANE_SSE_FRAME_NOT_UTF8,
+];
 
 /// An agent is dropped from the extended card because its card names the backend authority in text.
 const A2A_EXTENDED_CARD_AGENT_OMITTED: Diagnostic = Diagnostic {
@@ -511,6 +536,34 @@ fn the_catalog_is_not_empty() {
     );
 }
 
+/// Every live entry documents what it means and what to do, and names the release it arrived in.
+#[test]
+fn every_live_entry_documents_meaning_and_action() {
+    for d in DIAGNOSTICS.iter().filter(|d| !d.retired) {
+        for (field, text) in [
+            ("title", d.title),
+            ("summary", d.summary),
+            ("action", d.action),
+        ] {
+            assert!(
+                !text.trim().is_empty(),
+                "{} has an empty {field}",
+                d.banner()
+            );
+        }
+        let release: Vec<&str> = d.since.split('.').collect();
+        assert!(
+            release.len() == 3
+                && release
+                    .iter()
+                    .all(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())),
+            "{} names no release in `since`: {:?}",
+            d.banner(),
+            d.since
+        );
+    }
+}
+
 /// Codes are unique within this plane's catalog — a collision would make one un-resolvable.
 #[test]
 fn codes_are_unique() {
@@ -574,7 +627,7 @@ fn slugs_are_unique_and_kebab_case() {
     }
 }
 
-/// THE PLANE'S `declares.json` STATES ITS CATALOGUE: the `diagnostics` the door's Statement carries
+/// THE PLANE'S `declares.json` STATES ITS CATALOGUE: the `diagnostics` the door's Statement carries (and the release signs into a dropped-in plane's manifest), from which the host installs the plane's codes in either build, are exactly the entries [`DIAGNOSTICS`] holds, field for field, beside the plane's breaker fact and its needs.
 #[test]
 fn the_declares_file_states_the_catalogue() {
     let declared: serde_json::Value =

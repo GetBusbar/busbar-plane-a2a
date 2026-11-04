@@ -1,10 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! The agent cards the plane holds, in plugin-owned memory: the
+//! The agent cards the plane holds, in plugin-owned memory: the mirror of the `card` host records
+//! ([`crate::records::KIND_CARD`], keyed by agent id, operator scope).
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+
+use crate::a2a::agent_card::AgentCard;
+use crate::skill::{TaskShape, Unfit, Unreadable};
 
 use busbar_contract::abi::sdk::publish::Keyed;
 use serde_json::Value;
@@ -16,7 +20,22 @@ pub const MAX_CARDS: usize = 4096;
 /// a slow admitted unit may outlive any number of later refreshes.
 #[derive(Debug, Default)]
 pub struct Cards {
-    by_agent: Keyed<String, BTreeMap<u64, Arc<Value>>>,
+    by_agent: Keyed<String, BTreeMap<u64, Arc<HeldCard>>>,
+}
+
+#[derive(Debug)]
+struct HeldCard {
+    document: Arc<Value>,
+    typed: OnceLock<Result<AgentCard, Unreadable>>,
+}
+
+impl HeldCard {
+    fn new(document: Arc<Value>) -> Arc<Self> {
+        Arc::new(Self {
+            document,
+            typed: OnceLock::new(),
+        })
+    }
 }
 
 impl Cards {
@@ -33,27 +52,33 @@ impl Cards {
                     break;
                 }
             }
-            m.entry(agent.to_string())
-                .or_default()
-                .insert(generation, card);
+            let cards = m.entry(agent.to_string()).or_default();
+            let held = cards
+                .values()
+                .find(|held| Arc::ptr_eq(&held.document, &card))
+                .cloned()
+                .unwrap_or_else(|| HeldCard::new(card));
+            cards.insert(generation, held);
         });
     }
 
-    /// A restart's warm only fills a gap: a card held since the listing began wins.
+    /// A restart's warm only fills a gap: a card held for `agent` under `generation` since the
+    /// listing began wins, and a card held under another generation is no such card.
     pub fn hold_if_none(&self, agent: &str, generation: u64, card: Value) -> bool {
         self.by_agent.with_all(|m| {
-            if m.contains_key(agent) {
+            if m.get(agent)
+                .is_some_and(|held| held.contains_key(&generation))
+            {
                 return false;
             }
-            while m.len() >= MAX_CARDS {
+            while m.len() >= MAX_CARDS && !m.contains_key(agent) {
                 if m.pop_first().is_none() {
                     break;
                 }
             }
-            m.insert(
-                agent.to_string(),
-                BTreeMap::from([(generation, Arc::new(card))]),
-            );
+            m.entry(agent.to_string())
+                .or_default()
+                .insert(generation, HeldCard::new(Arc::new(card)));
             true
         })
     }
@@ -62,17 +87,52 @@ impl Cards {
     pub fn hold_shared_if_absent(&self, agent: &str, generation: u64, card: Arc<Value>) {
         self.by_agent.with(&agent.to_string(), |held| {
             if let Some(held) = held {
-                held.entry(generation).or_insert(card);
+                let cached = held
+                    .values()
+                    .find(|held| Arc::ptr_eq(&held.document, &card))
+                    .cloned()
+                    .unwrap_or_else(|| HeldCard::new(card));
+                held.entry(generation).or_insert(cached);
             }
         });
     }
 
     /// The card held for `agent` under `generation`; `None` when none is, or it was held under
+    /// another generation.
     #[must_use]
     pub fn at(&self, agent: &str, generation: u64) -> Option<Arc<Value>> {
         self.by_agent.with(&agent.to_string(), |held| {
-            held.and_then(|cards| cards.get(&generation).cloned())
+            held.and_then(|cards| {
+                cards
+                    .get(&generation)
+                    .map(|card| Arc::clone(&card.document))
+            })
         })
+    }
+
+    /// Judge a request against a card parsed only once for this held document.
+    pub fn fit(
+        &self,
+        agent: &str,
+        generation: u64,
+        shape: &TaskShape,
+    ) -> Result<Option<String>, Unfit> {
+        let held = self
+            .by_agent
+            .with(&agent.to_string(), |cards| {
+                cards.and_then(|cards| cards.get(&generation).cloned())
+            })
+            .ok_or(Unfit::NoCachedCard)?;
+        match held.typed.get_or_init(|| {
+            crate::a2a::agent_card::parse(&held.document).ok_or(if held.document.is_object() {
+                Unreadable::NotACard
+            } else {
+                Unreadable::NotAnObject
+            })
+        }) {
+            Ok(card) => crate::skill::judge(card, shape),
+            Err(reason) => Err(Unfit::Unreadable(*reason)),
+        }
     }
 
     /// Drop every card held under `generation` (its retire).

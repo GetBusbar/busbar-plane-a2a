@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! The `agents:` section's grammar, and the value rules that make the object pin worth having,
+//! The `agents:` section's grammar, and the value rules that make the object pin worth having, read as the door reads them: through [`crate::statement::read_agents_section`] over the section's JSON.
 
 use super::*;
 use crate::statement::read_agents_section;
@@ -9,7 +9,7 @@ use busbar_contract::config::UpstreamCreds;
 use busbar_contract::secret_ref::SecretRef;
 use serde_json::json;
 
-/// The reference config's sugar `{ word: value }` reads as, through the contract's own reading, so
+/// The reference config's sugar `{ word: value }` reads as, through the contract's own reading, so the expectation is whatever shape the pinned contract gives it (busbar step 2c reads sugar context-free).
 fn sugar(word: &str, value: &str) -> SecretRef {
     serde_json::from_value(serde_json::json!({ word: value })).expect("a sugar reference")
 }
@@ -153,7 +153,7 @@ fn a_url_without_a_scheme_fails_at_parse() {
     );
 }
 
-/// THE REGISTRATION URL IS PARSED, NOT PREFIX-TESTED: one with no host is refused, and one whose
+/// THE REGISTRATION URL IS PARSED, NOT PREFIX-TESTED: one with no host is refused, and one whose authority carries a userinfo is refused without the refusal repeating it.
 #[test]
 fn a_registration_url_is_parsed_and_its_userinfo_never_repeated() {
     let d = def("https://", PinMechanism::Unpinned);
@@ -215,7 +215,7 @@ fn the_reserved_words_still_function_as_section_knobs() {
     assert_eq!(cfg.agents.len(), 1, "the knobs are not agents");
 }
 
-/// THE CALLER'S CREDENTIAL IS NEVER FORWARDED TO A DELEGATE: refused per entry and at the section
+/// THE CALLER'S CREDENTIAL IS NEVER FORWARDED TO A DELEGATE: refused per entry and at the section level, in this plane's own sentence; `own` is accepted in both places.
 #[test]
 fn passthrough_is_refused_at_the_section_level_as_well_as_per_entry() {
     let err = parse(&json!({
@@ -252,7 +252,7 @@ fn passthrough_is_refused_at_the_section_level_as_well_as_per_entry() {
     .expect("`own` is the supported mode on both");
 }
 
-/// An entry round-trips to a document and back unchanged, which is what the overlay's per-entry
+/// An entry round-trips to a document and back unchanged, which is what the overlay's per-entry PATCH merge needs: patching one field must not rewrite the rest of the entry.
 #[test]
 fn an_entry_round_trips_through_its_document_form() {
     let d = AgentDefCfg {
@@ -286,7 +286,7 @@ fn an_entry_round_trips_through_its_document_form() {
     assert_eq!(back, d);
 }
 
-/// The registration an operator writes for a peer behind mutual TLS, parsed field for field: the
+/// The registration an operator writes for a peer behind mutual TLS, parsed field for field: the client certificate is named by REFERENCE (`file:` sugar), never by key material.
 #[test]
 fn a_mutual_tls_registration_names_its_client_certificate_by_reference() {
     let cfg = parse(&json!({
@@ -312,7 +312,7 @@ fn a_mutual_tls_registration_names_its_client_certificate_by_reference() {
     assert!(!format!("{identity:?}").contains("BEGIN"));
 }
 
-/// `mtls` with nothing to present is refused at parse, naming the missing key and what the peer
+/// `mtls` with nothing to present is refused at parse, naming the missing key and what the peer would have answered.
 #[test]
 fn mutual_tls_without_a_client_identity_is_refused_at_parse() {
     let err = parse(&json!({
@@ -375,7 +375,7 @@ fn the_admin_write_path_refuses_mutual_tls_without_a_client_identity_too() {
     assert!(err.contains("needs `client_identity:`"), "{err}");
 }
 
-/// The LEASE is a field rather than an adjective, so a lease that could never be presented is
+/// The LEASE is a field rather than an adjective, so a lease that could never be presented is refused where the operator wrote it: a zero `lease_ttl_ms` is refused at parse, naming the key, and a positive one parses field for field.
 #[test]
 fn a_zero_lease_ttl_is_refused_at_parse() {
     let err = parse(&json!({
@@ -403,7 +403,7 @@ fn a_zero_lease_ttl_is_refused_at_parse() {
     assert!(def.egress_scopes.is_empty());
 }
 
-/// An empty egress scope grants nothing and READS as though it grants something, so a blank name
+/// An empty egress scope grants nothing and READS as though it grants something, so a blank name in `egress_scopes` is refused at parse, naming the key.
 #[test]
 fn an_empty_egress_scope_is_refused() {
     let err = parse(&json!({
@@ -487,6 +487,28 @@ fn a_malformed_url_never_repeats_any_raw_credential_fragment() {
     );
 }
 
+/// A web URL the reader accepts without a literal `://` still has its userinfo masked.
+#[test]
+fn userinfo_is_masked_where_the_url_reader_finds_it() {
+    for url in [
+        "https:/svc:SECRET_CANARY@agent.example.com/a2a",
+        "https:\\\\svc:SECRET_CANARY@agent.example.com/a2a",
+        "https:/\\svc:SECRET_CANARY@agent.example.com/a2a",
+        "wss:/svc:SECRET_CANARY@agent.example.com/a2a",
+        "https:/\t/svc:SECRET_CANARY@agent.example.com/a2a",
+    ] {
+        assert!(busbar_contract::net::parse_url(url).is_ok_and(|p| p.userinfo));
+        let shown = without_userinfo(url);
+        assert!(!shown.contains("SECRET_CANARY"), "{url} shown as {shown}");
+        let error = validate_agent("planner", &def(url, PinMechanism::Unpinned)).unwrap_err();
+        assert!(!error.contains("SECRET_CANARY"), "{url} refused as {error}");
+    }
+    assert_eq!(
+        without_userinfo("https:/svc:SECRET_CANARY@agent.example.com/a2a"),
+        "https:/***@agent.example.com/a2a"
+    );
+}
+
 #[test]
 fn registration_url_scheme_is_case_insensitive() {
     for url in [
@@ -496,5 +518,18 @@ fn registration_url_scheme_is_case_insensitive() {
     ] {
         let registration = def(url, PinMechanism::Unpinned);
         assert!(validate_agent("agent", &registration).is_ok(), "{url}");
+    }
+}
+
+#[test]
+fn pin_tokens_match_the_configuration_wire_tokens() {
+    use super::PinMechanism;
+    for mechanism in [
+        PinMechanism::JwsIssuerKey,
+        PinMechanism::CertKeyPin,
+        PinMechanism::MutualTls,
+        PinMechanism::Unpinned,
+    ] {
+        assert_eq!(serde_json::to_value(mechanism).unwrap(), mechanism.token());
     }
 }

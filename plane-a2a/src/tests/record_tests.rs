@@ -2,10 +2,12 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! Round-trip tests for the A2A plane rows (`TaskRow` / `TaskEventRow`) through the store-seam
+//! `PlaneRecord` encoding — field-name stability across the plugin ABI and terminal-state
+//! disposition.
 
 use super::*;
 
-/// The task rows round-trip through serde unchanged. They cross a plugin ABI, so a field whose
+/// The task rows round-trip through serde unchanged.
 #[test]
 fn task_rows_round_trip_through_the_store_seam_encoding() {
     let task = TaskRow {
@@ -89,4 +91,17 @@ fn task_debug_does_not_reveal_a_callback_url_credential() {
             .contains("secret-webhook-token"),
         "the durable schema and bytes remain complete"
     );
+}
+
+#[test]
+fn task_row_callback_credential_has_explicit_wiping_custody() {
+    use crate::a2a::task::{Direction, Task};
+    let mut task = Task::submitted("task", "context", "caller", Direction::Inbound, 1).unwrap();
+    task.push_callback = Some("https://callback.example/?key=private-secret".into());
+    let mut row = task.to_row();
+    assert!(!format!("{row:?}").contains("private-secret"));
+    assert!(std::mem::needs_drop::<TaskRow>());
+    zeroize::Zeroize::zeroize(&mut row);
+    assert!(row.push_callback.is_empty());
+    assert_eq!(row.task_id, "task");
 }

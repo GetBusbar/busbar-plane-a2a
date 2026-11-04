@@ -21,9 +21,11 @@ pub mod pb {
     include!(concat!(env!("OUT_DIR"), "/lf.a2a.v1.serde.rs"));
 }
 
-/// The full service name the generated descriptor names (`package.Service`).
 #[cfg(test)]
-pub const SERVICE_NAME: &str = "lf.a2a.v1.A2AService";
+#[path = "tests/proto_support.rs"]
+mod support;
+#[cfg(test)]
+pub use support::SERVICE_NAME;
 
 /// The interface binding whose URL the model writes without an `http://` scheme.
 use crate::binding::BINDING_GRPC as GRPC_BINDING;

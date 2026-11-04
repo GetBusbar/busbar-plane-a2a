@@ -2,6 +2,9 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! The gRPC line's codec in the direction that DIALS: the hop's params as the rpc's request
+//! message, each answered message as its ProtoJSON result, the length prefix, and the status the
+//! trailers state (the engine's `relay::GrpcFraming`). The oracle is the generated `pb` messages,
+//! decoded and encoded with `prost` directly, never this module's own reader.
 
 use super::*;
 use crate::proto::pb;
@@ -60,6 +63,7 @@ fn a_method_in_either_dialect_names_its_rpc() {
 }
 
 /// THE HOP'S PARAMS ARE THE REQUEST MESSAGE: a v1.0 send's content survives the transcode, and a
+/// task read names exactly the id the params name.
 #[test]
 fn the_params_are_written_as_the_rpcs_request_message() {
     let params = json!({
@@ -107,6 +111,7 @@ fn the_params_are_written_as_the_rpcs_request_message() {
 }
 
 /// EACH ANSWERED MESSAGE IS ITS RESULT: the rpc's response message read back as ProtoJSON; a
+/// delete's `Empty` is `null`; a message that is not the rpc's response is refused.
 #[test]
 fn an_answered_message_is_read_as_the_rpcs_result() {
     let task = crate::proto::custody::initialized::<pb::Task>(|__custody_message| {
@@ -164,6 +169,9 @@ fn block(fields: &[(&str, &str)]) -> Vec<u8> {
 }
 
 /// THE STATUS THE TRAILERS STATE: the code the host passes beside them (the kernel hands on the
+/// status the transport read off them), with the `ErrorInfo` of the details' `google.rpc.Status`.
+/// The details never state the code: trailers handed on with no status state nothing, whatever
+/// their details say (RED: the details' own code was read as the call's status).
 #[test]
 fn the_trailers_state_the_calls_status_and_its_error_info() {
     use base64::Engine as _;
@@ -211,6 +219,7 @@ fn the_trailers_state_the_calls_status_and_its_error_info() {
 }
 
 /// THE A2A CODE A STATUS CARRIES: the reason's, else the one section 5.4 binds to the status
+/// alone; a status several A2A codes share, with no reason, names none.
 #[test]
 fn a_status_names_the_a2a_code_its_reason_or_its_row_binds() {
     let bare = |code: Code| Ended {

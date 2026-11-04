@@ -149,7 +149,10 @@ fn committed_metadata_is_exposed_once_and_only_after_applied() {
     .unwrap();
     j.enter(TICKET, &input(&result)).unwrap();
     assert!(!j.owns_unresolved_event(KIND_TASK_EVENT, KEY));
-    assert_eq!(j.committed_writes().len(), 2);
+    assert!(
+        j.committed_writes().is_empty(),
+        "non-tombstone writes are never deletion metadata"
+    );
     assert!(j.committed_writes().is_empty());
     assert!(j.applied_since(4, KIND_TASK_EVENT, KEY));
     assert!(!j.applied_since(6, KIND_TASK_EVENT, KEY));
@@ -704,4 +707,103 @@ fn an_ordinary_completed_journal_can_retain_its_next_authenticated_epoch() {
     notification(&journal, 1, "https://next.example/hook");
     deliveries.retain_publication(&journal);
     assert_eq!(deliveries.publications().len(), 1);
+}
+
+/// AN APPLIED PUBLICATION'S DELETION METADATA IS ITS PUSH-CONFIG TOMBSTONES ALONE: the task rows
+/// and configs it put (which may carry callback credentials) are never copied into the effects.
+#[test]
+fn applied_effects_carry_only_push_config_tombstones() {
+    use crate::records::KIND_PUSH_CONFIG;
+    let journal = Journal::default();
+    journal.enter(TICKET, &input(&[])).unwrap();
+    let writes = [
+        Write {
+            kind: KIND_TASK,
+            key: KEY.into(),
+            value: b"task row".to_vec(),
+        },
+        Write {
+            kind: KIND_PUSH_CONFIG,
+            key: "aa/t2".into(),
+            value: b"https://hook.example/?key=secret".to_vec(),
+        },
+        Write {
+            kind: KIND_PUSH_CONFIG,
+            key: KEY.into(),
+            value: Vec::new(),
+        },
+    ];
+    assert_eq!(journal.publish(1, &[], &[], &writes), Err(Halt::Pending));
+    let request = journal.0.with_all(|all| {
+        let step = all.get_mut(&()).unwrap().steps.last_mut().unwrap();
+        step.submitted = true;
+        let Action::Publish { request, .. } = &step.action else {
+            panic!("publication")
+        };
+        request.clone()
+    });
+    assert!(journal
+        .settle(&settlement(&request, Ok(Decision::Applied)))
+        .unwrap());
+    let effects = journal.applied_effects();
+    let deletes: Vec<_> = effects
+        .deletes
+        .iter()
+        .map(|w| (w.kind, w.key.as_str(), w.value.is_empty()))
+        .collect();
+    assert_eq!(deletes, [(KIND_PUSH_CONFIG, KEY, true)]);
+    journal.effects_finished(effects.owner);
+}
+
+#[test]
+fn committed_deletions_exclude_credential_bearing_puts() {
+    use crate::records::KIND_PUSH_CONFIG;
+    let journal = Journal::default();
+    journal.enter(TICKET, &input(&[])).unwrap();
+    let writes = [
+        Write {
+            kind: KIND_PUSH_CONFIG,
+            key: "caller/put".into(),
+            value: b"secret".to_vec(),
+        },
+        Write {
+            kind: KIND_PUSH_CONFIG,
+            key: "caller/delete".into(),
+            value: Vec::new(),
+        },
+    ];
+    assert_eq!(journal.publish(1, &[], &[], &writes), Err(Halt::Pending));
+    let request = journal.0.with_all(|all| {
+        let step = all.get_mut(&()).unwrap().steps.last_mut().unwrap();
+        step.submitted = true;
+        let Action::Publish { request, .. } = &step.action else {
+            unreachable!()
+        };
+        request.clone()
+    });
+    journal
+        .settle(&settlement(&request, Ok(Decision::Applied)))
+        .unwrap();
+    let metadata = journal.committed_writes();
+    assert_eq!(metadata.len(), 1);
+    assert_eq!(metadata[0].key, "caller/delete");
+    assert!(metadata[0].value.is_empty());
+    assert!(journal.committed_writes().is_empty());
+}
+
+#[test]
+fn conditional_failures_log_the_source_site_without_record_contents() {
+    let (sent, heard) = std::sync::mpsc::channel();
+    tracing::subscriber::with_default(crate::tests::capture::Capture(sent), || {
+        assert!(kind("private-record-name").is_err());
+        assert!(Journal::default()
+            .observe(1, KIND_TASK_EVENT, "private-scope")
+            .is_err());
+    });
+    let lines: Vec<_> = heard.try_iter().collect();
+    assert_eq!(lines.len(), 2);
+    assert!(lines
+        .iter()
+        .all(|(_, line)| line.contains("source_line=") && !line.contains("private-")));
+    assert_ne!(lines[0].1, lines[1].1);
 }

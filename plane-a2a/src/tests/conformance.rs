@@ -36,7 +36,7 @@ fn request(id: &str, method: &str) -> Vec<u8> {
     format!(r#"{{"jsonrpc":"2.0","id":{id},"method":"{method}","params":{{}}}}"#).into_bytes()
 }
 
-/// Drive one body through the door's arrival (the JSON-RPC line, no head fields) and hand back the
+/// Drive one body through the door's arrival (the JSON-RPC line, no head fields) and hand back the method row it classed the request under and the request id it read.
 fn decode(body: &[u8]) -> Result<(ops::MethodRow, serde_json::Value), String> {
     match agent_arrival::decide_and_read(body, |_| None).0 {
         AgentDisposition::Request { row, id, .. } => Ok((*row, id)),

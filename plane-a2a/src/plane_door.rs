@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! THE PLANE'S DOOR, SERVED: the slots the kernel calls over the plane ABI, on the SDK's safe
+//! surface.
 
 use busbar_contract::abi::mechanism::call::{OutHead, Outcome};
 use busbar_contract::abi::mechanism::door::Statement;
@@ -47,6 +48,8 @@ const MAX_INFLIGHT: u32 = 64;
 pub const VERSION: &str = "1.6.0";
 
 /// The Statement: the plane's name and version, the settings section it declares
+/// ([`statement::SECTIONS`]), its three outbound needs ([`statement::NEEDS`]), the secret
+/// references its section holds ([`statement::SECRET_REFS`]) and its tail ([`statement::TAIL`]).
 pub const STATEMENT: Statement = {
     let mut s = statement(crate::PLANE_KEY, VERSION, MAX_INFLIGHT)
         .with_kind_tail(statement::TAIL)
@@ -78,7 +81,9 @@ busbar_contract::statement_extensions!(
     )]
 );
 
-/// The most units the instance keeps state for at once. At it, the units the door is done with
+/// The most units the instance keeps state for at once; at it, the units the door is done with make
+/// room ([`AgentUnit::over`]), so an instance full of live units refuses the next arrival
+/// ([`room_for`]).
 pub const MAX_UNITS: usize = 4096;
 
 /// One unit the instance keeps, from its arrival: what the arrival was, the agent the caller
@@ -119,10 +124,13 @@ pub struct AgentUnit {
     /// `refusal` may still read it (the kernel judges the plane's last answer after it returns), and
     /// that refusal forgets it; until then it makes room when the instance is full ([`room_for`]).
     pub over: bool,
+    /// Request metadata retained for catalogue refusals after payload release.
+    ended_shape: Option<crate::skill::TaskShape>,
 }
 
 impl AgentUnit {
     /// A unit arriving as `disposition` under `generation`: no hop, envelope, framed call or pool
+    /// yet, its pass fresh, its ticket unknown and the door not done with it.
     fn new(
         disposition: AgentDisposition,
         agent: Option<String>,
@@ -142,6 +150,32 @@ impl AgentUnit {
             pool: None,
             ticket: Ticket::NONE,
             over: false,
+            ended_shape: None,
+        }
+    }
+
+    /// The door is done with the unit ([`AgentUnit::over`]): what only its hop's pieces read (a
+    /// card look in flight and its host stream, the answer bytes and the relayed copies of the
+    /// caller's request) is released now, keeping what a `refusal` still reads.
+    pub(crate) fn end(&mut self) {
+        self.over = true;
+        if let Some(envelope) = self.envelope.as_mut() {
+            use zeroize::Zeroize;
+            envelope.zeroize();
+        }
+        if let Some(hop) = self.hop.as_mut() {
+            self.ended_shape.get_or_insert_with(|| {
+                hop.request
+                    .as_deref()
+                    .map(crate::skill::TaskShape::of)
+                    .unwrap_or_default()
+            });
+            hop.request = None;
+            hop.verifying = None;
+            hop.outbox = Outbox::default();
+            hop.relay.release_payloads();
+            hop.rewritten = None;
+            hop.held_writes = Vec::new();
         }
     }
 }
@@ -191,10 +225,6 @@ pub struct Hop {
     /// reads (the task it opens, the callback it carries, the admission) reads the caller's own
     /// envelope, the params its gate had already screened.
     rewritten: Option<crate::request_json::RequestJson>,
-    /// The bytes the hop relays, kept when its task ids may be translated (the request names a
-    /// task, or a rewrite or a minted message id rewrote it): the translation splices the far
-    /// end's ids into these, every other byte as the caller wrote it. `None`: nothing kept.
-    relayed_bytes: Option<relay::RawBytes>,
     /// A gRPC send whose request carried no message: its first ATTEMPT mints the message's id
     /// ([`crate::framed::mints_message_id`]) before the task is opened.
     mint_message_id: bool,
@@ -220,7 +250,8 @@ pub struct Hop {
 }
 
 impl Hop {
-    /// Cancellation releases only a filing that never submitted a mutation. Applied outcomes
+    /// Cancellation releases only a filing that never submitted a mutation: an applied outcome is
+    /// acknowledged, and an unknown submitted attempt stays owned by its ticket.
     pub(crate) fn cancel_owed(
         &mut self,
         deliveries: &crate::push::Deliveries,
@@ -275,7 +306,7 @@ impl Hop {
         self.relay.expects_events()
     }
 
-    /// A hop about a task whose answer may be events (an event-stream hop): `envelope`
+    /// A task hop that receives event streams and optionally subscribes to an existing task.
     #[must_use]
     pub fn events(
         id: serde_json::Value,
@@ -355,6 +386,13 @@ const EVENTS_HEAD: [(&str, &str); 2] = [
 ];
 
 impl Outbox {
+    /// Write the remaining suffix and retain the cursor after a short host write.
+    fn drain(&mut self, write: impl FnOnce(&[u8]) -> usize) -> usize {
+        let n = write(&self.bytes[self.at..]);
+        self.at += n;
+        n
+    }
+
     /// The outbox for `answer`; `None` for a piece the hop refuses.
     fn of(answer: PieceAnswer) -> Option<Self> {
         let lent = matches!(answer, PieceAnswer::ToFarEndLent);
@@ -393,7 +431,9 @@ impl Outbox {
         })
     }
 
-    /// The outbox for `answer` on the gRPC line, the rpc `rpc`: a whole
+    /// The outbox for `answer` on the gRPC line, the rpc `rpc`: a whole answer is the rpc's one
+    /// message, or the status it ends with, and an answer in events is one message per event, each
+    /// on an answer of its own, an `error` event ending the stream.
     fn framed(answer: PieceAnswer, rpc: crate::framed::Rpc) -> Option<Self> {
         match answer {
             PieceAnswer::ToCaller(mut r) => {
@@ -429,7 +469,9 @@ impl Outbox {
         }
     }
 
-    /// A whole reply on the gRPC line: an `OK` answer is its one message, the stream closing as
+    /// A whole reply on the gRPC line: an `OK` answer is its one message, the stream closing as one
+    /// that ended whole; any other status is no message, and the call ends with it as its final
+    /// status (its message and details), rendered by the stream's framer (SEAM-4l).
     fn framed_whole(mut reply: crate::framed::FramedReply) -> Self {
         let ok = reply.code == crate::framed::Code::Ok as u32;
         let (bytes, final_status) = if ok {
@@ -450,6 +492,8 @@ impl Outbox {
 }
 
 /// ONE REQUEST BUSBAR ORIGINATES ([`crate::mirror::Originated`]): its agent's url judged as a
+/// relayed hop's endpoint is, then `method` with `params` sent over the agent's need naming its
+/// registration.
 pub(crate) fn drive_originated(
     plane: &A2aDoor,
     ticket: Ticket,
@@ -514,7 +558,8 @@ pub(crate) fn drive_originated(
     }
 }
 
-/// The mirror ([`crate::mirror::Flight`]): each stage's request originated, until its last stage
+/// The mirror ([`crate::mirror::Flight`]): each stage's request originated, until its last stage is
+/// answered or one is refused for the agent's unavailable credential.
 pub(crate) fn drive_mirror(
     plane: &A2aDoor,
     ticket: Ticket,
@@ -541,7 +586,6 @@ type CardWarmSnapshot = (u64, Option<Arc<AgentsCfg>>);
 /// One instance: the public base URL `open` was given, the host tables, every live generation's
 /// snapshot and section, the units in flight, whether (and when) the task records were restored,
 /// and the far end's own id for each relayed task busbar learnt it for.
-#[derive(Default)]
 pub struct A2aDoor {
     /// Conditional intent bytes remain leased until the host releases their answer.
     pub(crate) publication_leases: busbar_contract::abi::sdk::life::Leases,
@@ -550,15 +594,21 @@ pub struct A2aDoor {
     pub(crate) services: Option<StaticServices>,
     generations: Generations<PlaneSnapshot, AgentsCfg>,
     pub(crate) units: Keyed<u64, AgentUnit>,
+    arrival_gate: std::sync::Mutex<()>,
+    card_publication: std::sync::Mutex<()>,
+    cleanup_pending: std::sync::atomic::AtomicBool,
     pub(crate) restored: crate::task_door::Restore,
     /// `<caller>/<busbar task id>` to the far end's own id for the task: plane memory, so a
     /// restart forgets it (its bound included).
     backends: BackendIds,
     /// The agents' verified cards, held in plugin memory to their refresh generation.
     pub(crate) cards: crate::cards::Cards,
+    pub(crate) card_cache: crate::served_card_cache::CardCache,
     /// The held cards were warmed from the `card` and `card_approval` host records after `open`,
     /// both listings landed ([`warm_cards`]).
     cards_warmed: Keyed<(), bool>,
+    /// A warm's listing was refused and said so ([`warm_unlisted`]) since a warm last landed.
+    warm_unlisted: Keyed<(), bool>,
     /// The registration snapshot captured before a warm issues its first listing.
     warming: Keyed<(u32, u32), CardWarmSnapshot>,
     /// The host refused the last tick's (or its drive's) warm: the next tick attempts the
@@ -597,7 +647,49 @@ pub struct A2aDoor {
     pub(crate) latches: crate::task_hop::Latches,
 }
 
+impl Default for A2aDoor {
+    fn default() -> Self {
+        Self {
+            publication_leases: Default::default(),
+            public_url: Default::default(),
+            host: Default::default(),
+            services: Default::default(),
+            generations: Default::default(),
+            units: Keyed::sharded(),
+            arrival_gate: Default::default(),
+            card_publication: Default::default(),
+            cleanup_pending: Default::default(),
+            restored: Default::default(),
+            backends: Default::default(),
+            cards: Default::default(),
+            card_cache: Default::default(),
+            cards_warmed: Default::default(),
+            warm_unlisted: Default::default(),
+            warming: Default::default(),
+            warm_refused: Default::default(),
+            record_parts: Default::default(),
+            warm_driving: Default::default(),
+            deliveries: Default::default(),
+            attempting: Default::default(),
+            tokens: Default::default(),
+            pushes: Default::default(),
+            sweeps: Default::default(),
+            newest: Default::default(),
+            kept_registrations: Default::default(),
+            grown: Default::default(),
+            flights: Default::default(),
+            trust: Default::default(),
+            latches: Default::default(),
+        }
+    }
+}
+
 impl A2aDoor {
+    pub(crate) fn unit_ended(&self) {
+        self.cleanup_pending
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+
     /// Run `f` over unit `unit`, when the instance still keeps it.
     pub(crate) fn on_unit(&self, unit: u64, f: impl FnOnce(&mut AgentUnit)) {
         self.units.with(&unit, |u| u.map(f));
@@ -630,6 +722,8 @@ impl A2aDoor {
     }
 
     /// `refresh`: the new section judged, the applied `agent_push:` section (`owned`, the
+    /// document's other owned sections) judged as `open` judges it, and the next generation's
+    /// snapshot over the same public base URL.
     fn refreshed(
         &self,
         settings: &[u8],
@@ -640,7 +734,7 @@ impl A2aDoor {
         let cfg = agents_section(settings)?;
         statement::read_push_section(owned).map_err(Refusal::refused)?;
         let names: Vec<&str> = cfg.agents.keys().map(String::as_str).collect();
-        let spec = statement::agents_snapshot_spec(plane.public_url.as_deref(), &names);
+        let spec = statement::agents_snapshot_spec(plane.public_url, &names);
 
         let held_at = plane.newest();
         let before = plane.generations.at(held_at);
@@ -664,7 +758,9 @@ impl A2aDoor {
     }
 }
 
-/// The held cards, warmed from the `card` host records (the `connect` and `approve` answers
+/// The held cards, warmed from the `card` host records (the `connect` and `approve` answers write
+/// them, keeping every write on an answer): every agent's recorded card held under the newest
+/// generation, so an instance opened again serves the agents its operator approved before.
 fn warm_cards(plane: &A2aDoor, ticket: Ticket, issued: u32) -> (Poll<bool>, u32) {
     use crate::tasks::Records;
     let Some(host) = plane.host.as_ref() else {
@@ -682,7 +778,8 @@ fn warm_cards(plane: &A2aDoor, ticket: Ticket, issued: u32) -> (Poll<bool>, u32)
     let mut via = Via::new(host, plane.services, ticket, issued, &plane.grown);
     let cards = match via.list(crate::records::KIND_CARD, "") {
         Err(Halt::Pending) => return (Poll::Pending, via.issued()),
-        Err(Halt::Failed(_)) => {
+        Err(Halt::Failed(why)) => {
+            warm_unlisted(plane, crate::records::KIND_CARD, &why);
             plane.warming.remove(&key);
             return (Poll::Ready(false), via.issued());
         }
@@ -690,11 +787,17 @@ fn warm_cards(plane: &A2aDoor, ticket: Ticket, issued: u32) -> (Poll<bool>, u32)
     };
     let (approvals, landed) = match via.list(crate::records::KIND_CARD_APPROVAL, "") {
         Err(Halt::Pending) => return (Poll::Pending, via.issued()),
-        Err(Halt::Failed(_)) => (Vec::new(), false),
+        Err(Halt::Failed(why)) => {
+            warm_unlisted(plane, crate::records::KIND_CARD_APPROVAL, &why);
+            (Vec::new(), false)
+        }
         Ok(rows) => (rows, true),
     };
     let issued = via.issued();
     plane.warming.remove(&key);
+    if landed {
+        plane.warm_unlisted.remove(&());
+    }
 
     let Some(section) = section.filter(|_| plane.generations.at(generation).is_some()) else {
         return (Poll::Ready(false), issued);
@@ -707,7 +810,7 @@ fn warm_cards(plane: &A2aDoor, ticket: Ticket, issued: u32) -> (Poll<bool>, u32)
         let Some(original) = section.agents.get(&agent) else {
             continue;
         };
-        match serde_json::from_slice::<crate::request_json::RequestJson>(&value) {
+        match crate::request_json::parse(&value) {
             Ok(card) => {
                 if plane
                     .cards
@@ -732,14 +835,16 @@ fn warm_cards(plane: &A2aDoor, ticket: Ticket, issued: u32) -> (Poll<bool>, u32)
         if current.as_ref().and_then(|s| s.agents.get(&agent)) != Some(original) {
             continue;
         }
-        let approved =
-            match serde_json::from_slice::<std::collections::BTreeMap<String, String>>(&value) {
-                Ok(approved) => approved,
-                Err(e) => {
-                    record_unread(crate::records::KIND_CARD_APPROVAL, &agent, &e);
-                    continue;
-                }
-            };
+        let approved = match crate::request_json::from_slice::<
+            std::collections::BTreeMap<String, String>,
+        >(&value)
+        {
+            Ok(approved) => approved,
+            Err(e) => {
+                record_unread(crate::records::KIND_CARD_APPROVAL, &agent, &e);
+                continue;
+            }
+        };
         plane.trust.with_all(|standings| {
             let standing = standings.entry(agent).or_default();
             if standing.approved.is_none() {
@@ -748,6 +853,18 @@ fn warm_cards(plane: &A2aDoor, ticket: Ticket, issued: u32) -> (Poll<bool>, u32)
         });
     }
     (Poll::Ready(landed), issued)
+}
+
+/// A listing of the held `kind` the host refused at a warm: said once until a warm lands, so a
+/// store that keeps refusing it is named in the plugin's log without a line on every tick.
+fn warm_unlisted(plane: &A2aDoor, kind: &str, _why: &str) {
+    if plane.warm_unlisted.insert((), true).is_none() {
+        tracing::warn!(
+            kind,
+            "a2a: the host refused the listing of the stored {kind} records; the agents' \
+             cards stay unwarmed and the listing is retried on a later tick"
+        );
+    }
 }
 
 /// A record that could not be read leaves its agent without that restored card or approval.
@@ -762,9 +879,11 @@ fn record_unread(kind: &str, agent: &str, e: &serde_json::Error) {
 }
 
 /// How soon after a tick that left the held cards unwarmed (the host refused their listing) the
+/// tick that warms them again is asked for, at the latest: a second.
 const WARM_AGAIN_NS: u64 = 1_000_000_000;
 
 /// One held kind's listed `rows` read back whole ([`crate::split_record::rejoin`]): a card or an
+/// approval past the host's record ceiling is reassembled from its parts and verified.
 fn joined(
     plane: &A2aDoor,
     kind: &'static str,
@@ -778,11 +897,12 @@ fn joined(
         .collect();
     let joined = crate::split_record::rejoin(rows);
     plane.record_parts.with_all(|known| {
-        known.retain(|(k, _), _| *k != kind);
         for part in listed {
             let held = known.entry((kind, owner(&part).to_string())).or_default();
-            held.retired.push(part);
-            held.carried = false;
+            if !held.current.contains(&part) && !held.retired.contains(&part) {
+                held.retired.push(part);
+                held.carried = false;
+            }
         }
     });
     for (agent, why) in &joined.refused {
@@ -808,6 +928,8 @@ fn joined(
 }
 
 /// The `card` host records of `agent`'s verified `card`: keyed by the agent's id under the
+/// operator's scope (no caller prefix), split across records under the host's ceiling
+/// ([`kept_records`]).
 fn card_records(plane: &A2aDoor, agent: &str, card: &serde_json::Value) -> Vec<Write> {
     crate::relay::json_bytes(card)
         .map(|value| kept_records(plane, crate::records::KIND_CARD, agent, &value))
@@ -815,6 +937,7 @@ fn card_records(plane: &A2aDoor, agent: &str, card: &serde_json::Value) -> Vec<W
 }
 
 /// The `card_approval` host records of the skills (`id -> digest`) of the card the operator
+/// approved for `agent`: keyed like its `card` records ([`kept_records`]).
 fn approval_records(
     plane: &A2aDoor,
     agent: &str,
@@ -844,6 +967,11 @@ struct HeldParts {
 }
 
 /// The host records that keep `value` under `agent` of `kind`, whatever its length: a record is at
+/// most [`busbar_contract::bounded::MAX_RECORD_BYTES`] (busbar dev's store refuses a longer one,
+/// and the kernel answers the whole verb `500` for a write it cannot make), so a longer value is
+/// its parts, then its head ([`crate::split_record::split_value`]); then a tombstone of every part
+/// the store may hold under the key that the new value does not name ([`HeldParts`]), written after
+/// the head, so no head is ever left naming a part that is gone.
 fn kept_records(plane: &A2aDoor, kind: &'static str, agent: &str, value: &[u8]) -> Vec<Write> {
     let mut writes = crate::split_record::split_value(kind, agent, value);
     let named: Vec<String> = writes
@@ -879,6 +1007,8 @@ fn kept_records(plane: &A2aDoor, kind: &'static str, agent: &str, value: &[u8]) 
 }
 
 /// A whole serve answer (a trust verb's, a push callback's): `status`, the head `fields`, `body`,
+/// the `AUDIT_*` row, and the record `writes` it carries, every span in the one arena; a short
+/// buffer answers FAILED with what each needs.
 pub(crate) fn verb_answer(
     input: &Lent<'_, ServeIn>,
     out: &mut Out<'_, ServeOut>,
@@ -932,7 +1062,14 @@ pub(crate) fn verb_answer(
 pub const MAX_BACKEND_IDS: usize = 100_000;
 
 /// The longest far-end task id the instance holds, in bytes: the far end's id is untrusted input,
+/// so the map is bounded in bytes as well as in entries ([`MAX_BACKEND_IDS`]).
 pub const MAX_BACKEND_ID_BYTES: usize = 1024;
+
+/// Maximum retained task-key bytes per backend-id entry.
+const MAX_BACKEND_KEY_BYTES: usize = 4096;
+
+/// Combined string payload budget, counting both stored copies of each key.
+const MAX_BACKEND_BYTES: usize = 8 * 1024 * 1024;
 
 /// The far end's own task ids, by `<caller>/<busbar task id>`, bounded: past the bound the id
 /// recorded longest ago is forgotten first, whichever caller it is for, so one caller's volume
@@ -946,6 +1083,7 @@ struct Recorded {
     ids: std::collections::BTreeMap<String, (u64, String)>,
     order: std::collections::BTreeMap<u64, String>,
     next: u64,
+    bytes: usize,
 }
 
 impl BackendIds {
@@ -956,31 +1094,43 @@ impl BackendIds {
         })
     }
 
-    /// How many ids are held.
-    #[cfg(test)]
-    pub(crate) fn len(&self) -> usize {
-        self.0.with(&(), |r| r.map_or(0, |r| r.ids.len()))
-    }
-
-    /// Hold `id` under `key`; past `cap`, the id recorded longest ago is forgotten. A key held
+    /// Hold `id` under `key`, past `cap` forgetting the id recorded longest ago (a key held already
+    /// keeps its place), and answer `false` for an id longer than [`MAX_BACKEND_ID_BYTES`], which
+    /// is not held.
     pub(crate) fn record(&self, cap: usize, key: String, id: String) -> bool {
-        if id.len() > MAX_BACKEND_ID_BYTES {
+        if cap == 0 || id.len() > MAX_BACKEND_ID_BYTES || key.len() > MAX_BACKEND_KEY_BYTES {
             return false;
         }
         self.0.with_all(|m| {
             let r = m.entry(()).or_default();
+            let cost = key.len() * 2 + id.len();
             if let Some((_, held)) = r.ids.get_mut(&key) {
-                *held = id;
-                return;
+                let next_bytes = r.bytes - held.len() + id.len();
+                if next_bytes <= MAX_BACKEND_BYTES {
+                    r.bytes = next_bytes;
+                    *held = id;
+                    return;
+                }
             }
-            while r.ids.len() >= cap {
+            let previous = r.ids.remove(&key).map(|(at, held)| {
+                r.order.remove(&at);
+                r.bytes -= key.len() * 2 + held.len();
+                at
+            });
+            while r.ids.len() >= cap || r.bytes + cost > MAX_BACKEND_BYTES {
                 let Some((_, oldest)) = r.order.pop_first() else {
                     break;
                 };
-                r.ids.remove(&oldest);
+                if let Some((_, held)) = r.ids.remove(&oldest) {
+                    r.bytes -= oldest.len() * 2 + held.len();
+                }
             }
-            let at = r.next;
-            r.next += 1;
+            let at = previous.unwrap_or_else(|| {
+                let at = r.next;
+                r.next += 1;
+                at
+            });
+            r.bytes += cost;
             r.order.insert(at, key.clone());
             r.ids.insert(key, (at, id));
         });
@@ -993,14 +1143,20 @@ fn agents_section(bytes: &[u8]) -> Result<AgentsCfg, Refusal> {
     statement::read_agents_section(bytes).map_err(Refusal::refused)
 }
 
-/// Whether the instance has room for a unit under `key`, judged before `arrive` states anything:
-fn room_for(units: &Keyed<u64, AgentUnit>, key: u64) -> bool {
-    units.with_all(|m| {
-        if m.len() < MAX_UNITS || m.contains_key(&key) {
-            return true;
-        }
-        m.retain(|_, u| !u.over);
-        m.len() < MAX_UNITS
+/// Check capacity under the arrival gate, reclaiming ended units only after a new completion.
+fn room_for(plane: &A2aDoor, key: u64) -> bool {
+    if plane.units.len() < MAX_UNITS || plane.units.with(&key, |unit| unit.is_some()) {
+        return true;
+    }
+    if !plane
+        .cleanup_pending
+        .swap(false, std::sync::atomic::Ordering::AcqRel)
+    {
+        return false;
+    }
+    plane.units.with_all(|units| {
+        units.retain(|_, unit| !unit.over);
+        units.len() < MAX_UNITS
     })
 }
 
@@ -1023,13 +1179,15 @@ fn agent_of(target: &str) -> Option<String> {
     }
 }
 
-/// [`ArriveOut::refusal`]: the arrival is refused in the plane's own words, at its own status
+/// [`ArriveOut::refusal`]: the arrival is refused in the plane's own words, at its own status (the
+/// words ride in the head's error, and `refusal` renders them).
 pub const REFUSED_IN_OWN_WORDS: u32 = 1;
 
 /// [`ArriveOut::refusal`]: no line of this door serves the arrival (a 404).
 pub const UNSERVED: u32 = 2;
 
 /// REFUSED in the plane's own words, at its own status: `refusal` renders them in the line's
+/// dialect.
 fn refused(out: &mut Out<'_, ArriveOut>, refusal: &agent_arrival::AgentRefusal) -> Outcome {
     out.set(|o| &o.refusal, REFUSED_IN_OWN_WORDS);
     out.set(|o| &o.refusal_status, refusal.status);
@@ -1037,6 +1195,7 @@ fn refused(out: &mut Out<'_, ArriveOut>, refusal: &agent_arrival::AgentRefusal) 
 }
 
 /// The status a gRPC call is refused with at its arrival, as the refusal its line renders it from
+/// (the JSON-RPC code [`crate::framed::grpc_code`] maps back to it, and its message).
 fn framed_refusal(status: &crate::framed::CallStatus) -> agent_arrival::AgentRefusal {
     use crate::framed::Code;
     let code = match status.code() {
@@ -1053,13 +1212,17 @@ fn framed_refusal(status: &crate::framed::CallStatus) -> agent_arrival::AgentRef
 }
 
 /// REFUSED as UNSERVED (a `404`): no line of this door serves the arrival, a route it does not
+/// claim, a target its line does not read, or a request whose method names no operation class.
 fn unserved(out: &mut Out<'_, ArriveOut>) -> Outcome {
     out.set(|o| &o.refusal, UNSERVED);
     out.set(|o| &o.refusal_status, STATUS_NOT_FOUND);
     out.fail(Refusal::bare())
 }
 
-/// A gRPC call's head field `name`, over
+/// A gRPC call's head field `name`, over the call's own fields (`field`): no media type and no
+/// `Origin` to judge, and the version its `a2a-version` names, the line's own (`1.0`) when it names
+/// none: absent, empty, or nothing but whitespace (the version is read trimmed, so a blank one
+/// would otherwise read as the JSON-RPC line's default).
 fn framed_field<'a>(field: impl Fn(&str) -> Option<&'a str>, name: &str) -> Option<&'a str> {
     if name.eq_ignore_ascii_case(agent_arrival::H_VERSION) {
         field(name)
@@ -1117,7 +1280,7 @@ slot!(
     }
 );
 
-/// THE LIFECYCLE on the SDK's [`PlaneLife`] (`lifecycle: plane_life(A2aDoor)`): `validate`, `open`
+/// The SDK lifecycle validates settings, publishes generations, and drives timed work.
 impl PlaneLife for A2aDoor {
     type Held = AgentsCfg;
 
@@ -1135,6 +1298,7 @@ impl PlaneLife for A2aDoor {
     }
 
     /// `open`: the instance over the section and the public base URL, and the first generation's
+    /// snapshot.
     fn open(input: &Lent<'_, PlaneOpenIn>) -> Result<plane_life::Opened<Self>, Refusal> {
         let cfg = agents_section(input.open().settings().bytes())?;
 
@@ -1147,19 +1311,20 @@ impl PlaneLife for A2aDoor {
             ..A2aDoor::default()
         };
         let names: Vec<&str> = cfg.agents.keys().map(String::as_str).collect();
-        let spec = statement::agents_snapshot_spec(plane.public_url.as_deref(), &names);
+        let spec = statement::agents_snapshot_spec(plane.public_url, &names);
         Ok(plane_life::Opened {
             plane,
             first: Published { spec, held: cfg },
         })
     }
 
-    /// `refresh` with no other owned section applied ([`A2aDoor::refreshed`]). The slot calls
+    /// `refresh` with no other owned section applied ([`A2aDoor::refreshed`]); the slot calls
+    /// [`Self::refresh_in`], which reads the applied ones.
     fn refresh(&self, settings: &[u8], generation: u64) -> Result<Published<AgentsCfg>, Refusal> {
         self.refreshed(settings, &[], generation)
     }
 
-    /// `refresh` from the whole lent `in` ([`A2aDoor::refreshed`]): the applied `agent_push:`
+    /// Refresh validates the applied agent and push sections before publishing their snapshot.
     fn refresh_in(&self, input: &Lent<'_, RefreshIn>) -> Result<Published<AgentsCfg>, Refusal> {
         let extensions = input.head().extensions().bytes();
         let owned = busbar_contract::abi::mechanism::extensions::get(
@@ -1170,16 +1335,32 @@ impl PlaneLife for A2aDoor {
         self.refreshed(input.settings().bytes(), owned, input.generation())
     }
 
-    /// After `generation` was published, by `open` or `refresh`: the newest when it is newer. After
+    /// After `generation` was published, by `open` or `refresh`: the newest when it is newer, each
+    /// kept registration carrying the card it is held at now and starting again at the fail-closed
+    /// floor (nothing sighted) with the approval it stands at now.
     fn published(&self, generation: u64) {
-        self.newest.with_all(|m| {
-            if m.get(&()).is_none_or(|n| *n < generation) {
+        let _publication = self
+            .card_publication
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = self.newest.with_all(|m| {
+            let before = m.get(&()).copied();
+            if before.is_none_or(|n| n < generation) {
                 m.insert((), generation);
             }
+            before
         });
         let Some(kept) = self.kept_registrations.remove(&()) else {
             return;
         };
+        // A card a trust verb held after `refresh` copied the kept cards is carried on too.
+        if let Some(before) = before.filter(|n| *n < generation) {
+            for name in &kept {
+                if let Some(card) = self.cards.at(name, before) {
+                    self.cards.hold_shared(name, generation, card);
+                }
+            }
+        }
         self.trust.with_all(|m| {
             let approvals: Vec<_> = kept
                 .into_iter()
@@ -1202,9 +1383,11 @@ impl PlaneLife for A2aDoor {
     /// `retire`, after the generation's snapshot is dropped: the cards held to it go too.
     fn retire(&self, generation: u64) {
         self.cards.retire(generation);
+        self.card_cache.retire(generation);
     }
 
-    /// `tick`: one due push notification attempted ([`crate::push_door::tick_deliveries`]), and the next
+    /// `tick`: one due push notification attempted ([`crate::push_door::tick_deliveries`]), and the
+    /// next tick wanted when the earliest waiting one is due (`0`: none waits).
     fn tick(
         instance: Instance<'_, Self>,
         input: Lent<'_, TickIn>,
@@ -1270,6 +1453,7 @@ impl PlaneLife for A2aDoor {
     }
 
     /// `drive`: no session has unsolicited output; a push delivery the last `tick` left PENDING
+    /// goes on ([`crate::push_door::drive`]).
     fn drive(
         instance: Instance<'_, Self>,
         input: Lent<'_, PlaneDriveIn>,
@@ -1305,6 +1489,8 @@ impl PlaneLife for A2aDoor {
     }
 
     /// `cancel`: nothing the far end moved is in flight, so nothing moved; a card look the
+    /// cancelled unit held is abandoned, and every unit waiting on it is woken at once to look for
+    /// itself (cancellation is a wake).
     fn cancel(
         instance: Instance<'_, Self>,
         input: Lent<'_, PlaneCancelIn>,
@@ -1322,7 +1508,10 @@ impl PlaneLife for A2aDoor {
                 Ending::Keep,
                 |u| Some(u.ticket),
                 |u| {
-                    u.over = true;
+                    u.end();
+                    plane
+                        .cleanup_pending
+                        .store(true, std::sync::atomic::Ordering::Release);
                     u.hop.as_ref().is_some_and(|h| h.relay.far_answered())
                 },
             );
@@ -1354,7 +1543,8 @@ slot!(
             return Outcome::Failed;
         };
         let given = input;
-        if !room_for(&plane.units, given.unit()) {
+        let _arrival = plane.arrival_gate.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !room_for(plane, given.unit()) {
             return refused(&mut out, &agent_arrival::units_full());
         }
         let Some(route) = statement::route_of_claim(given.claim(), || agent_claims(plane)) else {
@@ -1406,21 +1596,23 @@ slot!(
         // A composed request may contain callback credentials even when its head is refused.
         let envelope = envelope.map(zeroize::Zeroizing::new);
         let fields = input.fields();
-        for name in [
-            agent_arrival::H_ORIGIN,
-            agent_arrival::H_CONTENT_TYPE,
-            agent_arrival::H_VERSION,
-        ] {
-            let value = fields
-                .iter()
-                .find(|f| {
-                    f.name()
-                        .as_str()
-                        .is_ok_and(|n| n.eq_ignore_ascii_case(name))
-                })
-                .map(|f| f.value().bytes());
-            if let Err(refusal) = agent_arrival::read_head_field(name, value) {
-                return refused(&mut out, &refusal);
+        if dialect != statement::DIALECT_TARGET {
+            for name in [
+                agent_arrival::H_ORIGIN,
+                agent_arrival::H_CONTENT_TYPE,
+                agent_arrival::H_VERSION,
+            ] {
+                let value = fields
+                    .iter()
+                    .find(|f| {
+                        f.name()
+                            .as_str()
+                            .is_ok_and(|n| n.eq_ignore_ascii_case(name))
+                    })
+                    .map(|f| f.value().bytes());
+                if let Err(refusal) = agent_arrival::read_head_field(name, value) {
+                    return refused(&mut out, &refusal);
+                }
             }
         }
         let field = |name: &str| {
@@ -1468,12 +1660,13 @@ slot!(
                 !crate::task_identity::translatable(r).is_empty()
                     || !crate::task_identity::referenced_tasks(r).is_empty()
             });
-            if names_a_task {
-                hop.relayed_bytes = Some(read.to_vec().into());
+            if names_a_task && hop.relay.replacement_bytes().is_none() {
+                hop.relay.send_instead(read.to_vec());
             }
         }
         // The request the admission reads: the hop's, which took it, or the arrival's own.
         let request = hop.as_ref().map_or(request.as_ref(), |h| h.request.as_deref());
+        let shape = request.map(crate::skill::TaskShape::of).unwrap_or_default();
         // The entry the unit routes over: the addressed agent, its name inside the `agents:`
         // section, routed directly; an unaddressed unit is routed by the
         // caller's scope, to the one agent its grant reaches.
@@ -1561,8 +1754,8 @@ slot!(
                     .map(|s| {
                         s.agents
                             .iter()
-                            .filter(|(name, def)| {
-                                admit_unit(plane, (name, def), None, generation, request)
+                            .filter(|(name, _def)| {
+                                admit_shape(plane, name, None, generation, &shape)
                                     .is_ok()
                             })
                             .map(|(name, _)| name.as_str())
@@ -1611,6 +1804,9 @@ slot!(
 );
 
 /// WHETHER THE PLANE ANSWERS AN ARRIVAL ITSELF, before any agent is selected: busbar's EXTENDED
+/// card on the plane's own endpoint (the caller named no agent, so the verb asks busbar about
+/// itself; busbar's extended card), and a notification wherever it arrived (received, never
+/// answered and never relayed: answered `202` with no body, moving nothing).
 pub(crate) fn answered_here(disposition: &AgentDisposition, addressed: bool) -> bool {
     match disposition {
         AgentDisposition::Request { row, .. } => !addressed && row.op == crate::ops::OP_AGENT_CARD,
@@ -1620,6 +1816,7 @@ pub(crate) fn answered_here(disposition: &AgentDisposition, addressed: bool) -> 
 }
 
 /// AN ARRIVAL ON THE OPEN LINE: a read of a card busbar serves ([`crate::served_card`]), kept with
+/// the generation it arrived under.
 fn arrive_card(
     plane: &A2aDoor,
     route: &statement::Route,
@@ -1675,7 +1872,11 @@ fn arrive_card(
     Outcome::Ready
 }
 
-/// The hop a unit's `on_piece` serves: the extended-card read addressed to one agent, task-less (its
+/// The hop a unit's `on_piece` serves: the extended-card read addressed to one agent, task-less
+/// (its `card_fetch` arm); a request whose answer is events (the vocabulary's multi-frame rows, and
+/// an unlisted method named as a stream), about a task, a subscribe answering busbar's own refusal
+/// first; and every other relayed one-reply request, about a task (`request` is its envelope: the
+/// caller's on the JSON-RPC line, the one its request spelled on the HTTP+JSON line).
 fn hop_of(
     disposition: &AgentDisposition,
     addressed: bool,
@@ -1713,14 +1914,6 @@ fn hop_of(
 }
 
 /// The URL the operator wrote for agent `member` in the section the unit arrived under.
-fn url_of<'a>(unit: &'a AgentUnit, member: &str) -> Option<&'a str> {
-    unit.section
-        .as_ref()?
-        .agents
-        .get(member)
-        .map(|a| a.url.as_str())
-}
-
 /// The host reach one piece's task work makes: the instance, and the piece's ticket.
 struct Reach<'p> {
     plane: &'p A2aDoor,
@@ -1729,6 +1922,7 @@ struct Reach<'p> {
 
 impl Reach<'_> {
     /// The piece's records and random bytes, counting on from the `issued` its unit's finished
+    /// pieces made; `None` when the instance was opened without host tables.
     fn via(&self, issued: u32) -> Option<Via<'_>> {
         let host = self.plane.host.as_ref()?;
         Some(Via::new(
@@ -1747,15 +1941,26 @@ impl Reach<'_> {
 
     /// The host's wall clock, milliseconds.
     fn now_ms(&self) -> Option<u64> {
-        let host = self.plane.host.as_ref()?;
-        match host.connector(self.ticket).clock_now() {
-            Poll::Ready(Ok(reading)) => Some(reading.wall_ns / 1_000_000),
+        match self.clock_ms() {
+            Poll::Ready(Ok(now)) => Some(now),
             _ => None,
         }
+    }
+
+    fn clock_ms(&self) -> Poll<Result<u64, ()>> {
+        let Some(host) = self.plane.host.as_ref() else {
+            return Poll::Ready(Err(()));
+        };
+        host.connector(self.ticket).clock_now().map(|result| {
+            result
+                .map(|reading| reading.wall_ns / 1_000_000)
+                .map_err(|_| ())
+        })
     }
 }
 
 /// OPEN the task `hop` is about, at its first ATTEMPT ([`task_hop::open`]): its identity on the
+/// relay and its record writes on `writes`, or the caller's whole answer when it does not go ahead.
 fn open_task(
     reach: &Reach<'_>,
     hop: &mut Hop,
@@ -1787,8 +1992,7 @@ fn open_task(
         let minted =
             crate::request_json::RequestJson::new(crate::framed::with_message_id(envelope, &id));
         if let Ok(bytes) = crate::relay::json_bytes(&minted) {
-            hop.relay.send_instead(bytes.clone());
-            hop.relayed_bytes = Some(bytes.into());
+            hop.relay.send_instead(bytes);
         }
         hop.request = Some(minted);
         hop.mint_message_id = false;
@@ -1828,7 +2032,7 @@ fn open_task(
     let req = task_hop::Request {
         envelope,
         relayed: hop.rewritten.as_deref(),
-        relayed_bytes: hop.relayed_bytes.as_ref().map(|bytes| bytes.as_slice()),
+        relayed_bytes: hop.relay.replacement_bytes(),
         caller,
         member,
         addressed,
@@ -1874,7 +2078,9 @@ fn open_task(
     }
 }
 
-/// SETTLE the task `hop` is about on what its answer has said ([`task_hop::settle_on_answer`]), in order: the
+/// SETTLE the task `hop` is about on what its answer has said ([`task_hop::settle_on_answer`]): the
+/// record writes ride with the answer, each move of the task publishes its push notification, and
+/// what earlier deliveries owe this caller's other tasks' chains is filed.
 fn settle_task(
     reach: &Reach<'_>,
     hop: &mut Hop,
@@ -1892,14 +2098,19 @@ fn settle_task(
         hop.settle = settles;
         Err(Outcome::Pending)
     };
-    let now = match hop.now {
-        Some(now) => now,
-        None => *hop.now.insert(reach.now().ok_or(Outcome::Failed)?),
+    // A host without a clock or records fails the piece with its settles kept for the re-call.
+    let now = match hop.now.or_else(|| reach.now()) {
+        Some(now) => *hop.now.insert(now),
+        None => {
+            hop.settle = settles;
+            return Err(Outcome::Failed);
+        }
     };
-    let mut via = reach
-        .via(pass.issued)
-        .ok_or(Outcome::Failed)?
-        .publishing(&pass.publication);
+    let Some(via) = reach.via(pass.issued) else {
+        hop.settle = settles;
+        return Err(Outcome::Failed);
+    };
+    let mut via = via.publishing(&pass.publication);
 
     let mut writes = hop.outbox.writes.clone();
     let seeded = writes.len();
@@ -1941,22 +2152,12 @@ fn settle_task(
         return pend(hop, settles);
     }
 
-    for (i, row) in moved.iter().enumerate() {
-        let config = match crate::local::held_config(
-            &mut crate::tasks::Staged::new(&mut via, &writes),
-            caller,
-            &row.task_id,
-        ) {
-            Err(Halt::Pending) => return pend(hop, settles),
-            Err(Halt::Failed(_)) => Err(()),
-            Ok(config) => Ok(config),
-        };
-        if i >= hop.queued {
-            let _ = config;
-            crate::push_door::apply_publication(reach.plane, &pass.publication);
-            hop.queued = i + 1;
-        }
+    // Each move's notification rides the journal's draft: published once per move, a re-entry
+    // never publishing one twice.
+    for _ in hop.queued..moved.len() {
+        crate::push_door::apply_publication(reach.plane, &pass.publication);
     }
+    hop.queued = hop.queued.max(moved.len());
 
     let owed = hop
         .owed
@@ -1992,6 +2193,10 @@ fn settle_task(
 }
 
 /// A HOP THE KERNEL REFUSED FOR BUSBAR'S OWN CREDENTIAL (`credential_unavailable`: the agent's
+/// `upstream_credential`, re-resolved for this hop, no longer resolves, so nothing was dialled):
+/// logged once as the engine logged a lease it could not mint (`A2A_OUTBOUND_CRED_UNLEASED`, naming
+/// `agent`), its answer made in the engine's words ([`HopRelay::refuse_credential`]: the relay's
+/// 502 naming the task, or the card fetch's) by [`hop_refused`].
 fn credential_refused(hop: &mut Hop, agent: &str, target_line: bool) -> bool {
     if hop.refused.is_none() {
         busbar_contract::diag_warn!(
@@ -2004,6 +2209,7 @@ fn credential_refused(hop: &mut Hop, agent: &str, target_line: bool) -> bool {
 }
 
 /// THE ANSWER A REFUSED HOP MAKES, once: `refuse`'s answer in the engine's words, re-framed on the
+/// HTTP+JSON line, kept on the hop for `refusal` to render.
 fn hop_refused(
     hop: &mut Hop,
     refuse: fn(&mut HopRelay) -> (relay::RelayReply, bool),
@@ -2021,7 +2227,7 @@ fn hop_refused(
     failed && hop.relay.task().is_some()
 }
 
-/// The caller's answer to a unit the kernel refused for busbar's own credential, as `refusal`
+/// Render and retain a credential refusal in the unit's wire dialect.
 fn credential_refusal(unit: &mut AgentUnit) -> Option<relay::RelayReply> {
     let target_line = unit.envelope.is_some() && unit.framed.is_none();
     let addressed = unit.agent.clone();
@@ -2038,6 +2244,11 @@ fn credential_refusal(unit: &mut AgentUnit) -> Option<relay::RelayReply> {
 }
 
 /// A HOP THAT LEFT AND HEARD NOTHING BACK (the kernel's walk ended with no member left after the
+/// unit's attempt went out: the connection to the agent could not be made, or closed unanswered):
+/// the engine's `RelayRefusal::Transport` as `receive::refuse_hop` answered it, never the open
+/// breaker's words — the attempt WAS dispatched ([`HopRelay::refuse_transport`]), as `refusal`
+/// renders it: what the refused piece made, its task already ended there as [`credential_refusal`]
+/// ends one.
 fn transport_refusal(unit: &mut AgentUnit) -> Option<relay::RelayReply> {
     let target_line = unit.envelope.is_some() && unit.framed.is_none();
     let hop = unit.hop.as_mut()?;
@@ -2057,7 +2268,8 @@ fn of_unit<T>(
     instance.get()?.units.with(&unit, |u| u.and_then(f))
 }
 
-/// The kernel's verdict on `agent` (`trust.serves`: the kernel's Approve as a query; it never pends, so it rides no ticket): [`svc::DISTRUST_NONE`] serves, any other
+/// The kernel's verdict on `agent` (`trust.serves`: the kernel's Approve as a query; it never
+/// pends, so it rides no ticket): [`svc::DISTRUST_NONE`] serves, any other `DISTRUST_*` refuses.
 pub(crate) fn verdict(plane: &A2aDoor, agent: &str) -> u64 {
     use busbar_contract::abi::host::service as svc;
     let Some(services) = plane.services else {
@@ -2069,7 +2281,9 @@ pub(crate) fn verdict(plane: &A2aDoor, agent: &str) -> u64 {
         .unwrap_or(svc::DISTRUST_UNKNOWN)
 }
 
-/// An arrival addressed to `member` states its trust facts (the agent, as the counterparty): the kernel's Approve judges them and refuses an agent its trust book does not serve
+/// An arrival addressed to `member` states its trust facts (the agent, as the counterparty): the
+/// kernel's Approve judges them and refuses an agent its trust book does not serve (`untrusted`,
+/// rendered by `refusal` in the admission's words).
 fn admit_addressed(
     plane: &A2aDoor,
     (member, def): (&str, &crate::a2a::config::AgentDefCfg),
@@ -2085,12 +2299,31 @@ fn admit_addressed(
 }
 
 /// THE ADMISSION AND THE CATALOGUE (the engine's `receive::admit`, after the kernel's identity and
+/// grant), for a unit routed to `member` (`def`): an agent the KERNEL'S TRUST BOOK does not serve
+/// ([`verdict`]: never approved, or quarantined), is refused in the admission's words
+/// ([`crate::card_trust::not_serving`]); one with no held card, or whose held card the request's
+/// shape (`envelope`) does not fit, is excluded from the catalogue — addressed, the catalogue's
+/// refusal naming the exclusion (`400`, [`crate::skill::refusal`]), routed by scope, the
+/// none-refusal.
 pub(crate) fn admit_unit(
     plane: &A2aDoor,
     (member, _def): (&str, &crate::a2a::config::AgentDefCfg),
     addressed: Option<&str>,
     generation: u64,
     envelope: Option<&serde_json::Value>,
+) -> Result<Option<String>, agent_arrival::AgentRefusal> {
+    let shape = envelope
+        .map(crate::skill::TaskShape::of)
+        .unwrap_or_default();
+    admit_shape(plane, member, addressed, generation, &shape)
+}
+
+fn admit_shape(
+    plane: &A2aDoor,
+    member: &str,
+    addressed: Option<&str>,
+    generation: u64,
+    shape: &crate::skill::TaskShape,
 ) -> Result<Option<String>, agent_arrival::AgentRefusal> {
     use crate::card_trust::{not_serving, verdict_state, UNTRUSTED_STATUS};
     let distrust = verdict(plane, member);
@@ -2110,16 +2343,14 @@ pub(crate) fn admit_unit(
         (unfit, Some(_)) => crate::skill::refusal(&unfit),
         (_, None) => agent_arrival::scope_refusal(""),
     };
-    let Some(card) = plane.cards.at(member, generation) else {
-        return Err(excluded(crate::skill::Unfit::NoCachedCard));
-    };
-    let shape = envelope
-        .map(crate::skill::TaskShape::of)
-        .unwrap_or_default();
-    crate::skill::fit(&card, &shape).map_err(excluded)
+    plane.cards.fit(member, generation, shape).map_err(excluded)
 }
 
-/// The caller's identity, the ordered gate's first step (a key that
+/// The caller's identity, the ordered gate's first step (a key that is disabled, deleted or past
+/// its row's `expires_at` is `KeyNotLive`, `401`, before anything else is judged), asked of the
+/// kernel at the unit's attempt: `entitlement.check` of the unit's caller for `member`'s agent
+/// scope, whose identity step refuses a principal that is not live (the kernel's own auth chain
+/// admits a key row past its `expires_at`; this plane's admission never did).
 fn caller_stands(
     reach: &Reach<'_>,
     pass: &mut crate::task_door::Pass,
@@ -2133,13 +2364,16 @@ fn caller_stands(
         entitled(reach, pass, &statement::agent_resource(member)),
         addressed,
     ) {
-        (true, _) => None,
-        (false, Some(_)) => Some(agent_arrival::not_live()),
-        (false, None) => Some(agent_arrival::scope_refusal("")),
+        (Ok(true), _) => None,
+        (Ok(false), Some(_)) => Some(agent_arrival::not_live()),
+        (Ok(false), None) => Some(agent_arrival::scope_refusal("")),
+        (Err(()), _) => Some(entitlement_unavailable(None)),
     }
 }
 
 /// ONE ATTEMPT OF A UNIT OVER A FAILOVER POOL, as [`pool_gate`] judges it: the pool, its members in
+/// declared order (the first the primary), the member the kernel's walk picked, the agent the unit
+/// addressed, and the caller's reference.
 struct PoolGate<'a> {
     /// The pool, as its refusal names it (`agent:<pool>`, the walk key).
     pool: &'a str,
@@ -2156,6 +2390,7 @@ enum Gate {
     /// The attempt goes on to the member.
     Go,
     /// The member is one this unit may not be sent to: declined, nothing sent, the walk moves on
+    /// (an empty `VERDICT_RETRY`).
     Decline,
     /// The caller's whole answer, before anything is sent.
     Refuse(relay::RelayReply),
@@ -2163,7 +2398,10 @@ enum Gate {
     Pending,
 }
 
-/// The pool's member for this attempt (over the kernel's one walk, which offers the members
+/// The pool's member for this attempt over the kernel's one walk, primary first: a hop that already
+/// left is not sent to another, a request about a task is pinned to the member holding it, and a
+/// fresh submission takes the member the walk placed it on unless the caller's grant, the trust
+/// book or the primary's card fingerprint rules that member out.
 fn pool_gate(
     reach: &Reach<'_>,
     hop: &mut Hop,
@@ -2184,10 +2422,22 @@ fn pool_gate(
         Some(holder) if holder != gate.member => Gate::Decline,
         Some(_) if elsewhere => {
             match entitled(reach, pass, &statement::agent_resource(gate.member)) {
-                true => Gate::Go,
-                false => {
+                Ok(true) => Gate::Go,
+                Err(()) => Gate::Refuse(relay::RelayReply::refused(
+                    &entitlement_unavailable(Some(hop.relay.id().clone())),
+                    None,
+                )),
+                Ok(false) => {
                     let standing = busbar_contract::abi::host::service::ENTITLEMENT_STANDING;
-                    let live = entitled(reach, pass, standing);
+                    let live = match entitled(reach, pass, standing) {
+                        Ok(live) => live,
+                        Err(()) => {
+                            return Gate::Refuse(relay::RelayReply::refused(
+                                &entitlement_unavailable(Some(hop.relay.id().clone())),
+                                None,
+                            ))
+                        }
+                    };
                     Gate::Refuse(relay::RelayReply::refused(
                         &agent_arrival::pinned_ungranted(
                             hop.relay.id().clone(),
@@ -2201,12 +2451,22 @@ fn pool_gate(
         }
         Some(_) => Gate::Go,
         None => {
-            if elsewhere
-                && (!entitled(reach, pass, &statement::agent_resource(gate.member))
+            if elsewhere {
+                let granted = match entitled(reach, pass, &statement::agent_resource(gate.member)) {
+                    Ok(granted) => granted,
+                    Err(()) => {
+                        return Gate::Refuse(relay::RelayReply::refused(
+                            &entitlement_unavailable(Some(hop.relay.id().clone())),
+                            None,
+                        ))
+                    }
+                };
+                if !granted
                     || verdict(reach.plane, gate.member)
-                        != busbar_contract::abi::host::service::DISTRUST_NONE)
-            {
-                return Gate::Decline;
+                        != busbar_contract::abi::host::service::DISTRUST_NONE
+                {
+                    return Gate::Decline;
+                }
             }
             if let Some(primary) = gate.members.first().filter(|p| *p != gate.member) {
                 let (a, b) = (
@@ -2227,6 +2487,8 @@ fn pool_gate(
 }
 
 /// The member holding the task a pooled unit's request is about ([`task_hop::holder`]), read once
+/// per unit and kept on its hop; `None` for a fresh submission, and where there is nothing to read
+/// it with.
 fn read_holder(
     reach: &Reach<'_>,
     hop: &mut Hop,
@@ -2287,16 +2549,39 @@ fn holder_unavailable(hop: &Hop) -> relay::RelayReply {
 }
 
 /// `entitlement.check` of the unit's caller for `target` (an agent's scope, or the principal's
-fn entitled(reach: &Reach<'_>, pass: &mut crate::task_door::Pass, target: &str) -> bool {
+/// standing), distinguishing host failure from an explicit denial.
+fn entitled(
+    reach: &Reach<'_>,
+    pass: &mut crate::task_door::Pass,
+    target: &str,
+) -> Result<bool, ()> {
     let handle = crate::task_door::handle(reach.ticket, pass.issued);
     pass.issued += 1;
-    reach
+    match reach
         .plane
         .services
-        .is_some_and(|services| services.entitled(handle, target).unwrap_or(false))
+        .map(|services| services.entitled(handle, target))
+    {
+        Some(Ok(entitled)) => Ok(entitled),
+        _ => {
+            tracing::warn!("a2a: host entitlement check unavailable; refusing the hop");
+            Err(())
+        }
+    }
 }
 
-/// The approved card fingerprint of `agent` (the approved canonical card fingerprint): its held card's, when the kernel's trust book serves it; `None` (which never
+fn entitlement_unavailable(id: Option<serde_json::Value>) -> agent_arrival::AgentRefusal {
+    agent_arrival::AgentRefusal::new(
+        503,
+        id,
+        -32603,
+        "the entitlement service is unavailable; retry this request".into(),
+    )
+}
+
+/// The approved card fingerprint of `agent` (the approved canonical card fingerprint): its held
+/// card's, when the kernel's trust book serves it; `None` (which never matches) when nothing is
+/// approved or held.
 fn approved_fingerprint(plane: &A2aDoor, agent: &str, generation: u64) -> Option<String> {
     if verdict(plane, agent) != busbar_contract::abi::host::service::DISTRUST_NONE {
         return None;
@@ -2305,7 +2590,8 @@ fn approved_fingerprint(plane: &A2aDoor, agent: &str, generation: u64) -> Option
     crate::a2a::card::fingerprint(&card).ok()
 }
 
-/// The not-interchangeable refusal: `503`, `-32004`, the
+/// The not-interchangeable refusal: `503`, `-32004`, the walk's own words, naming the task the hop
+/// opened.
 fn not_interchangeable(hop: &Hop, reason: String) -> relay::RelayReply {
     let refusal = agent_arrival::AgentRefusal::new(
         agent_arrival::STATUS_UNAVAILABLE,
@@ -2318,6 +2604,7 @@ fn not_interchangeable(hop: &Hop, reason: String) -> relay::RelayReply {
 }
 
 /// BIND the hop to the binding `member`'s card held under `generation` declares; the refusal's
+/// answer when the plane frames none of them.
 fn bind(
     reach: &Reach<'_>,
     hop: &mut Hop,
@@ -2343,6 +2630,9 @@ fn bind(
 }
 
 /// The caller's answer as its line spells it: on the HTTP+JSON line (`target_line`) a whole answer
+/// is re-framed ([`crate::rest::reframe`]) and each event to its bare result
+/// ([`crate::events::reframe_events`]), as the engine re-frames what its shared sequence answered;
+/// on the JSON-RPC line it leaves as the relay wrote it.
 #[must_use]
 pub fn for_line(answer: PieceAnswer, target_line: bool) -> PieceAnswer {
     match answer {
@@ -2360,7 +2650,8 @@ pub fn for_line(answer: PieceAnswer, target_line: bool) -> PieceAnswer {
     }
 }
 
-/// One piece of `unit`'s hop: applied (unless it continues or re-calls the answer still owed) and
+/// One piece of `unit`'s hop, applied (unless it continues or re-calls the answer still owed) and
+/// written into the host's buffers, answering the outcome and whether the unit is done.
 fn hop_piece(
     reach: &Reach<'_>,
     unit: &mut AgentUnit,
@@ -2384,13 +2675,9 @@ fn hop_piece(
         .filter(|m| !m.is_empty())
         .unwrap_or_else(|| given_member.to_string());
     let member = member_owned.as_str();
-    let url = url_of(unit, member).map(str::to_string);
-
-    let def = unit
-        .section
-        .as_ref()
-        .and_then(|s| s.agents.get(member))
-        .cloned();
+    let section = unit.section.clone();
+    let def = section.as_ref().and_then(|s| s.agents.get(member));
+    let url = def.map(|def| def.url.as_str());
 
     if unit.agent.is_none() && unit.pool.is_none() {
         let given_pool = input.pool().as_str().unwrap_or_default();
@@ -2407,9 +2694,9 @@ fn hop_piece(
     let framed = unit.framed;
     let target_line = unit.envelope.is_some() && framed.is_none();
 
-    let pooled: Option<(String, Vec<String>)> = unit.pool.as_ref().and_then(|name| {
-        let members = unit.section.as_ref()?.pools.get(name)?.clone();
-        Some((name.clone(), members))
+    let pooled = unit.pool.as_ref().and_then(|name| {
+        let members = section.as_ref()?.pools.get(name)?;
+        Some((name.as_str(), members))
     });
     let pass = &mut unit.pass;
     let Some(hop) = unit.hop.as_mut() else {
@@ -2558,8 +2845,12 @@ fn hop_piece(
                         hop.held_writes = writes;
                         return (Outcome::Pending, false);
                     }
-                    Poll::Ready(true) => None,
-                    Poll::Ready(false) => Some(hop.relay.refuse_demoted()),
+                    Poll::Ready(Ok(true)) => None,
+                    Poll::Ready(Ok(false)) => Some(hop.relay.refuse_demoted()),
+                    Poll::Ready(Err(outcome)) => {
+                        hop.held_writes = writes;
+                        return (outcome, false);
+                    }
                 }
             }
             _ => None,
@@ -2619,7 +2910,7 @@ fn hop_piece(
             (None, Some(answer)) => answer,
             (None, None) => {
                 let from = match given.from() {
-                    FROM_KERNEL => relay::From::Kernel(url.as_deref()),
+                    FROM_KERNEL => relay::From::Kernel(url),
                     FROM_CALLER => relay::From::Caller,
                     FROM_FAR_END => relay::From::FarEnd,
                     _ => return (Outcome::Refused, false),
@@ -2869,9 +3160,7 @@ fn hop_piece(
         ob.at = 0;
         n
     } else {
-        let n = reply.stream(&ob.bytes[ob.at..]);
-        ob.at += n;
-        n
+        ob.drain(|bytes| reply.stream(bytes))
     };
 
     let message_end = ob.messages && ob.at >= ob.bytes.len();
@@ -2930,7 +3219,7 @@ fn hop_piece(
     (Outcome::Ready, done)
 }
 
-/// THE NEED AN ATTEMPT ON `binding` RIDES, as `OnPieceOut::need` names it (its index plus one;
+/// Return the one-based outbound need index for the selected binding.
 #[must_use]
 pub fn attempt_need(binding: crate::binding::Binding) -> u32 {
     match binding {
@@ -2977,14 +3266,14 @@ slot!(
                 let (warmed, counted) = warm_cards(plane, instance.ticket(), issued);
                 let Poll::Ready(landed) = warmed else {
                     plane.on_unit(unit, |u| {
-                            u.pass.warming = true;
-});
+                        u.pass.warming = true;
+                    });
                     return Outcome::Pending;
                 };
                 plane.on_unit(unit, |u| {
-                        u.pass.warming = false;
-                        u.pass.issued = counted;
-});
+                    u.pass.warming = false;
+                    u.pass.issued = counted;
+                });
                 if landed {
                     plane.cards_warmed.insert((), true);
                 }
@@ -2993,8 +3282,8 @@ slot!(
         // The unit's ticket, which the kernel's `cancel` names it by.
         let ticket = instance.ticket();
         plane.on_unit(unit, |u| {
-                u.ticket = ticket;
-});
+            u.ticket = ticket;
+        });
         // A REFUSED PIECE (`TAIL_REFUSED_PIECE`) ends only a relayed hop's task: a unit with no hop
         // has nothing to end, and `refusal` answers it.
         let refused = input.from() == FROM_KERNEL && input.flags() & PIECE_REFUSED != 0;
@@ -3056,15 +3345,17 @@ slot!(
         // A FINISHED HOP'S UNIT IS OVER, never dropped here: a `refusal` of the answer it wrote
         // (the store refused its record writes, a response hook vetoed it) still reads it.
         if done {
-            plane.on_unit(unit, |u| {
-                    u.over = true;
-});
+            plane.on_unit(unit, AgentUnit::end);
+            plane.unit_ended();
         }
         outcome
     }
 );
 
 /// THE AGENTS OF `reachable` (the kernel's list for a unit routed by scope) IN THE CALLER'S
+/// CATALOGUE: the engine chose among those, and an agent the kernel's trust book does not serve,
+/// holds no card, or whose card the unit's request does not fit, is in no catalogue
+/// ([`admit_unit`]).
 fn serving_of(plane: &A2aDoor, unit: u64, reachable: &str) -> String {
     use busbar_contract::abi::plane::ROUTE_SCOPE_SEPARATOR;
     let Some((generation, section, envelope)) = plane.units.with(&unit, |u| {
@@ -3072,7 +3363,13 @@ fn serving_of(plane: &A2aDoor, unit: u64, reachable: &str) -> String {
             (
                 u.generation,
                 u.section.clone(),
-                u.hop.as_ref().and_then(|h| h.request.clone()),
+                u.ended_shape.clone().unwrap_or_else(|| {
+                    u.hop
+                        .as_ref()
+                        .and_then(|h| h.request.as_deref())
+                        .map(crate::skill::TaskShape::of)
+                        .unwrap_or_default()
+                }),
             )
         })
     }) else {
@@ -3084,9 +3381,7 @@ fn serving_of(plane: &A2aDoor, unit: u64, reachable: &str) -> String {
             section
                 .as_ref()
                 .and_then(|s| s.agents.get(*id))
-                .is_some_and(|def| {
-                    admit_unit(plane, (id, def), Some(id), generation, envelope.as_deref()).is_ok()
-                })
+                .is_some_and(|_def| admit_shape(plane, id, Some(id), generation, &envelope).is_ok())
         })
         .collect();
     if serving.len() == 1 {
@@ -3096,29 +3391,43 @@ fn serving_of(plane: &A2aDoor, unit: u64, reachable: &str) -> String {
 }
 
 /// THE ONE AGENT AN UNADDRESSED UNIT WOULD BE SERVED BY: the agents of the unit's section that
+/// would serve its request ([`admit_unit`], the candidates its arrival named), when exactly one
+/// does; `None` when none or several do.
 fn sole_serving(plane: &A2aDoor, unit: u64) -> Option<String> {
     let (generation, section, envelope) = plane.units.with(&unit, |u| {
         u.map(|u| {
             (
                 u.generation,
                 u.section.clone(),
-                u.hop.as_ref().and_then(|h| h.request.clone()),
+                u.ended_shape.clone().unwrap_or_else(|| {
+                    u.hop
+                        .as_ref()
+                        .and_then(|h| h.request.as_deref())
+                        .map(crate::skill::TaskShape::of)
+                        .unwrap_or_default()
+                }),
             )
         })
     })?;
     let section = section?;
-    let mut serving = section.agents.iter().filter(|(id, def)| {
-        admit_unit(
-            plane,
-            (id.as_str(), def),
-            None,
-            generation,
-            envelope.as_deref(),
-        )
-        .is_ok()
-    });
-    let (one, _) = serving.next()?;
+    let mut serving = section
+        .agents
+        .keys()
+        .filter(|id| admit_shape(plane, id.as_str(), None, generation, &envelope).is_ok());
+    let one = serving.next()?;
     serving.next().is_none().then(|| one.clone())
+}
+
+/// The agent an open breaker's refusal of an unaddressed unit names: its one serving agent
+/// ([`sole_serving`]), or the pool that agent is a member of in the section the unit arrived
+/// under, whose walk refused it.
+fn breaker_subject(plane: &A2aDoor, unit: u64) -> Option<String> {
+    let one = sole_serving(plane, unit)?;
+    let section = plane
+        .units
+        .with(&unit, |u| u.and_then(|u| u.section.clone()));
+    let pool = section.and_then(|s| s.pool_of(&one).map(|(name, _)| name.to_string()));
+    Some(pool.unwrap_or(one))
 }
 
 slot!(
@@ -3178,14 +3487,7 @@ slot!(
                     // the one serving agent of its catalogue (before the breaker).
                     // An unaddressed unit whose one agent is a pool member was walked over the pool
                     // (the kernel routes it as an addressed one): the walk's refusal names the pool.
-                    let agent = agent.or_else(|| {
-                        let one = sole_serving(plane, given.unit())?;
-                        let pool = plane
-                            .generations
-                            .current()
-                            .and_then(|s| s.pool_of(&one).map(|(name, _)| name.to_string()));
-                        Some(pool.unwrap_or(one))
-                    })?;
+                    let agent = agent.or_else(|| breaker_subject(plane, given.unit()))?;
                     Some(agent_arrival::breaker_refusal(&agent, id, retry_after))
                 })
             })
@@ -3315,8 +3617,9 @@ slot!(
             (relay::RawBytes::from(crate::framed::status_block(&reply)), Vec::new(), neutral)
         } else {
             let mut head = vec![("content-type", rendered.content_type.to_string())];
-            // AN OPEN BREAKER'S WAIT rides every line's refusal, whatever words it carries (the
-            // engine's `refuse_hop`: `503` + `Retry-After` from the cell's own deadline).
+            // AN OPEN BREAKER'S WAIT rides every HTTP line's refusal as `Retry-After`, whatever words
+            // it carries (the engine's `refuse_hop`: `503` + `Retry-After` from the cell's own
+            // deadline); on the gRPC line it is the status message's own words alone.
             if breaker && transport.is_none() {
                 head.push(("retry-after", retry_after.to_string()));
             }
@@ -3449,6 +3752,8 @@ impl LookParked {
 }
 
 /// Where a look runs: the instance, the op's ticket, and the completion handle its host services
+/// count on from (every service the op made before it, so a handle is never issued twice on the op:
+/// the replay rule).
 struct LookAt<'a> {
     plane: &'a A2aDoor,
     generation: u64,
@@ -3531,6 +3836,8 @@ const JUDGED_ADDRESSES: usize = 16;
 const JUDGED_BYTES: usize = 4096;
 
 /// THE GUARD, AS THE ENGINE APPLIED IT TO EVERY HOP (`fetch::guard_hop`, the card fetch's and the
+/// relay's alike): the host's ONE destination judgement of `url` (the name, then every address it
+/// resolves to), on handle `base`.
 fn judge_hop(
     at: &LookAt<'_>,
     url: &str,
@@ -3578,6 +3885,8 @@ fn judge_hop(
 }
 
 /// THE RELAY'S GUARD (the engine's `relay::prepare`, which guarded the registered endpoint through
+/// the card fetch's own hop door before every relayed submission): the agent's `url` judged on the
+/// registration's `allow_private`, once per attempt.
 fn guard_relay(
     reach: &Reach<'_>,
     hop: &mut Hop,
@@ -3632,6 +3941,10 @@ fn guard_relay(
 }
 
 /// THE CARD at the agent origin's well-known paths, canonical first, over the agent's connection
+/// need, as the engine fetched it (`fetch::fetch_card`): every hop guarded from scratch
+/// ([`judge_hop`]), a redirect followed — resolved against the hop that sent it — up to
+/// [`crate::card_trust::MAX_REDIRECTS`], and the legacy path only when the canonical one produced
+/// no document.
 fn fetch_card(
     at: &LookAt<'_>,
     name: &str,
@@ -3813,7 +4126,13 @@ fn fetch_card(
     }
 }
 
-/// The kernel's verdict on `card`'s signatures against the root key it holds for agent `name`
+/// The room a `trust.verify` answer is first asked into, in bytes.
+const VERIFY_FIRST_BYTES: usize = 256;
+
+/// The most room a `trust.verify` answer is re-asked into after a short answer named more, in bytes.
+const VERIFY_MAX_BYTES: usize = 1 << 16;
+
+/// Ask the kernel to verify the card signatures against the agent's registered root key.
 fn signed_by_root(
     at: &LookAt<'_>,
     seq: u32,
@@ -3828,11 +4147,16 @@ fn signed_by_root(
         ));
     };
     let handle = at.handle(seq);
-    let (mut buf, mut grown) = (vec![0u8; 256], Vec::new());
+    let (mut buf, mut grown) = (vec![0u8; VERIFY_FIRST_BYTES], Vec::new());
 
     let answer = match services.trust_verify(handle, name, &payload, &signatures, &mut buf) {
         Err(busbar_contract::abi::sdk::ServiceError::Short { bytes, .. }) => {
-            grown.resize(usize::try_from(bytes).unwrap_or(usize::MAX).min(1 << 16), 0);
+            grown.resize(
+                usize::try_from(bytes)
+                    .unwrap_or(usize::MAX)
+                    .min(VERIFY_MAX_BYTES),
+                0,
+            );
             services.trust_verify(handle, name, &payload, &signatures, &mut grown)
         }
         other => other,
@@ -3846,9 +4170,13 @@ fn signed_by_root(
 }
 
 /// THE CATALOGUE HASH a card that failed its verification is sighted under: no fingerprint is ever
+/// this, so a pinned (approved) agent sighted under it has drifted, and the kernel quarantines it.
 const UNVERIFIED_CARD: &str = "unverified";
 
 /// THE LOOK every trust read shares (`connect`, `approve` and verify-on-call), so no two of them
+/// judge a card differently: fetch the card, verify it against the registration's pin, and record
+/// the verified fingerprint on the kernel's trust book (`trust.sight`, which stamps the agent's
+/// re-verification clock and judges it against a declared fingerprint).
 fn look(
     at: &LookAt<'_>,
     name: &str,
@@ -3872,12 +4200,12 @@ fn look(
     let (card, hop, issued) = fetch_card(at, name, def, resumed)?;
     let (verify_seq, sight_seq) = (issued, issued + 1);
 
-    let refused_hop = card.as_ref().err().map(|_| ());
-    let card =
-        card.map_err(|e| crate::card_trust::hop_refusal(&def.pin, &hop, &def.url).unwrap_or(e));
-
-    let unreachable =
-        refused_hop.is_some() && crate::card_trust::hop_refusal(&def.pin, &hop, &def.url).is_none();
+    // A failed fetch is judged once: refused by the hop's own guard, or the agent unreachable.
+    let guarded = card
+        .is_err()
+        .then(|| crate::card_trust::hop_refusal(&def.pin, &hop, &def.url));
+    let unreachable = matches!(guarded, Some(None));
+    let card = card.map_err(|e| guarded.flatten().unwrap_or(e));
     let looked = match card.and_then(|card| {
         crate::card_trust::verify_card(&def.pin, &card, &hop, || {
             signed_by_root(at, verify_seq, name, &card)
@@ -3964,6 +4292,7 @@ fn settle_look(
 }
 
 /// WHETHER `member` SERVES, on its `standing` (read here, never decided): SERVING is the kernel's
+/// verdict on the agent's key.
 fn kernel_serves(
     plane: &A2aDoor,
     member: &str,
@@ -3973,7 +4302,7 @@ fn kernel_serves(
         && verdict(plane, member) == busbar_contract::abi::host::service::DISTRUST_NONE
 }
 
-/// VERIFY-ON-CALL (the served engine's `receive::verify_agent_on_call` and `verify::reverify_once`):
+/// Reverify a due registration through its single flight before allowing an outbound hop.
 fn verify_agent_on_call(
     reach: &Reach<'_>,
     hop: &mut Hop,
@@ -3981,21 +4310,30 @@ fn verify_agent_on_call(
     member: &str,
     def: &crate::a2a::config::AgentDefCfg,
     generation: u64,
-) -> Poll<bool> {
+) -> Poll<Result<bool, Outcome>> {
     let plane = reach.plane;
     let key = member.to_string();
     let standing = plane.trust.get(&key).unwrap_or_default();
     let cadence = crate::card_trust::Cadence::of(def);
-    let Some(now_ms) = reach.now_ms() else {
-        hop.verifying = None;
-        hop.waits_on = None;
-        let waiters = plane.flights.abandon(reach.ticket);
-        if let Some(host) = plane.host.as_ref() {
-            for waiter in waiters {
-                host.wake(waiter);
+    let now_ms = match reach.clock_ms() {
+        Poll::Pending => return Poll::Pending,
+        Poll::Ready(Ok(now)) => now,
+        Poll::Ready(Err(())) => {
+            tracing::warn!(
+                agent = %member,
+                "a2a: the host clock did not answer, so agent `{member}`'s trust could not be re-checked; \
+                 the piece fails and may be retried"
+            );
+            hop.verifying = None;
+            hop.waits_on = None;
+            let waiters = plane.flights.abandon(reach.ticket);
+            if let Some(host) = plane.host.as_ref() {
+                for waiter in waiters {
+                    host.wake(waiter);
+                }
             }
+            return Poll::Ready(Err(Outcome::Failed));
         }
-        return Poll::Ready(false);
     };
     let serves =
         |standing: &crate::card_trust::TrustStanding| kernel_serves(plane, member, standing);
@@ -4006,19 +4344,22 @@ fn verify_agent_on_call(
             FlightState::Landed => {
                 hop.waits_on = None;
                 let standing = plane.trust.get(&key).unwrap_or_default();
-                return Poll::Ready(serves(&standing));
+                return Poll::Ready(Ok(serves(&standing)));
             }
             FlightState::Released => hop.waits_on = None,
         }
     }
     if hop.verifying.is_none() {
         if !cadence.due(&standing.ledger, now_ms) {
-            return Poll::Ready(serves(&standing));
+            return Poll::Ready(Ok(serves(&standing)));
         }
 
         if let Some(seen) = plane.flights.join(&key, reach.ticket) {
             hop.waits_on = Some(seen);
             return Poll::Pending;
+        }
+        if let Some(standing) = reuse_fresh_look(plane, &key, cadence, now_ms) {
+            return Poll::Ready(Ok(serves(&standing)));
         }
     }
     let at = LookAt {
@@ -4053,12 +4394,35 @@ fn verify_agent_on_call(
             host.wake(waiter);
         }
     }
-    Poll::Ready(serving)
+    Poll::Ready(Ok(serving))
+}
+
+/// Recheck the ledger after taking a flight, avoiding a look already completed by its prior owner.
+fn reuse_fresh_look(
+    plane: &A2aDoor,
+    key: &str,
+    cadence: crate::card_trust::Cadence,
+    now_ms: u64,
+) -> Option<crate::card_trust::TrustStanding> {
+    let standing = plane.trust.get(&key.to_string()).unwrap_or_default();
+    if cadence.due(&standing.ledger, now_ms) {
+        return None;
+    }
+    let waiters = plane.flights.land(key);
+    if let Some(host) = plane.host.as_ref() {
+        for waiter in waiters {
+            host.wake(waiter);
+        }
+    }
+    Some(standing)
 }
 
 /// THE LOOK OF A UNIT HOLDING ITS AGENT'S FLIGHT (`held`: the flights, the host that wakes, the
+/// unit's ticket), run as `look`; a look that unwinds releases the flight, landing nothing, and
+/// wakes every unit that waited on it.
 fn looking<T>(held: (&Flights, Option<&Host>, Ticket), look: impl FnOnce() -> T) -> T {
-    /// Armed while the look runs: dropped armed only by an unwinding look. A look that returns
+    /// Armed while the look runs, so only an unwinding look drops it armed and releases the flight;
+    /// a look that returns disarms it and the caller lands the flight.
     struct Unwinding<'p> {
         flights: &'p Flights,
 
@@ -4118,6 +4482,7 @@ pub struct Flights(Keyed<String, Flight>);
 
 impl Flights {
     /// `ticket` is due to look at `agent`: `None` = it holds the flight and looks; `Some(epoch)` =
+    /// another unit's look is in flight, and `ticket` waits on it.
     fn join(&self, agent: &str, ticket: Ticket) -> Option<u64> {
         self.0.with_all(|m| {
             let f = m.entry(agent.to_string()).or_default();
@@ -4166,6 +4531,8 @@ impl Flights {
     }
 
     /// THE UNIT ON `ticket` WAS ABANDONED (cancelled): every flight it held is released, landing
+    /// nothing, and the units that waited on them are answered to be woken; it waits on none any
+    /// more.
     fn abandon(&self, ticket: Ticket) -> Vec<Ticket> {
         self.0.with_all(|m| {
             let mut woken = Vec::new();
@@ -4186,6 +4553,7 @@ const VIEW_FIELDS: &[(&str, &str)] =
     &[(relay::H_CONTENT_TYPE, crate::agent_arrival::JSON_MEDIA_TYPE)];
 
 /// A trust verb's refusal: `status`, the message alone (the kernel frames it in the admin
+/// taxonomy), the condition it is when it names one, and its audit row.
 fn verb_refused(
     input: &Lent<'_, ServeIn>,
     out: &mut Out<'_, ServeOut>,
@@ -4309,13 +4677,23 @@ slot!(
             return verb_refused(&input, &mut out, STATUS_NOT_FOUND, "", None, AUDIT_REJECTED);
         }
         let hold_card = |card: serde_json::Value| {
+            let _publication = plane.card_publication.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let card = std::sync::Arc::new(card);
             if generation != held_at && plane.generations.at(generation).is_some() {
                 plane.cards.hold_shared(&name, generation, card.clone());
             }
-            plane.cards.hold_shared(&name, held_at, card);
+            plane.cards.hold_shared(&name, held_at, card.clone());
+            // A refresh published meanwhile that kept the registration serves the card too.
+            let newest = plane.newest();
+            if newest != held_at
+                && plane
+                    .generations
+                    .at(newest)
+                    .is_some_and(|s| s.agents.get(&name) == Some(&def))
+            {
+                plane.cards.hold_shared(&name, newest, card);
+            }
         };
-        let mut standing = plane.trust.get(&name).unwrap_or_default();
         // The card record: a card this look verified rides the verb's
         // answer as the agent's `card` host records (split under the host's record ceiling),
         // which a later `open` warms the held cards from.
@@ -4329,14 +4707,15 @@ slot!(
             if let Some(card) = looked.card {
                 hold_card(card);
             }
+            let Some(approved) = kept_standing(plane, (&name, &def), &looked.sighting, None) else {
+                return verb_refused(&input, &mut out, STATUS_NOT_FOUND, "", None, AUDIT_REJECTED);
+            };
             let view = crate::card_trust::connect_view(
                 &name,
                 state_now,
                 &looked.sighting,
-                standing.approved.as_ref(),
+                approved.as_ref(),
             );
-            standing.sighting = looked.sighting;
-            plane.trust.insert(name, standing);
             let answer = (200, VIEW_FIELDS, view.as_bytes());
             return verb_answer(&input, &mut out, answer, AUDIT_APPLIED, &writes);
         };
@@ -4347,12 +4726,15 @@ slot!(
         }
         // The skills approved, held for the trust view's drift lists: the card this
         // approval adopted, which `agrees` matched to the fingerprint the operator named.
-        standing.approved = looked.sighting.seen().map(|seen| seen.skills.clone());
+        let skills = looked.sighting.seen().map(|seen| seen.skills.clone());
+        let Some(approved) = kept_standing(plane, (&name, &def), &looked.sighting, Some(skills))
+        else {
+            return verb_refused(&input, &mut out, STATUS_NOT_FOUND, "", None, AUDIT_REJECTED);
+        };
         // ... and written as the agent's `card_approval` host record, so a restart keeps them.
         let mut writes = writes;
         writes.extend(
-            standing
-                .approved
+            approved
                 .as_ref()
                 .map(|approved| approval_records(plane, &name, approved))
                 .unwrap_or_default(),
@@ -4361,16 +4743,45 @@ slot!(
             &name,
             state_now,
             &looked.sighting,
-            standing.approved.as_ref(),
+            approved.as_ref(),
         );
-        standing.sighting = looked.sighting;
-        plane.trust.insert(name, standing);
         let answer = (200, VIEW_FIELDS, view.as_bytes());
         verb_answer(&input, &mut out, answer, AUDIT_APPLIED, &writes)
     }
 );
 
-/// APPROVE `agent`'s trust key on the KERNEL'S trust book at the fingerprint the operator named
+/// The skills (`id -> digest`) of the card an operator approved for an agent.
+type ApprovedSkills = std::collections::BTreeMap<String, String>;
+
+/// A trust verb's `sighting` (and an approval's skills, `approved`) recorded on `name`'s live
+/// standing in place while the newest generation still registers it as `def`, answering the
+/// approved skills it stands at; `None` when the registration was replaced, recording nothing.
+fn kept_standing(
+    plane: &A2aDoor,
+    (name, def): (&str, &crate::a2a::config::AgentDefCfg),
+    sighting: &crate::card_trust::Sighting,
+    approved: Option<Option<ApprovedSkills>>,
+) -> Option<Option<ApprovedSkills>> {
+    plane.trust.with_all(|standings| {
+        let registered = plane
+            .generations
+            .at(plane.newest())
+            .is_some_and(|s| s.agents.get(name) == Some(def));
+        if !registered {
+            return None;
+        }
+        let standing = standings.entry(name.to_string()).or_default();
+        standing.sighting = sighting.clone();
+        if let Some(approved) = approved {
+            standing.approved = approved;
+        }
+        Some(standing.approved.clone())
+    })
+}
+
+/// APPROVE `agent`'s trust key on the KERNEL'S trust book at the fingerprint the operator named and
+/// this look just sighted (`trust.decide`, the ONE decide path `POST /admin/trust/approve` takes
+/// for `<instance>/<agent>`).
 fn approve_key(plane: &A2aDoor, at: &LookAt<'_>, agent: &str, seen: &str) -> Result<(), String> {
     use busbar_contract::abi::host::service as svc;
     let services = plane
@@ -4414,26 +4825,8 @@ slot!(
     Start, GenIn, OutHead, |_, _, _| { Outcome::Ready }
 );
 
-/// Projects an A2A request envelope into the hook's `tool` and `arguments` JSON view.
-#[cfg(test)]
-#[must_use]
-pub fn projection(envelope: &[u8]) -> Option<Vec<u8>> {
-    let envelope = serde_json::from_slice::<crate::request_json::RequestJson>(envelope).ok()?;
-    envelope.as_object()?;
-    let tool = envelope
-        .get("method")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default();
-    let arguments = envelope.get("params").unwrap_or(&serde_json::Value::Null);
-    #[derive(serde::Serialize)]
-    struct Projection<'a> {
-        arguments: &'a serde_json::Value,
-        tool: &'a str,
-    }
-    crate::relay::json_bytes(&Projection { arguments, tool }).ok()
-}
-
-/// Parse the request once for every part of its hook view. The invocation takes ownership of
+/// Parse the request once for every part of its hook view: the projection, the invocation (which
+/// takes ownership of `params`) and the session.
 pub(crate) fn hook_view(
     envelope: &[u8],
 ) -> Option<(
@@ -4441,7 +4834,7 @@ pub(crate) fn hook_view(
     busbar_contract::ir::invoke::InvokeReq,
     Option<String>,
 )> {
-    let mut value = serde_json::from_slice::<crate::request_json::RequestJson>(envelope).ok()?;
+    let mut value = crate::request_json::parse(envelope).ok()?;
     value.as_object()?;
     let context = crate::task_identity::context_of(&value);
     let session = (!context.is_empty()).then(|| context.to_string());
@@ -4469,16 +4862,12 @@ pub(crate) fn hook_view(
     Some((projection, invocation, session))
 }
 
-/// THE SESSION a request's hook view carries: the `contextId` its message names, which groups an
-#[cfg(test)]
-#[must_use]
-pub fn context_session(envelope: &[u8]) -> Option<String> {
-    let envelope = serde_json::from_slice::<crate::request_json::RequestJson>(envelope).ok()?;
-    let context = crate::task_identity::context_of(&envelope);
-    (!context.is_empty()).then(|| context.to_string())
-}
-
 /// A request-stage hook's rewrite, read as a `prompt: rw` reply to an A2A submission (the invoke
+/// rewrite contract): the hook stage hands the plane the reply as `{"messages": [...], "tools":
+/// ...}`; an A2A request has one untrusted content member, its `params` object, and the rewrite
+/// REPLACES it: a `messages` entry's `content` (an object verbatim, or a JSON string that parses to
+/// an object) or, for an entry with no `role`, the entry itself; the LAST entry that yields an
+/// object wins.
 pub fn rewritten_params(rewrite: &[u8]) -> Result<Option<serde_json::Value>, String> {
     use serde_json::Value;
     let refused = |why: String| {
@@ -4490,7 +4879,7 @@ pub fn rewritten_params(rewrite: &[u8]) -> Result<Option<serde_json::Value>, Str
         );
         why
     };
-    let reply = serde_json::from_slice::<crate::request_json::RequestJson>(rewrite)
+    let reply = crate::request_json::parse(rewrite)
         .map_err(|e| refused(format!("the output is not JSON: {e}")))?;
     let messages = reply
         .get("messages")
@@ -4505,7 +4894,7 @@ pub fn rewritten_params(rewrite: &[u8]) -> Result<Option<serde_json::Value>, Str
         };
         let resolved = match candidate {
             Value::Object(_) => Some(crate::request_json::RequestJson::new(candidate.clone())),
-            Value::String(text) => serde_json::from_str::<crate::request_json::RequestJson>(text)
+            Value::String(text) => crate::request_json::parse_str(text)
                 .ok()
                 .filter(|value| value.is_object()),
             _ => None,
@@ -4532,9 +4921,11 @@ pub const UNREADABLE_REWRITE: &str = "a rewrite hook attached to this agent comm
      params the hook said it had replaced.";
 
 /// The status a committed rewrite busbar cannot read back is refused with: A2A section 5.4's
+/// `InternalError` row.
 pub const UNREADABLE_REWRITE_STATUS: u32 = 500;
 
-/// The refusal of a committed rewrite busbar cannot read back: a conformant
+/// The refusal of a committed rewrite busbar cannot read back: a conformant A2A internal error
+/// (`-32603` at `500`) echoing the request id `id`.
 #[must_use]
 pub fn unreadable_rewrite(id: Option<serde_json::Value>) -> agent_arrival::AgentRefusal {
     agent_arrival::AgentRefusal::new(
@@ -4545,14 +4936,15 @@ pub fn unreadable_rewrite(id: Option<serde_json::Value>) -> agent_arrival::Agent
     )
 }
 
-/// THE ENVELOPE `envelope` WITH ITS `params` REPLACED by `params`, re-serialized (the served
+/// THE ENVELOPE `envelope` WITH ITS `params` REPLACED by `params`, re-serialized (the served engine
+/// wrote a committed rewrite back into the envelope and relayed it re-serialized).
 #[must_use]
 pub fn with_params(
     envelope: &[u8],
     params: serde_json::Value,
 ) -> Option<(serde_json::Value, Vec<u8>)> {
     let params = crate::request_json::RequestJson::new(params);
-    let mut value = serde_json::from_slice::<crate::request_json::RequestJson>(envelope).ok()?;
+    let mut value = crate::request_json::parse(envelope).ok()?;
     let replaced = value
         .as_object_mut()?
         .insert("params".to_string(), params.into_value());
@@ -4562,6 +4954,8 @@ pub fn with_params(
 }
 
 /// THE HTTP+JSON BODY THAT SPELLS `params` on `route`, where the line's body is the request's
+/// params ([`crate::rest::compose`]: a message sent or streamed, a push config posted, whose task
+/// the path names again); `None` on a route whose params the path and query spell.
 fn target_body(route: &statement::Route, params: &serde_json::Value) -> Option<Vec<u8>> {
     let rel = route
         .target
@@ -4674,8 +5068,8 @@ slot!(
             Err(_) => {
                 if let Some(plane) = instance.get() {
                     plane.on_unit(input.unit(), |u| {
-                            u.unreadable_rewrite = true;
-});
+                        u.unreadable_rewrite = true;
+                    });
                 }
                 return Outcome::Refused;
             }
@@ -4684,17 +5078,13 @@ slot!(
             Some((value, bytes, kept)) => {
                 if let Some(plane) = instance.get() {
                     plane.on_unit(input.unit(), |u| {
-                            // A line that composed its request relays the composition, so the
-                            // rewrite is what it relays (the HTTP+JSON and gRPC lines).
-                            let composed = u.envelope.is_some();
-                            if let Some(hop) = u.hop.as_mut() {
-                                if composed {
-                                    hop.relay.send_instead(bytes.clone());
-                                }
-                                hop.rewritten = Some(value.clone());
-                                hop.relayed_bytes = Some(bytes.clone().into());
-                            }
-});
+                        // A line that composed its request relays the composition, so the
+                        // rewrite is what it relays (the HTTP+JSON and gRPC lines).
+                        if let Some(hop) = u.hop.as_mut() {
+                            hop.relay.send_instead(bytes.clone());
+                            hop.rewritten = Some(value.clone());
+                        }
+                    });
                 }
                 let kept = match line {
                     Line::Document => Some(bytes.clone()),
@@ -4792,3 +5182,7 @@ busbar_contract::plugin_door! {
 #[cfg(test)]
 #[path = "tests/request_ownership_cases.rs"]
 mod request_ownership_cases;
+
+#[cfg(test)]
+#[path = "tests/plane_door_support.rs"]
+mod plane_door_support;

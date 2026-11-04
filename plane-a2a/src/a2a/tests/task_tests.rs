@@ -11,7 +11,7 @@ fn a_task() -> Task {
     Task::submitted("t-1", "ctx-1", "key-abc", Direction::Inbound, NOW).expect("valid identity")
 }
 
-/// The listed state tokens round-trip. These strings are the store row, the audit row
+/// The listed state tokens round-trip.
 #[test]
 fn every_state_token_round_trips() {
     let all = [
@@ -50,7 +50,7 @@ fn every_state_token_round_trips() {
     );
 }
 
-/// An unknown token is REFUSED, never defaulted. A row written by a newer engine must not be
+/// An unknown token is REFUSED, never defaulted.
 #[test]
 fn an_unknown_state_token_is_refused_not_defaulted() {
     assert_eq!(
@@ -100,14 +100,14 @@ fn the_transition_table_is_total_and_terminal_is_terminal() {
     }
 }
 
-/// The two interrupt states reach each other DIRECTLY. Forcing an input-required task through
+/// The two interrupt states reach each other DIRECTLY.
 #[test]
 fn an_interrupt_may_become_the_other_interrupt_without_pretending_to_work() {
     assert!(TaskState::InputRequired.can_transition_to(TaskState::AuthRequired));
     assert!(TaskState::AuthRequired.can_transition_to(TaskState::InputRequired));
 }
 
-/// A refused transition leaves the task COMPLETELY untouched, `updated_at` included. If a rejected
+/// A refused transition leaves the task COMPLETELY untouched, `updated_at` included.
 #[test]
 fn a_refused_transition_changes_nothing_at_all() {
     let mut t = a_task();
@@ -126,7 +126,7 @@ fn a_refused_transition_changes_nothing_at_all() {
     assert_eq!(t, before, "a refused transition mutates nothing");
 }
 
-/// Identity is checked on the way IN. An empty principal is a task nobody can be shown and nobody
+/// Identity is checked on the way IN.
 #[test]
 fn a_task_without_identity_is_refused_at_construction() {
     assert_eq!(
@@ -143,7 +143,7 @@ fn a_task_without_identity_is_refused_at_construction() {
     );
 }
 
-/// The store projection round-trips every field. A field added to `Task` and forgotten in `to_row`
+/// Check that the store projection round-trips every task field.
 #[test]
 fn the_store_projection_round_trips_every_field() {
     let mut t = a_task();

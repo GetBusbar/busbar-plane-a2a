@@ -16,7 +16,50 @@ mod task_sweep_gate;
 #[path = "task_conditional_publication.rs"]
 mod task_conditional_publication;
 
+/// The existing replay-token TTL, retained for legacy claim callers. Task publication and retention
+/// do not acquire claims and do not interpret this TTL as an ownership lease.
+pub(crate) const CLAIM_TTL_MS: u64 = 60_000;
+
+/// The key of event `seq` of `caller`'s task `task`: the host's listed key of record `seq` of the
+/// chain `<caller>/<task>` (`busbar_contract::services::chain_key`), and the key a change claims
+/// the sequence under.
+#[must_use]
+pub(crate) fn event_key(caller: &str, task: &str, seq: u64) -> String {
+    format!("{caller}/{task}/{seq:020}")
+}
+
+/// The genesis commit of a task, answering it as held.
+fn submit_held(
+    rec: &mut dyn Records,
+    at: &Stamp<'_>,
+    genesis: &HeldTask,
+    row: TaskRow,
+    _out: &mut Vec<Write>,
+) -> Result<HeldTask, Halt> {
+    let id = row.task_id.clone();
+    let key = task_key(at.caller, &id);
+    let chain = observe(rec, &key)?;
+    if rec.get(KIND_TASK, &key)?.is_some() {
+        return Err(Halt::Failed(format!("task `{id}` already exists")));
+    }
+    commit(rec, at, genesis, (None, chain), row, EV_SUBMITTED, None)?
+        .ok_or_else(|| Halt::Failed(format!("task `{id}` already exists")))
+}
+
+/// Open a relayed task with one atomic publication: the final row and the submitted/delegated
+/// events.
+pub(crate) fn open(
+    rec: &mut dyn Records,
+    at: &Stamp<'_>,
+    row: TaskRow,
+    agent_id: &str,
+    _out: &mut Vec<Write>,
+) -> Result<TaskRow, Halt> {
+    open_configured(rec, at, row, agent_id, None)
+}
+
 /// SUBMIT `row` for the caller: the task, and its chain's genesis event, stamped with the row's
+/// `created_at`.
 pub(crate) fn submit(
     rec: &mut dyn Records,
     at: &Stamp<'_>,
@@ -56,6 +99,7 @@ pub(crate) fn dispatch(
 }
 
 /// ADVANCE the artifact cursor to `cursor`, monotonic, with a `task.artifact` event; nothing when it
+/// would not move forward.
 pub(crate) fn advance_cursor(
     rec: &mut dyn Records,
     at: &Stamp<'_>,
@@ -93,7 +137,8 @@ fn framed(out: &mut Vec<u8>, bytes: &[u8]) {
     out.extend_from_slice(bytes);
 }
 
-/// The host's digest of event `e` on the chain `scope`: the length-prefixed prelude
+/// The host's digest of event `e` on the chain `scope`: the length-prefixed prelude (`prev_hash`,
+/// `scope`, `seq`) the host frames, then the door's own bytes ([`suffix`]).
 pub(crate) fn host_digest(scope: &str, e: &TaskEventRow) -> String {
     let mut input = Vec::new();
     framed(&mut input, e.prev_hash.as_bytes());
@@ -123,6 +168,7 @@ fn chain_of(key: &str) -> Option<(String, u64)> {
 
 impl Book {
     /// Apply an answer's writes: a put, or an empty value's tombstone; on the chained kind, an
+    /// append the host seals, or the chain dropped.
     pub(crate) fn apply(&mut self, writes: &[Write]) {
         for w in writes {
             if w.kind == KIND_TASK_EVENT {
@@ -139,6 +185,8 @@ impl Book {
     }
 
     /// THE HOST'S APPEND to the chain `scope` (`<caller>/<task>`): the next sequence, the tail's
+    /// digest as the link, the digest over the prelude and `own` bytes; kept, as a test reads it,
+    /// as the event row under its listed key.
     fn chain(&mut self, scope: &str, own: &[u8]) {
         let held: Vec<(String, String)> = self
             .rows
@@ -193,7 +241,8 @@ impl Book {
         serde_json::from_slice(&self.rows[at]).unwrap()
     }
 
-    /// THE HOST'S VERIFIED READ of the chains under `prefix`: each chain's records, and ahead of
+    /// THE HOST'S VERIFIED READ of the chains under `prefix`: each chain's records, and ahead of a
+    /// chain that does not verify a span keyed by its scope, carrying the break.
     fn chains(&self, prefix: &str) -> Vec<(String, Vec<u8>)> {
         let mut by_chain: BTreeMap<String, Vec<(String, TaskEventRow)>> = BTreeMap::new();
         for at in self.rows.keys() {
@@ -278,14 +327,6 @@ impl Records for Book {
             .filter(|((k, key), _)| k == kind && key.starts_with(prefix))
             .map(|((_, key), v)| (key.clone(), v.clone()))
             .collect())
-    }
-
-    fn claim(&mut self, kind: &str, key: &str, _ttl_ms: u64) -> Result<bool, Halt> {
-        if let Some(theirs) = self.race.take() {
-            self.apply(&theirs);
-            self.claims.insert((kind.to_string(), key.to_string()));
-        }
-        Ok(self.claims.insert((kind.to_string(), key.to_string())))
     }
 
     fn observe_chain_life(&mut self, kind: &str, scope: &str) -> Result<Option<Vec<u8>>, Halt> {
@@ -374,6 +415,9 @@ fn event(book: &Book, caller: &str, task: &str, seq: u64) -> TaskEventRow {
 }
 
 /// A real inbound task leaves a chain that RECOMPUTES from the persisted rows: opening a relayed
+/// task writes `task.submitted` (the genesis, seq 1, no predecessor) then `task.delegated` (who it
+/// was delegated to), each event's hash is the digest of its own fields and links to its
+/// predecessor's, and every event is scoped to the task and its caller.
 #[test]
 fn an_inbound_task_leaves_a_verifying_chain_in_the_store_the_front_door_wrote_it_to() {
     let mut book = Book::default();
@@ -435,6 +479,7 @@ fn an_inbound_task_leaves_a_verifying_chain_in_the_store_the_front_door_wrote_it
 }
 
 /// A task is held under its caller's prefix: its caller reads it back, another caller reads the same
+/// nothing a missing id reads, and a list is the caller's own.
 #[test]
 fn a_task_is_read_back_by_its_caller_only() {
     let mut book = Book::default();
@@ -448,7 +493,7 @@ fn a_task_is_read_back_by_its_caller_only() {
     let ids: Vec<String> = list(&mut book, ALICE, 100)
         .unwrap()
         .into_iter()
-        .map(|r| r.task_id)
+        .map(|r| r.task_id.clone())
         .collect();
     assert_eq!(ids, vec!["t1".to_string()]);
     for nobody in ["", "A11CE", "a/b"] {
@@ -462,6 +507,7 @@ fn a_task_is_read_back_by_its_caller_only() {
 }
 
 /// A change chains its event onto the tail the task record carries, under the digest, and a second
+/// submit of the same id is refused.
 #[test]
 fn a_change_chains_its_event_onto_the_tail() {
     let mut book = Book::default();
@@ -476,7 +522,7 @@ fn a_change_chains_its_event_onto_the_tail() {
     )
     .unwrap();
     book.apply(&out);
-    assert_eq!(moved.map(|r| r.state), Some("working".to_string()));
+    assert_eq!(moved.map(|r| r.state.clone()), Some("working".to_string()));
     let (e1, e2) = (event(&book, ALICE, "t1", 1), event(&book, ALICE, "t1", 2));
     assert_eq!(
         (e1.kind.as_str(), e1.prev_hash.as_str(), e1.ts),
@@ -510,6 +556,7 @@ fn a_change_chains_its_event_onto_the_tail() {
 }
 
 /// RACE-SAFE: a writer that loses its sequence to another writer re-reads and takes the next one,
+/// on top of the other's change rather than over it.
 #[test]
 fn a_change_that_loses_its_sequence_takes_the_next() {
     let mut book = Book::default();
@@ -607,6 +654,9 @@ fn a_terminal_task_past_its_window_reads_as_absent() {
 }
 
 /// THE SWEEP: an expired terminal task goes as tombstones (its row, its events, its push config),
+/// and a task whose id it prefixes stays, active and untouched however long it sat idle (amended to
+/// Q128 K2-H5, coordinator 2026-10-07; spec docs/design/BUSBAR-1.6.0.md :198-203: it pinned the
+/// abandon-cancel of idle active tasks).
 #[test]
 fn the_sweep_tombstones_the_expired_and_leaves_the_idle_active() {
     let mut book = Book::default();
@@ -655,13 +705,19 @@ fn the_sweep_tombstones_the_expired_and_leaves_the_idle_active() {
     }
 }
 
-/// Retention sweeping preserves active tasks and their push tokens.
+/// Retention sweeping preserves active tasks and their push configs.
 #[test]
-fn an_idle_active_task_survives_the_sweep_with_its_push_token() {
+fn an_idle_active_task_survives_the_sweep_with_its_push_config() {
     let mut book = Book::default();
     submitted(&mut book, ALICE, "idle", 100);
-    let tokens = crate::push::Tokens::default();
-    let token = tokens.mint(ALICE, "idle", b"sig").unwrap();
+    assert!(write_config(
+        &mut book,
+        &step(ALICE, 100),
+        "idle",
+        None,
+        b"{\"url\":\"https://hook.example/idle\"}".to_vec(),
+    )
+    .unwrap());
     let now = 100 + 86_400 * 30;
     let mut out = Vec::new();
     retention_sweep(&mut book, now, 64, &mut out).unwrap();
@@ -678,12 +734,15 @@ fn an_idle_active_task_survives_the_sweep_with_its_push_token() {
         "ListTasks still has it"
     );
     assert!(
-        tokens.claim(&token).is_some(),
-        "its push token stays valid while the task is active"
+        book.value(KIND_PUSH_CONFIG, &task_key(ALICE, "idle"))
+            .is_some(),
+        "its push config stays while the task is active"
     );
 }
 
-/// THE CAP: while MAX_RETAINED or more TERMINAL tasks are held, the oldest go; active tasks are
+/// THE CAP: while more than MAX_RETAINED TERMINAL tasks are held, the oldest go; active tasks are not
+/// counted against the cap and none goes (amended to Q128 K2-H5, coordinator 2026-10-07; spec
+/// :198-203: it counted active tasks toward the cap); the sweep touches no more than its budget.
 #[test]
 fn the_sweep_holds_the_cap_with_terminal_tasks_only() {
     let mut book = Book::default();
@@ -714,12 +773,23 @@ fn the_sweep_holds_the_cap_with_terminal_tasks_only() {
     let mut out = Vec::new();
     retention_sweep(&mut book, 30, 64, &mut out).unwrap();
     book.apply(&out);
-    assert!(book.value(KIND_TASK, &task_key(ALICE, "new")).is_none());
+    assert!(
+        book.value(KIND_TASK, &task_key(ALICE, "new")).is_some(),
+        "exactly MAX_RETAINED terminal tasks is the cap, not past it"
+    );
     assert_eq!(
         list(&mut book, ALICE, 30).unwrap().len(),
-        MAX_RETAINED - 1 + 5,
+        MAX_RETAINED + 5,
         "the cap held over terminal tasks; no active task goes"
     );
+    book.hold(ALICE, &held("newer".into(), "completed", 25));
+    retention_sweep(&mut book, 30, 64, &mut out).unwrap();
+    book.apply(&out);
+    assert!(
+        book.value(KIND_TASK, &task_key(ALICE, "new")).is_none(),
+        "one past the cap, the oldest goes"
+    );
+    assert_eq!(list(&mut book, ALICE, 30).unwrap().len(), MAX_RETAINED + 5);
 }
 
 /// Apply `to` for ALICE's `task` at `now` through [`transition`] and the book.
@@ -876,7 +946,8 @@ fn an_illegal_transition_writes_neither_a_row_nor_an_event() {
     assert_eq!(book.rows, rows_before, "the store is untouched");
 }
 
-/// "Process 1" (the engine's `process_one`): ALICE's `t-work` taken to `working`; BOB's
+/// "Process 1" (the engine's `process_one`): ALICE's `t-work` taken to `working`; BOB's `t-paused`
+/// dispatched, working, its cursor at 7, then interrupted on `auth-required`.
 fn process_one() -> Book {
     let mut book = Book::default();
     submitted(&mut book, ALICE, "t-work", 100);
@@ -953,6 +1024,9 @@ fn a_tampered_chain_is_reported_on_restore_and_the_task_is_still_restored() {
 }
 
 /// ENTRIES CUT FROM THE END ARE CAUGHT. Dropping a chain's last events leaves every remaining link
+/// correct, so the host's verified read alone cannot see it (busbar's generic chain verifier pins
+/// that limit:
+/// `audit/tests/chain_tests.rs::truncating_the_tail_verifies_and_that_limit_is_deliberate`).
 #[test]
 fn dropping_the_last_event_is_a_reported_break() {
     let mut book = process_one();
@@ -980,6 +1054,7 @@ fn dropping_the_last_event_is_a_reported_break() {
 }
 
 /// An in-flight task whose WHOLE chain is gone is a cut chain too: its row committed events the
+/// store no longer holds.
 #[test]
 fn dropping_every_event_of_an_in_flight_task_is_a_reported_break() {
     let mut book = process_one();
@@ -1000,6 +1075,8 @@ fn dropping_every_event_of_an_in_flight_task_is_a_reported_break() {
 }
 
 /// An untouched store still restores clean: a chain whose last event is the one its task row
+/// committed is no break, and another task's chain the scope's prefix also reaches (`t-work`
+/// reaches `t-work2`) is never counted as this one's.
 #[test]
 fn a_whole_chain_is_no_break_whatever_its_neighbours() {
     let mut book = process_one();
@@ -1042,6 +1119,7 @@ fn an_unreadable_row_is_counted_rather_than_silently_dropped() {
 }
 
 /// Ported from busbar-a2a a2a/tests/chain_golden.rs::one_undecodable_record_does_not_drop_the_others_on_restore
+/// (the task-row half; the host skips an undecodable chain record itself).
 #[test]
 fn one_undecodable_task_row_does_not_drop_the_others_on_restore() {
     let mut book = process_one();
@@ -1086,6 +1164,7 @@ fn editing_a_persisted_event_breaks_the_chain_the_front_door_wrote() {
 }
 
 /// The sweep drops an expired task's chain whole: one empty append on the chain's scope, never a
+/// listing of its events.
 #[test]
 fn the_sweep_drops_an_expired_tasks_chain_whole() {
     let mut book = Book::default();
@@ -1112,6 +1191,7 @@ fn the_sweep_drops_an_expired_tasks_chain_whole() {
 }
 
 /// B1 RULING 1 (coordinator 2026-10-07): MOVING BYTES BETWEEN CONTEXT, PRINCIPAL AND AGENT BREAKS
+/// THE CHAIN (predev's F-A2A2, the reason its v2 framing exists).
 #[test]
 fn moving_bytes_between_context_principal_and_agent_breaks_verification() {
     let at = |context: &str, principal: &str, agent: &str| TaskEventRow {
@@ -1165,18 +1245,16 @@ fn the_chain_scope_is_the_callers_opaque_reference_and_the_task() {
     let caller_ref = busbar_contract::redacted::sha256_hex(b"keyed digest of the principal");
     let mut book = Book::default();
     let mut out = Vec::new();
+    let mut presented = row("t1", 100);
+    presented.principal = PRINCIPAL.to_string();
     open(
         &mut book,
         &step(&caller_ref, 100),
-        row("t1", 100),
+        presented,
         "planner",
         &mut out,
     )
     .unwrap();
-    assert!(
-        out.is_empty(),
-        "an acknowledged transaction is never written again"
-    );
     let committed = book.publications.last().unwrap();
     let scopes: Vec<&str> = committed
         .iter()
@@ -1208,6 +1286,9 @@ fn the_chain_scope_is_the_callers_opaque_reference_and_the_task() {
 }
 
 /// THE TASK KIND IS TERMINAL-ONLY, and the plane's records layer is what keeps it so. At f608d7d5
+/// the tail declared it (`PlaneTail::record_retentions`, `record_retention(0, TerminalOnly)`): a
+/// purge of the `task` kind drops only TERMINAL rows older than its cutoff and keeps an ACTIVE row
+/// however old, while every other held kind goes by age.
 #[test]
 fn the_records_layer_declares_the_task_kind_as_terminal_only() {
     use crate::records::{retention_of, Retention, HELD_KINDS};
@@ -1259,11 +1340,16 @@ fn the_records_layer_declares_the_task_kind_as_terminal_only() {
         list(&mut restarted, ALICE, now).unwrap(),
         list(&mut book, ALICE, now).unwrap()
     );
-    let mut out = Vec::new();
-    retention_sweep(&mut restarted, now, 64, &mut out).unwrap();
-    assert!(
-        out.is_empty(),
+    let published = restarted.publications.len();
+    assert_eq!(
+        retention_sweep(&mut restarted, now, 64, &mut Vec::new()).unwrap(),
+        0,
         "a restarted sweep finds nothing more to drop"
+    );
+    assert_eq!(
+        restarted.publications.len(),
+        published,
+        "and publishes nothing"
     );
 }
 
@@ -1281,12 +1367,10 @@ impl Records for Listed<'_> {
         self.lists.push((kind.to_string(), prefix.to_string()));
         self.book.list(kind, prefix)
     }
-    fn claim(&mut self, kind: &str, key: &str, ttl_ms: u64) -> Result<bool, Halt> {
-        self.book.claim(kind, key, ttl_ms)
-    }
 }
 
 /// THE RESTORE READS ONLY THE IN-FLIGHT TASKS' CHAINS: each one listed under its own scope, and a
+/// terminal task's chain never asked for.
 #[test]
 fn the_restore_reads_only_the_in_flight_tasks_chains() {
     let mut book = process_one();
@@ -1304,4 +1388,29 @@ fn the_restore_reads_only_the_in_flight_tasks_chains() {
         .map(|(_, prefix)| prefix.as_str())
         .collect();
     assert_eq!(chains, [task_key(BOB, "t-paused").as_str()]);
+}
+
+impl Book {
+    pub(crate) fn claim(&mut self, kind: &str, key: &str, _ttl_ms: u64) -> Result<bool, Halt> {
+        if let Some(theirs) = self.race.take() {
+            self.apply(&theirs);
+            self.claims.insert((kind.to_string(), key.to_string()));
+        }
+        Ok(self.claims.insert((kind.to_string(), key.to_string())))
+    }
+}
+
+#[test]
+fn retention_reports_unreadable_rows_without_leaking_their_bytes() {
+    let mut book = Book::default();
+    book.apply(&[Write {
+        kind: KIND_TASK,
+        key: task_key(ALICE, "broken"),
+        value: b"secret-invalid-record".to_vec(),
+    }]);
+    let error = retention_sweep(&mut book, 1000, 32, &mut Vec::new()).unwrap_err();
+    assert_eq!(
+        error,
+        Halt::Failed("unreadable task record during retention".into())
+    );
 }

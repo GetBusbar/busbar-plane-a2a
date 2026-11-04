@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! The door's half of push delivery, over the test's host records: what a moved task queues, and
+//! the chain records an attempt owes.
 
 use busbar_contract::vocab::{EV_PUSH_DELIVERED, EV_PUSH_FAILED};
 
@@ -9,8 +10,8 @@ use super::*;
 use crate::a2a::task::TaskState;
 use crate::push::DeliveryAuth;
 use crate::records::{KIND_PUSH_CONFIG, KIND_TASK_EVENT};
-use crate::tasks::tests::{submitted, Book, ALICE, BOB};
-use crate::tasks::{event_key, get, task_key};
+use crate::tasks::tests::{event_key, submitted, Book, ALICE, BOB};
+use crate::tasks::{get, task_key};
 use crate::TaskEventRow;
 
 /// Alice's task `t1`, moved to `working`, with `callback` on its row.
@@ -42,6 +43,7 @@ fn config(url: &str, auth: Option<DeliveryAuth>) -> PushConfig {
 }
 
 /// A moved task whose caller registered a push config queues ONE notification, due at once, to
+/// the config's URL, presenting the config's credential, and keyed to the caller.
 #[test]
 fn a_moved_task_with_a_registered_config_queues_its_notification_to_that_config() {
     let mut book = Book::default();
@@ -70,6 +72,7 @@ fn a_moved_task_with_a_registered_config_queues_its_notification_to_that_config(
 }
 
 /// A legacy row URL supplies no durable credential authority; neither it nor an absent callback
+/// queues a notification.
 #[test]
 fn a_legacy_row_callback_without_durable_authority_queues_nothing() {
     let mut book = Book::default();
@@ -89,6 +92,7 @@ fn a_legacy_row_callback_without_durable_authority_queues_nothing() {
 }
 
 /// The config a moved task's notification goes to is read through the piece's records, under the
+/// caller's own key: another caller's config for a task of the same id is never it.
 #[test]
 fn the_config_is_read_under_the_callers_own_key() {
     let mut book = Book::default();
@@ -112,6 +116,7 @@ fn the_config_is_read_under_the_callers_own_key() {
 }
 
 /// What an attempt owes is filed on its task's chain as the attempt's record kind, with no request
+/// id (no inbound request originates a delivery); another caller's owed outcome is not filed.
 #[test]
 fn an_owed_outcome_is_filed_on_its_tasks_chain() {
     let mut book = Book::default();
@@ -162,7 +167,7 @@ fn an_owed_outcome_is_filed_on_its_tasks_chain() {
     );
 }
 
-use busbar_contract::abi::host::service::{DEST_INTERNAL, DEST_PLAINTEXT};
+use busbar_contract::abi::host::service::{DEST_INTERNAL, DEST_PLAINTEXT, DEST_UNRESOLVABLE};
 use busbar_contract::vocab::EV_PUSH_REFUSED;
 
 use crate::push::DeliverySettled;
@@ -177,14 +182,18 @@ type Scripted = Option<(u64, Vec<String>)>;
 type Fields = Vec<(Vec<u8>, Vec<u8>)>;
 
 /// A host whose judge answers each attempt from a script (the last answer repeats), and whose
+/// receiver answers `status`; every judged URL and every send is logged, and every send's framed
+/// exchange is read back: the fields the far end is handed, keyed to the URL they went to.
 struct TestHost {
     verdicts: Vec<Scripted>,
     status: u16,
     judged: Vec<String>,
     sent: Vec<String>,
     /// Each send's URL and the fields its exchange framed, in send order (a sealed value reads
+    /// `<sealed>`).
     framed: Vec<(String, Fields)>,
     /// Each send's whole framed head, sealed values included, in send order: the bytes the far end
+    /// is handed.
     heads: Vec<Vec<u8>>,
     /// How many sends answer PENDING before one reaches the receiver.
     pends: u32,
@@ -287,6 +296,7 @@ fn tick_once(d: &Deliveries, host: &mut TestHost, now_ns: u64) -> (Attempted, De
 }
 
 /// The base case: a completed task with a callback is POSTed to it once, and its delivered record is
+/// owed; its last delivery drops the credential.
 #[test]
 fn a_completed_task_with_a_callback_is_delivered() {
     let callback = "https://hook.caller.test/notify";
@@ -300,6 +310,7 @@ fn a_completed_task_with_a_callback_is_delivered() {
 }
 
 /// A callback that resolves to an internal address at DELIVERY (it passed at registration) is
+/// refused by the judge on this attempt, and nothing is sent.
 #[test]
 fn a_callback_that_became_internal_after_registration_is_refused_at_delivery() {
     let d = queued("https://hook.caller.test/notify");
@@ -315,6 +326,14 @@ fn a_callback_that_became_internal_after_registration_is_refused_at_delivery() {
 }
 
 /// THE CALLER'S OWN CREDENTIAL IS PRESENTED, and it is the caller's — not busbar's (ported from the
+/// engine's `pushdeliver_tests.rs::the_callers_own_webhook_credential_is_presented_on_the_delivery`,
+/// the `egress-auth × a2a-server` cell). A caller whose webhook authenticates registers its
+/// `authentication` with the push config; the exchange the attempt actually frames and sends, once
+/// the judge admits the callback, carries exactly one `authorization` field, `<scheme>
+/// <credentials>` as RFC 9110 spells it and as the caller wrote it. Read off the SENT exchange, as
+/// predev read its sent log: framing the attempt without the held credential, or an exchange that
+/// drops the field, reds here. The credential is never printed: a failure names the field, not its
+/// value.
 #[test]
 fn the_callers_own_webhook_credential_is_presented_on_the_delivery() {
     let callback = "https://hook.caller.test/notify";
@@ -367,6 +386,7 @@ fn the_callers_own_webhook_credential_is_presented_on_the_delivery() {
 }
 
 /// A name that resolves to nothing at delivery, or a judgement that could not be made, is refused:
+/// nothing was checked, so nothing is allowed.
 #[test]
 fn a_name_that_resolves_to_nothing_at_delivery_time_is_refused() {
     for script in [Some((DEST_UNRESOLVABLE, &[][..])), None] {
@@ -386,6 +406,7 @@ fn a_name_that_resolves_to_nothing_at_delivery_time_is_refused() {
 }
 
 /// A private address is refused with no socket: no exchange is framed and nothing is sent, so the
+/// caller's credential reaches no refused destination.
 #[test]
 fn a_private_address_is_refused_with_no_socket() {
     let d = queued("https://hook.caller.test/notify");
@@ -402,6 +423,7 @@ fn a_private_address_is_refused_with_no_socket() {
 }
 
 /// A plaintext callback that reached a row is refused at DELIVERY on the host's verdict (the
+/// open-web class admits a secure connection only), and nothing is sent.
 #[test]
 fn a_plaintext_callback_is_refused_at_delivery() {
     let callback = "http://hook.caller.test/notify";
@@ -415,6 +437,7 @@ fn a_plaintext_callback_is_refused_at_delivery() {
 }
 
 /// The judge is asked again on the retry: a receiver that failed with a `503` is retried, and the
+/// retry's fresh verdict (now internal) refuses it before anything is sent a second time.
 #[test]
 fn the_guard_is_re_run_on_the_retry() {
     let d = queued("https://hook.caller.test/notify");
@@ -438,6 +461,7 @@ fn the_guard_is_re_run_on_the_retry() {
 }
 
 /// A deleted config withdraws the queued attempt. An already borrowed delivery keeps its immutable
+/// URL/auth snapshot, so the pump must check current() before using it.
 #[test]
 fn a_deleted_config_withdraws_the_captured_delivery_before_it_can_be_sent() {
     let callback = "https://hook.caller.test/notify";
@@ -475,6 +499,7 @@ fn a_deleted_config_withdraws_the_captured_delivery_before_it_can_be_sent() {
 }
 
 /// A queued notification wakes the instance's driver ticket (R-PUSH), so the kernel ticks and
+/// attempts it at once; a task that queues nothing wakes nothing; an unarmed wake is a no-op.
 #[test]
 fn a_queued_notification_wakes_the_driver_ticket() {
     let mut book = Book::default();
@@ -501,6 +526,7 @@ fn a_queued_notification_wakes_the_driver_ticket() {
 }
 
 /// The pushback path (`queue_moved`, the agent's own report of a task's move) wakes the driver
+/// ticket after queueing the caller's delivery.
 #[test]
 fn queue_moved_wakes_the_driver_ticket() {
     let mut book = Book::default();
@@ -522,6 +548,9 @@ fn queue_moved_wakes_the_driver_ticket() {
 }
 
 /// A delivery is never sent twice (R-PUSH): a `tick` whose exchange pends holds the attempt, and a
+/// second `tick` while it is held starts nothing and calls nothing; `drive` alone carries it on, and
+/// the receiver is reached EXACTLY once. RED against a variant where the tick and drive both
+/// deliver (two receiver hits).
 #[test]
 fn a_pending_attempt_is_delivered_once_whether_tick_or_drive_runs_first() {
     let callback = "https://hook.caller.test/notify";
@@ -551,6 +580,10 @@ fn a_pending_attempt_is_delivered_once_whether_tick_or_drive_runs_first() {
 }
 
 /// A lost wake still ends in exactly one delivery (R-PUSH, coordinator option (b)): an attempt left
+/// held with no `drive` is abandoned by the first tick past the whole attempt's deadline (ten
+/// seconds), which is asked for at that moment, and its delivery is requeued under the
+/// retry rules and then sent once. RED against round 2's behaviour (a held attempt is never given
+/// up): nothing is ever sent.
 #[test]
 fn a_dropped_wake_ends_in_exactly_one_delivery_after_the_timeout() {
     let callback = "https://hook.caller.test/notify";
@@ -599,6 +632,9 @@ fn a_dropped_wake_ends_in_exactly_one_delivery_after_the_timeout() {
 }
 
 /// An attempt cancelled by abandonment never also completes: the connection it held is closed, and
+/// a late `drive` (the old connection's answer arriving) finds nothing to carry on, so the
+/// receiver is reached once, by the requeued attempt. RED against a variant that abandons without
+/// dropping the attempt (the late drive sends it a second time).
 #[test]
 fn an_abandoned_attempt_never_also_completes() {
     let callback = "https://hook.caller.test/notify";
@@ -628,6 +664,10 @@ fn an_abandoned_attempt_never_also_completes() {
 }
 
 /// A RETRY'S WAIT IS COUNTED FROM WHEN THE ATTEMPT ENDED (spec l.391-392: three attempts, two
+/// delays of 250/500 ms ±20 %). An attempt whose exchange pends, and whose `503` arrives two
+/// seconds after the tick that began it, is not retried on the tick that follows its `drive`: the
+/// retry waits out its 250 ms from then. RED against a wait counted from the attempt's start (the
+/// delay is already spent when the failure lands, so the retry goes out at once).
 #[test]
 fn a_retry_waits_from_when_a_pended_attempt_ended() {
     let callback = "https://hook.caller.test/notify";
@@ -661,6 +701,10 @@ fn a_retry_waits_from_when_a_pended_attempt_ended() {
 }
 
 /// A RECEIVER WHOSE ADDRESSES CHANGED IS STILL DELIVERED TO: the destination judge runs on every
+/// attempt and the dial lands only within what it judged (spec l.392-393, "re-runs the destination
+/// judge on every attempt"; THE DESIGN, its connections section: the connector judges every open),
+/// so a fresh, allowed resolution that shares no address with an earlier delivery's is reached. RED
+/// against a plane-side rule that refuses it (`Moved`) for as long as the instance lives.
 #[test]
 fn a_receiver_whose_addresses_changed_is_still_delivered() {
     let callback = "https://hook.caller.test/notify";
@@ -713,6 +757,8 @@ fn terminal_task_without_durable_config_queues_nothing() {
 }
 
 /// AN ENDED TASK SPENDS ITS CALLBACK TOKEN, whichever move ended it: the token busbar registered
+/// with the agent is released when the move is terminal, so tasks that end through the relayed
+/// answer or a refresh never pile up against `MAX_TOKENS`; a live task keeps its token.
 #[test]
 fn an_ended_task_spends_its_callback_token() {
     let mut book = Book::default();
@@ -733,6 +779,11 @@ fn an_ended_task_spends_its_callback_token() {
 }
 
 /// A NOTIFICATION QUEUED WHILE AN ATTEMPT IS HELD DOES NOT WAKE THE DRIVER TICKET: the wake would
+/// make the kernel tick, and a tick's start is the driver ticket's cycle boundary, which forgets
+/// the held attempt's pending exchange (its completion lost, the attempt ended only by its
+/// deadline's abandonment, a replay dialling again). The queued notification waits; the held attempt's own
+/// completion wake carries it, and the held attempt ends with its own result, sent once. RED
+/// against a queue that wakes while an attempt is held.
 #[test]
 fn a_notification_queued_during_a_held_attempt_waits_for_that_attempts_own_wake() {
     let callback = "https://hook.caller.test/notify";
@@ -765,6 +816,10 @@ fn a_notification_queued_during_a_held_attempt_waits_for_that_attempts_own_wake(
     );
 
     assert_eq!(drive_over(&mut host, &d, &attempting), Outcome::Ready);
+    assert!(
+        woken.try_iter().count() > 0,
+        "completion must wake queued work"
+    );
     assert_eq!(host.sent, vec![callback.to_string()], "sent once");
     assert_eq!(d.take_owed(ALICE, None).len(), 1, "its own result is owed");
 
@@ -843,6 +898,10 @@ fn the_whole_attempt_is_abandoned_at_ten_seconds_as_a_transport_error() {
 }
 
 /// WHILE AN ATTEMPT IS HELD THE TICK IS ASKED FOR ONLY AT ITS ABANDONMENT, never at once for a
+/// delivery that came due meanwhile: such a tick starts no attempt (the held one is `drive`'s), and
+/// its start is the driver ticket's cycle boundary, which forgets the held exchange's answers. The
+/// held attempt's own completion wake attempts what waits. RED against a tick asked for at the
+/// earliest of the due delivery and the deadline (the instance ticks at once, over and over).
 #[test]
 fn a_held_attempt_asks_for_no_tick_before_its_deadline() {
     let d = queued("https://hook.caller.test/notify");
@@ -910,4 +969,71 @@ fn acknowledged_retention_config_deletes_clean_the_actual_other_caller_queue() {
         0,
         "retention acknowledgement uses its actual stored caller/key"
     );
+}
+
+use crate::push::Owed;
+use crate::tasks::{Records, Write};
+
+pub fn queue(deliveries: &Deliveries, row: &TaskRow, config: Option<&PushConfig>) -> bool {
+    let Some(delivery) = captured(row, config) else {
+        return false;
+    };
+    deliveries.enqueue(delivery, 0);
+
+    deliveries.wake();
+    true
+}
+
+pub fn forget_deleted(deliveries: &Deliveries, writes: &[Write]) {
+    for w in writes
+        .iter()
+        .filter(|w| w.kind == KIND_PUSH_CONFIG && w.value.is_empty())
+    {
+        deliveries.forget_config(&w.key);
+    }
+}
+
+pub fn queue_moved(
+    deliveries: &Deliveries,
+    rec: &mut dyn Records,
+    caller: &str,
+    row: &TaskRow,
+) -> Result<bool, Halt> {
+    match local::held_config(rec, caller, &row.task_id) {
+        Ok(config) => Ok(queue(deliveries, row, config.as_ref())),
+        Err(Halt::Pending) => Err(Halt::Pending),
+        Err(Halt::Failed(_)) => {
+            defer(deliveries, row);
+            Ok(true)
+        }
+    }
+}
+
+pub(crate) fn defer(deliveries: &Deliveries, row: &TaskRow) {
+    deliveries.enqueue(deferred(row), 0);
+    busbar_contract::diag_warn!(
+        crate::diagnostics::A2A_PUSH_CHECK_UNAVAILABLE,
+        "a2a: notification config unavailable; retained for delivery retry"
+    );
+    deliveries.wake();
+}
+
+pub fn file_owed(
+    rec: &mut dyn Records,
+    caller: &str,
+    owed: &[Owed],
+    now_s: u64,
+    out: &mut Vec<Write>,
+) -> Result<(), Halt> {
+    for o in owed.iter().filter(|o| o.caller == caller) {
+        let at = Stamp {
+            caller,
+            request_id: "",
+            now: now_s,
+        };
+        if let Err(Halt::Pending) = tasks::record_push_delivery(rec, &at, &o.task_id, o.kind, out) {
+            return Err(Halt::Pending);
+        }
+    }
+    Ok(())
 }

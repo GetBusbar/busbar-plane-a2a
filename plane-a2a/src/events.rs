@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! One event off a relayed event stream. Pure: the relay feeds it frames
+//! One event off a relayed event stream, pure: the relay feeds it frames
+//! ([`crate::sse::SseReader`]) and the door writes what it answers.
 
 use std::borrow::Cow;
 
@@ -9,6 +10,7 @@ use busbar_contract::jsonrpc::{read_response, Reply};
 use serde_json::Value;
 
 use crate::a2a::task::TaskState;
+use crate::agent_arrival::AgentRefusal;
 use crate::relay::HopRefusal;
 use crate::relay::RawBytes;
 use crate::request_json::RequestJson;
@@ -53,6 +55,7 @@ fn json_event(value: &Value) -> Vec<u8> {
 }
 
 /// `payload` as one complete event: each of its lines a `data:` line of its own, as the
+/// event-stream format joins them back.
 fn data_event(payload: &[u8]) -> Vec<u8> {
     let mut out = RawBytes::default();
     for line in payload.split(|b| *b == b'\n') {
@@ -64,7 +67,29 @@ fn data_event(payload: &[u8]) -> Vec<u8> {
     out.into_vec()
 }
 
+/// The words a far end's `error` event is relayed with: its own prose never travels.
+pub const BACKEND_ERROR_TEXT: &str = "the backend agent refused this request";
+
+/// A far end's `error` event as the caller's stream carries it: the far end's code when A2A
+/// defines it (else `InvalidAgentResponse`), fixed words, and the task it is about, never the far
+/// end's own `message` or `data`.
+fn error_event(reply: &Reply, rpc_id: &Value, task_id: &str) -> Value {
+    let code = match reply {
+        Reply::Error { code, .. } => code.as_ref().and_then(Value::as_i64),
+        Reply::Result(_) => None,
+    }
+    .filter(|code| task_identity::status_of_code(*code).is_some())
+    .unwrap_or(crate::relay::CODE_INVALID_AGENT_RESPONSE);
+    let refusal = AgentRefusal::new(0, Some(rpc_id.clone()), code, BACKEND_ERROR_TEXT);
+    if task_id.is_empty() {
+        refusal.envelope()
+    } else {
+        task_identity::about_task(&refusal, task_id)
+    }
+}
+
 /// READ ONE FAR-END EVENT `frame_text` and frame it for the caller of request `rpc_id`, under
+/// busbar's `task_id`, `context_id` and the matched `skill`.
 pub fn read_event(
     frame_text: &str,
     rpc_id: &Value,
@@ -91,8 +116,7 @@ pub fn read_event(
         Cow::Owned(bytes) => Some(RawBytes::from(bytes)),
         Cow::Borrowed(_) => None,
     };
-    let Ok(envelope) =
-        serde_json::from_slice::<RequestJson>(readable.as_deref().unwrap_or(data.as_bytes()))
+    let Ok(envelope) = crate::request_json::parse(readable.as_deref().unwrap_or(data.as_bytes()))
     else {
         return Err(HopRefusal::NotJson);
     };
@@ -111,7 +135,7 @@ pub fn read_event(
     }
     let Reply::Result(_) = reply else {
         return Ok(Event {
-            sse: json_event(&envelope),
+            sse: json_event(&error_event(&reply, rpc_id, task_id)),
             state: None,
             artifact: false,
             backend_task_id: None,
@@ -163,7 +187,8 @@ pub fn read_event(
     })
 }
 
-/// AN HTTP+JSON FAR END'S FRAME, wrapped back into the one dialect: its `data:` payload is the
+/// AN HTTP+JSON FAR END'S FRAME, wrapped back into the one dialect: its `data:` payload is the bare
+/// event, so it becomes `result` under `rpc_id`.
 #[must_use]
 pub fn rewrap<'f>(frame_text: &'f str, rpc_id: &Value) -> Cow<'f, str> {
     sse_data(frame_text)
@@ -178,6 +203,7 @@ pub fn rewrap<'f>(frame_text: &'f str, rpc_id: &Value) -> Cow<'f, str> {
 }
 
 /// THE HTTP+JSON LINE'S EVENTS: every event of `buf` whose data is a JSON-RPC `result` becomes the
+/// bare result, and everything else passes byte for byte.
 #[must_use]
 pub fn reframe_events(buf: &[u8]) -> Vec<u8> {
     let Ok(text) = std::str::from_utf8(buf) else {
@@ -206,6 +232,7 @@ fn data_field(line: &str) -> Option<&str> {
 }
 
 /// One event's `lines` (each with its terminator) onto `out`: its data lines replaced, where they
+/// join to a JSON-RPC `result`, by that result's own bytes.
 fn reframe_event(lines: &[&str], out: &mut RawBytes) {
     let data: Vec<&str> = lines.iter().copied().filter_map(data_field).collect();
     let joined = zeroize::Zeroizing::new(data.join("\n"));

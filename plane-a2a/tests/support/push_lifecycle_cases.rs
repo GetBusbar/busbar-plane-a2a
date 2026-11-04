@@ -152,7 +152,9 @@ extern "C" fn signed(_: HostCtx, input: *const c_void, out: *mut ServiceOut) -> 
     let i = unsafe { input.cast::<SignIn>().read() };
     let key = b"fixture";
     let signature = [7u8; 64];
-    assert!(i.into.cap >= key.len() + signature.len() && i.into.spans_cap >= 1);
+    if i.into.cap < key.len() + signature.len() || i.into.spans_cap < 1 {
+        return answer(out, Outcome::Failed, 0, 0);
+    }
     unsafe {
         std::ptr::copy_nonoverlapping(key.as_ptr(), i.into.buf, key.len());
         std::ptr::copy_nonoverlapping(
@@ -248,7 +250,9 @@ extern "C" fn random_fill(_: HostCtx, input: *const c_void, out: *mut ServiceOut
         s.random = s.random.wrapping_add(1);
         s.conditional.random(i.head, s.random)
     });
-    assert!(i.into.cap >= i.len as usize);
+    if i.into.cap < i.len as usize {
+        return answer(out, Outcome::Failed, 0, 0);
+    }
     unsafe {
         std::ptr::write_bytes(i.into.buf, value, i.len as usize);
     }
@@ -1137,7 +1141,10 @@ fn a_pending_push_retains_its_original_timestamp_across_the_publication_receipts
     let (_reset, door) = open_scripted();
     let auth = registered(&door);
     let before = script(|s| s.conditional.events.len());
-    script(|s| s.clock_step_ns = 1_000_000_000);
+    script(|s| {
+        s.wall_ns = 1_800_000_010_000_000_000;
+        s.clock_step_ns = 1_000_000_000;
+    });
     let answer = serve(&door, 699, &auth, COMPLETED, 4096);
     assert_eq!(
         (answer.outcome, answer.status),
@@ -1145,7 +1152,7 @@ fn a_pending_push_retains_its_original_timestamp_across_the_publication_receipts
         "{answer:?}"
     );
     assert_eq!(task_state()["state"], "completed");
-    assert_eq!(task_state()["updated_at"], 1_800_000_000_u64);
+    assert_eq!(task_state()["updated_at"], 1_800_000_010_u64);
     assert!(script(|s| s.wall_ns) > 1_800_000_000_000_000_000);
     assert_eq!(script(|s| s.conditional.events.len()), before + 1);
     assert!(!door.pending_serves.borrow().contains_key(&ticket(699)));
@@ -1178,10 +1185,21 @@ fn callback_pending_and_short_refusals_preserve_one_budget_charge_and_one_warnin
     };
     let original = loans();
     for (body, cap) in [(COMPLETED, 4096), (WORKING, 8192)] {
-        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let refusal = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             recall(&door, 700, &auth, body, cap)
         }))
-        .is_err());
+        .expect_err("changed push input must be refused by the fixture");
+        let message = refusal
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| refusal.downcast_ref::<&str>().copied())
+            .unwrap_or("");
+        let expected = if cap == 4096 {
+            "a pending serve must resume its exact logical input"
+        } else {
+            "pending serve loans cannot be replaced"
+        };
+        assert!(message.contains(expected), "{message}");
         assert_eq!(
             loans(),
             original,

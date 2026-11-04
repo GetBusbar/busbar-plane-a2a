@@ -29,6 +29,10 @@ install_go() {
 
 install_py() {
   echo "installing control: a2a-python ${CONTROL_PY_VERSION}"
+  # The pin is applied from the hashed requirements file; refuse to install if
+  # that file names a different a2a-sdk than the version this script reports.
+  grep -qF "a2a-sdk==${CONTROL_PY_VERSION} " "$HERE/../../conformance/requirements-py.txt" \
+    || { echo "conformance/requirements-py.txt does not pin a2a-sdk==${CONTROL_PY_VERSION}" >&2; return 1; }
   python3 -m venv "$SRC_DIR/venv"
   "$SRC_DIR/venv/bin/pip" install -q --require-hashes --only-binary=:all: \
     -r "$HERE/../../conformance/requirements-py.txt"

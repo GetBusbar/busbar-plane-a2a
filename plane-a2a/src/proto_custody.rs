@@ -34,7 +34,7 @@ impl Wipe for u8 {
 
 impl Wipe for String {
     fn wipe(&mut self) {
-        self.zeroize();
+        crate::request_json::wipe_string(self);
     }
 }
 
@@ -55,6 +55,7 @@ impl<T: Wipe> Wipe for Box<T> {
 impl<T: Wipe> Wipe for Vec<T> {
     fn wipe(&mut self) {
         self.iter_mut().for_each(Wipe::wipe);
+        self.clear();
     }
 }
 
@@ -135,13 +136,15 @@ pub(crate) fn encode_base64(value: impl AsRef<[u8]>) -> Guard<String> {
     Guard::new(base64::engine::general_purpose::STANDARD.encode(value))
 }
 
-/// Build test messages without moving unnamed fields out of a Drop-bearing default value.
 #[cfg(test)]
-pub(crate) fn initialized<T: Wipe + Default>(initialize: impl FnOnce(&mut T)) -> T {
-    let mut value = Guard::new(T::default());
-    initialize(&mut value);
-    value.take()
-}
+#[path = "tests/proto_custody_support.rs"]
+mod support;
+#[cfg(test)]
+pub(crate) use support::initialized;
+
+#[cfg(test)]
+#[path = "tests/proto_custody_tests.rs"]
+mod tests;
 
 /// Deserialize collections through their own guards rather than Serde's plain partial locals.
 pub(crate) trait Decode<'de>: Sized + Wipe {

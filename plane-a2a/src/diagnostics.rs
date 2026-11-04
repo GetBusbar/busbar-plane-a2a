@@ -169,7 +169,7 @@ pub const A2A_TASK_STATE_UNREAD: Diagnostic = Diagnostic {
     retired: false,
 };
 
-/// A split card or approval record was not read back whole at the card warm: the agent is looked
+/// A split card or approval record was not read back whole at the card warm: the agent is looked at afresh.
 pub const A2A_SPLIT_RECORD_UNREAD: Diagnostic = Diagnostic {
     code: 7031,
     class: Class::Plane,
@@ -190,7 +190,7 @@ pub const A2A_SPLIT_RECORD_UNREAD: Diagnostic = Diagnostic {
     retired: false,
 };
 
-/// Part records of a split card or approval that no whole record names were found at the card
+/// Part records of a split card or approval that no whole record names were found at the card warm: each is tombstoned on its agent's next write.
 pub const A2A_SPLIT_RECORD_STRAY_PARTS: Diagnostic = Diagnostic {
     code: 7032,
     class: Class::Plane,
@@ -354,7 +354,7 @@ pub const A2A_PROTOCOL_VERSION_IGNORED: Diagnostic = Diagnostic {
     retired: false,
 };
 
-/// A relayed SSE frame was not valid UTF-8 and was dropped. Frozen: `BUSBAR-7104`, the published
+/// A relayed SSE frame was not valid UTF-8 and was dropped.
 pub const PLANE_SSE_FRAME_NOT_UTF8: Diagnostic = Diagnostic {
     code: 7104,
     class: Class::Plane,
@@ -373,31 +373,6 @@ pub const PLANE_SSE_FRAME_NOT_UTF8: Diagnostic = Diagnostic {
     since: "1.6.0",
     retired: false,
 };
-
-/// THE CODES THE PLANE RAISES, ascending by code: every entry its source reports through
-#[cfg(test)]
-pub const DIAGNOSTICS: &[&Diagnostic] = &[
-    &A2A_TASK_CHAIN_VERIFY_FAILED,
-    &A2A_POOL_NOT_INTERCHANGEABLE,
-    &A2A_OUTBOUND_CRED_UNLEASED,
-    &A2A_RELAYED_STREAM_REFUSED,
-    &A2A_RELAYED_OUTCOME_UNRECORDED,
-    &A2A_RELAYED_SUBMISSION_FAILED,
-    &A2A_FAILURE_UNRECORDED,
-    &A2A_TASK_ROWS_UNREADABLE,
-    &A2A_TASK_STATE_UNREAD,
-    &A2A_SPLIT_RECORD_UNREAD,
-    &A2A_SPLIT_RECORD_STRAY_PARTS,
-    &A2A_BACKEND_TASK_ID_UNHELD,
-    &A2A_RELAY_ENDPOINT_REFUSED,
-    &A2A_TRUST_SIGHTING_UNRECORDED,
-    &A2A_CARD_RECORD_UNREAD,
-    &A2A_HOOK_REWRITE_NOT_APPLIED,
-    &A2A_HOOK_REWRITE_UNREADABLE,
-    &A2A_PUSH_CHECK_UNAVAILABLE,
-    &A2A_PROTOCOL_VERSION_IGNORED,
-    &PLANE_SSE_FRAME_NOT_UTF8,
-];
 
 #[cfg(test)]
 #[path = "tests/diagnostics_tests.rs"]

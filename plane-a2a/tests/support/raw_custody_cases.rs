@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! Actual host callbacks preserve the retained body across a byte window, metadata SHORT,
+//! //! cancellation and an upstream error.
 
 use super::*;
 
@@ -80,10 +81,17 @@ fn a_real_upstream_error_does_not_echo_the_private_body_and_cancel_ends_its_owne
     let answer = door.piece(
         UNIT,
         Given::far_end(HTTP_UNAVAILABLE, SECRET.as_bytes()),
-        REQUEST.len(),
+        4096,
     );
     assert_eq!(answer.outcome, Some(Outcome::Ready), "{answer:?}");
-    assert!(!String::from_utf8_lossy(&answer.emitted).contains(SECRET));
+    let rendered = String::from_utf8_lossy(&answer.emitted);
+    assert!(!rendered.contains(SECRET));
+    let refusal: serde_json::Value =
+        serde_json::from_slice(&answer.emitted).expect("a complete refusal");
+    assert_eq!(refusal["id"], 7);
+    assert!(refusal["error"]["message"]
+        .as_str()
+        .is_some_and(|text| text.contains("this agent's backend refused busbar's request")));
     assert_eq!(door.cancel(UNIT), Outcome::Ready);
     assert!(!door.still_answers(UNIT));
 }

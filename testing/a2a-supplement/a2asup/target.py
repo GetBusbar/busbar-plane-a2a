@@ -57,8 +57,10 @@ class Target:
 
     card: dict = field(default_factory=dict)
     interfaces: list[Interface] = field(default_factory=list)
+    _bindings: dict[str, object] | None = field(default=None, init=False, repr=False)
 
     def load(self) -> None:
+        self.close()
         r = httpx.get(self.card_url, timeout=30.0, headers=self._headers())
         r.raise_for_status()
         self.card = r.json()
@@ -99,6 +101,8 @@ class Target:
 
     def bindings(self) -> dict[str, object]:
         """One driver per DISTINCT binding the card declares, keyed by binding name."""
+        if self._bindings is not None:
+            return self._bindings
         made: dict[str, object] = {}
         for iface in self.interfaces:
             if iface.binding in made:
@@ -110,7 +114,15 @@ class Target:
             elif iface.binding == "grpc":
                 made[iface.binding] = GrpcBinding(
                     _authority(iface.url), secure=urlparse(iface.url).scheme == "https")
+        self._bindings = made
         return made
+
+    def close(self) -> None:
+        for binding in (self._bindings or {}).values():
+            close = getattr(binding, "close", None)
+            if close is not None:
+                close()
+        self._bindings = None
 
     def versions_declared(self) -> list[str]:
         return sorted({i.version for i in self.interfaces if i.version})

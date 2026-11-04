@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! THE DOOR'S FACTS THE DOOR-DRIVEN TESTS NAME (`tests/unit_lifetime.rs`, `tests/project_session.rs`,
+//! //! and the plugin crate's both-ways script `plane-a2a-plugin/tests/both_ways.rs`).
 
 /// `plane_door::MAX_UNITS`: the most units the instance keeps state for at once.
 pub const MAX_UNITS: usize = 4096;
@@ -70,6 +71,7 @@ pub const PUSH_TRUST_FROM: &str = "owned.agent_push.ca";
 pub const HELD_KINDS: &[&str] = &["task", "task_event", "push_config", "card", "card_approval"];
 
 /// `statement::ROUTES` as `(verb, target)`, in order: a route's index is the claim an arrival
+/// carries.
 pub const ROUTES: &[(&str, &str)] = &[
     ("POST", "/a2a/message:send"),
     ("POST", "/a2a/message:stream"),

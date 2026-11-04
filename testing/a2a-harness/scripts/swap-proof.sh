@@ -19,6 +19,13 @@ check () { # name expected actual
   if [ "$2" = "$3" ]; then echo "  OK   $1 (exit $3)"; pass=$((pass+1));
   else echo "  BAD  $1 expected exit $2 got $3"; fail=$((fail+1)); fi
 }
+# An exit code alone cannot tell the intended verdict from a traceback, an
+# import error or a failed launch (all exit 1): each red state must also show
+# the specific outcome text it exists to produce.
+check_text () { # name file extended-regex
+  if grep -Eq -- "$3" "$2" 2>/dev/null; then echo "  OK   $1 (saw /$3/)"; pass=$((pass+1));
+  else echo "  BAD  $1 expected /$3/ in $2"; fail=$((fail+1)); fi
+}
 
 echo "=== 1. CONTROL: the known-good reference must be GREEN ==="
 python3 -m a2aht run --launch "$BIN/a2a serve --echo --port 9401 --quiet" \
@@ -39,6 +46,7 @@ python3 -m a2aht run --endpoint http://127.0.0.1:9402 \
   --label "negative-control" --tier pull-request --role server \
   --json reports/sp-negative.json > reports/sp-2.txt 2>&1
 check "negative control fails" 1 $?
+check_text "negative control judged red" reports/sp-2.txt "BATTERY RED"
 grep -E "FAIL=|BATTERY" reports/sp-2.txt | tail -1 | sed 's/^/       /'
 fixture_stop "$BP" || exit 2
 BP=""
@@ -60,9 +68,11 @@ for r in b["results"]:
         r["outcome"] = "FAIL"   # pretend the baseline recorded something else
 json.dump(b, open("reports/sp-drifted-baseline.json", "w"))
 PY
+[ -s reports/sp-control.json ] || { echo "  BAD  state 1 wrote no reports/sp-control.json"; fail=$((fail+1)); }
 python3 -m a2aht baseline --report reports/sp-control.json \
   --baseline reports/sp-drifted-baseline.json > reports/sp-4.txt 2>&1
 check "pin drift detected" 1 $?
+check_text "drift names the changed row" reports/sp-4.txt "core\.get_task_roundtrip +baseline=FAIL"
 grep -E "MISMATCH|core.get_task" reports/sp-4.txt | head -2 | sed 's/^/       /'
 
 echo
@@ -79,6 +89,7 @@ python3 -m a2aht run --launch "$BIN/a2a serve --echo --port 9403 --quiet" \
   --role server --known-deviations reports/sp-stale-dev.json \
   --json reports/sp-stale.json > reports/sp-5.txt 2>&1
 check "stale pin detected" 1 $?
+check_text "stale record named" reports/sp-5.txt "\[DEVIATION_FIXED\] core\.get_task_roundtrip"
 grep -E "DEVIATION_FIXED|stale" reports/sp-5.txt | head -2 | sed 's/^/       /'
 
 echo
@@ -100,6 +111,7 @@ python3 -m a2aht run --endpoint http://127.0.0.1:9404 \
   --known-deviations reports/sp-partial-dev.json \
   --json reports/sp-partial.json > reports/sp-6.txt 2>&1
 check "unrecorded deviation still red" 1 $?
+check_text "partial deviations judged red" reports/sp-6.txt "BATTERY RED"
 grep -E "BASELINED=|BATTERY" reports/sp-6.txt | tail -1 | sed 's/^/       /'
 fixture_stop "$BP2" || exit 2
 BP2=""

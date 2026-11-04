@@ -2,6 +2,10 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! TRUST IS RE-CHECKED BEFORE EVERY OUTBOUND REQUEST, busbar's own included (docs/a2a.md "Trust
+//! re-checked before every outbound request"): the requests busbar ORIGINATES to an agent (the
+//! push-config mirror, the `ListTasks` refresh) go through [`drive_originated`], and an agent the
+//! kernel's trust book does not serve (quarantined, its card changed, never approved) is sent
+//! nothing.
 
 use std::cell::Cell;
 use std::ffi::c_void;
@@ -369,7 +373,8 @@ fn list_dials(plane: &A2aDoor) -> usize {
     DIALS.with(Cell::get)
 }
 
-/// A QUARANTINED agent is sent no mirrored push config: the mirror busbar originates is held to
+/// A QUARANTINED agent is sent no mirrored push config: the mirror busbar originates is held to the
+/// agent's trust as a relayed hop is.
 #[test]
 fn a_quarantined_agent_is_sent_no_mirrored_push_config() {
     let plane = door_over(Some(quarantined));
@@ -392,6 +397,7 @@ fn a_quarantined_agent_is_asked_no_list_tasks_refresh() {
 }
 
 /// The control: an agent the trust book serves IS dialled for both, so the cases above see a dial
+/// when one is made.
 #[test]
 fn a_serving_agent_is_dialled_for_its_mirror_and_its_refresh() {
     let plane = door_over(Some(serving));
@@ -445,4 +451,39 @@ fn failed_sightings_and_unavailable_trust_services_refuse_originated_requests() 
     plane.services = None;
     assert_eq!(mirror_dials(&plane), 0);
     assert_eq!(list_dials(&plane), 0);
+}
+
+#[test]
+fn a_breaker_refusal_uses_the_arrivals_pool_after_refresh() {
+    VERDICT.with(|v| v.set(svc::DISTRUST_NONE));
+    let plane = door_over(Some(serving));
+    let mut cfg = agents_section(
+        br#"{"planner":{"url":"https://planner.example/a2a","pin":{"mechanism":"unpinned"}}}"#,
+    )
+    .unwrap();
+    cfg.pools.insert("original".into(), vec!["planner".into()]);
+    let mut unit = AgentUnit::new(
+        AgentDisposition::Notice {
+            method: "notice".into(),
+        },
+        None,
+        Some(Arc::new(cfg.clone())),
+        1,
+    );
+    unit.hop = Some(Hop::task(
+        serde_json::json!(1),
+        "1.0",
+        serde_json::json!({"method":"message/send","params":{}}),
+    ));
+    plane.units.insert(7, unit);
+    plane.cards.hold(
+        "planner",
+        1,
+        serde_json::json!({"name":"Planner","skills":[]}),
+    );
+    cfg.pools.clear();
+    let spec = statement::agents_snapshot_spec(None, &["planner"]);
+    let _ = plane.generations.publish_with(2, &spec, cfg);
+    PlaneLife::published(&plane, 2);
+    assert_eq!(breaker_subject(&plane, 7).as_deref(), Some("original"));
 }

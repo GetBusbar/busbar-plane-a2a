@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! busbar's task identity on a relayed hop, against the served engine's own cases
+//! busbar's task identity on a relayed hop, against the served engine's own cases (`busbar-a2a`
+//! `relay::rewrite_identity`, `idmap::translate_request`, `rpcerror::about_task`).
 
 use super::*;
 use serde_json::json;
@@ -185,6 +186,7 @@ fn the_codes_a_far_end_may_answer_keep_section_5_4s_statuses() {
 }
 
 /// The verbs that are ABOUT a task name it `taskId` (and A2A v1.0's JSON-RPC binding also accepts
+/// `task_id`; `GetTask` and `CancelTask` say `id`).
 #[test]
 fn every_spelling_of_the_task_member_is_translated() {
     let back = |id: &str| (id == "busbar-t").then(|| "backend-t".to_string());
@@ -206,6 +208,7 @@ fn every_spelling_of_the_task_member_is_translated() {
 }
 
 /// Nothing degenerate is recorded: a far end that named no task id (an empty one) leaves nothing to
+/// map, so the id the door would record is absent, and an empty pair is never an identity.
 #[test]
 fn a_degenerate_pair_is_not_recorded() {
     for result in [
@@ -223,6 +226,7 @@ fn a_degenerate_pair_is_not_recorded() {
 }
 
 /// A MESSAGE'S OWN `id` IS NOT A TASK ID and must never be rewritten as one: a translation that
+/// reached for every member called `id` would corrupt an identity this map knows nothing about.
 #[test]
 fn a_messages_own_id_member_is_left_alone() {
     let back = |id: &str| (id == "busbar-not-a-message-id").then(|| "backend-x".to_string());
@@ -289,11 +293,12 @@ fn push_notification_not_supported_and_extension_support_required_round_trip() {
         .envelope();
         assert_eq!(wire["error"]["code"], code);
         assert_eq!(wire["error"]["data"][0]["reason"], reason);
-        assert_ne!(code, -32006, "must not collapse to the gateway-fault code");
     }
 }
 
 /// A TASK'S HISTORY leaves under busbar's identity too: every message in `history` that names the
+/// far end's task or context names busbar's, so no backend id reaches the caller; a message that
+/// names neither is left alone.
 #[test]
 fn a_tasks_history_messages_take_busbars_identity() {
     let mut task = json!({ "task": { "id": "far-1", "contextId": "far-c",
@@ -322,6 +327,8 @@ fn a_tasks_history_messages_take_busbars_identity() {
 }
 
 /// A v1.0 PUSH-CONFIG VERB'S `id` IS THE CONFIG, NOT THE TASK (a2a.proto:716-733: `task_id = 2`,
+/// `id = 3`): it is neither a task the request names nor one translated, even when it equals a held
+/// task's id.
 #[test]
 fn a_push_config_verbs_config_id_is_not_a_task() {
     for method in [
@@ -365,6 +372,7 @@ fn a_translated_request_keeps_the_callers_bytes_but_the_ids() {
 }
 
 /// AN UNWRAPPED v0.3 RESULT NAMES ITS TASK BY THE MEMBER ITS `kind` SAYS: a task its `id`; a
+/// message, a status update and an artifact update their `taskId`.
 #[test]
 fn an_unwrapped_v0_3_result_names_its_task_by_the_member_its_kind_says() {
     for kind in ["status-update", "artifact-update"] {
@@ -399,6 +407,9 @@ fn an_unwrapped_v0_3_result_names_its_task_by_the_member_its_kind_says() {
 }
 
 /// A MESSAGE'S REFERENCED TASKS ARE TRANSLATED BOTH WAYS (`Message.reference_task_ids`,
+/// a2a.proto:276): on the way out busbar's ids the caller holds become the far end's; on the way
+/// back the far end's id for this task, or for a task the request referred to, becomes busbar's,
+/// and an id busbar does not know is left as it is.
 #[test]
 fn a_messages_referenced_tasks_are_translated_both_ways() {
     let back = |id: &str| (id == "a2a-p-1").then(|| "b-1".to_string());

@@ -2,10 +2,12 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! The door's half of the task verbs: the restore claim, the records reach and the record kind
+//! indices.
 
 use super::*;
 
 /// The instance's very first local verb runs its restore, and no local verb after it does, whatever
+/// second it arrives in.
 #[test]
 fn only_the_first_local_verb_restores_and_none_sweeps() {
     let restored = Keyed::new();
@@ -64,6 +66,7 @@ const TICKET: Ticket = Ticket {
 const LONG: u64 = RECORD_BYTES as u64 + 1;
 
 /// A host that holds one long record: a buffer short of it is answered short at its size, one that
+/// holds it is answered with it.
 fn long_record(
     log: &mut Vec<(u32, usize)>,
     handle: CompletionHandle,
@@ -102,6 +105,7 @@ fn a_short_records_answer_is_re_called_once_on_its_handle_at_the_named_size() {
 }
 
 /// A piece that answers PENDING runs again from the top: the handle a short answer already sized is
+/// re-issued at that size, so the host never answers it short a second time (that is FAULT).
 #[test]
 #[allow(unsafe_code)]
 fn a_piece_run_again_issues_a_short_handle_at_the_size_already_named() {
@@ -220,3 +224,94 @@ fn the_sizes_book_is_bounded() {
 
 #[path = "task_door_lifecycle_cases.rs"]
 mod lifecycle_cases;
+
+impl Via<'_> {
+    fn claim(&mut self, kind: &str, key: &str, ttl_ms: u64) -> Result<bool, Halt> {
+        self.issue((0, 0), |services, handle, _, _| {
+            services.records_claim(handle, kind, key.as_bytes(), ttl_ms)
+        })
+    }
+}
+
+#[test]
+fn oversized_host_scratch_and_unbounded_scans_are_refused() {
+    assert!(check_record_room(MAX_RECORD_ROOM, MAX_RECORD_ITEMS).is_ok());
+    assert!(matches!(
+        check_record_room(u64::MAX, 1),
+        Err(Halt::Failed(_))
+    ));
+    assert!(matches!(
+        check_record_room(1, u64::MAX),
+        Err(Halt::Failed(_))
+    ));
+    assert!(check_scan_room(MAX_SCAN_ROWS, MAX_SCAN_BYTES).is_ok());
+    assert!(check_scan_room(MAX_SCAN_ROWS + 1, 0).is_err());
+    assert!(check_scan_room(0, MAX_SCAN_BYTES + 1).is_err());
+}
+
+#[test]
+fn local_answer_windows_share_one_wiping_allocation() {
+    use crate::tests::raw_custody_probe::{assert_wiped, SECRET};
+    assert_wiped(|| {
+        let body = Remaining::new(SECRET);
+        let pointer = body.bytes.as_slice().as_ptr();
+        let mut tail = body.clone();
+        for offset in 0..SECRET.len() {
+            assert_eq!(tail.bytes.as_slice().as_ptr(), pointer);
+            assert_eq!(tail.as_slice(), &SECRET[offset..]);
+            tail = tail.advance(1);
+        }
+        assert!(tail.is_empty());
+        assert_eq!(
+            body.as_slice(),
+            SECRET,
+            "a retained SHORT replay is unchanged"
+        );
+        assert!(!format!("{body:?}").contains(std::str::from_utf8(SECRET).unwrap()));
+    });
+}
+
+#[test]
+fn mirrored_capability_is_only_for_the_tasks_holding_agent() {
+    use crate::a2a::task::{Direction, Task, TaskState};
+    let mut task = Task::submitted("task", "context", "caller", Direction::Inbound, 1).unwrap();
+    task.agent_id = "agent-a".into();
+    assert!(mirror_owns_task(&task, "agent-a"));
+    assert!(!mirror_owns_task(&task, "agent-b"));
+    task.state = TaskState::Completed;
+    assert!(!mirror_owns_task(&task, "agent-a"));
+}
+
+#[test]
+fn malformed_notification_config_is_not_treated_as_absent() {
+    assert!(matches!(decode_notification_config(None), Ok(None)));
+    assert!(decode_notification_config(Some(b"not-json-secret")).is_err());
+    assert!(decode_notification_config(Some(b"null")).is_err());
+}
+
+#[test]
+#[allow(unsafe_code)]
+fn oversized_short_answer_is_refused_before_allocation_or_reissue() {
+    let tables = unarmed_task_services();
+    // SAFETY: the immutable complete table and its static callbacks outlive both wrappers.
+    let host = unsafe { Host::from_raw(&tables) };
+    // SAFETY: the same immutable complete table remains live through the operation.
+    let services = unsafe { Services::from_raw(&tables) };
+    let grown = Keyed::new();
+    let mut via = Via::new(&host, services, TICKET, 0, &grown);
+    let mut calls = 0;
+    let answer: Result<(), Halt> = via.issue((RECORD_BYTES, 1), |_, _, _, _| {
+        calls += 1;
+        if calls == 1 {
+            Poll::Ready(Err(ServiceError::Short {
+                bytes: MAX_RECORD_ROOM + 1,
+                items: 1,
+            }))
+        } else {
+            Poll::Ready(Ok(()))
+        }
+    });
+    assert!(matches!(answer, Err(Halt::Failed(_))));
+    assert_eq!(calls, 1);
+    assert_eq!(via.scratch.len(), RECORD_BYTES);
+}

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! THE DEPLOYMENT'S PUBLIC BASE, READ ONE WAY: the absolute URLs this plane publishes (its
+//! THE DEPLOYMENT'S PUBLIC BASE, READ ONE WAY: the absolute URLs this plane publishes (its audience, its protected-resource metadata document, its rewritten card endpoints) all come from the operator's `public_url` through [`absolute`].
 
 /// One reading of `public_url`: parse it, replace the path wholesale, drop query and fragment.
 pub fn absolute(public_url: &str, path: &str) -> Option<String> {

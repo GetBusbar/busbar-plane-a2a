@@ -119,8 +119,11 @@ def main(argv: list[str] | None = None) -> int:
         admin_token=args.admin_token,
         agent_url=args.verifier_agent_url,
     )
-    results = run(target, args.issuer_key, verifier_probe)
-    return report(target, results, args.json_out)
+    try:
+        results = run(target, args.issuer_key, verifier_probe)
+        return report(target, results, args.json_out)
+    finally:
+        target.close()
 
 
 if __name__ == "__main__":

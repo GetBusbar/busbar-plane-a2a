@@ -13,7 +13,7 @@ from a2aht import process_fixture
 
 
 class DarwinSignalRegressions(unittest.TestCase):
-    def library(self, start=(10, 20), queried_version=7, kernel_version=7, refusal=0):
+    def library(self, start=(10, 20), queried_version=7, kernel_version=7, refusal=0, sig=15):
         def info(pid, flavor, argument, output, size):
             self.assertEqual(flavor, 18)
             # A single native BSD+unique record: start and version belong to
@@ -25,10 +25,13 @@ class DarwinSignalRegressions(unittest.TestCase):
             value.unique.idversion = queried_version
             return size
 
+        expected = sig
+
         def send(pointer, sig):
             token = ctypes.cast(pointer, ctypes.POINTER(ctypes.c_uint32 * 8)).contents
             self.assertEqual(token[5], 1234)
-            self.assertIn(sig, (9, 15))
+            # The signal delivered is the one the caller asked for, never a substitute.
+            self.assertEqual(sig, expected)
             return errno.ESRCH if token[7] != kernel_version else refusal
 
         return SimpleNamespace(proc_pidinfo=Mock(side_effect=info),
@@ -46,7 +49,7 @@ class DarwinSignalRegressions(unittest.TestCase):
     def test_recycled_pid_cannot_receive_term_or_kill(self):
         for sig in (15, 9):
             with self.subTest(signal=sig):
-                lib = self.library(queried_version=7, kernel_version=8)
+                lib = self.library(queried_version=7, kernel_version=8, sig=sig)
                 self.assertFalse(self.invoke(lib, sig))
                 self.assertEqual(lib.proc_signal_with_audittoken.call_count, 1)
 

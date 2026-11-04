@@ -18,7 +18,9 @@ const received = [];
 const backend = http.createServer((req, res) => {
   received.push(req.headers);
   res.setHeader('content-type', 'application/json');
-  res.end(JSON.stringify({ name: 'probe', 'Ā': 1, 'ÿ': 2 }));
+  // U+FF61 sorts before U+10000 by code point and UTF-8 bytes, but after it by UTF-16 code units
+  // (U+10000 is the surrogate pair D800 DC00): only these keys tell RFC 8785's order apart.
+  res.end(JSON.stringify({ name: 'probe', '\uFF61': 1, '\u{10000}': 2 }));
 });
 async function listen(server) {
   await new Promise((resolve, reject) => {
@@ -84,7 +86,7 @@ try {
   assert.equal(response.status, 200);
   const signed = await response.json();
   const signature = signed.signatures[0];
-  const payload = Buffer.from('{"name":"probe","ÿ":2,"Ā":1}').toString('base64url');
+  const payload = Buffer.from('{"name":"probe","\u{10000}":2,"\uFF61":1}').toString('base64url');
   const publicKey = crypto.createPublicKey({ key: Buffer.from(await readFile(keyFile, 'utf8'), 'base64'),
                                             format: 'der', type: 'spki' });
   assert(crypto.verify(null, Buffer.from(`${signature.protected}.${payload}`), publicKey,

@@ -60,10 +60,14 @@ EQUIV_OPS: list[tuple[str, dict]] = [
 #
 # A REST 404 alone cannot distinguish a missing route from a missing task.
 # Resource errors count as operation evidence only with their defined ErrorInfo.
+# SPEC 5.4's PushNotificationNotSupportedError (-32003 / 400 / UNIMPLEMENTED) and
+# ExtendedAgentCardNotConfiguredError (-32007 / 400 / FAILED_PRECONDITION) are the same "this agent
+# does not offer the operation" answer for the push and extended-card verbs; REST's 400 already
+# covered them, so every binding reads them alike.
 NOT_IMPLEMENTED = {
-    "jsonrpc": {-32004, -32601},
+    "jsonrpc": {-32003, -32004, -32007, -32601},
     "http_json": {400, 405, 501},
-    "grpc": {"UNIMPLEMENTED"},
+    "grpc": {"UNIMPLEMENTED", "FAILED_PRECONDITION"},
 }
 
 # SPEC 5.4, the TaskNotFoundError row: JSON-RPC -32001 / gRPC NOT_FOUND / HTTP 404.
@@ -408,10 +412,7 @@ def check_bind_equiv_004(target: Target) -> Result:
         )
 
     baseline = names[0]
-    if any(anon or forged or not good for anon, forged, good in verdicts.values()):
-        return Result(req.id, Verdict.FAIL,
-                      "every binding must refuse anonymous and forged credentials and admit the real credential",
-                      evidence)
+    # The specific explanations first, so each is reachable; the generic refusal is the fallback.
     divergent = [n for n in names if verdicts[n] != verdicts[baseline]]
     if divergent:
         return Result(
@@ -430,6 +431,10 @@ def check_bind_equiv_004(target: Target) -> Result:
             "agreement is not evidence that the declared scheme is supported anywhere.",
             evidence,
         )
+    if any(anon or forged or not good for anon, forged, good in verdicts.values()):
+        return Result(req.id, Verdict.FAIL,
+                      "every binding must refuse anonymous and forged credentials and admit the real credential",
+                      evidence)
     return Result(
         req.id,
         Verdict.PASS,

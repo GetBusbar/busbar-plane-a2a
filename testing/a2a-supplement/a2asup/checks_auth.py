@@ -58,7 +58,8 @@ def _declared_schemes(card: dict) -> dict:
 
 
 def _security_requirements(card: dict) -> list:
-    for key in ("security", "security_requirements"):
+    # v1.0 ProtoJSON spells the list `securityRequirements`, as checks_bind reads it.
+    for key in ("security", "securityRequirements", "security_requirements"):
         value = card.get(key)
         if isinstance(value, list) and value:
             return value
@@ -626,9 +627,10 @@ def _check_auth_intask_002(target: Target, binding, name: str) -> Result:
         return Result(
             req.id,
             Verdict.FAIL,
-            f"the upstream agent set the task to auth-required and the subject reported it as "
-            f"{state!r}. A client cannot know it is being asked for a credential, so the "
-            f"authorization request is lost.",
+            f"asked for in-task authorization through the `{AUTH_REQUIRED_PREFIX}` fixture, the "
+            f"subject reported the task as {state!r}. Either the subject lost an auth-required "
+            f"state its upstream set, or its upstream does not implement the fixture; in the first "
+            f"case a client cannot know it is being asked for a credential.",
             evidence,
         )
     return Result(

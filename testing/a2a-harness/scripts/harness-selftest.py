@@ -134,8 +134,10 @@ def main():
 
     # ---- 3b. GREEN twin: without the plant, the same load is clean. Otherwise 3 could pass
     #      because load_tests raises for an unrelated reason.
-    check("conformance_load_is_clean_without_the_plant", p.returncode == 0,
-          (p.stdout + p.stderr)[-400:])
+    p5b = py(COUNT)
+    check("conformance_load_is_clean_without_the_plant",
+          p5b.returncode == 0 and count_from(p5b) == base,
+          (p5b.stdout + p5b.stderr)[-400:])
 
     # ---- 4a. The governance tier is a separate tool and still discovers its own tests.
     p6 = py("import a2agov.tests_governance\n"

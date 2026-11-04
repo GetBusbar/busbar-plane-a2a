@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! THE WELL-KNOWN TYPES the gRPC line's messages name (`google.protobuf.Struct`, `Value`,
+//! THE WELL-KNOWN TYPES the gRPC line's messages name (`google.protobuf.Struct`, `Value`, `ListValue`, `NullValue`, `Timestamp`), with their protobuf JSON mapping.
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -423,21 +423,6 @@ fn date(year: i64, month: u32, day: u32) -> Option<i64> {
     .then(|| days_from_civil(year, month, day))
 }
 
-/// The UTC date and time of `(seconds, nanos)`, when the calendar holds it (`chrono`'s
-fn civil(seconds: i64, nanos: i32) -> Option<(i64, u32, u32, u32, u32)> {
-    let nanos = u32::try_from(nanos).ok()?;
-    let days = seconds.div_euclid(SECS_PER_DAY);
-    let of_day = u32::try_from(seconds.rem_euclid(SECS_PER_DAY)).ok()?;
-    let (year, month, day) = civil_from_days(days);
-    if !(MIN_YEAR..=MAX_YEAR).contains(&year)
-        || nanos >= 2 * NANOS_PER_SEC
-        || (nanos >= NANOS_PER_SEC && of_day % 60 != 59)
-    {
-        return None;
-    }
-    Some((year, month, day, of_day, nanos))
-}
-
 /// Whether `(seconds, nanos)` is within the protobuf Timestamp range (years 0001–9999).
 #[must_use]
 pub fn representable(seconds: i64, nanos: i32) -> bool {
@@ -445,24 +430,17 @@ pub fn representable(seconds: i64, nanos: i32) -> bool {
 }
 
 impl Timestamp {
-    /// Its protobuf JSON form: a four-digit year in 0001–9999, the fraction in 0, 3, 6 or 9
+    /// Its protobuf JSON form: a four-digit year in 0001–9999, the fraction in 0, 3, 6 or 9 digits, and UTC's `Z` suffix.
     fn rfc3339(self) -> Result<String, &'static str> {
         if !representable(self.seconds, self.nanos) {
             return Err("timestamp is outside the protobuf seconds or nanoseconds range");
         }
-        let (year, month, day, of_day, nanos) =
-            civil(self.seconds, self.nanos).ok_or("invalid or out-of-range datetime")?;
+        let (year, month, day) = civil_from_days(self.seconds.div_euclid(SECS_PER_DAY));
+        let of_day = self.seconds.rem_euclid(SECS_PER_DAY);
+        let nano = self.nanos;
         let mut out = String::with_capacity(32);
-        if (0..=9999).contains(&year) {
-            let _ = write!(out, "{year:04}");
-        } else {
-            let _ = write!(out, "{year:+05}");
-        }
-        let (mut sec, mut nano) = (of_day % 60, nanos);
-        if nano >= NANOS_PER_SEC {
-            sec += 1;
-            nano -= NANOS_PER_SEC;
-        }
+        let _ = write!(out, "{year:04}");
+        let sec = of_day % 60;
         let _ = write!(
             out,
             "-{month:02}-{day:02}T{:02}:{:02}:{sec:02}",
@@ -548,7 +526,7 @@ fn fraction(s: &str) -> Result<(&str, u32), ParseError> {
     Ok((rest, n * SCALE[taken]))
 }
 
-/// The offset (`Z`, or `±HH:MM`; `chrono`'s `timezone_offset` with zulu and the minus sign
+/// The offset (`Z`, or `±HH:MM`; `chrono`'s `timezone_offset` with zulu and the minus sign allowed and minutes required), in seconds east, and what follows it.
 fn offset(mut s: &str) -> Result<(&str, i32), ParseError> {
     if let Some(b'Z' | b'z') = s.as_bytes().first() {
         return Ok((&s[1..], 0));

@@ -3,11 +3,10 @@
 import http.client
 import json
 from pathlib import Path
-import socket
+import select
 import subprocess
 import sys
 import threading
-import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -35,27 +34,16 @@ class RelayRegressions(unittest.TestCase):
         origin = ThreadingHTTPServer(("127.0.0.1", 0), Origin)
         thread = threading.Thread(target=origin.serve_forever, daemon=True)
         thread.start()
-        with socket.socket() as reservation:
-            reservation.bind(("127.0.0.1", 0))
-            relay_port = reservation.getsockname()[1]
         command = [sys.executable, str(Path(__file__).with_name("broken_agent.py")),
-                   str(relay_port), str(origin.server_port)]
+                   "0", str(origin.server_port)]
         if mode is not None:
             command.append(mode)
         child = subprocess.Popen(command,
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         connection = None
         try:
-            deadline = time.monotonic() + 5
-            while True:
-                self.assertIsNone(child.poll(), "relay exited before listening")
-                try:
-                    with socket.create_connection(("127.0.0.1", relay_port), timeout=.1):
-                        break
-                except OSError:
-                    if time.monotonic() >= deadline:
-                        self.fail("relay never listened")
-                    time.sleep(.02)
+            self.assertTrue(select.select([child.stdout], [], [], 5)[0], "relay never listened")
+            relay_port = int(child.stdout.readline())
             connection = http.client.HTTPConnection("127.0.0.1", relay_port, timeout=3)
             connection.request("POST", "/", body=b"")
             response = connection.getresponse()

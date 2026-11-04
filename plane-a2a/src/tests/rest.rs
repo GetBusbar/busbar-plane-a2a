@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! The HTTP+JSON line's arrival: the envelope each route composes (member for member the engine's
+//! The HTTP+JSON line's arrival: the envelope each route composes (member for member the engine's `rest.rs`), the verb a `POST /tasks/{id}` names, the captures and the query as the router and `Query` decoded them, and the answer re-framed by what it is.
 
 use super::*;
 use crate::statement::ROUTES;
@@ -28,7 +28,7 @@ fn envelope(name: &str, params: Value) -> Value {
     json!({"jsonrpc": "2.0", "id": REST_RPC_ID, "method": name, "params": params})
 }
 
-/// QUERY STRINGS ARE TYPED ON THE WAY INTO THE ENVELOPE. `historyLength=5` means the NUMBER five to
+/// QUERY STRINGS ARE TYPED ON THE WAY INTO THE ENVELOPE.
 #[test]
 fn query_values_are_typed_the_way_the_envelope_wants_them() {
     assert_eq!(json_scalar("5"), json!(5));
@@ -39,7 +39,7 @@ fn query_values_are_typed_the_way_the_envelope_wants_them() {
     assert_eq!(json_scalar(""), json!(""));
 }
 
-/// ABSENT IS NOT EMPTY. A query parameter the caller omitted must not appear in the composed params
+/// ABSENT IS NOT EMPTY.
 #[test]
 fn an_omitted_query_parameter_is_absent_from_the_params() {
     let params = Params::new()
@@ -56,18 +56,18 @@ fn an_omitted_query_parameter_is_absent_from_the_params() {
     assert_eq!(params, json!({"id": "t-1", "historyLength": 7}));
 }
 
-/// THE PATH WINS OVER THE BODY. A `taskId` member in a posted push-notification config must not
+/// THE PATH WINS OVER THE BODY.
 #[test]
 fn a_body_member_cannot_re_point_the_addressed_task() {
     let params = Params::new()
-        .merge(&json!({"taskId": "somebody-elses", "url": "https://receiver.example/hook"}))
+        .merge(json!({"taskId": "somebody-elses", "url": "https://receiver.example/hook"}))
         .set("taskId", "the-one-addressed")
         .into_value();
     assert_eq!(params["taskId"], "the-one-addressed");
     assert_eq!(params["url"], "https://receiver.example/hook");
 }
 
-/// AN EMPTY BODY IS NOT A PARSE FAILURE. `POST /tasks/{id}:cancel` carries none, and neither does a
+/// AN EMPTY BODY IS NOT A PARSE FAILURE.
 #[test]
 fn an_absent_body_composes_empty_params() {
     assert_eq!(json_body(b"").unwrap(), json!({}));
@@ -110,7 +110,7 @@ fn malformed_or_nonobject_bodies_never_compose_a_path_addressed_operation() {
     }
 }
 
-/// EVERY ROUTE OF THE LINE composes the engine's envelope: the method its request line names, the
+/// EVERY ROUTE OF THE LINE composes the engine's envelope: the method its request line names, the path captures, the typed query members it reads (and no other), the body verbatim.
 #[test]
 fn each_route_composes_the_engines_envelope() {
     let body = br#"{"message":{"role":"ROLE_USER","parts":[]}}"#;
@@ -206,7 +206,7 @@ fn each_route_composes_the_engines_envelope() {
     );
 }
 
-/// A `POST /tasks/{id}` NAMING NO VERB is the engine's `404` + `MethodNotFound`, in its words, before
+/// A `POST /tasks/{id}` NAMING NO VERB is the engine's `404` + `MethodNotFound`, in its words, before anything else is judged; a route that is not the line's, or a path that does not fit, composes nothing.
 #[test]
 fn a_task_post_naming_no_verb_is_the_engines_404() {
     let task = route("POST", "/a2a/tasks/{id}");
@@ -230,7 +230,7 @@ fn a_task_post_naming_no_verb_is_the_engines_404() {
     assert_eq!(compose(route("POST", "/a2a"), "/a2a", b"{}"), Ok(None));
 }
 
-/// A PATH CAPTURE IS DECODED AS THE ROUTER DECODED IT: `%XX` is the byte and `+` stays a `+`; a
+/// A PATH CAPTURE IS DECODED AS THE ROUTER DECODED IT: `%XX` is the byte and `+` stays a `+`; a capture whose bytes are not UTF-8 is a bad request.
 #[test]
 fn path_captures_decode_as_the_router_did() {
     assert_eq!(path_decode("a%3Ab+c").as_deref(), Some("a:b+c"));
@@ -263,7 +263,7 @@ fn path_captures_decode_as_the_router_did() {
     );
 }
 
-/// A QUERY COMPONENT IS DECODED AS `Query` DECODED IT: `+` is a space, `%XX` the byte, a repeated
+/// A QUERY COMPONENT IS DECODED AS `Query` DECODED IT: `+` is a space, `%XX` the byte, a repeated key keeps the last value.
 #[test]
 fn query_components_decode_as_the_extractor_did() {
     let q = query_map(Some("a=1+2&b=%41&a=3&&c")).unwrap();
@@ -273,7 +273,7 @@ fn query_components_decode_as_the_extractor_did() {
     assert!(query_map(None).unwrap().is_empty());
 }
 
-/// RE-FRAMED BY WHAT IT IS: a result is the body verbatim, an error the AIP-193 document at the
+/// RE-FRAMED BY WHAT IT IS: a result is the body verbatim, an error the AIP-193 document at the answer's status, anything else untouched.
 #[test]
 fn an_answer_is_reframed_by_what_it_is() {
     let result = br#"{"jsonrpc":"2.0","id":"a2a-http-json","result":{"tasks":[]}}"#;
@@ -339,7 +339,7 @@ fn an_unreadable_agent_error_is_preserved_without_fabricating_an_empty_error() {
     }
 }
 
-/// THE RESULT IS THE ANSWER'S OWN BYTES (Law 5): member order, an integer past 64 bits and a
+/// THE RESULT IS THE ANSWER'S OWN BYTES (Law 5): member order, an integer past 64 bits and a number past `f64`'s range reach the HTTP+JSON caller as the far end wrote them.
 #[test]
 fn a_result_is_the_answers_own_bytes() {
     let answer = br#"{"jsonrpc":"2.0","id":"a2a-http-json","result":{"z":1, "id":"a2a-p-1","n":123456789012345678901234567890,"big":1e400}}"#;
@@ -363,7 +363,7 @@ fn a_string_coded_refusal_re_frames_from_its_http_status() {
     assert_eq!(body["error"]["message"], "no card yet");
 }
 
-/// SUBSCRIBE IS A GET (proto `SubscribeToTask`: `get: "/tasks/{id=*}:subscribe"`). The verb suffix
+/// SUBSCRIBE IS A GET (proto `SubscribeToTask`: `get: "/tasks/{id=*}:subscribe"`).
 #[test]
 fn a_get_of_a_tasks_subscribe_suffix_is_subscribe_to_task() {
     let task = "/a2a/tasks/{id}";
@@ -381,7 +381,7 @@ fn a_get_of_a_tasks_subscribe_suffix_is_subscribe_to_task() {
     );
 }
 
-/// A CANCEL'S BODY IS ITS PARAMS (proto `CancelTask`: `post: "/tasks/{id=*}:cancel" body: "*"`), so
+/// A CANCEL'S BODY IS ITS PARAMS (proto `CancelTask`: `post: "/tasks/{id=*}:cancel" body: "*"`), so the caller's `metadata` reaches the operation; the path's id wins over a posted one.
 #[test]
 fn a_posted_cancel_body_reaches_the_params_and_the_path_wins() {
     assert_eq!(
@@ -398,7 +398,7 @@ fn a_posted_cancel_body_reaches_the_params_and_the_path_wins() {
     );
 }
 
-/// ONLY THE PROTO'S NON-STRING QUERY MEMBERS ARE TYPED. `contextId`, `pageToken`, `status` and
+/// ONLY THE PROTO'S NON-STRING QUERY MEMBERS ARE TYPED.
 #[test]
 fn only_the_protos_non_string_query_members_are_typed() {
     assert_eq!(

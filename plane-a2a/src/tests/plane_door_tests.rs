@@ -25,6 +25,7 @@ fn body_of(answer: PieceAnswer) -> (u32, Value) {
 }
 
 /// On the HTTP+JSON line a relayed answer leaves as its bare `result` (A2A section 11.3), and a
+/// refusal as the AIP-193 document at its own status, as the engine re-frames them.
 #[test]
 fn the_target_line_answers_the_bare_result_and_an_aip193_refusal() {
     let task =
@@ -42,6 +43,7 @@ fn the_target_line_answers_the_bare_result_and_an_aip193_refusal() {
 }
 
 /// On the JSON-RPC line the answer is the relay's, byte for byte; and a piece that is not the
+/// caller's whole answer is never touched, on either line.
 #[test]
 fn the_document_line_and_a_partial_answer_are_left_alone() {
     let ok = json!({ "jsonrpc": "2.0", "id": 7, "result": { "kind": "task" } });
@@ -58,9 +60,23 @@ fn an_outbox_keeps_sensitive_bytes_in_order_across_a_short_write_and_replacement
     let mut outbox =
         Outbox::of(PieceAnswer::ToFarEnd(first.to_vec().into())).expect("first answer");
     let cut = first.len() / 2;
-    let mut emitted = outbox.bytes[..cut].to_vec();
-    assert_eq!(&outbox.bytes[cut..], &first[cut..]);
-    emitted.extend_from_slice(&outbox.bytes[cut..]);
+    let mut emitted = Vec::new();
+    assert_eq!(
+        outbox.drain(|bytes| {
+            emitted.extend_from_slice(&bytes[..cut]);
+            cut
+        }),
+        cut
+    );
+    assert_eq!(outbox.at, cut);
+    assert_eq!(
+        outbox.drain(|bytes| {
+            emitted.extend_from_slice(bytes);
+            bytes.len()
+        }),
+        first.len() - cut
+    );
+    assert_eq!(outbox.at, first.len());
     assert_eq!(emitted, first, "a short write preserves the exact suffix");
     outbox = Outbox::of(PieceAnswer::ToFarEnd(second.to_vec().into())).expect("next answer");
     assert_eq!(
@@ -111,7 +127,9 @@ fn envelope(method: &str) -> Value {
     json!({ "jsonrpc": "2.0", "id": 7, "method": method, "params": { "id": "t1" } })
 }
 
-/// A request whose answer is events gets an events hop about its task: the vocabulary's
+/// A request whose answer is events gets an events hop about its task: the vocabulary's multi-frame
+/// rows in both spellings, a subscribe answering busbar's own refusal first, and an unlisted method
+/// named as a stream.
 #[test]
 fn a_request_whose_answer_is_events_gets_an_events_hop() {
     for method in ["message/stream", "tasks/resubscribe"] {
@@ -165,6 +183,7 @@ fn a_request_whose_answer_is_events_gets_an_events_hop() {
 }
 
 /// THE ARRIVAL'S REQUEST IS READ ONCE AND NEVER COPIED: a hop takes the envelope the arrival was
+/// decided over, and an arrival that makes no hop leaves it for the admission to read.
 #[test]
 fn a_hop_takes_the_request_and_no_hop_leaves_it() {
     let mut sent = Some(envelope("message/send"));
@@ -181,6 +200,7 @@ fn a_hop_takes_the_request_and_no_hop_leaves_it() {
 }
 
 /// A BLANK `a2a-version` ON THE gRPC LINE NAMES NO VERSION: the line's own (`1.0`) stands, as for
+/// an absent or empty one.
 #[test]
 fn a_blank_a2a_version_on_the_grpc_line_reads_as_the_lines_own_version() {
     use crate::agent_arrival::{decide_and_read, H_VERSION};
@@ -231,24 +251,29 @@ fn a_streamed_hop_states_a_stream_and_the_tail_predevs_600_second_ceiling() {
 }
 
 /// The hook projection is the engine gate's: the method as the tool and `params` verbatim as the
+/// arguments (`null` when absent); a body that is no JSON object projects nothing.
 #[test]
 fn the_hook_projection_is_the_method_and_its_params() {
     let send = br#"{"jsonrpc":"2.0","id":7,"method":"message/send","params":{"message":{"parts":[{"kind":"text","text":"hi"}]}}}"#;
-    let got: Value = serde_json::from_slice(&projection(send).unwrap()).unwrap();
+    let got: Value = serde_json::from_slice(&hook_projection(send).unwrap()).unwrap();
     assert_eq!(
         got,
         json!({ "tool": "message/send",
             "arguments": { "message": { "parts": [{ "kind": "text", "text": "hi" }] } } })
     );
-    let bare: Value =
-        serde_json::from_slice(&projection(br#"{"jsonrpc":"2.0","method":"tasks/list"}"#).unwrap())
-            .unwrap();
+    let bare: Value = serde_json::from_slice(
+        &hook_projection(br#"{"jsonrpc":"2.0","method":"tasks/list"}"#).unwrap(),
+    )
+    .unwrap();
     assert_eq!(bare, json!({ "tool": "tasks/list", "arguments": null }));
-    assert_eq!(projection(b"not json"), None);
-    assert_eq!(projection(b"[1]"), None);
+    assert_eq!(hook_projection(b"not json"), None);
+    assert_eq!(hook_projection(b"[1]"), None);
 }
 
 /// THE INVOKE REWRITE CONTRACT, as the served engine applied a `prompt: rw` hook's reply to an A2A
+/// submission's params: an object `content`, a JSON-string `content` that parses to an object, or a
+/// role-less entry itself; the last usable entry wins; nothing usable is not applied; a reply that
+/// cannot be read back is no rewrite at all (`Err`, the unit refused).
 #[test]
 fn a_rewrite_replaces_the_params_by_the_invoke_contract() {
     let params = |reply: Value| rewritten_params(&serde_json::to_vec(&reply).unwrap());
@@ -296,6 +321,8 @@ fn a_rewrite_replaces_the_params_by_the_invoke_contract() {
 }
 
 /// On the HTTP+JSON line the body the kernel keeps is the params where the line's body is the
+/// params (a message sent or streamed, a push config posted), and nothing where the path and the
+/// query spell them.
 #[test]
 fn the_target_line_keeps_the_rewritten_params_as_its_body() {
     let route = |verb: &str, suffix: &str| {
@@ -431,7 +458,10 @@ fn a_panicking_look_surfaces_and_releases_its_flight_never_swallowed() {
     );
 }
 
-/// A LOOK THAT RETURNS KEEPS ITS FLIGHT for the caller to land: the unwinding guard is disarmed,
+/// A LOOK THAT RETURNS KEEPS ITS FLIGHT for the caller to land: the unwinding guard is disarmed, so
+/// its drop releases nothing, the waiter still waits on the look in flight, and another due unit
+/// joins it rather than looking afresh (the twin of the panicking look above, whose guard drops
+/// armed and releases the flight).
 #[test]
 fn a_returning_look_keeps_its_flight_for_the_caller_to_land() {
     let flights = Flights::default();
@@ -454,6 +484,8 @@ fn a_returning_look_keeps_its_flight_for_the_caller_to_land() {
 }
 
 /// THE gRPC LINE'S OUTBOX: a whole answer is the rpc's one message at `OK` (no media type, no
+/// length), or the status its error binds with the details field; an answer in events is one
+/// message per event, each emitted on an answer of its own.
 #[test]
 fn the_framed_line_answers_messages_and_statuses() {
     use crate::framed::{Rpc, DETAILS_FIELD};
@@ -535,7 +567,9 @@ fn the_framed_line_answers_messages_and_statuses() {
     );
 }
 
-/// A STATUS ON THE gRPC LINE CLOSES AS ITS BLOCK, in the bytes and order predev's gRPC line closed a
+/// A STATUS ON THE gRPC LINE CLOSES AS ITS BLOCK, in the bytes and order predev's gRPC line closed
+/// a call with: `grpc-status`, the percent-encoded `grpc-message` where there is a message, the
+/// details field where there are details.
 #[test]
 fn a_framed_status_closes_as_its_block() {
     use crate::framed::{status_block, FramedReply};
@@ -568,6 +602,7 @@ fn a_framed_status_closes_as_its_block() {
 }
 
 /// THE gRPC LINE'S BOUNDARIES (SEAM-4l): a whole OK answer is one message, a status's text is no
+/// message, and a stream that fails after its first message ends with its own final status.
 #[test]
 fn the_framed_line_marks_its_messages_and_a_late_failure() {
     use crate::framed::Rpc;
@@ -611,7 +646,8 @@ fn the_framed_line_marks_its_messages_and_a_late_failure() {
     assert!(after.done && after.bytes.is_empty() && after.final_status.is_some());
 }
 
-/// A long-running task streams many events and re-records the same pair each time. Re-recording a
+/// A long-running task streams many events and re-records the same pair each time, and re-recording
+/// a held key must not evict any other.
 #[test]
 fn re_recording_the_same_pair_does_not_churn_the_map() {
     let map = BackendIds::default();
@@ -656,7 +692,9 @@ fn the_far_end_task_ids_are_forgotten_oldest_first_never_by_the_callers_name() {
     );
 }
 
-/// A COMMITTED REWRITE BUSBAR CANNOT READ BACK REFUSES THE SUBMISSION — it does not fall back to the
+/// A COMMITTED REWRITE BUSBAR CANNOT READ BACK REFUSES THE SUBMISSION — it does not fall back to
+/// the `params` the hook said it had replaced (predev
+/// `hook_tap_tests::a_committed_rewrite_busbar_cannot_read_back_is_refused_rather_than_silently_undone`).
 #[test]
 fn a_committed_rewrite_busbar_cannot_read_back_is_refused_rather_than_silently_undone() {
     let ok = rewritten_params(
@@ -691,6 +729,9 @@ fn a_committed_rewrite_busbar_cannot_read_back_is_refused_rather_than_silently_u
 }
 
 /// THE REFUSAL AN A2A CLIENT ACTUALLY READS (predev
+/// `hook_tap_tests::the_unreadable_rewrite_refusal_is_a_conformant_a2a_internal_error`): the row of
+/// A2A section 5.4 its status comes from, `InternalError`, `-32603`, `500`, echoing the caller's
+/// id, in predev's words; the HTTP+JSON line answers the same row as its AIP-193 document.
 #[test]
 fn the_unreadable_rewrite_refusal_is_a_conformant_a2a_internal_error() {
     let id = json!("req-7");
@@ -725,6 +766,7 @@ fn the_unreadable_rewrite_refusal_is_a_conformant_a2a_internal_error() {
 }
 
 /// A NOTIFICATION is the plane's own to acknowledge wherever it arrives, never relayed: `202` and
+/// no body at all, as the engine answered it (`jsonrpc::accepted`).
 #[test]
 fn a_notification_is_acknowledged_here_with_a_202_and_no_body() {
     let notice = AgentDisposition::Notice {
@@ -743,6 +785,9 @@ fn a_notification_is_acknowledged_here_with_a_202_and_no_body() {
     assert_eq!(crate::agent_arrival::STATUS_ACCEPTED, 202);
 }
 /// `jsonrpc_client_issues_get_extended_agent_card`: a caller that addresses ONE agent and asks for
+/// the extended card is asking for THAT agent's, and the door relays it as a TASK-LESS hop (a card
+/// read opens no task), the caller's envelope posted verbatim at the agent's own path; on the
+/// plane's own endpoint the same verb names no agent and makes no hop.
 #[test]
 fn an_addressed_extended_card_read_is_relayed_as_a_task_less_hop() {
     let row = crate::ops::row_for("GetExtendedAgentCard").expect("a row");
@@ -782,12 +827,15 @@ fn an_addressed_extended_card_read_is_relayed_as_a_task_less_hop() {
 }
 
 /// THE VERSION THE STATEMENT NAMES IS THE CRATE'S: [`VERSION`] is written out (the purity rules
+/// keep `env!` out of the plane's source), so this pins it to the manifest's `version`, exactly.
 #[test]
 fn the_statement_names_the_crates_version() {
     assert_eq!(VERSION, env!("CARGO_PKG_VERSION"));
 }
 
 /// G1-22: THE PARTS A KEY'S EARLIER VALUES RETIRED DO NOT ACCUMULATE: an agent whose over-ceiling
+/// card changes on every connect tombstones the parts of the value it replaces, not every part any
+/// value of the key ever had (a part an unwritten answer left behind is a stray the warm lists).
 #[test]
 fn the_tombstones_of_a_changing_split_record_stay_bounded() {
     let plane = A2aDoor::default();
@@ -814,6 +862,8 @@ fn the_tombstones_of_a_changing_split_record_stay_bounded() {
 }
 
 /// G1-25: AN APPROVAL MADE BETWEEN A REFRESH AND ITS PUBLICATION IS KEPT: the trust reset the
+/// publication makes keeps every kept registration's approval as it stands then, not as it stood
+/// when the refresh was judged.
 #[test]
 fn an_approval_made_while_a_refresh_publishes_is_kept() {
     let section =
@@ -833,7 +883,14 @@ fn an_approval_made_while_a_refresh_publishes_is_kept() {
             ..Default::default()
         },
     );
+    plane
+        .cards
+        .hold("planner", 1, json!({"name":"newly approved"}));
     PlaneLife::published(&plane, 2);
+    assert_eq!(
+        plane.cards.at("planner", 2).unwrap()["name"],
+        "newly approved"
+    );
     assert_eq!(
         plane
             .trust
@@ -866,6 +923,7 @@ fn a_rewrite_that_yields_no_object_is_not_applied_and_says_so() {
 }
 
 /// G1-54: A COMMITTED REWRITE BUSBAR CANNOT READ BACK IS REFUSED WITH ITS REASON NAMED: the caller
+/// reads the fixed internal error, and the operator reads what the hook returned.
 #[test]
 fn an_unreadable_rewrite_names_its_reason() {
     let (read, lines) = diags_of(|| rewritten_params(b"not json"));
@@ -887,6 +945,8 @@ fn an_unreadable_rewrite_names_its_reason() {
 }
 
 /// G1-2: THE FAR END'S TASK ID IS UNTRUSTED INPUT, BOUNDED IN BYTES as the map is in entries: an id
+/// longer than 1024 bytes is not held (the task keeps busbar's own id), so a far end answering
+/// half-megabyte ids cannot make the bounded map hold gigabytes.
 #[test]
 fn a_far_end_task_id_past_the_byte_bound_is_not_held() {
     let map = BackendIds::default();
@@ -894,4 +954,20 @@ fn a_far_end_task_id_past_the_byte_bound_is_not_held() {
     assert_eq!(map.get("amy/t1"), None);
     map.record(3, "amy/t2".to_string(), "y".repeat(1024));
     assert_eq!(map.get("amy/t2").map(|id| id.len()), Some(1024));
+}
+
+fn hook_projection(bytes: &[u8]) -> Option<Vec<u8>> {
+    hook_view(bytes).map(|view| view.0)
+}
+
+#[test]
+fn repeated_warm_failures_log_once_without_host_error_text() {
+    let plane = A2aDoor::default();
+    let (_, logs) = diags_of(|| {
+        warm_unlisted(&plane, crate::records::KIND_CARD, "secret-host-detail");
+        warm_unlisted(&plane, crate::records::KIND_CARD, "secret-host-detail");
+    });
+    assert_eq!(logs.len(), 1);
+    assert!(logs[0].contains("stored card records"));
+    assert!(!logs[0].contains("secret-host-detail"));
 }

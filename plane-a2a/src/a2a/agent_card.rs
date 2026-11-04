@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! THE AGENT CARD, as the plane reads it: busbar's own structs, transcribed from the A2A
+//! THE AGENT CARD, as the plane reads it: busbar's own structs, transcribed from the A2A specification.
 
 use std::collections::BTreeMap;
 
@@ -157,7 +157,7 @@ where
     Option::<T>::deserialize(de).map(Option::unwrap_or_default)
 }
 
-/// Read the members busbar acts on; `None` when the document is not a card (not an object, or a
+/// Read the members busbar acts on; `None` when the document is not a card (not an object, or a member present with the wrong type; a `null` member is absent).
 #[must_use]
 pub fn parse(card: &Value) -> Option<AgentCard> {
     if !card.is_object() {

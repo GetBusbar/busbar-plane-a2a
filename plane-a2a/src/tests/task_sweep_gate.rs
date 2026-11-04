@@ -4,7 +4,7 @@
 use super::*;
 
 #[test]
-fn sweep_cadence_preserves_the_existing_interval_and_drains_full_budget_backlogs() {
+fn sweep_cadence_bounds_backlog_scans_and_drains_full_budget_backlogs() {
     let gate = SweepGate::default();
     assert!(
         gate.due(100),
@@ -16,12 +16,12 @@ fn sweep_cadence_preserves_the_existing_interval_and_drains_full_budget_backlogs
     assert!(gate.due(100 + SWEEP_INTERVAL_SECS));
     gate.swept(130, SWEEP_BUDGET, SWEEP_BUDGET);
     assert!(
-        gate.due(130),
-        "a full-budget sweep may leave a backlog; the next submit drains it"
+        gate.due(131),
+        "a full-budget sweep may leave a backlog; a later submit drains it"
     );
-    gate.swept(130, SWEEP_BUDGET - 1, SWEEP_BUDGET);
+    gate.swept(131, SWEEP_BUDGET - 1, SWEEP_BUDGET);
     assert!(!gate.due(130));
-    assert!(gate.due(130 + SWEEP_INTERVAL_SECS));
+    assert!(gate.due(131 + SWEEP_INTERVAL_SECS));
     assert!(
         SweepGate::default().due(130),
         "restart does not persist a stale delay"
@@ -78,4 +78,13 @@ fn sweep_count_matches_retired_tasks_and_keeps_active_rows_and_chains() {
             .unwrap()
             .is_empty());
     }
+}
+
+#[test]
+fn reserving_a_sweep_excludes_concurrent_starts_and_backs_off_failures() {
+    let gate = SweepGate::default();
+    assert!(gate.due(100));
+    assert!(!gate.due(100));
+    assert!(!gate.due(129));
+    assert!(gate.due(130));
 }

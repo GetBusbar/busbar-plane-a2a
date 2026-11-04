@@ -34,7 +34,7 @@ un-evidenced entry is indistinguishable from a mute button.
 import json
 import re
 
-from .model import FAIL, ERROR
+from .model import FAIL, ERROR, NOT_CONFIGURED, OBSERVED, PASS
 
 BASELINED = "BASELINED"
 DEVIATION_FIXED = "DEVIATION_FIXED"
@@ -173,7 +173,11 @@ def apply(report, doc):
             recorded_refs = clause_refs(rec["clause"])
             actual_refs = clause_refs(result.get("clause") or "")
             same_assertion = bool(recorded_refs & actual_refs) if actual_refs else False
-            if evidence in (result["detail"] or "") and same_assertion:
+            # load() judged the evidence whitespace-normalised, so match it the same way: a
+            # record wrapped across lines in the JSON file must still find its failure text.
+            found = (" ".join(str(evidence).split())
+                     in " ".join((result["detail"] or "").split()))
+            if found and same_assertion:
                 matched.add(result["id"])
                 result["outcome"] = BASELINED
                 result["baselined"] = {
@@ -191,7 +195,7 @@ def apply(report, doc):
                     "why": "this test still fails, but not in the recorded "
                            "way. The deviation CHANGED, which is new "
                            "information and must be re-examined."
-                           + ("" if evidence in (result["detail"] or "") else
+                           + ("" if found else
                               " The recorded evidence is not in the failure "
                               "detail.")
                            + ("" if same_assertion else
@@ -206,6 +210,21 @@ def apply(report, doc):
                     "actual_clause_refs": sorted(actual_refs),
                     "actual_detail": (result["detail"] or "")[:600],
                 })
+        elif result["outcome"] not in (PASS, OBSERVED):
+            # The recorded test did not measure anything (INAPPLICABLE, NOT_CONFIGURED, ...):
+            # the deviation is unjudged, never "fixed", and the record must not be deleted.
+            matched.add(result["id"])
+            if result["outcome"] != NOT_CONFIGURED:
+                result["outcome"] = DEVIATION_CHANGED
+            problems.append({
+                "id": result["id"],
+                "kind": "DEVIATION_NOT_MEASURED",
+                "why": "a deviation is recorded for this test but it did not "
+                       "measure the target (outcome %s), so whether the "
+                       "deviation still occurs is unknown. Fix the run; do not "
+                       "remove the record." % result["outcome"],
+                "expected_evidence": evidence_of(rec),
+            })
         else:
             matched.add(result["id"])
             result["outcome"] = DEVIATION_FIXED

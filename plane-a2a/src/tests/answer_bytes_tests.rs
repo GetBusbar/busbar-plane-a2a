@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! The byte splice of a far end's answer: busbar's identity at the members' own spans, every other
+//! The byte splice of a far end's answer: busbar's identity at the members' own spans, every other byte as the far end wrote it, and the same identity the value path gives.
 
 use serde_json::{json, Value};
 
@@ -111,6 +111,23 @@ fn a_missing_identity_member_is_appended_and_a_skill_lands_in_metadata() {
     );
 }
 
+/// An empty far-end id names no task: a reference to `""` stays `""` on both twins.
+#[test]
+fn an_empty_far_end_id_is_not_the_tasks_own_reference() {
+    for far in [
+        r#"{"kind":"task","id":"","contextId":"c","referenceTaskIds":[""]}"#,
+        r#"{"message":{"role":"agent","taskId":"","referenceTaskIds":["","far-9"]}}"#,
+    ] {
+        let out = spliced(far, None);
+        assert_eq!(
+            serde_json::from_str::<Value>(&out).unwrap(),
+            valued(far, None),
+            "{far} -> {out}"
+        );
+        assert!(!out.contains(r#"["T""#), "{far} -> {out}");
+    }
+}
+
 #[test]
 fn a_result_that_is_no_object_takes_no_identity() {
     for far in [&b"[1]"[..], &b"\"s\""[..], &b"7"[..], &b"null"[..]] {
@@ -121,7 +138,7 @@ fn a_result_that_is_no_object_takes_no_identity() {
     }
 }
 
-/// AN UNWRAPPED v0.3 UPDATE takes busbar's id in the `taskId` its `kind` names it by, at that
+/// AN UNWRAPPED v0.3 UPDATE takes busbar's id in the `taskId` its `kind` names it by, at that member's own span, and gains no `id`.
 #[test]
 fn an_unwrapped_update_takes_busbars_id_where_its_kind_names_its_task() {
     assert_eq!(
@@ -169,7 +186,7 @@ fn the_result_span_and_the_rewrap_keep_the_far_ends_bytes() {
     assert!(rewrap(b"{} {}", &json!(1)).is_err());
 }
 
-/// THE CALLER'S REQUEST, TRANSLATED BY SPLICE: only the ids `to` answers for change, at their own
+/// THE CALLER'S REQUEST, TRANSLATED BY SPLICE: only the ids `to` answers for change, at their own spans; nothing translated is `None`.
 #[test]
 fn a_request_is_translated_at_its_ids_spans_only() {
     let to = |id: &str| (id == "busbar-t").then(|| "far-t".to_string());

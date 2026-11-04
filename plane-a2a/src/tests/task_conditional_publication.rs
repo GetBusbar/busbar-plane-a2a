@@ -21,7 +21,8 @@ enum Answer {
     Publish(Candidate, Option<bool>),
 }
 
-/// A callback's replayed host handles and its explicitly driven conditional exchange. Keeping
+/// A callback's replayed host handles and its explicitly driven conditional exchange. Keeping the
+/// candidate and host receipt separate lets a test lose a commit reply without redoing it.
 struct Call {
     host: Rc<RefCell<Book>>,
     answers: Vec<Answer>,
@@ -109,10 +110,6 @@ impl Records for Call {
             Answer::List(value) => Ok(value.clone()),
             _ => panic!("the callback changed its host handle sequence"),
         }
-    }
-
-    fn claim(&mut self, _: &str, _: &str, _: u64) -> Result<bool, Halt> {
-        panic!("task publication must not acquire a replay-token claim")
     }
 
     fn observe_chain_life(&mut self, kind: &str, scope: &str) -> Result<Option<Vec<u8>>, Halt> {

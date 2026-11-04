@@ -155,16 +155,23 @@ fn hook_projection_and_session_reads_wipe_their_temporary_request_trees() {
     use zeroize::Zeroize;
     let bytes = serde_json::to_vec(&request()).unwrap();
     let probe = Probe::start();
-    let mut projected = crate::plane_door::projection(&bytes).expect("the projection reads");
+    let mut projected = crate::plane_door::hook_view(&bytes)
+        .map(|view| view.0)
+        .expect("the projection reads");
     let doc: serde_json::Value = serde_json::from_slice(&projected).unwrap();
     assert_eq!(doc["arguments"], request()["params"]);
     projected.zeroize();
-    assert_eq!(crate::plane_door::context_session(&bytes), None);
+    assert_eq!(
+        crate::plane_door::hook_view(&bytes).and_then(|view| view.2),
+        None
+    );
     probe.finished();
 
     let not_an_object = serde_json::to_vec(&serde_json::json!([{"credential":SECRET}])).unwrap();
     let probe = Probe::start();
-    assert!(crate::plane_door::projection(&not_an_object).is_none());
+    assert!(crate::plane_door::hook_view(&not_an_object)
+        .map(|view| view.0)
+        .is_none());
     probe.finished();
 }
 

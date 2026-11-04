@@ -381,7 +381,7 @@ fn drive_listing() -> Vec<(tracing::Level, String)> {
         u.pass.listed = Some((
             1,
             crate::binding::Binding::JsonRpc,
-            Some((200, serde_json::to_vec(&doc).unwrap())),
+            Some((200, serde_json::to_vec(&doc).unwrap().into())),
         ))
     });
     let (send, receive) = std::sync::mpsc::channel();

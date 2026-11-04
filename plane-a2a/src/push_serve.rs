@@ -44,6 +44,7 @@ pub const RATE_LIMITED: &str = "this task's push volume has exceeded its window 
 const JSON_FIELDS: &[(&str, &str)] = &[("content-type", crate::agent_arrival::JSON_MEDIA_TYPE)];
 
 /// A refusal in the one shape this endpoint speaks: `{"error":{"message":...}}`, not a JSON-RPC
+/// envelope (the caller is an HTTP webhook client).
 fn refused(
     input: &Lent<'_, ServeIn>,
     out: &mut Out<'_, ServeOut>,
@@ -52,12 +53,12 @@ fn refused(
     extra: &[(&str, &str)],
 ) -> Outcome {
     let body = serde_json::to_vec(&json!({ "error": { "message": message } })).unwrap_or_default();
-    let mut fields = JSON_FIELDS.to_vec();
-    fields.extend_from_slice(extra);
+    let fields = refusal_fields(status, extra);
     out.answer(input, status, &fields, &body, AUDIT_NONE)
 }
 
 /// `202`, with no document: the report was taken, the move it recorded written to the task's
+/// chain with the answer.
 fn accepted(input: &Lent<'_, ServeIn>, out: &mut Out<'_, ServeOut>, writes: &[Write]) -> Outcome {
     crate::plane_door::verb_answer(input, out, (202, &[], b""), AUDIT_NONE, writes)
 }
@@ -130,18 +131,19 @@ fn unavailable(
 }
 
 /// The synchronous signer retains the service's Short/failure distinction. A failed signer is
+/// not evidence that a caller presented an invalid capability.
 fn signature(
     plane: &A2aDoor,
     ticket: busbar_contract::abi::mechanism::ticket::Ticket,
     task_id: &str,
-) -> Result<Vec<u8>, ServiceError> {
+) -> Result<zeroize::Zeroizing<Vec<u8>>, ServiceError> {
     let services = plane.services.as_ref().ok_or(ServiceError::Unserved)?;
     let handle = crate::task_door::handle(ticket, 0);
     let data = crate::push::token_input(task_id);
-    let mut bytes = vec![0u8; 1024];
+    let mut bytes = zeroize::Zeroizing::new(vec![0u8; 1024]);
     let mut spans = vec![crate::task_door::ABSENT_SPAN; 2];
     match services.sign(handle, &data, &mut bytes, &mut spans) {
-        Ok(signature) => return Ok(signature.signature.to_vec()),
+        Ok(signature) => return Ok(zeroize::Zeroizing::new(signature.signature.to_vec())),
         Err(ServiceError::Short {
             bytes: needed,
             items,
@@ -154,7 +156,7 @@ fn signature(
     }
     services
         .sign(handle, &data, &mut bytes, &mut spans)
-        .map(|s| s.signature.to_vec())
+        .map(|s| zeroize::Zeroizing::new(s.signature.to_vec()))
 }
 
 fn finish_prepared(
@@ -180,6 +182,7 @@ fn finish_prepared(
 }
 
 /// THE MOVE A PUSHED `document` ASKS OF A TASK IN `held`: the state it reports, when it reports one
+/// this build can read and the task is not already in it.
 pub(crate) fn push_move(held: TaskState, document: &Value) -> Option<TaskState> {
     crate::task_identity::reported_task_state(document).filter(|reported| *reported != held)
 }
@@ -321,7 +324,7 @@ pub(crate) fn serve(
         return cached_refusal(instance, &input, &mut out, state, 401, UNAUTHORISED);
     }
 
-    let Ok(document) = serde_json::from_slice::<crate::request_json::RequestJson>(body) else {
+    let Ok(document) = crate::request_json::parse(body) else {
         return cached_refusal(
             instance,
             &input,
@@ -333,22 +336,10 @@ pub(crate) fn serve(
     };
 
     let Some(reported) = push_move(task.state, &document) else {
-        let outcome = accepted(&input, &mut out, &[]);
-        if outcome == Outcome::Ready {
-            state.publication.finished();
-        } else {
-            instance.park(state);
-        }
-        return outcome;
+        return finish_unchanged(plane, instance, &input, &mut out, state);
     };
     if !task.state.can_transition_to(reported) {
-        let outcome = accepted(&input, &mut out, &[]);
-        if outcome == Outcome::Ready {
-            state.publication.finished();
-        } else {
-            instance.park(state);
-        }
-        return outcome;
+        return finish_unchanged(plane, instance, &input, &mut out, state);
     }
     let mut writes = Vec::new();
     let at = Stamp {
@@ -374,19 +365,42 @@ pub(crate) fn serve(
             return unavailable(instance, &input, &mut out, state, "task-transition");
         }
         Ok(None) => {
-            let outcome = accepted(&input, &mut out, &[]);
-            if outcome == Outcome::Ready {
-                state.publication.finished();
-                if state.publication.completed() {
-                    plane.deliveries.release_publication(&state.publication);
-                }
-            } else {
-                instance.park(state);
-            }
-            return outcome;
+            return finish_unchanged(plane, instance, &input, &mut out, state);
         }
         Ok(Some(_)) => {}
     };
     state.prepared = Some(Prepared { writes });
     finish_prepared(plane, instance, &input, &mut out, state)
 }
+
+fn finish_unchanged(
+    plane: &A2aDoor,
+    instance: &Instance<'_, A2aDoor>,
+    input: &Lent<'_, ServeIn>,
+    out: &mut Out<'_, ServeOut>,
+    state: Admitted,
+) -> Outcome {
+    let outcome = accepted(input, out, &[]);
+    if outcome == Outcome::Ready {
+        state.publication.finished();
+        if state.publication.completed() {
+            plane.deliveries.release_publication(&state.publication);
+        }
+    } else {
+        instance.park(state);
+    }
+    outcome
+}
+
+fn refusal_fields<'a>(status: u32, extra: &[(&'a str, &'a str)]) -> Vec<(&'a str, &'a str)> {
+    let mut fields = JSON_FIELDS.to_vec();
+    fields.extend_from_slice(extra);
+    if status == 401 {
+        fields.push(("www-authenticate", "Bearer"));
+    }
+    fields
+}
+
+#[cfg(test)]
+#[path = "tests/push_serve_tests.rs"]
+mod tests;

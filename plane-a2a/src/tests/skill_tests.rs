@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! The skill a request matches on a held card, and the refusal of one it does not fit, in the
+//! The skill a request matches on a held card, and the refusal of one it does not fit, in the served engine's words (`busbar-a2a` `registry::judge`, `receive::admit`).
 
 use serde_json::json;
 
@@ -209,7 +209,7 @@ fn researcher() -> Value {
     )
 }
 
-/// A protocol capability the task requires and the card does not declare excludes the agent, on
+/// A protocol capability the task requires and the card does not declare excludes the agent, on each of the two capabilities; a card that declares it fits.
 #[test]
 fn a_required_protocol_capability_the_card_does_not_declare_excludes_the_agent() {
     let streams = TaskShape {
@@ -232,7 +232,7 @@ fn a_required_protocol_capability_the_card_does_not_declare_excludes_the_agent()
     );
 }
 
-/// The caller must be able to read what the agent produces: an output-mode mismatch excludes it,
+/// The caller must be able to read what the agent produces: an output-mode mismatch excludes it, and a compatible output mode fits.
 #[test]
 fn output_modes_must_be_compatible() {
     let wants_pdf = TaskShape {
@@ -247,7 +247,7 @@ fn output_modes_must_be_compatible() {
     assert_eq!(fit(&planner(), &json_both_ways), Ok(None));
 }
 
-/// CONTENT-BLINDNESS BY CONSTRUCTION: the shape the fit reads holds typed metadata only. An
+/// CONTENT-BLINDNESS BY CONSTRUCTION: the shape the fit reads holds typed metadata only.
 #[test]
 fn the_task_shape_carries_no_channel_for_prose() {
     let TaskShape {
@@ -261,7 +261,7 @@ fn the_task_shape_carries_no_channel_for_prose() {
     assert!(output_modes.is_empty());
 }
 
-/// A JSON `null` MEMBER OF A HELD CARD READS AS ABSENT, as the gRPC line's messages read it
+/// A JSON `null` MEMBER OF A HELD CARD READS AS ABSENT, as the gRPC line's messages read it (build.rs: "a JSON `null` for a repeated or map member reads as empty"): a card an SDK serialised with explicit nulls is judged on what it declares, never refused as unreadable.
 #[test]
 fn a_held_card_with_null_members_reads_as_absent() {
     let card = json!({
@@ -310,4 +310,50 @@ fn proto_field_names_cannot_bypass_callback_or_output_mode_fit() {
         fit(&held, &shape),
         Err(Unfit::CapabilityNotDeclared("pushNotifications"))
     );
+}
+
+/// A held card that is an object with a mistyped member is not called "not a JSON object".
+#[test]
+fn a_mistyped_member_is_not_reported_as_a_non_object_card() {
+    for held in [
+        json!({ "capabilities": { "streaming": "yes" } }),
+        json!({ "name": 5 }),
+        json!({ "skills": "x" }),
+    ] {
+        assert_eq!(
+            fit(&held, &TaskShape::default()),
+            Err(Unfit::Unreadable(Unreadable::NotACard)),
+            "{held}"
+        );
+    }
+    assert_eq!(
+        refusal(&Unfit::Unreadable(Unreadable::NotACard)).message,
+        "this agent's held card cannot be read: a member it declares has the wrong type"
+    );
+}
+
+/// The stream rule is the vocabulary's own `multi_frame` column, and the suffix for an unlisted name.
+#[test]
+fn a_method_reads_as_a_stream_exactly_where_its_row_is_multi_frame() {
+    for row in crate::ops::METHODS {
+        assert_eq!(
+            reads_as_stream(row.method),
+            row.multi_frame,
+            "{}",
+            row.method
+        );
+    }
+    assert!(reads_as_stream("vendor/stream"));
+    assert!(!reads_as_stream("vendor/send"));
+}
+
+/// THE FIT of a held card DOCUMENT to `shape`: [`judge`] over the card read.
+pub fn fit(card: &Value, shape: &TaskShape) -> Result<Option<String>, Unfit> {
+    let unreadable = if card.is_object() {
+        Unreadable::NotACard
+    } else {
+        Unreadable::NotAnObject
+    };
+    let card = crate::a2a::agent_card::parse(card).ok_or(Unfit::Unreadable(unreadable))?;
+    judge(&card, shape)
 }

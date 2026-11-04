@@ -132,6 +132,14 @@ def load_tests():
             "MIN_EXPECTED_TESTS deliberately in a commit that says why."
             % (len(tests), modules, MIN_EXPECTED_TESTS))
 
+    unregistered = sorted(REQUIRED_PROFILE - {t.id for t in tests})
+    if unregistered:
+        raise RuntimeError(
+            "REQUIRED_PROFILE names %s, which no registered test carries. A "
+            "renamed or removed required row silently drops out of the "
+            "INAPPLICABLE-is-red rule; update REQUIRED_PROFILE with it."
+            % unregistered)
+
     stray = [t.id for t in tests if t.role == "governance"]
     if stray:
         raise RuntimeError(

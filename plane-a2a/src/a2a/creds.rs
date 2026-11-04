@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! THE OUTBOUND DELEGATION CREDENTIAL, as the `agents:` grammar spells it: a secret reference plus
+//! THE OUTBOUND DELEGATION CREDENTIAL, as the `agents:` grammar spells it: a secret reference plus its lease policy, held by busbar and scoped to one registration.
 
 use busbar_contract::secret_ref::SecretRef;
 

@@ -2,14 +2,18 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! THE A2A PLANE'S OWN DURABLE RECORD TYPES: the task row and the task-event row, each the JSON
+//! value of one host record of its kind ([`crate::records`]).
 
-/// DIGEST FRAMING VERSION 1 — the LEGACY ambiguous pipe-join (`{prev_hash}|{task_id}|…|{state}`). The
+/// DIGEST FRAMING VERSION 1 — the LEGACY ambiguous pipe-join (`{prev_hash}|{task_id}|…|{state}`),
+/// retained only so a chain persisted before the fix still verifies.
 pub const DIGEST_VERSION_LEGACY_PIPE: u8 = 1;
 
-/// DIGEST FRAMING VERSION 2 — the INJECTIVE length-prefixed framing every new event is sealed under:
+/// DIGEST FRAMING VERSION 2 — the INJECTIVE length-prefixed framing every new event is sealed
+/// under, so no field's content can be read as another field's.
 pub const DIGEST_VERSION_LEN_PREFIXED: u8 = 2;
 
-/// The framing a row that predates the versioned digest is read under: rows persisted before the fix
+/// The framing a row that predates the versioned digest is read under: the legacy pipe-join, which
+/// serde defaults to when a row carries no `digest_version`.
 fn default_digest_version() -> u8 {
     DIGEST_VERSION_LEGACY_PIPE
 }
@@ -22,7 +26,7 @@ fn default_digest_version() -> u8 {
 /// `principal` is the caller reference the kernel lends on every piece (the
 /// per-principal reference the task's records are keyed under, [`crate::tasks::task_key`]);
 /// `agent_id` is a busbar-local registration id.
-#[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, Eq, serde::Serialize)]
 pub struct TaskRow {
     /// Protocol task id — busbar's own, unique within its caller; the record's key is
     /// `<principal>/<task_id>`.
@@ -50,6 +54,60 @@ pub struct TaskRow {
     pub created_at: u64,
     /// Unix seconds of the most recent state change. The retention sweep's age key.
     pub updated_at: u64,
+}
+
+/// Keep a callback owned while Serde is still decoding later record fields.
+pub(crate) fn callback_field<'de, D: serde::Deserializer<'de>>(
+    de: D,
+) -> Result<crate::proto::custody::Guard<String>, D::Error> {
+    <String as serde::Deserialize>::deserialize(de).map(crate::proto::custody::Guard::new)
+}
+
+impl<'de> serde::Deserialize<'de> for TaskRow {
+    fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+        #[derive(serde::Deserialize)]
+        struct Wire {
+            task_id: String,
+            context_id: String,
+            principal: String,
+            direction: String,
+            state: String,
+            agent_id: String,
+            artifact_cursor: u64,
+            #[serde(deserialize_with = "callback_field")]
+            push_callback: crate::proto::custody::Guard<String>,
+            #[serde(default)]
+            push_version: String,
+            created_at: u64,
+            updated_at: u64,
+        }
+        let mut wire = Wire::deserialize(de)?;
+        Ok(Self {
+            task_id: wire.task_id,
+            context_id: wire.context_id,
+            principal: wire.principal,
+            direction: wire.direction,
+            state: wire.state,
+            agent_id: wire.agent_id,
+            artifact_cursor: wire.artifact_cursor,
+            push_callback: wire.push_callback.take(),
+            push_version: wire.push_version,
+            created_at: wire.created_at,
+            updated_at: wire.updated_at,
+        })
+    }
+}
+
+impl zeroize::Zeroize for TaskRow {
+    fn zeroize(&mut self) {
+        crate::request_json::wipe_string(&mut self.push_callback);
+    }
+}
+
+impl Drop for TaskRow {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(self);
+    }
 }
 
 impl std::fmt::Debug for TaskRow {

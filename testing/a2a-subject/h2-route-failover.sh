@@ -186,8 +186,14 @@ for i in 1 2 3 4 5 6 7 8; do
 done
 
 IFS=$'\t' read -r _ judged_failures judged_detail <<<"$(judge_route_failover "$records")"
-failures=$((failures + judged_failures))
-[ "$judged_failures" -eq 0 ] || detail="${detail}${judged_detail}; "
+# A judge that crashed or never ran leaves judged_failures empty: that is a FAILURE, never zero.
+if ! h2_int_is "$judged_failures" -ge 0; then
+  failures=$((failures+1))
+  detail="${detail}the route-failover judge returned no verdict (${judged_failures:-empty}); "
+else
+  failures=$((failures + judged_failures))
+  [ "$judged_failures" -eq 0 ] || detail="${detail}${judged_detail}; "
+fi
 
 if [ -n "$tripped_at" ]; then
   # Every pre-trip attempt was actually dialled: one POST per attempt before the trip.

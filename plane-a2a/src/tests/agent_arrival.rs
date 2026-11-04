@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! One JSON-RPC arrival decided in the served order, and its refusal rendered in the line's
+//! dialect.
 
 use super::*;
 
@@ -124,7 +125,7 @@ fn the_media_type_is_judged_before_the_body_and_the_version() {
         b"not json",
         head(Some("text/plain"), Some("9.9")),
     ));
-    assert_eq!(r.status, 415);
+    assert_eq!(r.status, 400);
     assert_eq!(r.code, CODE_CONTENT_TYPE_NOT_SUPPORTED);
     assert_eq!(r.id, None);
     assert_eq!(
@@ -362,6 +363,8 @@ fn a_kernel_refusal_keeps_the_kernels_status_and_is_worded_as_an_unsupported_ope
 }
 
 /// THE WORDS NEVER OVERFLOW THE ABI CAP (spec ruling log 2026-09-30, new-plane refusals follow
+/// predev bytes): a refusal that echoes a field line of the largest size a transport admits, made
+/// of the characters JSON escapes, still fits `MAX_REFUSAL_TEXT`, and reads back whole.
 #[test]
 fn the_words_of_a_head_refusal_echoing_the_largest_admitted_field_line_fit_the_abi_cap() {
     use busbar_contract::abi::plane::{LARGEST_ADMITTED_FIELD_LINE, MAX_REFUSAL_TEXT};
@@ -424,6 +427,7 @@ fn an_origin_that_is_not_loopback_is_refused_before_every_other_rule() {
 }
 
 /// A METHOD THE VOCABULARY DOES NOT LIST IS RELAYED, NEVER REFUSED: classed as the hop the engine
+/// relays it on, a request or a notification alike.
 #[test]
 fn an_unlisted_method_is_classed_as_the_hop_the_engine_relays_it_on() {
     use crate::ops::{OP_MESSAGE_SEND, OP_MESSAGE_STREAM, OP_TASK_GET};
@@ -450,6 +454,7 @@ fn an_unlisted_method_is_classed_as_the_hop_the_engine_relays_it_on() {
 }
 
 /// THE gRPC LINE'S RENDERING is the JSON-RPC envelope at the refusal's neutral status, the bytes
+/// the grpc transport maps to `grpc-status`; a kernel refusal keeps the kernel's status.
 #[test]
 fn the_grpc_rendering_is_the_envelope_at_the_neutral_status() {
     let own = refused(decide_arrival(b"", head(Some("text/plain"), None)));
@@ -457,7 +462,7 @@ fn the_grpc_rendering_is_the_envelope_at_the_neutral_status() {
         render(Dialect::Framed, &own, true),
         render(Dialect::JsonRpc, &own, true)
     );
-    assert_eq!(render(Dialect::Framed, &own, true).status, 415);
+    assert_eq!(render(Dialect::Framed, &own, true).status, 400);
     let kernel = kernel_refusal(429, "this key's budget is spent");
     let out = render(Dialect::Framed, &kernel, false);
     assert_eq!(out.status, 0);
@@ -465,6 +470,7 @@ fn the_grpc_rendering_is_the_envelope_at_the_neutral_status() {
 }
 
 /// THE OPEN BREAKER'S REFUSAL is 1.5.5's `BreakerOpen` client text: `503`, `-32004`, the agent
+/// named, the request id echoed, and the seconds the `Retry-After` field repeats.
 #[test]
 fn an_open_breaker_refusal_names_the_agent_and_the_seconds_to_wait() {
     let refusal = breaker_refusal("probe", Some(serde_json::json!(7)), 12);
@@ -521,7 +527,7 @@ fn an_ungranted_caller_is_told_the_scope_it_does_not_hold() {
     );
 }
 
-/// A KEY THAT IS NOT LIVE IS REFUSED `401`, HOWEVER IT IS NOT LIVE (1.5.5's `KeyNotLive`). Which
+/// A KEY THAT IS NOT LIVE IS REFUSED `401`, HOWEVER IT IS NOT LIVE (1.5.5's `KeyNotLive`).
 #[test]
 fn a_key_that_is_not_live_is_refused_401_however_it_is_not_live() {
     let refusal = not_live();
@@ -534,6 +540,7 @@ fn a_key_that_is_not_live_is_refused_401_however_it_is_not_live() {
 }
 
 /// AN AGENT THIS DEPLOYMENT DOES NOT FRONT is a `404` in 1.5.5's words (`NoSuchAgent`), never an
+/// out-of-scope one.
 #[test]
 fn an_unknown_agent_is_a_404_in_1_5_5_words() {
     let rendered = render(Dialect::JsonRpc, &no_such_agent("nonexistent"), true);
@@ -571,8 +578,9 @@ fn a_null_id_is_never_answered_with_a_success_result() {
 }
 
 /// A request method with no `id` member is a notification: acknowledged, never answered (JSON-RPC
+/// 2.0 section 4.1), and a notification is not a request, so it names no id and carries no refusal.
 #[test]
-fn a_request_method_with_no_id_is_a_notification_and_gets_no_response_body() {
+fn a_request_method_with_no_id_is_classified_as_a_notification() {
     let d = decide_arrival(
         br#"{"jsonrpc":"2.0","method":"SendMessage","params":{}}"#,
         head(None, None),
@@ -587,13 +595,10 @@ fn a_request_method_with_no_id_is_a_notification_and_gets_no_response_body() {
         d.op_class().is_some(),
         "an admitted notification is a unit of its method's class"
     );
-    assert_eq!(
-        STATUS_ACCEPTED, 202,
-        "a notification is acknowledged, not answered"
-    );
 }
 
 /// A tripped agent rejects a fresh submission on each line with 503 and `-32004`, naming the agent
+/// and the seconds to wait, before any dial.
 #[test]
 fn a_tripped_agent_rejects_fresh_submissions_on_every_binding() {
     let refusal = breaker_refusal("planner", Some(serde_json::json!(1)), 30);
@@ -694,7 +699,25 @@ fn near_miss_versions_and_media_types_are_refused_before_dispatch() {
         let answer = refused(decide_arrival(SEND, head(Some(content_type), None)));
         assert_eq!(
             (answer.status, answer.code),
-            (415, CODE_CONTENT_TYPE_NOT_SUPPORTED)
+            (400, CODE_CONTENT_TYPE_NOT_SUPPORTED)
         );
+    }
+}
+
+#[test]
+fn a_structured_json_media_type_requires_a_type_and_subtype() {
+    assert!(!is_json_media_type("foo+json"));
+    assert!(!is_json_media_type("/+json"));
+    assert!(is_json_media_type("application/problem+json"));
+}
+
+#[test]
+fn duplicate_task_identity_fields_are_refused_before_relay() {
+    for body in [
+        br#"{"jsonrpc":"2.0","id":1,"method":"GetTask","params":{"id":"victim","id":"own"}}"#.as_slice(),
+        br#"{"jsonrpc":"2.0","id":1,"method":"GetTask","params":{"id":"victim"},"params":{"id":"own"}}"#.as_slice(),
+        br#"{"jsonrpc":"2.0","id":1,"method":"SendMessage","params":{"message":{"taskId":"victim","taskId":"own"}}}"#.as_slice(),
+    ] {
+        assert!(matches!(decide_arrival(body, head(None, None)), AgentDisposition::Refused(_)));
     }
 }

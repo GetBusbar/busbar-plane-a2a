@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! The far end's answer, spliced, never re-serialised (a relay sends the client's bytes with
+//! The far end's answer, spliced, never re-serialised (a relay sends the client's bytes with governed byte-level splices).
 
 use std::borrow::Cow;
 use std::ops::Range;
@@ -39,7 +39,7 @@ fn past_blank(b: &[u8], mut i: usize) -> usize {
     i
 }
 
-/// The span of the JSON value at `i` (whitespace before it allowed), read by the contract's one
+/// The span of the JSON value at `i` (whitespace before it allowed), read by the contract's one span grammar (`busbar_contract::spans`), never a plane-local copy of it.
 fn value_at(b: &[u8], i: usize) -> Option<Range<usize>> {
     let rest = b.get(i..)?;
     match resolve_pointer(rest, "") {
@@ -79,7 +79,7 @@ fn object_members(b: &[u8], span: &Range<usize>) -> Option<Vec<ObjectMember>> {
         }
         let key_span = value_at(b, j)?;
         let mut member = ObjectMember {
-            key: serde_json::from_slice(&b[key_span.clone()]).ok()?,
+            key: crate::request_json::from_slice(&b[key_span.clone()]).ok()?,
             value: 0..0,
         };
         j = past_blank(b, key_span.end);
@@ -103,7 +103,7 @@ fn last<'m>(members: &'m [ObjectMember], key: &str) -> Option<&'m ObjectMember> 
     members.iter().rev().find(|m| m.key == key)
 }
 
-/// THE READING COPY of `b`: `b` itself, unless a number in it lies past `f64`'s range, which is
+/// THE READING COPY of `b`: `b` itself, unless a number in it lies past `f64`'s range, which is then spelled `0` (the reading never decides on a number's value; the caller's bytes keep it).
 #[must_use]
 pub fn readable(b: &[u8]) -> Cow<'_, [u8]> {
     let mut out: Option<RawBytes> = None;
@@ -145,7 +145,7 @@ pub(crate) fn with_readable<T>(bytes: &[u8], read: impl FnOnce(&[u8]) -> T) -> T
 
 /// Parse a reading copy directly into the DOM's wiping owner.
 pub(crate) fn read_json(bytes: &[u8]) -> Result<RequestJson, serde_json::Error> {
-    with_readable(bytes, |bytes| serde_json::from_slice::<RequestJson>(bytes))
+    with_readable(bytes, |bytes| crate::request_json::parse(bytes))
 }
 
 /// The span of `result` in the JSON-RPC envelope `envelope` (its last `result` member).
@@ -161,55 +161,13 @@ pub fn member_span(doc: &[u8], key: &str) -> Option<Range<usize>> {
     last(&object_members(doc, &span)?, key).map(|m| m.value.clone())
 }
 
-/// WHETHER `b` IS THE JSON A PARSE TO A VALUE READS (every token, every string, the parse's depth
+/// WHETHER `b` IS THE JSON A PARSE TO A VALUE READS (every token, every string, the parse's depth bound), read through and dropped: no value is built.
 #[must_use]
 pub fn is_json(b: &[u8]) -> bool {
-    serde_json::from_slice::<Shape>(b).is_ok()
+    crate::request_json::valid(b)
 }
 
-/// A JSON value read and dropped, at every level as a value's parse reads it.
-struct Shape;
-
-impl<'de> serde::Deserialize<'de> for Shape {
-    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        d.deserialize_any(Shape)
-    }
-}
-
-impl<'de> serde::de::Visitor<'de> for Shape {
-    type Value = Shape;
-    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("a JSON value")
-    }
-    fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<Shape, E> {
-        Ok(Shape)
-    }
-    fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<Shape, E> {
-        Ok(Shape)
-    }
-    fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<Shape, E> {
-        Ok(Shape)
-    }
-    fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<Shape, E> {
-        Ok(Shape)
-    }
-    fn visit_str<E: serde::de::Error>(self, _: &str) -> Result<Shape, E> {
-        Ok(Shape)
-    }
-    fn visit_unit<E: serde::de::Error>(self) -> Result<Shape, E> {
-        Ok(Shape)
-    }
-    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut s: A) -> Result<Shape, A::Error> {
-        while s.next_element::<Shape>()?.is_some() {}
-        Ok(Shape)
-    }
-    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut m: A) -> Result<Shape, A::Error> {
-        while m.next_entry::<Shape, Shape>()?.is_some() {}
-        Ok(Shape)
-    }
-}
-
-/// THE JSON-RPC ANSWER `envelope` AS THE CONTRACT'S READER JUDGES IT, read off its bytes: its
+/// THE JSON-RPC ANSWER `envelope` AS THE CONTRACT'S READER JUDGES IT, read off its bytes: its `jsonrpc` and `id` as values (through the reading copy), its `error` as present (`null` kept `null`) and its `result` as present, and the span of its `result`.
 #[must_use]
 pub fn envelope_reading(envelope: &[u8]) -> Option<(Value, Option<Range<usize>>)> {
     let members = object_members(envelope, &document(envelope)?)?;
@@ -253,7 +211,7 @@ pub fn result_reply(id: &Value, result: &[u8]) -> Vec<u8> {
     out.into_vec()
 }
 
-/// An HTTP+JSON answer `body` re-framed as the JSON-RPC envelope answering `id`, its `result` the
+/// An HTTP+JSON answer `body` re-framed as the JSON-RPC envelope answering `id`, its `result` the body's own bytes (an empty body is `null`).
 pub fn rewrap(body: &[u8], id: &Value) -> Result<Vec<u8>, String> {
     if body.iter().all(u8::is_ascii_whitespace) {
         return Ok(result_reply(id, b"null"));
@@ -277,7 +235,7 @@ impl Edits {
         self.replace.push((at, bytes.into()));
     }
 
-    /// Set `key` of the object `obj` (its members `ms`) to `value`: every occurrence replaced, or
+    /// Set `key` of the object `obj` (its members `ms`) to `value`: every occurrence replaced, or the member appended.
     fn put(
         &mut self,
         b: &[u8],
@@ -358,7 +316,7 @@ fn string_at(b: &[u8], span: &Range<usize>) -> Option<String> {
     if b.get(span.start) != Some(&b'"') {
         return None;
     }
-    serde_json::from_slice(&b[span.clone()]).ok()
+    crate::request_json::from_slice(&b[span.clone()]).ok()
 }
 
 /// Every string of the array spanning `list` that `to` answers for, replaced by its answer.
@@ -375,10 +333,10 @@ fn translate_list(
     }
 }
 
-/// The members a message names the tasks it refers to under (A2A `Message.reference_task_ids`,
+/// The members a message names the tasks it refers to under (A2A `Message.reference_task_ids`, `Message.reference_task_ids` in the vendored proto, in either JSON spelling).
 pub const REFERENCE_MEMBERS: [&str; 2] = ["referenceTaskIds", "reference_task_ids"];
 
-/// A message's identity: its `taskId` and `contextId`, where it names them, are busbar's, and every
+/// A message's identity: its `taskId` and `contextId`, where it names them, are busbar's, and every task it refers to that `refer` knows is named by busbar's id.
 fn message_identity(
     b: &[u8],
     msg: &Range<usize>,
@@ -399,10 +357,10 @@ fn message_identity(
     }
 }
 
-/// A table of `(name, identity member)` pairs: [`crate::task_identity::WRAPPERS`] (a wrapper and
+/// A table of `(name, identity member)` pairs: [`crate::task_identity::WRAPPERS`] (a wrapper and the member naming the task inside it) or [`crate::task_identity::KINDS`] (a `kind` and the member naming its task).
 pub type IdMembers<'a> = &'a [(&'a str, &'a str)];
 
-/// THE BYTE TWIN OF `task_identity::rewrite_identity`: the far end's `result` bytes with busbar's
+/// THE BYTE TWIN OF `task_identity::rewrite_identity`: the far end's `result` bytes with busbar's task and context ids (and the matched skill) spliced in, every other byte as the far end wrote it.
 #[must_use]
 pub fn rewrite_identity(
     result: &[u8],
@@ -421,23 +379,27 @@ pub fn rewrite_identity(
             .map(|m| (*w, *id, m.value.clone()))
     });
     let kind = last(&top_ms, "kind").and_then(|m| string_at(b, &m.value));
-    let (wrapper, id_member, payload) = match wrapped {
-        Some((w, id, span)) => (Some(w), id, span),
+    let (wrapper, id_member, payload, ms) = match wrapped {
+        Some((w, id, span)) => {
+            let ms = object_members(b, &span)?;
+            (Some(w), id, span, ms)
+        }
         None => {
             let by_kind = kinds
                 .iter()
                 .find(|(k, _)| Some(*k) == kind.as_deref())
                 .map_or("id", |(_, id)| *id);
-            (None, by_kind, top)
+            (None, by_kind, top, top_ms)
         }
     };
     let message = match wrapper {
         Some(w) => w == "message",
         None => kind.as_deref() == Some("message"),
     };
-    let ms = object_members(b, &payload)?;
 
-    let own = last(&ms, id_member).and_then(|m| string_at(b, &m.value));
+    let own = last(&ms, id_member)
+        .and_then(|m| string_at(b, &m.value))
+        .filter(|s| !s.is_empty());
     let refer = |far: &str| {
         if own.as_deref() == Some(far) {
             return Some(task_id.to_string());
@@ -505,7 +467,7 @@ pub fn rewrite_identity(
     Some(e.apply(b))
 }
 
-/// THE CALLER'S REQUEST `envelope` WITH THE TASK IDS `to` ANSWERS FOR SPLICED IN, every other byte
+/// THE CALLER'S REQUEST `envelope` WITH THE TASK IDS `to` ANSWERS FOR SPLICED IN, every other byte as the caller wrote it: each string member of `params` named in `top`, each of its `message`'s named in `message`, and each id in the message's [`REFERENCE_MEMBERS`] lists.
 #[must_use]
 pub fn translate_ids(
     envelope: &[u8],

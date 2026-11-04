@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! One callback's replay journal for read-bound observations and atomic publication. The host
+//! One callback's replay journal for read-bound observations and atomic publication, where the host
+//! owns a submitted attempt and a wake neither acknowledges it nor permits a replacement candidate.
 
 use std::sync::{Arc, Weak};
 
@@ -14,7 +15,7 @@ use busbar_contract::abi::sdk::store::conditional::{Decision, Expected};
 use busbar_contract::abi::sdk::{Keyed, Out};
 
 use crate::proto::custody::{Guard, Wipe};
-use crate::records::{HELD_KINDS, KIND_TASK_EVENT};
+use crate::records::KIND_TASK_EVENT;
 use crate::tasks::{ChainLife, Halt, Predicate, Write};
 
 /// Shared only by one pass and its ephemeral record adapter. All guards protect local data;
@@ -124,16 +125,33 @@ impl Drop for Action {
     }
 }
 
+#[track_caller]
 fn failed() -> Halt {
+    failed_at("host callback or journal state is inconsistent")
+}
+
+#[track_caller]
+fn failed_at(reason: &'static str) -> Halt {
+    let site = std::panic::Location::caller();
+    tracing::warn!(
+        phase = "conditional-publication",
+        source_line = site.line(),
+        reason,
+        "A2A conditional publication is unavailable or inconsistent"
+    );
     Halt::Failed("conditional task publication unavailable or inconsistent".into())
 }
 
+/// The width of a chain life, the host's opaque generation of one event chain.
+const CHAIN_LIFE_BYTES: usize = 8;
+
+/// The tail's index of held kind `kind` ([`crate::task_door::kind_index`]); a kind the tail does
+/// not state is refused here rather than written.
 fn kind(kind: &str) -> Result<u32, Halt> {
-    HELD_KINDS
-        .iter()
-        .position(|k| *k == kind)
-        .and_then(|i| u32::try_from(i).ok())
-        .ok_or_else(failed)
+    match crate::task_door::kind_index(kind) {
+        u32::MAX => Err(failed()),
+        index => Ok(index),
+    }
 }
 
 fn expected(value: &Option<Vec<u8>>) -> Expected {
@@ -231,7 +249,9 @@ impl Journal {
                     Action::Observe { .. } => wire::OBSERVED,
                     Action::Publish { .. } => wire::RESULT,
                 };
-                if !step.submitted && busbar_contract::abi::mechanism::extensions::get(extensions, result_key).is_some() {
+                let answered =
+                    busbar_contract::abi::mechanism::extensions::get(extensions, result_key);
+                if !step.submitted && answered.is_some() {
                     s.broken = true;
                     return Err(failed());
                 }
@@ -254,25 +274,24 @@ impl Journal {
                     s.broken = true;
                     return Err(failed());
                 }
-                let refused = match &step.action {
-                    Action::Observe { answer, .. } => matches!(answer, Some(Err(error)) if !matches!(error, wire::ConditionalFailure::Refused(_))),
-                    Action::Publish { answer, .. } => matches!(answer, Some(Err(error)) if !matches!(error, wire::ConditionalFailure::Refused(_))),
+                let (failure, commit) = match &step.action {
+                    Action::Observe { answer, .. } => {
+                        (answer.as_ref().and_then(|a| a.as_ref().err()), false)
+                    }
+                    Action::Publish { answer, .. } => {
+                        (answer.as_ref().and_then(|a| a.as_ref().err()), true)
+                    }
                 };
-                if refused {
-
-
-                    s.broken = true;
-                    return Err(failed());
-                }
-                match &step.action {
-                    Action::Observe { answer: Some(Err(wire::ConditionalFailure::Refused(_))), .. } => {
+                match failure {
+                    Some(wire::ConditionalFailure::Refused(_)) => {
                         s.response_only = true;
+                        s.refused_commit |= commit;
                     }
-                    Action::Publish { answer: Some(Err(wire::ConditionalFailure::Refused(_))), .. } => {
-                        s.response_only = true;
-                        s.refused_commit = true;
+                    Some(_) => {
+                        s.broken = true;
+                        return Err(failed());
                     }
-                    _ => {}
+                    None => {}
                 }
             }
             Ok(())
@@ -292,7 +311,9 @@ impl Journal {
             if s.cancelled || s.broken {
                 return Err(failed());
             }
-            let capability = s.capability.ok_or_else(failed)?;
+            let capability = s
+                .capability
+                .ok_or_else(|| failed_at("required value missing or sequence exhausted"))?;
             let at = s
                 .steps
                 .iter()
@@ -306,7 +327,10 @@ impl Journal {
                     s.broken = true;
                     return Err(failed());
                 }
-                s.next = s.next.checked_add(1).ok_or_else(failed)?;
+                s.next = s
+                    .next
+                    .checked_add(1)
+                    .ok_or_else(|| failed_at("required value missing or sequence exhausted"))?;
                 s.steps.push(Step {
                     seq,
                     submitted: false,
@@ -334,7 +358,9 @@ impl Journal {
             match answer {
                 None => Err(Halt::Pending),
                 Some(Ok(Expected::Absent)) => Ok(None),
-                Some(Ok(Expected::Bytes(bytes))) if bytes.len() == 8 => Ok(Some(bytes.clone())),
+                Some(Ok(Expected::Bytes(bytes))) if bytes.len() == CHAIN_LIFE_BYTES => {
+                    Ok(Some(bytes.clone()))
+                }
                 Some(Err(wire::ConditionalFailure::Refused(_))) => Err(failed()),
                 _ => {
                     s.broken = true;
@@ -342,18 +368,6 @@ impl Journal {
                 }
             }
         })
-    }
-
-    /// Publish once at this replay position. Only a definitive conflict permits primitive retry.
-    #[cfg(test)]
-    pub(crate) fn publish(
-        &self,
-        seq: u32,
-        predicates: &[Predicate],
-        lives: &[ChainLife],
-        writes: &[Write],
-    ) -> Result<bool, Halt> {
-        self.publish_with(seq, predicates, lives, writes, &Draft::default())
     }
 
     pub(crate) fn publish_with(
@@ -369,7 +383,9 @@ impl Journal {
             if s.cancelled || s.broken {
                 return Err(failed());
             }
-            let capability = s.capability.ok_or_else(failed)?;
+            let capability = s
+                .capability
+                .ok_or_else(|| failed_at("required value missing or sequence exhausted"))?;
             let at = s
                 .steps
                 .iter()
@@ -413,12 +429,16 @@ impl Journal {
                         s.broken = true;
                         return Err(failed());
                     }
-                    s.next = s.next.checked_add(1).ok_or_else(failed)?;
+                    s.next = s
+                        .next
+                        .checked_add(1)
+                        .ok_or_else(|| failed_at("required value missing or sequence exhausted"))?;
                     s.next
                 }
             };
-            let request = candidate(capability, correlation, predicates, lives, writes)?;
-            if at == s.steps.len() {
+            let mut request = candidate(capability, correlation, predicates, lives, writes)?;
+            let fresh = at == s.steps.len();
+            if fresh {
                 if draft.notify && draft.config.is_none() {
                     return Err(failed());
                 }
@@ -427,8 +447,12 @@ impl Journal {
                         writes
                             .iter()
                             .find(|w| w.kind == crate::records::KIND_TASK && !w.value.is_empty())
-                            .and_then(|w| serde_json::from_slice::<crate::TaskRow>(&w.value).ok())
-                            .ok_or_else(failed)?,
+                            .and_then(|w| {
+                                crate::request_json::from_slice::<crate::TaskRow>(&w.value).ok()
+                            })
+                            .ok_or_else(|| {
+                                failed_at("required value missing or sequence exhausted")
+                            })?,
                     )
                 } else {
                     None
@@ -437,7 +461,15 @@ impl Journal {
                     seq,
                     submitted: false,
                     action: Action::Publish {
-                        request: (*request).clone(),
+                        request: wire::Request {
+                            capability: request.capability,
+                            candidate: wire::ConditionalCandidate {
+                                correlation: request.candidate.correlation,
+                                predicates: std::mem::take(&mut request.candidate.predicates),
+                                mutations: std::mem::take(&mut request.candidate.mutations),
+                                chains: std::mem::take(&mut request.candidate.chains),
+                            },
+                        },
                         writes: writes.to_vec(),
                         answer: None,
                         metadata_taken: false,
@@ -464,7 +496,7 @@ impl Journal {
             else {
                 return Err(failed());
             };
-            if step.seq != seq || original != &*request || after.draft != *draft {
+            if step.seq != seq || (!fresh && original != &*request) || after.draft != *draft {
                 s.broken = true;
                 return Err(failed());
             }
@@ -516,56 +548,19 @@ impl Journal {
                 } = &mut step.action
                 {
                     if !*metadata_taken {
-                        writes.extend(committed.clone());
+                        writes.extend(
+                            committed
+                                .iter()
+                                .filter(|w| {
+                                    w.kind == crate::records::KIND_PUSH_CONFIG && w.value.is_empty()
+                                })
+                                .cloned(),
+                        );
                         *metadata_taken = true;
                     }
                 }
             }
             writes
-        })
-    }
-
-    /// Whether this invocation's conditional event filing actually reached Applied.
-    #[cfg(test)]
-    pub(crate) fn applied_since(&self, seq: u32, kind: &str, key: &str) -> bool {
-        self.0.with(&(), |s| {
-            s.is_some_and(|s| {
-                s.steps.iter().any(|step| {
-                    if step.seq < seq {
-                        return false;
-                    }
-                    matches!(&step.action, Action::Publish {
-                answer: Some(Ok(Decision::Applied)), writes, ..
-            } if writes.iter().any(|w| w.kind == kind && w.key == key && !w.value.is_empty()))
-                })
-            })
-        })
-    }
-
-    /// A submitted event whose definitive outcome is still unknown cannot be offered anew.
-    #[cfg(test)]
-    pub(crate) fn owns_unresolved_event(&self, kind: &str, key: &str) -> bool {
-        self.0.with(&(), |s| {
-            s.is_some_and(|s| {
-                s.steps.iter().any(|step| {
-                    if !step.submitted {
-                        return false;
-                    }
-                    match &step.action {
-                        Action::Publish { answer, writes, .. } => {
-                            let resolved = matches!(
-                                answer,
-                                Some(Ok(_)) | Some(Err(wire::ConditionalFailure::Refused(_)))
-                            );
-                            !resolved
-                                && writes
-                                    .iter()
-                                    .any(|w| w.kind == kind && w.key == key && !w.value.is_empty())
-                        }
-                        _ => false,
-                    }
-                })
-            })
         })
     }
 
@@ -623,7 +618,9 @@ impl Journal {
         self.0.with(&(), |s| s.is_some_and(|s| s.cancelled))
     }
 
-    /// An emitted later observation replaced the prior definitive commit at the host. Its
+    /// An emitted later observation replaced the prior definitive commit at the host, so its
+    /// cancellation has no commit receipt to acknowledge and only the retained local effects
+    /// remain.
     pub(crate) fn cancelled_without_receipt(&self) -> bool {
         self.0.with(&(), |state| {
             state.is_some_and(|state| {
@@ -841,7 +838,14 @@ impl Journal {
                 };
                 if matches!(answer, Some(Ok(Decision::Applied))) {
                     if !*metadata_taken {
-                        effects.deletes.extend(writes.clone());
+                        effects.deletes.extend(
+                            writes
+                                .iter()
+                                .filter(|w| {
+                                    w.kind == crate::records::KIND_PUSH_CONFIG && w.value.is_empty()
+                                })
+                                .cloned(),
+                        );
                         *metadata_taken = true;
                     }
                     if after.draft.notify && !after.notify_done {
@@ -913,7 +917,11 @@ fn candidate(
     let mut mutations = Guard::new(Vec::new());
     let mut chains = Guard::new(Vec::new());
     for life in lives {
-        if life.expected.as_ref().is_some_and(|b| b.len() != 8) {
+        if life
+            .expected
+            .as_ref()
+            .is_some_and(|b| b.len() != CHAIN_LIFE_BYTES)
+        {
             return Err(failed());
         }
         if !writes
@@ -934,7 +942,7 @@ fn candidate(
             let life = lives
                 .iter()
                 .find(|l| l.kind == w.kind && l.scope == w.key)
-                .ok_or_else(failed)?;
+                .ok_or_else(|| failed_at("required value missing or sequence exhausted"))?;
             chains.push(if w.value.is_empty() {
                 wire::ChainMutation::Drop {
                     kind,
@@ -987,3 +995,7 @@ mod raw_custody_tests;
 #[cfg(test)]
 #[path = "tests/conditional_fixture.rs"]
 pub(crate) mod fixture;
+
+#[cfg(test)]
+#[path = "tests/conditional_publication_support.rs"]
+mod support;

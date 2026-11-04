@@ -10,6 +10,34 @@ use zeroize::Zeroize;
 
 use crate::proto::custody::{Decode, Guard, Seed, Wipe};
 
+#[path = "request_json_decode.rs"]
+mod decode;
+
+pub(crate) fn valid(bytes: &[u8]) -> bool {
+    decode::validate(bytes)
+}
+
+/// Read a JSON document with the established last-member-wins object semantics.
+pub(crate) fn parse(bytes: &[u8]) -> Result<RequestJson, serde_json::Error> {
+    decode::parse(bytes, true)
+}
+
+pub(crate) fn parse_str(text: &str) -> Result<RequestJson, serde_json::Error> {
+    parse(text.as_bytes())
+}
+
+/// Decode owned wire JSON without leaving decoded strings in serde_json's private scratch.
+pub(crate) fn from_slice<T: serde::de::DeserializeOwned>(
+    bytes: &[u8],
+) -> Result<T, serde_json::Error> {
+    let document = decode::parse(bytes, false)?;
+    T::deserialize(&*document)
+}
+
+pub(crate) fn from_str<T: serde::de::DeserializeOwned>(text: &str) -> Result<T, serde_json::Error> {
+    from_slice(text.as_bytes())
+}
+
 /// A parsed request and every clone of it wipe their strings when their owner ends.
 #[derive(Clone, Default, serde::Serialize)]
 #[serde(transparent)]
@@ -168,7 +196,7 @@ impl DerefMut for RequestJson {
     }
 }
 
-fn wipe_string(value: &mut String) {
+pub(crate) fn wipe_string(value: &mut String) {
     #[cfg(test)]
     crate::tests::request_custody_probe::observe(false, value);
 
@@ -199,23 +227,5 @@ impl Drop for RequestJson {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::RequestJson;
-
-    #[test]
-    fn malformed_later_array_item_wipes_the_initialized_prior_value() {
-        crate::tests::request_custody_probe::assert_wiped(|| {
-            let input = br#"["callback-credential-custody-canary",{"unfinished":]"#;
-            assert!(serde_json::from_slice::<RequestJson>(input).is_err());
-        });
-    }
-
-    #[test]
-    fn duplicate_object_member_wipes_its_superseded_value() {
-        crate::tests::request_custody_probe::assert_wiped(|| {
-            let input = br#"{"credential":"callback-credential-custody-canary","credential":"replacement"}"#;
-            let document: RequestJson = serde_json::from_slice(input).unwrap();
-            assert_eq!(document["credential"], "replacement");
-        });
-    }
-}
+#[path = "tests/request_json_tests.rs"]
+mod tests;

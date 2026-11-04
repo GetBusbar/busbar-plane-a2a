@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! The door's declarations pass the dispatcher's own validators, and `read_agents_section` judges a
+//! section with the grammar's words.
 
 use super::*;
 use busbar_contract::abi::plane::check::{
@@ -82,6 +83,8 @@ fn the_tail_passes_the_dispatchers_check() {
 }
 
 /// RED before ruling B1: the door declared no chain, so the host framed none. The task-event kind
+/// is declared chained, length-prefixed with its scope digested (B1 ruling 1, coordinator
+/// 2026-10-07), and passes the loader's check.
 #[test]
 fn the_tail_declares_the_task_chain() {
     assert_eq!(TAIL.record_chains_len(), 1);
@@ -159,6 +162,7 @@ fn a_generation_with_no_readable_public_base_claims_nothing() {
 }
 
 /// Ported from busbar-a2a plane_tests.rs::a_section_carrying_only_the_reserved_keys_is_still_no_plane
+/// (its plane half; the mounted surface is the root's `agent_door` cell of the same name).
 #[test]
 fn a_section_carrying_only_the_reserved_keys_states_no_route_and_no_card() {
     use busbar_contract::abi::plane::ROUTE_PUBLIC;
@@ -374,6 +378,7 @@ fn every_route_is_one_line_of_the_dialect_in_mount_order() {
 }
 
 /// THE DEALT VALIDATE BLOB: the boot's deal hands `{agents: <section>}`, which is unwrapped to the
+/// section; a bare section passes through as it is.
 #[test]
 fn a_dealt_validate_blob_is_unwrapped_to_its_section() {
     let dealt =
@@ -390,6 +395,7 @@ fn a_dealt_validate_blob_is_unwrapped_to_its_section() {
 }
 
 /// Two constants, and both are wire-visible: the credential kind appears on a stored credential row
+/// and the scope kind on every scope reference an operator writes.
 #[test]
 fn the_credential_kind_and_the_scope_kind_are_the_spellings_the_rest_of_the_tree_uses() {
     assert_eq!(
@@ -400,6 +406,9 @@ fn the_credential_kind_and_the_scope_kind_are_the_spellings_the_rest_of_the_tree
     assert_eq!(s(TAIL.scope), "agent");
 }
 /// THE AGENT FEE (the engine's `agents.fees`): the door counts `per_request` and only it, so the
+/// kernel's one rule over declared fee units validates `agents.fees.per_request` and refuses
+/// `agents.fees.per_session` naming `per_request` as the counted list; the fee unit is a billable
+/// class at the index the door reports it under, once per served unit.
 #[test]
 fn the_door_counts_the_per_request_fee_and_never_a_per_session_one() {
     let same = |a: AbiStr, b: &str| a.ptr() == b.as_ptr() && a.len() == b.len();
@@ -413,6 +422,9 @@ fn the_door_counts_the_per_request_fee_and_never_a_per_session_one() {
     ));
 }
 /// Ported from `busbar-a2a` `creds_tests::the_callers_credential_has_no_path_to_a_delegate`, its
+/// config half: the per-entry value that would mean "forward the caller's credential"
+/// (`upstream_credentials: passthrough`) is refused at validation in the plane's own sentence, and
+/// `own` is accepted, so the refusal is about the value and not the key.
 #[test]
 fn the_callers_credential_has_no_path_to_a_delegate() {
     let def = |extra: serde_json::Value| -> crate::a2a::config::AgentDefCfg {
@@ -590,7 +602,7 @@ fn the_statement_declares_the_push_queue_counters() {
         (FAMILY_PUSH_UNFILED, METRIC_PUSH_UNFILED),
     ] {
         let family = &FAMILIES[index as usize];
-        assert_eq!(family.name.len, name.len(), "{name}");
+        assert_eq!(s(family.name), name, "{name}");
         assert_eq!(
             family.kind,
             busbar_contract::abi::mechanism::door::FAMILY_COUNTER
@@ -647,4 +659,13 @@ fn each_fronted_agent_claims_its_endpoint_with_a_trailing_separator() {
     assert_eq!(agent_slash_target(".."), None);
     assert_eq!(agent_slash_target(""), None);
     assert!(agent_slash_claims(&["a b", "ok"]).len() == 1);
+}
+
+#[test]
+fn malformed_credential_structs_do_not_echo_secret_scalars() {
+    for field in ["upstream_credential", "client_identity"] {
+        let value = serde_json::json!({"planner": {"url":"https://agent.example", "pin":{"mechanism":"unpinned"}, field: "secret-scalar-never-log"}});
+        let error = read_section(&serde_json::to_vec(&value).unwrap()).unwrap_err();
+        assert!(!error.contains("secret-scalar-never-log"));
+    }
 }

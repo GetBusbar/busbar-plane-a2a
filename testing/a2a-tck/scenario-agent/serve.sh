@@ -39,7 +39,9 @@ so there is no a2a-sdk pin -- refusing to serve" >&2
 fi
 
 WORK="${A2A_SCENARIO_AGENT_WORK:-${XDG_CACHE_HOME:-$HOME/.cache}/busbar-a2a/scenario-agent}"
-VENV="$WORK/venv-$CONTROL_PY_VERSION"
+requirements="../../conformance/requirements-py.txt"
+requirements_hash="$(shasum -a 256 "$requirements" | awk '{print $1}')"
+VENV="$WORK/venv-$CONTROL_PY_VERSION-$requirements_hash"
 mkdir -p "$WORK" 2>/dev/null || {
   echo "could not create the scenario agent's work directory $WORK -- refusing to serve" >&2
   exit 2
@@ -63,8 +65,7 @@ discard () {
 if [ ! -x "$VENV/bin/python" ]; then
   echo "installing a2a-sdk ${CONTROL_PY_VERSION} into $VENV" >&2
   python3 -m venv "$VENV" \
-    && "$VENV/bin/pip" -q install --upgrade pip \
-    && "$VENV/bin/pip" -q install "a2a-sdk[http-server]==${CONTROL_PY_VERSION}" uvicorn starlette \
+    && "$VENV/bin/pip" -q install --require-hashes -r "$requirements" \
     || {
       note="$(discard "$VENV" virtualenv)"
       echo "could not install a2a-sdk ${CONTROL_PY_VERSION} into $VENV; $note -- refusing to serve" >&2

@@ -106,10 +106,6 @@ pub(crate) mod encoding {
             value.wipe();
             value.clear();
             super::bytes::merge(wire, &mut incoming, buf, ctx)?;
-            if std::str::from_utf8(&incoming).is_err() {
-                return Err(MergeFailure::InvalidUtf8.into_error());
-            }
-
             match String::from_utf8(incoming.take()) {
                 Ok(text) => {
                     *value = text;

@@ -13,8 +13,9 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from a2aht import cli, jcs, runner, spec, tests_adversarial, tests_card, tests_client, tests_core, tests_hostile, transport
-from a2aht.model import NotConfigured
+from a2aht import cli, deviations, jcs, runner, spec, tests_adversarial, tests_card, tests_client, tests_core, tests_hostile, transport
+from a2aht import target as target_module
+from a2aht.model import Context as RecordingContext, NotConfigured
 from a2aht.target import Call, Target
 from a2aht.fakes import FakePeer
 
@@ -34,6 +35,27 @@ class Context:
 
 
 class ProtocolRegressions(unittest.TestCase):
+    def test_capability_refusal_requires_the_protocol_error(self):
+        ctx = Context()
+        call = SimpleNamespace(error={"code": -32603}, error_code=-32603,
+                               error_name=None, binding="JSONRPC", http=SimpleNamespace(status=200))
+        ctx.target = SimpleNamespace(capability=lambda name: False, call=lambda *a, **k: call)
+        with self.assertRaises(AssertionError):
+            tests_core.test_extended_card(ctx)
+        call.error_code = spec.ERROR_MAP["UnsupportedOperationError"][0]
+        tests_core.test_extended_card(ctx)
+
+    def test_declared_legacy_version_cannot_refuse_missing_header(self):
+        ctx = Context()
+        call = SimpleNamespace(error={"code": -32009}, error_code=-32009,
+                               error_name=None, binding="JSONRPC", http=SimpleNamespace(status=200))
+        ctx.target = SimpleNamespace(interfaces=lambda: [{"protocolVersion": "0.3"}],
+                                     call=lambda *a, **k: call)
+        with self.assertRaises(AssertionError):
+            tests_core.test_absent_version_header(ctx)
+        ctx.target.interfaces = lambda: [{"protocolVersion": "1.0"}]
+        tests_core.test_absent_version_header(ctx)
+
     def test_failed_discovery_does_not_break_report_metadata(self):
         target = Target(endpoint="http://fixture.invalid")
         target._card = []  # reachable JSON, but not a usable AgentCard
@@ -543,6 +565,153 @@ Path(os.environ["HEADER_CAPTURE"]).write_text(json.dumps({
             tests_adversarial.test_deep_nesting(ctx)
         self.assertEqual(len(captured), 1)
         self.assertEqual(captured[0].count('{"n":'), 2000)
+
+
+class HarnessAuditRegressions(unittest.TestCase):
+    """Each test fails against the harness as it was before the matching fix."""
+
+    def test_jsonrpc_answer_without_a_response_object_is_an_error(self):
+        # F243: a dead agent (synthetic 599) or an HTML/empty 401 must never read as success.
+        for status, body in ((599, b"connection failed"), (401, b""), (200, b'{"detail": "x"}')):
+            call = Call.from_jsonrpc(transport.HttpResponse(status, [], body, 0.0),
+                                     "SendMessage", {})
+            self.assertIsNotNone(call.error, status)
+            self.assertEqual(call.error_code, status)
+            self.assertFalse(call.ok)
+
+    def test_launched_target_output_is_never_an_unread_pipe(self):
+        # F244: a pipe nobody reads blocks a target that logs per request.
+        seen = {}
+        def popen(*args, **kwargs):
+            seen.update(kwargs)
+            return SimpleNamespace(pid=os.getpid(), stdout=None)
+        target = Target(launch=["fixture"], port=1)
+        with patch.object(target_module.subprocess, "Popen", popen), \
+             patch.object(target_module, "owns_listener", return_value=True), \
+             patch.object(target_module.os, "waitid", return_value=None):
+            target.start()
+        try:
+            self.assertIsNot(seen["stdout"], subprocess.PIPE)
+            self.assertTrue(hasattr(seen["stdout"], "fileno"))
+        finally:
+            target._proc = None
+            target._log.close()
+
+    def test_unknown_field_fault_is_caught_on_jsonrpc(self):
+        # F245: -32603 inside an HTTP 200 is a fault on the JSON-RPC binding too.
+        answer = transport.HttpResponse(
+            200, [], b'{"jsonrpc": "2.0", "id": 1, "error": {"code": -32603}}', 0.0)
+        ctx = Context()
+        ctx.target = SimpleNamespace(
+            call=lambda *a: Call.from_jsonrpc(answer, "SendMessage", {}))
+        with self.assertRaises(AssertionError):
+            tests_adversarial.test_unknown_fields(ctx)
+
+    def test_stream_abort_finds_the_task_from_a_status_update(self):
+        # F251: a stream whose first frame is a status update still names its task.
+        asked = []
+        ctx = Context()
+        ctx.target = SimpleNamespace(
+            capability=lambda name: True,
+            stream=lambda *a, **k: SimpleNamespace(
+                events=[{"statusUpdate": {"taskId": "t-1", "status": {}}}]),
+            call=lambda method, params: asked.append((method, params))
+                 or SimpleNamespace(error=None, http=None))
+        tests_adversarial.test_client_disconnect_midstream(ctx)
+        self.assertIn(("GetTask", {"id": "t-1"}), asked)
+
+    def test_patch_version_on_any_interface_is_observed(self):
+        # F249: the observation must not be overwritten by a later interface.
+        ctx = RecordingContext(SimpleNamespace(interfaces=lambda: [
+            {"protocolVersion": "1.0.1"}, {"protocolVersion": "1.0"}]), {})
+        tests_card.test_card_version_shape(ctx)
+        self.assertIs(ctx.observations["protocol_version_has_patch"], True)
+
+    def test_required_profile_must_name_registered_tests(self):
+        # F252: a renamed required row must not silently leave the INAPPLICABLE-is-red rule.
+        with patch.object(runner, "REQUIRED_PROFILE",
+                          runner.REQUIRED_PROFILE | {"core.renamed_away"}):
+            with self.assertRaises(RuntimeError) as raised:
+                runner.load_tests()
+        self.assertIn("core.renamed_away", str(raised.exception))
+
+    def test_stall_probe_reply_without_close_is_not_a_close(self):
+        # F260: a peer that answers but keeps the connection open has not closed it.
+        import socket
+        class Socket:
+            replies = [b"HTTP/1.1 408 Request Timeout\r\n\r\n"]
+            def sendall(self, _):
+                pass
+            def settimeout(self, _):
+                pass
+            def recv(self, _):
+                if self.replies:
+                    return self.replies.pop()
+                raise socket.timeout()
+            def close(self):
+                pass
+        with patch.object(transport, "_connect", return_value=(Socket(), "h", "/")):
+            self.assertIsNone(transport.raw_connect_and_stall("http://h/", 0.5))
+
+    def _signature(self, header, signature):
+        protected = jcs.b64url_encode(json.dumps(header).encode("utf-8"))
+        return {"protected": protected, "signature": signature}
+
+    def test_malformed_signature_is_reported_not_raised(self):
+        # F301: a hostile card's signature text is a verdict, never a crash.
+        key = {"kty": "OKP", "crv": "Ed25519", "kid": "k", "x": jcs.b64url_encode(b"\0" * 32)}
+        out = jcs.verify_jws(self._signature({"alg": "EdDSA", "kid": "k"}, "A"), "{}", [key])
+        self.assertIs(out["verified"], False)
+
+    def test_jku_is_fetched_only_over_http(self):
+        # F302: a card-chosen jku must not read local files.
+        signature = self._signature({"alg": "EdDSA", "kid": "k", "jku": "file:///etc/hosts"}, "AA")
+        with patch.object(jcs.urllib.request, "urlopen",
+                          side_effect=AssertionError("jku fetched")) as urlopen:
+            out = jcs.verify_jws(signature, "{}")
+        urlopen.assert_not_called()
+        self.assertIs(out["verified"], False)
+
+    def test_malformed_jku_and_key_set_are_reported_not_raised(self):
+        signature = self._signature({"alg": "ES256", "kid": "k", "jku": "https://["}, "AA")
+        self.assertIs(jcs.verify_jws(signature, "{}")["verified"], False)
+        signature = self._signature({"alg": "ES256", "kid": "k", "jku": "https://keys.example/"}, "AA")
+        from io import BytesIO
+        with patch.object(jcs.urllib.request, "urlopen", return_value=BytesIO(b'{"keys":123}')):
+            self.assertIsNot(jcs.verify_jws(signature, "{}")["verified"], True)
+        self.assertIs(jcs.verify_jws(signature, "{}", 123)["verified"], False)
+
+    def _deviation(self, outcome, evidence):
+        record = {"test": "core.fixture", "clause": "SPEC 3.1.3", "evidence": evidence,
+                  "judgement": "fixture", "verdict": "real-defect-in-control"}
+        report = {"results": [{"id": "core.fixture", "outcome": outcome, "clause": "SPEC 3.1.3",
+                               "detail": "the control answered the fixture wrongly"}]}
+        return deviations.apply(report, {"deviations": [record]})
+
+    def test_wrapped_deviation_evidence_still_matches(self):
+        # F303: load() normalises evidence whitespace, so apply() must match it the same way.
+        report, problems = self._deviation("FAIL", "the control  answered\n the fixture wrongly")
+        self.assertEqual(report["results"][0]["outcome"], deviations.BASELINED, problems)
+
+    def test_unmeasured_recorded_test_is_never_called_fixed(self):
+        # F304: an INAPPLICABLE run of a recorded test says nothing about the deviation.
+        report, problems = self._deviation("INAPPLICABLE", "the control answered the fixture")
+        self.assertNotEqual(report["results"][0]["outcome"], deviations.DEVIATION_FIXED)
+        self.assertTrue(runner.is_bad(report["results"][0]))
+        self.assertEqual([p["kind"] for p in problems], ["DEVIATION_NOT_MEASURED"])
+
+    def test_preflight_error_stops_the_launched_target(self):
+        # F305: a raising preflight must not leave a --launch subject running.
+        stopped = []
+        target = SimpleNamespace(start=lambda: None, stop=lambda: stopped.append(True))
+        test = SimpleNamespace(role="server", tier="every-commit")
+        with patch.object(cli, "build_target", return_value=target), \
+             patch.object(cli, "_preflight", side_effect=OSError("card fetch blew up")), \
+             patch.object(runner, "load_tests", return_value=[test]), \
+             patch.object(runner, "select", return_value=[test]):
+            with self.assertRaises(OSError):
+                cli.main(["run", "--endpoint", "http://fixture.invalid"])
+        self.assertEqual(stopped, [True])
 
 
 if __name__ == "__main__":

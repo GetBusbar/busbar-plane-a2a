@@ -11,7 +11,7 @@
 //!
 //! 0. An `Origin` that is neither loopback nor listed is `403` + `-32004`, judged first, by the
 //!    contract's one rule ([`busbar_contract::jsonrpc::origin_admitted`]); this plane lists none.
-//! 1. A declared `Content-Type` that is not a JSON media type is `415` + `-32005`, judged BEFORE the
+//! 1. A declared `Content-Type` that is not a JSON media type is `400` + `-32005`, judged BEFORE the
 //!    body is parsed, so a header fault is never answered as a body fault. No `Content-Type` at all
 //!    is not refused here.
 //! 2. An `A2A-Version` this endpoint does not speak is `400` + `-32009`. Absent or empty is `0.3`;
@@ -79,11 +79,11 @@ pub const CODE_METHOD_NOT_FOUND: i64 = -32601;
 /// `-32603`: busbar failed.
 pub const CODE_INTERNAL: i64 = -32603;
 
-/// The status every refusal before a method is read answers with, but the media-type one.
+/// The status of malformed requests, including unsupported media types under A2A v1.0.
 pub const STATUS_BAD_REQUEST: u32 = 400;
 
 /// The status of a media type this endpoint does not read.
-pub const STATUS_UNSUPPORTED_MEDIA_TYPE: u32 = 415;
+pub const STATUS_UNSUPPORTED_MEDIA_TYPE: u32 = STATUS_BAD_REQUEST;
 
 /// The status of an `Origin` this plane does not admit.
 pub const STATUS_FORBIDDEN: u32 = 403;
@@ -140,7 +140,8 @@ impl AgentRefusal {
         let mut head = head.splitn(3, ' ');
         let status = head.next()?.parse().ok()?;
         let code = head.next()?.parse().ok()?;
-        let id: crate::request_json::RequestJson = serde_json::from_str(head.next()?).ok()?;
+        let id: crate::request_json::RequestJson =
+            crate::request_json::from_str(head.next()?).ok()?;
         Some(AgentRefusal::new(
             status,
             (!id.is_null()).then(|| id.into_value()),
@@ -181,6 +182,8 @@ impl AgentRefusal {
 }
 
 /// A JSON-RPC `error` object at `http_status` as the AIP-193 error document the HTTP+JSON line
+/// answers: the status name is the error code's when it has one (the catch-all `-32004` only at 400
+/// or 501), else the HTTP status's; `details` is the error's `data` array, only when there is one.
 #[must_use]
 pub fn aip193(http_status: u32, error: &Value) -> Value {
     let message = error
@@ -206,6 +209,7 @@ pub fn aip193(http_status: u32, error: &Value) -> Value {
 }
 
 /// The `ErrorInfo` reason an A2A-defined code carries ([`crate::ERRORS`]); JSON-RPC's own codes
+/// carry none.
 #[must_use]
 pub fn reason_of(code: i64) -> Option<&'static str> {
     crate::ERRORS
@@ -215,6 +219,7 @@ pub fn reason_of(code: i64) -> Option<&'static str> {
 }
 
 /// The canonical status name a known code maps to: the `gRPC Status` column of A2A section 5.4,
+/// which AIP-193 puts in `error.status`; `None` for a code A2A and JSON-RPC do not define.
 #[must_use]
 pub fn status_name_of(code: i64) -> Option<&'static str> {
     Some(match code {
@@ -299,6 +304,7 @@ impl AgentDisposition {
     }
 
     /// The operation class an admitted arrival is a unit of: its row's, or for a method the
+    /// vocabulary does not list, the class it is relayed as ([`crate::ops::relay_class`]).
     #[must_use]
     pub fn op_class(&self) -> Option<busbar_contract::ids::OpClassId> {
         match self {
@@ -313,12 +319,16 @@ impl AgentDisposition {
 }
 
 /// Whether a declared media type is one this endpoint reads: `application/json`, or any RFC 6839
+/// `+json` type.
 #[must_use]
 pub fn is_json_media_type(media: &str) -> bool {
     media.eq_ignore_ascii_case(JSON_MEDIA_TYPE)
-        || media
-            .rsplit_once('+')
-            .is_some_and(|(_, suffix)| suffix.eq_ignore_ascii_case("json"))
+        || media.split_once('/').is_some_and(|(kind, subtype)| {
+            !kind.is_empty()
+                && subtype.rsplit_once('+').is_some_and(|(base, suffix)| {
+                    !base.is_empty() && suffix.eq_ignore_ascii_case("json")
+                })
+        })
 }
 
 /// The asked version at `Major.Minor`.
@@ -366,6 +376,7 @@ pub fn head_refusal<'a>(
 }
 
 /// The `Origin` refusal: a request driven from a browser origin that is neither loopback nor one
+/// this plane lists (it lists none).
 pub fn origin_refusal<'a>(field: impl Fn(&str) -> Option<&'a str>) -> Result<(), AgentRefusal> {
     match field(H_ORIGIN) {
         Some(origin) if !busbar_contract::jsonrpc::origin_admitted(origin, &[]) => Err(
@@ -401,6 +412,8 @@ pub(crate) fn read_head_field<'a>(
 }
 
 /// DECIDE ONE ARRIVAL on the JSON-RPC line, and hand back the body as the JSON it was read as
+/// (`None` when the head was refused before it, or it is not JSON): the door keeps that value as
+/// the unit's request, so the body is parsed once.
 pub fn decide_and_read<'a>(
     body: &[u8],
     field: impl Fn(&str) -> Option<&'a str> + Copy,
@@ -412,7 +425,8 @@ pub fn decide_and_read<'a>(
         Ok(v) => v,
         Err(refusal) => return (AgentDisposition::Refused(refusal), None),
     };
-    let Ok(value) = serde_json::from_slice::<crate::request_json::RequestJson>(body) else {
+    let Ok(value) = crate::request_json::from_slice::<crate::request_json::RequestJson>(body)
+    else {
         let refusal = AgentRefusal::unnamed(STATUS_BAD_REQUEST, CODE_PARSE, NOT_JSON);
         return (AgentDisposition::Refused(refusal), None);
     };
@@ -476,6 +490,7 @@ pub enum Dialect {
 }
 
 /// Render `refusal` in `dialect`. `own_status` is whether the status is the plane's own (a refused
+/// arrival's) rather than the kernel's.
 #[must_use]
 pub fn render(dialect: Dialect, refusal: &AgentRefusal, own_status: bool) -> Rendered {
     let doc = match dialect {
@@ -490,6 +505,7 @@ pub fn render(dialect: Dialect, refusal: &AgentRefusal, own_status: bool) -> Ren
 }
 
 /// Render `refusal` in `dialect`, naming the task it is about (`task_id`): its `ResourceInfo` after the `ErrorInfo` in `error.data`, which the
+/// HTTP+JSON line carries as `details`.
 #[must_use]
 pub fn render_about_task(dialect: Dialect, refusal: &AgentRefusal, task_id: &str) -> Rendered {
     let doc = crate::task_identity::about_task(refusal, task_id);
@@ -508,12 +524,14 @@ pub fn render_about_task(dialect: Dialect, refusal: &AgentRefusal, task_id: &str
 pub const BUDGET_SPENT: &str = "this key's budget is spent";
 
 /// A refusal the kernel made (a key not live, a scope not held, a budget spent, a gate's no), as
+/// the plane words it: `-32004` with the kernel's text and no id, at the kernel's status.
 #[must_use]
 pub fn kernel_refusal(status: u32, text: &str) -> AgentRefusal {
     AgentRefusal::unnamed(status, CODE_UNSUPPORTED_OPERATION, text)
 }
 
 /// THE CLASS-TO-WIRE TABLE (the P-item "refusal-reason collapse"): the JSON-RPC code a kernel
+/// refusal of `class` is rendered under.
 #[must_use]
 pub const fn class_code(class: busbar_contract::abi::plane::RefusalClass) -> i64 {
     use busbar_contract::abi::plane::RefusalClass as C;
@@ -551,7 +569,7 @@ pub fn not_granted_sentence(resource: &str) -> String {
 /// The status a unit addressed to an agent this deployment does not front answers with.
 pub const STATUS_NO_SUCH_AGENT: u32 = 404;
 
-/// The unknown agent's refusal: `404`, `-32004`, no id,
+/// The unknown agent's refusal: `404`, `-32004`, no id, "no fronted agent `<agent>`".
 #[must_use]
 pub fn no_such_agent(agent: &str) -> AgentRefusal {
     kernel_refusal(STATUS_NO_SUCH_AGENT, &format!("no fronted agent `{agent}`"))
@@ -561,15 +579,19 @@ pub fn no_such_agent(agent: &str) -> AgentRefusal {
 pub const STATUS_NOT_LIVE: u32 = 401;
 
 /// The caller whose key is no longer live: `401`, `-32004`, no id. It says `this key` rather than
+/// the key's id: a plane never sees the raw principal, as [`not_granted_sentence`] words it.
 #[must_use]
 pub fn not_live() -> AgentRefusal {
     kernel_refusal(STATUS_NOT_LIVE, "this key is not live")
 }
 
 /// The status an arrival is refused with while the instance holds as many live units as it keeps
+/// ([`crate::plane_door::MAX_UNITS`]): the caller may try again once one ends.
 pub const STATUS_TOO_MANY_REQUESTS: u32 = 429;
 
 /// The full instance's refusal: every unit the instance keeps is live work, and none is ever pushed
+/// out for a new one (admission bounds live work, nothing evicts it), so the arrival is refused
+/// with the busy class's code (`-32004`, [`class_code`]), no id, at `429`.
 #[must_use]
 pub fn units_full() -> AgentRefusal {
     kernel_refusal(
@@ -582,6 +604,8 @@ pub fn units_full() -> AgentRefusal {
 pub const STATUS_UNAVAILABLE: u32 = 503;
 
 /// The open breaker's refusal: the agent `agent` the unit addressed is not dialled while its breaker is open,
+/// and the caller is told the seconds until it may be, `retry_after_s` (the same figure the
+/// `Retry-After` field carries); `503`, `-32004`, echoing the request id `id`.
 #[must_use]
 pub fn breaker_refusal(agent: &str, id: Option<Value>, retry_after_s: u32) -> AgentRefusal {
     AgentRefusal::new(
@@ -596,7 +620,9 @@ pub fn breaker_refusal(agent: &str, id: Option<Value>, retry_after_s: u32) -> Ag
     )
 }
 
-/// The pooled agent's card read, refused: a pool's members are
+/// The pooled agent's card read, refused: a pool's members are distinct backends that may each
+/// present a different extended card, so there is no one card to relay; `400`, `-32004`, echoing
+/// the request id `id`.
 #[must_use]
 pub fn pooled_card(id: Value) -> AgentRefusal {
     AgentRefusal::new(
@@ -609,7 +635,10 @@ pub fn pooled_card(id: Value) -> AgentRefusal {
     )
 }
 
-/// The pinned hop's grant refusal: a
+/// The pinned hop's grant refusal: a request about a task held by a pool member other than the one
+/// addressed is judged on that member's grant, `resource` (`agent:<id>`), and one the caller's key
+/// does not reach (or a key that is no longer live) is refused before the socket: `403`, `-32004`,
+/// echoing the request id `id`.
 #[must_use]
 pub fn pinned_ungranted(id: Value, resource: &str, live: bool) -> AgentRefusal {
     let message = if live {
@@ -630,6 +659,7 @@ pub fn pinned_ungranted(id: Value, resource: &str, live: bool) -> AgentRefusal {
 }
 
 /// The walk's words for a pool member not interchangeable with its primary: their approved card fingerprints differ (or one has
+/// none), so a request is not moved between them.
 #[must_use]
 pub fn not_interchangeable(
     pool: &str,
@@ -648,7 +678,8 @@ pub fn not_interchangeable(
 /// `-32602`: the request's parameters cannot be served as given.
 pub const CODE_INVALID_PARAMS: i64 = -32602;
 
-/// The unaddressed unit's refusal: `reachable` is
+/// The unaddressed unit's refusal: `reachable` is the agents the caller's grant reaches, joined by
+/// [`busbar_contract::abi::plane::ROUTE_SCOPE_SEPARATOR`] (empty = none).
 #[must_use]
 pub fn scope_refusal(reachable: &str) -> AgentRefusal {
     let ids: Vec<&str> = reachable

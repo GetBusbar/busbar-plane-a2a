@@ -2,6 +2,13 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! The outbound binding: which of A2A's bindings a hop speaks to an agent, read off the agent's
+//! held card (JSON-RPC when no card is held), and the HTTP+JSON framing the relay composes in
+//! that binding.
+//!
+//! The card says HOW, the operator's `url:` says WHERE: a binding's own URL on the card is never
+//! dialled. All three of A2A's bindings are spoken (JSON-RPC, REST and gRPC are
+//! its lines): gRPC is dialled over the door's own gRPC need, at the operator's origin, its request
+//! the rpc's message ([`crate::framed::request_message`]).
 
 use serde_json::Value;
 use zeroize::Zeroizing;
@@ -51,11 +58,15 @@ impl Binding {
 /// The lookup: the binding a card word names, if the plane frames it: an unknown word is `None`, and the hop is refused naming it.
 #[must_use]
 pub fn speakable(word: &str) -> Option<Binding> {
-    match word.trim().to_ascii_uppercase().as_str() {
-        BINDING_JSONRPC => Some(Binding::JsonRpc),
-        BINDING_HTTP_JSON => Some(Binding::HttpJson),
-        BINDING_GRPC => Some(Binding::Grpc),
-        _ => None,
+    let word = word.trim();
+    if word.eq_ignore_ascii_case(BINDING_JSONRPC) {
+        Some(Binding::JsonRpc)
+    } else if word.eq_ignore_ascii_case(BINDING_HTTP_JSON) {
+        Some(Binding::HttpJson)
+    } else if word.eq_ignore_ascii_case(BINDING_GRPC) {
+        Some(Binding::Grpc)
+    } else {
+        None
     }
 }
 
@@ -68,27 +79,41 @@ pub struct Selected<'a> {
 }
 
 /// Select HOW the configured endpoint speaks without changing WHERE the operator sends it.
+/// Matching advertised interfaces take precedence. If the configured endpoint is an operator
+/// alias/private route and none matches, retain the primary HOW: v0.3's preferred transport
+/// (JSONRPC when unstated), or v1.0's first speakable interface as before. Never choose a v0.3
+/// additional transport merely because a different endpoint offers it.
 #[must_use]
 pub fn select<'a>(card: Option<&Value>, configured_url: &'a str) -> Selected<'a> {
+    let configured = url::Url::parse(configured_url).ok();
+    let endpoint_matches = |advertised: &str| {
+        configured.as_ref().is_some_and(|configured| {
+            !advertised.is_empty()
+                && configured
+                    .join(advertised)
+                    .is_ok_and(|resolved| resolved == *configured)
+        })
+    };
     let word = match card {
         Some(card) => match card.get("supportedInterfaces").and_then(Value::as_array) {
             Some(interfaces) => {
-                let words: Vec<&str> = interfaces
-                    .iter()
-                    .filter_map(|i| i.get("protocolBinding").and_then(Value::as_str))
-                    .filter(|word| !word.trim().is_empty())
-                    .collect();
+                let words = || {
+                    interfaces
+                        .iter()
+                        .filter_map(|i| i.get("protocolBinding").and_then(Value::as_str))
+                        .filter(|word| !word.trim().is_empty())
+                };
                 interfaces
                     .iter()
                     .find_map(|interface| {
                         let word = interface.get("protocolBinding")?.as_str()?;
                         (speakable(word).is_some()
-                            && endpoint_matches(configured_url, interface.get("url")?.as_str()?))
+                            && endpoint_matches(interface.get("url")?.as_str()?))
                         .then_some(word)
                     })
-                    .or_else(|| words.iter().copied().find(|word| speakable(word).is_some()))
-                    .or_else(|| words.first().copied())
-                    .unwrap_or(BINDING_JSONRPC)
+                    .or_else(|| words().find(|word| speakable(word).is_some()))
+                    .or_else(|| words().next())
+                    .unwrap_or("INVALID")
                     .to_string()
             }
             None => {
@@ -99,7 +124,7 @@ pub fn select<'a>(card: Option<&Value>, configured_url: &'a str) -> Selected<'a>
                 let primary_matches = card
                     .get("url")
                     .and_then(Value::as_str)
-                    .is_none_or(|url| endpoint_matches(configured_url, url));
+                    .is_none_or(|url| endpoint_matches(url));
                 if primary_matches && speakable(preferred).is_some() {
                     preferred.to_string()
                 } else {
@@ -110,10 +135,7 @@ pub fn select<'a>(card: Option<&Value>, configured_url: &'a str) -> Selected<'a>
                         .find_map(|interface| {
                             let word = interface.get("transport")?.as_str()?;
                             (speakable(word).is_some()
-                                && endpoint_matches(
-                                    configured_url,
-                                    interface.get("url")?.as_str()?,
-                                ))
+                                && endpoint_matches(interface.get("url")?.as_str()?))
                             .then_some(word)
                         })
                         .unwrap_or(preferred)
@@ -129,31 +151,8 @@ pub fn select<'a>(card: Option<&Value>, configured_url: &'a str) -> Selected<'a>
     }
 }
 
-/// Compare resolved URL references using the existing URL parser alone. Query order, path
-fn endpoint_matches(configured_url: &str, advertised: &str) -> bool {
-    if advertised.is_empty() {
-        return false;
-    }
-    let Ok(configured) = url::Url::parse(configured_url) else {
-        return false;
-    };
-    configured
-        .join(advertised)
-        .is_ok_and(|resolved| resolved == configured)
-}
-
-/// The binding at the card's primary endpoint. Consumers with an operator endpoint use
-#[cfg(test)]
-#[must_use]
-pub fn binding_of(card: Option<&Value>) -> String {
-    let endpoint = card
-        .and_then(|card| card.get("url"))
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    select(card, endpoint).word
-}
-
 /// One untrusted word made safe for a caller's error body: at most 48 characters of an
+/// identifier-shaped alphabet, everything else `?`.
 #[must_use]
 pub fn bounded_word(word: &str) -> String {
     const MAX: usize = 48;
@@ -188,6 +187,7 @@ pub fn unframable_text(method: &str, binding: &str) -> String {
 }
 
 /// One operation's place on the HTTP+JSON binding: its request line, the `params` members its query
+/// string carries, and whether what is left of `params` is the body.
 struct RestOp {
     verb: &'static str,
     path: &'static str,
@@ -273,11 +273,16 @@ impl Drop for Framed {
         self.body.as_mut_slice().zeroize();
         #[cfg(test)]
         crate::tests::raw_custody_probe::after_wipe(&self.body);
-        self.body.zeroize();
+        self.body.clear();
     }
 }
 
 /// COMPOSE `method` with `params` on the HTTP+JSON binding under the agent URL `base` (A2A section
+/// 11.3): the path joined onto the operator's, its `{member}`s taken from `params`, the query
+/// members on the query string, what is left as the body.
+///
+/// # Errors
+/// Why the request cannot be carried on this binding (never shown to the caller).
 pub fn compose(base: &str, method: &str, params: &Value) -> Result<Framed, String> {
     let op = rest_op(method).ok_or_else(|| {
         format!("`{method}` is not one of the eleven operations A2A's HTTP+JSON binding defines")
@@ -399,13 +404,17 @@ fn scalar(value: &Value) -> String {
 }
 
 /// Percent-encode one path segment against an allowlist, so no `/`, `?`, `#` or `%` in an id can
+/// re-point the request line ([`compose`] refuses the dot segments, which the allowlist passes).
 fn percent(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     for b in raw.bytes() {
         if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
             out.push(b as char);
         } else {
-            out.push_str(&format!("%{b:02X}"));
+            const HEX: &[u8; 16] = b"0123456789ABCDEF";
+            out.push('%');
+            out.push(char::from(HEX[usize::from(b >> 4)]));
+            out.push(char::from(HEX[usize::from(b & 15)]));
         }
     }
     out

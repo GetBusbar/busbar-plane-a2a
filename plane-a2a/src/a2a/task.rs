@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! THE CANONICAL TASK: busbar's own struct for the unit of work A2A calls a Task, and the state
-
-#![cfg_attr(not(test), allow(dead_code))]
+//! THE CANONICAL TASK: busbar's own struct for the unit of work A2A calls a Task, and the state machine that says which moves are legal.
 
 use serde::{Deserialize, Serialize};
 
@@ -20,7 +18,7 @@ pub enum Direction {
 }
 
 impl Direction {
-    /// The stable wire/store token. Config, admin responses, audit rows and store rows all spell it
+    /// The stable wire/store token.
     pub fn as_str(self) -> &'static str {
         match self {
             Direction::Inbound => "inbound",
@@ -28,7 +26,7 @@ impl Direction {
         }
     }
 
-    /// Parse a stored token. An UNKNOWN token is an error rather than a default, because defaulting
+    /// Parse a stored token.
     pub fn parse(s: &str) -> Result<Self, TaskError> {
         match s {
             "inbound" => Ok(Direction::Inbound),
@@ -77,17 +75,8 @@ impl TaskState {
 
     /// Parse a stored token, refusing an unknown one.
     pub fn parse(s: &str) -> Result<Self, TaskError> {
-        match s {
-            "submitted" => Ok(TaskState::Submitted),
-            "working" => Ok(TaskState::Working),
-            "input-required" => Ok(TaskState::InputRequired),
-            "auth-required" => Ok(TaskState::AuthRequired),
-            "completed" => Ok(TaskState::Completed),
-            "failed" => Ok(TaskState::Failed),
-            "canceled" => Ok(TaskState::Canceled),
-            "rejected" => Ok(TaskState::Rejected),
-            other => Err(TaskError::UnknownState(other.to_string())),
-        }
+        Self::deserialize(serde::de::value::StrDeserializer::<serde::de::value::Error>::new(s))
+            .map_err(|_| TaskError::UnknownState(s.to_string()))
     }
 
     /// A state nothing leaves.
@@ -98,7 +87,7 @@ impl TaskState {
         )
     }
 
-    /// PAUSED awaiting the caller. Distinct from terminal AND from active: an interrupted task
+    /// PAUSED awaiting the caller.
     pub fn is_interrupted(self) -> bool {
         matches!(self, TaskState::InputRequired | TaskState::AuthRequired)
     }
@@ -174,7 +163,7 @@ impl std::fmt::Display for TaskError {
 /// THE CANONICAL TASK ROW. Exactly the fields that decide how an in-flight task RESUMES after a
 /// restart — who it belongs to, what state it is in, which agent it went to, and how far its
 /// artifact stream got — plus the two timestamps the retention policy reads.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Task {
     /// busbar's own task id.
     pub task_id: String,
@@ -203,8 +192,34 @@ pub struct Task {
     pub updated_at: u64,
 }
 
+impl Drop for Task {
+    fn drop(&mut self) {
+        if let Some(callback) = &mut self.push_callback {
+            crate::request_json::wipe_string(callback);
+        }
+    }
+}
+
+impl std::fmt::Debug for Task {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Task")
+            .field("task_id", &self.task_id)
+            .field("context_id", &self.context_id)
+            .field("principal", &self.principal)
+            .field("direction", &self.direction)
+            .field("state", &self.state)
+            .field("agent_id", &self.agent_id)
+            .field("artifact_cursor", &self.artifact_cursor)
+            .field("push_callback", &"[redacted]")
+            .field("push_version", &self.push_version)
+            .field("created_at", &self.created_at)
+            .field("updated_at", &self.updated_at)
+            .finish()
+    }
+}
+
 impl Task {
-    /// A freshly SUBMITTED task. The only constructor that invents a state, so every other path has
+    /// A freshly SUBMITTED task.
     pub fn submitted(
         task_id: impl Into<String>,
         context_id: impl Into<String>,
@@ -242,7 +257,7 @@ impl Task {
         Ok(())
     }
 
-    /// Move to `to`, or refuse. `updated_at` moves only on a move that was ACCEPTED, so the
+    /// Move to `to`, or refuse.
     pub fn transition_to(&mut self, to: TaskState, now: u64) -> Result<(), TaskError> {
         if !self.state.can_transition_to(to) {
             return Err(TaskError::IllegalTransition {
@@ -272,7 +287,7 @@ impl Task {
         }
     }
 
-    /// Read back from the store seam, validating every field that has a closed domain. A row that
+    /// Read back from the store seam, validating every field that has a closed domain.
     pub fn from_row(row: &crate::TaskRow) -> Result<Self, TaskError> {
         let task = Task {
             task_id: row.task_id.clone(),
@@ -296,7 +311,7 @@ impl Task {
     }
 }
 
-/// Map an A2A state transition to its provenance event kind. The neutral core only hash-chains and
+/// Map an A2A state transition to its provenance event kind.
 pub fn event_kind_for_transition(from: TaskState, to: TaskState) -> &'static str {
     use busbar_contract::vocab::{EV_INTERRUPTED, EV_RESUMED, EV_TERMINAL, EV_WORKING};
     match to {
@@ -310,7 +325,7 @@ pub fn event_kind_for_transition(from: TaskState, to: TaskState) -> &'static str
     }
 }
 
-/// THE TRANSITION PLAN the neutral engine applies under its working-set lock. Given the CURRENT
+/// THE TRANSITION PLAN the neutral engine applies under its working-set lock.
 pub fn plan_transition(
     to: TaskState,
     now: u64,
@@ -324,7 +339,7 @@ pub fn plan_transition(
     }
 }
 
-/// The restore-row readability predicate the neutral rehydrate consults. Answers `Ok(())`
+/// Validate that a stored row can restore a canonical task.
 pub fn readable_row(row: &crate::TaskRow) -> Result<(), String> {
     Task::from_row(row).map(|_| ()).map_err(|e| e.to_string())
 }

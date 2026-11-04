@@ -26,7 +26,7 @@ import urllib.parse
 
 from .model import (a2a_test, ROLE_CLIENT, ROLE_SEAM, PULL_REQUEST,
                     PRE_RELEASE, NEEDS_FAKE_PEER, NEEDS_REAL_PEER,
-                    Inapplicable)
+                    Inapplicable, NotConfigured)
 from . import spec
 from .fakes import Behaviour, FakePeer
 
@@ -407,6 +407,6 @@ def test_seam_relay(ctx):
             raise Inapplicable(
                 "the drive command created no task on the downstream peer, so "
                 "there is no seam to inspect")
-        raise Inapplicable(
+        raise NotConfigured(
             "the generic drive exposes downstream traffic but no correlated upstream response; "
             "an unrelated SendMessage cannot establish relay identifier isolation")

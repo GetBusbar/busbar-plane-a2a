@@ -29,7 +29,9 @@ extern "C" fn listed(_: HostCtx, input: *const c_void, out: *mut ServiceOut) -> 
     let full = kind == b"task" && i.prefix.is_empty();
     let pending = {
         let mut script = SCRIPT.lock().unwrap_or_else(PoisonError::into_inner);
-        let s = script.as_mut().unwrap();
+        let Some(s) = script.as_mut() else {
+            return answer(out, Outcome::Failed, 0, 0);
+        };
         if full {
             s.restore_tickets.push(i.head.handle.ticket);
         }
@@ -52,16 +54,20 @@ extern "C" fn signed(_: HostCtx, input: *const c_void, out: *mut ServiceOut) -> 
         unsafe { std::slice::from_raw_parts(i.data.ptr(), i.data.len()) }
     };
     let h = i.head.handle;
-    SCRIPT
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .as_mut()
-        .unwrap()
-        .sign_handles
-        .push(((h.ticket.slot, h.ticket.generation, h.seq), data.to_vec()));
+    {
+        let mut script = SCRIPT.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(script) = script.as_mut() else {
+            return answer(out, Outcome::Failed, 0, 0);
+        };
+        script
+            .sign_handles
+            .push(((h.ticket.slot, h.ticket.generation, h.seq), data.to_vec()));
+    }
     let key = b"busbar-card-test";
     let signature = [7u8; 64];
-    assert!(i.into.cap >= key.len() + signature.len() && i.into.spans_cap >= 1);
+    if i.into.cap < key.len() + signature.len() || i.into.spans_cap < 1 {
+        return answer(out, Outcome::Failed, 0, 0);
+    }
     // SAFETY: the checked capacities cover both writes and the sole result span.
     unsafe {
         std::ptr::copy_nonoverlapping(key.as_ptr(), i.into.buf, key.len());
@@ -89,7 +95,7 @@ extern "C" fn signed(_: HostCtx, input: *const c_void, out: *mut ServiceOut) -> 
     result
 }
 
-fn open_scripted(pend_restore: bool) -> (Door, Reset) {
+fn open_scripted(pend_restore: bool) -> (Reset, Door) {
     *SCRIPT.lock().unwrap_or_else(PoisonError::into_inner) = Some(Script {
         pend_restore,
         ..Script::default()
@@ -123,7 +129,7 @@ fn open_scripted(pend_restore: bool) -> (Door, Reset) {
         )
     };
     assert_eq!(result.outcome(), Outcome::Ready);
-    (Door::new(output.open.instance), Reset(store().clone()))
+    (Reset(store().clone()), Door::new(output.open.instance))
 }
 
 fn piece(
@@ -167,7 +173,7 @@ fn own_and_grpc_extended_cards_retry_after_short_fields_or_arena_without_consumi
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
     for grpc in [false, true] {
         for (fields, arena) in [(0, 16384), (16, 0)] {
-            let (door, _reset) = open_scripted(false);
+            let (_reset, door) = open_scripted(false);
             if grpc {
                 let target = format!("{}/GetExtendedAgentCard", door_facts::SERVICE_PATH);
                 assert_eq!(
@@ -181,7 +187,17 @@ fn own_and_grpc_extended_cards_retry_after_short_fields_or_arena_without_consumi
             let (short, out, body) = piece(&door, 1, b"", fields, arena);
             assert_eq!(short, Outcome::Failed);
             assert!(body.is_empty());
-            assert!(out.fields_needed > 0 || out.arena_needed > 0);
+            if fields == 0 {
+                assert!(
+                    out.fields_needed > 0,
+                    "missing fields must report field capacity"
+                );
+            } else {
+                assert!(
+                    out.arena_needed > 0,
+                    "missing arena must report byte capacity"
+                );
+            }
             let first = SCRIPT
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
@@ -222,7 +238,7 @@ fn cancel_by_unit_or_ticket_releases_a_pending_restore_for_the_next_real_local_v
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
     let body = br#"{"jsonrpc":"2.0","id":7,"method":"tasks/list","params":{}}"#;
     for named in [false, true] {
-        let (door, _reset) = open_scripted(true);
+        let (_reset, door) = open_scripted(true);
         let (ready, status, _) = door.connect("vendor");
         assert_eq!((ready, status), (Outcome::Ready, 200));
         assert_eq!(

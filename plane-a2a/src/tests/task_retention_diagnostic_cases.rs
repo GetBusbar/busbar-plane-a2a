@@ -25,9 +25,6 @@ impl Records for Listing<'_> {
             None => self.desk.list(kind, prefix),
         }
     }
-    fn claim(&mut self, kind: &str, key: &str, ttl_ms: u64) -> Result<bool, Halt> {
-        self.desk.claim(kind, key, ttl_ms)
-    }
     fn observe_chain_life(&mut self, kind: &str, scope: &str) -> Result<Option<Vec<u8>>, Halt> {
         self.desk.observe_chain_life(kind, scope)
     }

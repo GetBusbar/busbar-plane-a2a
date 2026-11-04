@@ -107,8 +107,8 @@ arm_on="$(
     read -r kid tok <<<"$(h2_mint h2-oracle)"
     [ -n "$tok" ] || { echo "mint-failed"; exit 0; }
     bound="$(h2_bind "$tok")"
-    read -r st _ <<<"$(h2_call "$bound" "billing-on-unpriced")"
-    printf "%s %s\n" "$st" "$(h2_usage_field "$kid" spend_cents)"
+    read -r st body <<<"$(h2_call "$bound" "billing-on-unpriced")"
+    printf "%s %s %s\n" "$st" "$(h2_usage_field "$kid" spend_cents)" "$body"
   ' _ "$here" "${WORK_ROOT}/on"
 )"
 
@@ -126,7 +126,7 @@ elif [ "${off_spend:-x}" != "1" ]; then
 fi
 
 # ARM 2 must REFUSE -- at boot or at the call, either is #42-compliant.
-read -r on_status on_spend <<<"$arm_on"
+read -r on_status on_spend on_body <<<"$arm_on"
 case "$arm_on" in
   boot-refused-unpriced)
     : # #77(5): "Unpriced class = BOOT REFUSAL when billing is on". Compliant.
@@ -146,6 +146,15 @@ case "$arm_on" in
       # of mcp item 500).
       failures=$((failures+1))
       detail="${detail}arm 2 (billing ON, class 'bytes' unpriced) answered ${on_status}, which is neither a served 200 nor a refusal (want a 4xx call refusal or a boot refusal, #42/#77(5); 000 is no connection, 5xx is a node failure); "
+    elif [[ "$on_status" =~ ^(401|403|404|429)$ ]]; then
+      # The kernel classes `Unpriced` as Rejected (busbar-contract caps/seat_verdict.rs). 401/403
+      # are the caller's credential or grant, 404 an unrouted agent and 429 a budget: refusals for
+      # an UNRELATED reason that never reached the unpriced-class check, so they prove nothing.
+      failures=$((failures+1))
+      detail="${detail}arm 2 (billing ON, class 'bytes' unpriced) answered ${on_status}, an auth/scope/routing/budget refusal rather than the unpriced-class refusal; "
+    elif ! printf '%s' "$on_body" | grep -qi unpriced; then
+      failures=$((failures+1))
+      detail="${detail}arm 2 refusal does not identify the unpriced class; "
     fi
     ;;
 esac

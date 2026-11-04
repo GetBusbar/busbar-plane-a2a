@@ -46,7 +46,8 @@ Off by default: a document with no `agents:` section states no route.
 - `pools:` (the top-level failover pools whose members are `agents:` registrations): handed to the
   plane under `agents:`, first member the primary.
 - `agent_push:` (the plane's own section, read at open and re-judged at every reload): `ca`, the
-  operator CA (PEM) push callbacks are verified against. Absent = off.
+  operator CA (PEM) trusted when making outbound callback deliveries. When absent, deliveries trust
+  the platform public roots; omitting this section does not disable configured callbacks.
 
 ## Diagnostics
 
@@ -65,6 +66,14 @@ The codes this plane raises (stated in `plane-a2a/declares.json`):
 | `BUSBAR-7025` | `a2a-task-state-unread` | actionable |
 | `BUSBAR-7031` | `a2a-split-record-unread` | actionable |
 | `BUSBAR-7032` | `a2a-split-record-stray-parts` | benign_recurring |
+| `BUSBAR-7040` | `a2a-backend-task-id-unheld` | actionable |
+| `BUSBAR-7041` | `a2a-relay-endpoint-refused` | actionable |
+| `BUSBAR-7042` | `a2a-trust-sighting-unrecorded` | actionable |
+| `BUSBAR-7044` | `a2a-card-record-unread` | actionable |
+| `BUSBAR-7045` | `a2a-hook-rewrite-not-applied` | actionable |
+| `BUSBAR-7046` | `a2a-hook-rewrite-unreadable` | actionable |
+| `BUSBAR-7050` | `a2a-push-check-unavailable` | actionable |
+| `BUSBAR-7051` | `a2a-protocol-version-ignored` | actionable |
 | `BUSBAR-7104` | `plane-sse-frame-not-utf8` | actionable |
 
 ## Build

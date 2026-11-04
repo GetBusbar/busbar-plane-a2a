@@ -177,9 +177,11 @@ def test_all_bindings_driven(ctx):
     role=ROLE_SERVER, tier=PULL_REQUEST,
 )
 def test_card_version_shape(ctx):
-    for iface in ctx.target.interfaces():
-        pv = str(iface.get("protocolVersion", ""))
-        ctx.observe("protocol_version_has_patch", pv.count(".") > 1,
+    versions = [str(iface.get("protocolVersion", ""))
+                for iface in ctx.target.interfaces()]
+    if versions:
+        ctx.observe("protocol_version_has_patch",
+                    any(pv.count(".") > 1 for pv in versions),
                     "SPEC 3.6 recommends omitting patch components (SHOULD NOT); "
                     "this is not a MUST failure. Version-negotiation checks exercise "
                     "the separate MUST to ignore patch components.")

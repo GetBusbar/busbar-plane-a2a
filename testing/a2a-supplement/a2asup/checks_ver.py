@@ -96,6 +96,7 @@ def check_ver_server_001(target: Target) -> Result:
     evidence.append(f"no A2A-Version + {METHODS_0_3['send_message']!r} -> {absent_0_3!r}")
     supports_0_3 = any(".".join(version.split(".")[:2]) == "0.3" for version in declared)
     refused_unsupported_0_3 = (not supports_0_3 and absent_0_3.code == VERSION_NOT_SUPPORTED)
+    absent_refused = refused_unsupported_0_3
     if not refused_unsupported_0_3 and (not absent_0_3.ok or not isinstance(absent_0_3.payload, dict) or not absent_0_3.payload):
         failures.append(
             f"with no A2A-Version header the agent must apply 0.3 semantics, but 0.3's own method "
@@ -112,6 +113,7 @@ def check_ver_server_001(target: Target) -> Result:
     )
     evidence.append(f"A2A-Version: '' + {METHODS_0_3['send_message']!r} -> {empty_0_3!r}")
     refused_unsupported_0_3 = (not supports_0_3 and empty_0_3.code == VERSION_NOT_SUPPORTED)
+    empty_refused = refused_unsupported_0_3
     if not refused_unsupported_0_3 and (not empty_0_3.ok or not isinstance(empty_0_3.payload, dict) or not empty_0_3.payload):
         failures.append(
             f"an EMPTY A2A-Version must be interpreted as 0.3, but 0.3's own method name was "
@@ -144,11 +146,16 @@ def check_ver_server_001(target: Target) -> Result:
             f"VersionNotSupported: {crossed!r}; version-dependent dispatch was not established",
             evidence,
         )
+    if absent_refused or empty_refused:
+        legacy = ("an absent and an empty A2A-Version are refused as VersionNotSupportedError, "
+                  "which is legal because no interface declares 0.3")
+    else:
+        legacy = "an absent and an empty A2A-Version are both answered as 0.3"
     return Result(
         req.id,
         Verdict.PASS,
-        f"every declared version {declared} is accepted under its own method vocabulary, an "
-        f"absent and an empty A2A-Version are both answered as 0.3, and a request declaring 1.0 "
+        f"every declared version {declared} is accepted under its own method vocabulary, "
+        f"{legacy}, and a request declaring 1.0 "
         f"is NOT answered on 0.3's method name -- so the vocabulary tracks the requested version "
         f"rather than being served unconditionally.",
         evidence,

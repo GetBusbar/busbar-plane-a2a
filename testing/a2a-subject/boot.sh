@@ -297,9 +297,13 @@ prove_the_boundary_is_intact() {
   # The signature, altered by one character. Flipped to a DIFFERENT character deliberately, so the
   # token stays the same length and still base64url-decodes — a truncated token would be refused as
   # malformed, which proves the parser works and says nothing about the signature check.
-  local tampered last
-  last="${bound: -1}"
-  if [ "$last" = "A" ]; then tampered="${bound%?}B"; else tampered="${bound%?}A"; fi
+  # The FIRST signature character is flipped, never the last: the last of an 86-character
+  # Ed25519 signature carries only 2 data bits, so an A<->B swap there can change padding bits only.
+  local tampered sig first
+  sig="${bound##*.}"
+  first="${sig:0:1}"
+  if [ "$first" = "A" ]; then first=B; else first=A; fi
+  tampered="${bound%.*}.${first}${sig:1}"
   got=$(subject_probe_status "$direct" "$tampered")
   if [ "$got" = "401" ]; then say "     ok:  flipped signature        -> 401"
   else say "     BAD: flipped signature        -> $got (expected 401)"; failures=$((failures+1)); fi
@@ -919,9 +923,9 @@ leg_battery() {
     0) ;;
     3) die "the battery could not START: busbar served no agent card, so NOTHING WAS TESTED and \
 there is no conformance number from this instrument. This is not a low score — it is the absence of \
-a score, and it is the exact state A4.4 exists to end. See the header's finding 1: a registration \
-booted from YAML is \`Pending\` for ever, so \`/a2a/agents/{id}\` answers 503 and there is no \
-card anywhere for the battery to read." ;;
+a score, and it is the exact state A4.4 exists to end. The registration was promoted and awaited \
+as serving before the battery started, so read the battery output above for why no card was read \
+(the --card-url it was given, or the binding shim in front of busbar)." ;;
     *) die "the independent battery found defects in busbar's A2A implementation (exit $rc). Read \
 the counts line above; it is the number this leg exists to produce." ;;
   esac

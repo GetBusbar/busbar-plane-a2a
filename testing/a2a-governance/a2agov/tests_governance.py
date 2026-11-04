@@ -159,14 +159,22 @@ def test_detection_recovery_asymmetry(ctx):
     # Phase 1: peer goes bad. Phase 2: peer reverts to the approved card.
     with FakePeer(Behaviour(card_mutate_after_n_fetches=1,
                             card_mutation=mutation)) as peer:
-        drive(ctx, peer, timeout=45.0)
-        drive(ctx, peer, timeout=45.0)
+        runs = [drive(ctx, peer, timeout=45.0)]
+        reached_peer = len(peer.requests) > 0
+        runs.append(drive(ctx, peer, timeout=45.0))
         calls_while_bad = len(peer.a2a_requests())
         peer.behaviour.card_mutate_after_n_fetches = None
         peer.behaviour.card_mutation = {}
-        drive(ctx, peer, timeout=45.0)
+        runs.append(drive(ctx, peer, timeout=45.0))
         calls_after_revert = len(peer.a2a_requests()) - calls_while_bad
 
+    ctx.observe("drives", [_summary(run) for run in runs])
+    # A drive that never reached the fixture (bad command, subject down) or
+    # timed out leaves both counts at 0, which would otherwise read as
+    # "recovery is held back", the good outcome.
+    if not reached_peer or any(run["timed_out"] for run in runs):
+        raise NotConfigured("the drives must complete and the first must reach the "
+                            "fixture peer before recovery can be observed")
     ctx.observe("calls_while_card_was_changed", calls_while_bad)
     ctx.observe("calls_after_card_reverted", calls_after_revert)
     ctx.observe("immediately_retrusted_on_revert", calls_after_revert > 0)

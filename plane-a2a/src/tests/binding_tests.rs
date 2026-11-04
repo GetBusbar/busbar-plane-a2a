@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! The outbound binding off a held card, and the HTTP+JSON framing, against the served engine's
+//! own cases (`busbar-a2a` `relay::binding_of`, `HttpJsonFraming`).
 
 use serde_json::{json, Map};
 
@@ -18,7 +19,7 @@ fn card(words: &[&str]) -> Value {
 fn no_card_or_no_interfaces_is_json_rpc() {
     assert_eq!(binding_of(None), BINDING_JSONRPC);
     assert_eq!(binding_of(Some(&json!({}))), BINDING_JSONRPC);
-    assert_eq!(binding_of(Some(&card(&[" "]))), BINDING_JSONRPC);
+    assert_eq!(binding_of(Some(&card(&[" "]))), "INVALID");
 }
 
 #[test]
@@ -36,6 +37,8 @@ fn the_first_binding_the_plane_frames_is_taken_in_the_cards_order() {
 }
 
 /// gRPC IS SPOKEN (the engine's `relay::framing_for` answered all three words): a card that lists
+/// it first is reached on it; a card listing only bindings the plane does not frame names its first,
+/// and is refused by name. RED: `speakable("GRPC")` answered `None` and a gRPC-only card was refused.
 #[test]
 fn grpc_is_framed_so_a_card_that_lists_it_first_is_reached_on_it() {
     assert_eq!(speakable(BINDING_GRPC), Some(Binding::Grpc));
@@ -117,6 +120,7 @@ fn what_the_binding_cannot_carry_is_refused_not_dropped() {
 }
 
 /// Legacy metadata has no field in the vendored v1.0 GET request messages. Do not invent a
+/// query encoding or silently discard it while accepting the legacy operation spelling.
 #[test]
 fn legacy_get_metadata_is_explicitly_unrepresentable_on_the_pinned_http_binding() {
     for method in [
@@ -161,6 +165,7 @@ fn a_success_body_is_rewrapped_as_the_result_and_an_empty_one_is_null() {
 const AGENT: &str = "https://backend.agent.test/a2a";
 
 /// `http_json_client_issues_send_stream_message`: the stream submission is a POST to
+/// `/message:stream`, its body the params with no JSON-RPC envelope member.
 #[test]
 fn http_json_client_issues_send_stream_message() {
     let f = compose(
@@ -176,6 +181,8 @@ fn http_json_client_issues_send_stream_message() {
 }
 
 /// `http_json_client_issues_cancel_task`: a POST to the task's `:cancel`, naming the id it was
+/// handed (the far end's own, once the door translated it), the rest of the request as the body
+/// (proto `CancelTask`: `body: "*"`), here the empty object.
 #[test]
 fn http_json_client_issues_cancel_task() {
     let f = compose(
@@ -193,6 +200,7 @@ fn http_json_client_issues_cancel_task() {
 }
 
 /// `http_json_client_issues_subscribe_to_task` (and its v1.0 spelling, `task_id`): a GET of the
+/// task's `:subscribe` (proto `SubscribeToTask`: `get: "/tasks/{id=*}:subscribe"`).
 #[test]
 fn http_json_client_issues_subscribe_to_task() {
     for (method, member) in [("tasks/resubscribe", "id"), ("SubscribeToTask", "task_id")] {
@@ -208,6 +216,7 @@ fn http_json_client_issues_subscribe_to_task() {
 }
 
 /// `http_json_client_issues_list_tasks`: a GET of the collection, its options on the query, no
+/// body.
 #[test]
 fn http_json_client_issues_list_tasks() {
     let f = compose(AGENT, "ListTasks", &json!({})).unwrap();
@@ -229,6 +238,9 @@ fn http_json_client_issues_get_extended_agent_card() {
 }
 
 /// `the_cards_interface_url_never_moves_the_hop`: a card says HOW, never WHERE. A card naming its
+/// interface at another host is read for its binding word alone, and the request is composed under
+/// the operator's own URL (the door hands the kernel a path; the kernel joins it onto the agent's
+/// sealed origin).
 #[test]
 fn the_cards_interface_url_never_moves_the_hop() {
     let card = json!({ "supportedInterfaces": [{
@@ -246,6 +258,7 @@ fn the_cards_interface_url_never_moves_the_hop() {
 }
 
 /// SUBSCRIBE IS A GET on the HTTP+JSON binding (proto `SubscribeToTask`:
+/// `get: "/tasks/{id=*}:subscribe"`), with no body, in both dialects' spellings.
 #[test]
 fn http_json_client_subscribes_with_a_get() {
     for (method, member) in [("tasks/resubscribe", "id"), ("SubscribeToTask", "id")] {
@@ -260,6 +273,8 @@ fn http_json_client_subscribes_with_a_get() {
 }
 
 /// A CANCEL CARRIES ITS METADATA in the body (proto `CancelTask`:
+/// `post: "/tasks/{id=*}:cancel" body: "*"`; `CancelTaskRequest.metadata`), never refused as
+/// unframable.
 #[test]
 fn http_json_client_cancel_carries_its_metadata_in_the_body() {
     let f = compose(
@@ -280,6 +295,7 @@ fn http_json_client_cancel_carries_its_metadata_in_the_body() {
 }
 
 /// AN ID CANNOT RE-POINT THE REQUEST LINE: a dot segment (`.`, `..`), the one value the
+/// percent-encoding allowlist passes that still moves a path, is refused rather than composed.
 #[test]
 fn a_dot_segment_id_is_refused_rather_than_composed() {
     for id in [".", ".."] {
@@ -428,4 +444,25 @@ fn rest_binding_refuses_nonobject_params_and_nonstring_path_identifiers() {
     )
     .unwrap();
     assert_eq!(framed.target, "/tasks/t");
+}
+
+/// The binding at the card's primary endpoint. Consumers with an operator endpoint use
+/// [`select`] so a matching additional interface is chosen coherently with that endpoint.
+#[must_use]
+pub fn binding_of(card: Option<&Value>) -> String {
+    let endpoint = card
+        .and_then(|card| card.get("url"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    select(card, endpoint).word
+}
+
+#[test]
+fn advertised_empty_interfaces_do_not_silently_select_jsonrpc() {
+    assert!(speakable(&select(Some(&card(&[])), "https://example.test").word).is_none());
+}
+
+#[test]
+fn escaped_path_bytes_keep_uppercase_hex_without_per_byte_formatting() {
+    assert_eq!(percent("a/é%"), "a%2F%C3%A9%25");
 }

@@ -30,7 +30,13 @@ fn both_open_card_aliases_refuse_an_unknown_agent_as_missing() {
 #[test]
 fn both_open_card_aliases_refuse_a_serving_pool_as_the_document_line_does() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
-    let saved = store().clone();
+    struct Restore(Vec<(String, String, Vec<u8>)>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            *store() = std::mem::take(&mut self.0);
+        }
+    }
+    let _restore = Restore(store().clone());
     let door = open_with(POOLED);
     let (outcome, status, _) = door.connect("vendor");
     assert_eq!((outcome, status), (Outcome::Ready, 200));
@@ -55,7 +61,6 @@ fn both_open_card_aliases_refuse_a_serving_pool_as_the_document_line_does() {
         );
     }
     drop(door);
-    *store() = saved;
 }
 
 static FAIL_SIGNATURE: AtomicBool = AtomicBool::new(false);

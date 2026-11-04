@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! The `a2a` plane as a droppable busbar plugin: the `cdylib` a signed tarball carries
+//! The `a2a` plane as a droppable busbar plugin: the `cdylib` a signed tarball carries (`kind: plane`, section `agents`).
 
 #![deny(unsafe_code)]
 

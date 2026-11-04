@@ -23,7 +23,10 @@ fn fresh_inline_callback_authentication_is_durable_and_not_held_by_the_hop() {
     let held = get(&mut desk.book, ALICE, &task.task_id, 300)
         .unwrap()
         .unwrap();
-    assert!(crate::push_door::queue_moved(&deliveries, &mut desk.book, ALICE, &held.row).unwrap());
+    assert!(
+        crate::push_door::tests::queue_moved(&deliveries, &mut desk.book, ALICE, &held.row)
+            .unwrap()
+    );
     let delivery = deliveries.next_due(0).unwrap();
     let (_, sealed) = deliveries.request(&delivery);
     assert!(sealed
@@ -39,9 +42,6 @@ impl Records for BrokenRecords {
     }
     fn list(&mut self, _: &str, _: &str) -> Result<Vec<(String, Vec<u8>)>, Halt> {
         Err(Halt::Failed("injected store failure".into()))
-    }
-    fn claim(&mut self, _: &str, _: &str, _: u64) -> Result<bool, Halt> {
-        panic!("holder must not claim")
     }
 }
 #[test]
@@ -92,27 +92,27 @@ fn resumed_inline_config_survives_a_fresh_delivery_book_and_delete_stops_future_
         .is_some());
     let row = get(&mut d.book, ALICE, "t1", 300).unwrap().unwrap().row;
     let deliveries = crate::push::Deliveries::default();
-    assert!(crate::push_door::queue_moved(&deliveries, &mut d.book, ALICE, &row).unwrap());
+    assert!(crate::push_door::tests::queue_moved(&deliveries, &mut d.book, ALICE, &row).unwrap());
     let deletion = Write {
         kind: KIND_PUSH_CONFIG,
         key: tasks::task_key(ALICE, "t1"),
         value: Vec::new(),
     };
     d.book.apply(std::slice::from_ref(&deletion));
-    crate::push_door::forget_deleted(&deliveries, std::slice::from_ref(&deletion));
+    crate::push_door::tests::forget_deleted(&deliveries, std::slice::from_ref(&deletion));
     assert!(deliveries.next_due(0).is_none());
-    assert!(!crate::push_door::queue_moved(&deliveries, &mut d.book, ALICE, &row).unwrap());
+    assert!(!crate::push_door::tests::queue_moved(&deliveries, &mut d.book, ALICE, &row).unwrap());
 }
 
 #[test]
 fn inline_token_refusal_does_not_treat_null_as_a_promised_token() {
-    for token in [Value::Null, json!("unsupported"), json!(false)] {
+    for token in [Value::Null, json!(""), json!("unsupported"), json!(false)] {
         let mut d = desk();
         let request = send(
             json!({"message":{"messageId":"m"},"configuration":{"pushNotificationConfig":{"url":"https://receiver.example/cb","token":token}}}),
         );
         let result = opened(&mut d, &request, ALICE);
-        if token.is_null() {
+        if token.is_null() || token.as_str() == Some("") {
             assert!(matches!(result, Opened::Hop { .. }));
         } else {
             assert!(
@@ -196,9 +196,6 @@ impl Records for FailedResume {
     }
     fn list(&mut self, k: &str, v: &str) -> Result<Vec<(String, Vec<u8>)>, Halt> {
         self.0.list(k, v)
-    }
-    fn claim(&mut self, _: &str, _: &str, _: u64) -> Result<bool, Halt> {
-        panic!("task resumption must not acquire a claim")
     }
     fn observe_chain_life(&mut self, kind: &str, scope: &str) -> Result<Option<Vec<u8>>, Halt> {
         self.0.observe_chain_life(kind, scope)

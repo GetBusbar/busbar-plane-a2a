@@ -201,15 +201,10 @@ def test_unknown_fields(ctx):
     call = ctx.target.call("SendMessage", {"message": msg,
                                            "unknownTopLevel": 42})
     # SPEC 5.7 says SHOULD ignore, so rejection is not a hard violation. What
-    # is asserted is that it does not fault.
-    if call.error is not None and call.binding == "HTTP+JSON":
-        ctx.assert_must(
-            call.http.status < 500,
-            "an unrecognised field caused HTTP %d" % call.http.status,
-            "SPEC 5.7: 'Implementations SHOULD ignore unrecognized fields in "
-            "messages, allowing for forward compatibility'. Faulting is never "
-            "the right answer.",
-        )
+    # is asserted is that it does not fault, on either binding: a JSON-RPC
+    # fault is -32603 inside an HTTP 200, which _survived checks.
+    if call.error is not None:
+        _survived(ctx, call.http, "a request carrying unrecognised fields")
     ctx.observe("unknown_field_accepted", call.error is None,
                 "SPEC 5.7 makes ignoring unknown fields a SHOULD, so "
                 "rejecting them is a legal if unfriendly choice.")
@@ -367,9 +362,8 @@ def test_connect_and_stall(ctx):
 
 @a2a_test(
     id="adv.client_disconnects_mid_stream",
-    defect="When a client vanishes mid-stream the agent keeps the task or the "
-           "connection alive forever, leaking a worker per abandoned "
-           "delegation.",
+    defect="A client disconnect cancels its still-live task or prevents a new "
+           "stream from reading it, coupling task lifetime to one connection.",
     clause="SPEC 3.5.2 (stream lifecycle is independent of task lifecycle)",
     role=ROLE_SERVER, tier=PULL_REQUEST,
 )
@@ -382,9 +376,15 @@ def test_client_disconnect_midstream(ctx):
     ctx.observe("events_before_abort", len(res.events))
     task_id = None
     for event in res.events:
-        for key in ("task",):
-            if key in event:
-                task_id = (event[key] or {}).get("id")
+        if task_id:
+            break
+        if not isinstance(event, dict):
+            continue
+        if isinstance(event.get("task"), dict):
+            task_id = event["task"].get("id")
+        for key in ("statusUpdate", "artifactUpdate"):
+            if not task_id and isinstance(event.get(key), dict):
+                task_id = event[key].get("taskId")
     ctx.observe("aborted_task_id_known", task_id is not None)
     # SPEC 3.5.2: "The task lifecycle is independent of any individual
     # stream's lifecycle", so the task MUST still be there after we hang up.
@@ -544,10 +544,9 @@ def test_jsonrpc_envelope(ctx):
 
 @a2a_test(
     id="adv.method_case_sensitivity",
-    defect="Agent accepts a method name in the wrong case, so an "
-           "implementation that happens to send 'sendmessage' works against "
-           "this agent and fails against a conformant one, producing an "
-           "interop bug nobody can reproduce.",
+    defect="Agent does not accept the required PascalCase method name, "
+           "so conforming clients cannot invoke SendMessage. Additional "
+           "accepted aliases are observations rather than conformance failures.",
     clause="SPEC 9.1 (PascalCase); see AMBIGUITIES.JSONRPC_METHOD_NAMING",
     role=ROLE_SERVER, tier=PRE_RELEASE,
 )

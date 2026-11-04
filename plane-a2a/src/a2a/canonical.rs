@@ -14,8 +14,9 @@
 //!    the pin is worthless.
 //!
 //! `serde_json::to_string` gives neither guarantee: it preserves neither a canonical key order for
-//! every input path nor RFC 8785's number formatting. So the canonicalizer is written out, and the
-//! tests below are the RFC's own vectors rather than our idea of what they should say.
+//! every input path nor RFC 8785's number formatting. So the canonicalizer is written out, and its
+//! tests (`tests/canonical_tests.rs`) are the RFC's own vectors rather than our idea of what they
+//! should say.
 //!
 //! DELIBERATELY OVER `Value`, NOT OVER OUR OWN STRUCTS. Hashing a busbar-owned projection of a card
 //! would mean any field busbar does not model could change without registering as drift, which is
@@ -59,7 +60,7 @@ pub fn canonicalize(value: &Value) -> Result<String, CanonicalError> {
     Ok(out)
 }
 
-fn write_value(value: &Value, out: &mut String) -> Result<(), CanonicalError> {
+pub(super) fn write_value(value: &Value, out: &mut String) -> Result<(), CanonicalError> {
     match value {
         Value::Null => out.push_str("null"),
         Value::Bool(true) => out.push_str("true"),
@@ -78,7 +79,7 @@ fn write_value(value: &Value, out: &mut String) -> Result<(), CanonicalError> {
         }
         Value::Object(map) => {
             let mut names: Vec<&String> = map.keys().collect();
-            names.sort_by_key(|n| utf16_units(n));
+            names.sort_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
             out.push('{');
             for (i, name) in names.iter().enumerate() {
                 if i > 0 {
@@ -94,12 +95,8 @@ fn write_value(value: &Value, out: &mut String) -> Result<(), CanonicalError> {
     Ok(())
 }
 
-fn utf16_units(s: &str) -> Vec<u16> {
-    s.encode_utf16().collect()
-}
-
-/// RFC 8785 section 3.2.2.2: the SHORTEST escape wins, `\u` only below U+0020, and every other
-fn write_string(s: &str, out: &mut String) {
+/// RFC 8785 section 3.2.2.2: the SHORTEST escape wins, `\u` only below U+0020, and every other character is emitted literally as UTF-8.
+pub(super) fn write_string(s: &str, out: &mut String) {
     out.push('"');
     for c in s.chars() {
         match c {
@@ -117,7 +114,7 @@ fn write_string(s: &str, out: &mut String) {
     out.push('"');
 }
 
-/// RFC 8785 section 3.2.2.3: EVERY number is an IEEE-754 double, printed as ECMAScript
+/// RFC 8785 section 3.2.2.3: EVERY number is an IEEE-754 double, printed as ECMAScript `Number.prototype.toString`.
 fn number(n: &serde_json::Number) -> Result<String, CanonicalError> {
     let f = if let Some(i) = n.as_i64() {
         i as f64
@@ -170,17 +167,19 @@ fn ecmascript_number(f: f64) -> String {
     out
 }
 
-/// The shortest decimal digit string that round-trips to `abs` (a finite positive double) and the
+/// The shortest decimal digit string that round-trips to `abs` (a finite positive double) and the decimal exponent of its first digit, with an exact halfway tie settled to the even last digit.
 fn shortest_digits(abs: f64) -> (String, i32) {
     let (digits, exp) = split_scientific(&format!("{abs:e}"));
-
-    let (exact, exact_exp) = split_scientific(&format!("{abs:.800e}"));
-    let exact = exact.trim_end_matches('0');
     let k = digits.len();
-    let halfway = exact_exp == exp && exact.len() == k + 1 && exact.ends_with('5');
-    if !halfway {
+    let halfway = |precision: usize| {
+        let (exact, exact_exp) = split_scientific(&format!("{abs:.precision$e}"));
+        let exact = exact.trim_end_matches('0');
+        (exact_exp == exp && exact.len() == k + 1 && exact.ends_with('5'))
+            .then(|| exact.to_string())
+    };
+    let Some(exact) = halfway(HALFWAY_SCREEN_DIGITS).and_then(|_| halfway(800)) else {
         return (digits, exp);
-    }
+    };
     let lower = exact[..k].to_string();
     let mut upper = lower.clone().into_bytes();
 
@@ -206,6 +205,10 @@ fn shortest_digits(abs: f64) -> (String, i32) {
         (upper, exp)
     }
 }
+
+/// A halfway case has at most 18 significant digits, so this many fractional digits render it
+/// exactly: a number that is no halfway candidate at this precision is none at full precision.
+const HALFWAY_SCREEN_DIGITS: usize = 40;
 
 /// `d.ddde-N` (Rust `{:e}`) to its digits with the point removed and its decimal exponent.
 fn split_scientific(s: &str) -> (String, i32) {

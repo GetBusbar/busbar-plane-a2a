@@ -3,7 +3,7 @@
 
 //! The tests' one `tracing` capture.
 
-/// Every event's level and rendered fields, sent down a channel (the plane holds no subscriber
+/// Every event's level and rendered fields, sent down a channel (the plane holds no subscriber dependency, so the `tracing` trait is implemented by hand).
 pub(crate) struct Capture(pub(crate) std::sync::mpsc::Sender<(tracing::Level, String)>);
 
 struct Render<'a>(&'a mut String);

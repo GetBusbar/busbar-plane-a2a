@@ -1,4 +1,4 @@
-//! Tests for `ops.rs`. Lifted out of the implementation file so its line count
+//! Tests for `ops.rs`.
 
 use super::{row_for, MethodRow, METHODS, OP_CLASSES};
 

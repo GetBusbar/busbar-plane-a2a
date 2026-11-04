@@ -2,6 +2,8 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! THE DOOR, BOTH WAYS, OP BY OP: the logic crate's `door` linked and this crate's
+//! //! dropped-in image (the `busbar-plane-a2a-plugin` cdylib `cargo test` builds beside the test)
+//! //! loaded on one dispatcher through busbar's real loader, and one script driven through both.
 
 /// Loads the same door for linked and dropped-in behavior checks.
 fn loaded_door() -> busbar_plugin_loader::dispatch::LoadedDoor {
@@ -11,6 +13,7 @@ fn loaded_door() -> busbar_plugin_loader::dispatch::LoadedDoor {
 }
 
 /// The door's private facts this script names, restated as data in the logic crate's
+/// `tests/support/door_facts.rs`.
 #[path = "../../plane-a2a/tests/support/door_facts.rs"]
 #[allow(dead_code)]
 mod door_facts;
@@ -146,6 +149,7 @@ mod both_ways {
     }
 
     /// `arrive` of `body` at `target` on claim `(verb, route)` with `fields`: one line, and the
+    /// refused arrival's own words.
     fn arrive(
         p: &Plugin<Plane>,
         unit: u64,
@@ -158,6 +162,7 @@ mod both_ways {
     }
 
     /// `arrive` on the snapshot's claim `index`, which may be one past the route table (an agent's
+    /// trailing-separator claim, R-16).
     fn arrive_on(
         p: &Plugin<Plane>,
         unit: u64,
@@ -228,6 +233,8 @@ mod both_ways {
     }
 
     /// `project` of `body` at `target` on claim `(verb, route)`, with a request-stage `rewrite`:
+    /// one line of the view's scalars and strings, its session, the projected body, the prompt
+    /// view's turns and the rewritten body.
     fn project(
         p: &Plugin<Plane>,
         unit: u64,
@@ -493,6 +500,8 @@ mod both_ways {
     }
 
     /// A `SendMessage` call's request message, as a gRPC client encodes it: `SendMessageRequest {
+    /// message (2): Message { message_id (1): "m3", context_id (2): "ctx-11", role (4): ROLE_USER,
+    /// parts (5): [Part { text (1): "hi" }] } }` (the vendored `a2a.proto`), in field order.
     fn grpc_send() -> Vec<u8> {
         let mut bytes = vec![0x12, 0x14];
         bytes.extend_from_slice(&[0x0a, 0x02]);
@@ -535,6 +544,7 @@ mod both_ways {
     }
 
     /// This crate's dropped-in image, the `busbar_plane_a2a_plugin` cdylib `cargo test` builds
+    /// beside the test (uplifted to `target/<profile>`, or hashed in its `deps`).
     fn dropped(d: &Dispatcher) -> Plugin<Plane> {
         let path = actual_image();
         let stated = LinkedRow::of_loaded(crate::loaded_door())
@@ -566,6 +576,8 @@ mod both_ways {
     }
 
     /// THE gRPC NEED, AS THE DOOR STATES IT (spec line 2026-09-30, the a2a door's third need): the
+    /// agents reached over grpc are the same member route as over http (each at its own `url`, an
+    /// upstream, its client identity the same anchors), only the transport differs.
     #[test]
     fn the_door_states_its_agents_over_http_and_over_grpc_alike() {
         let rendered = LinkedRow::of_loaded(crate::loaded_door())
@@ -607,6 +619,8 @@ mod both_ways {
     }
 
     /// `refresh` of [`GOOD`] to `generation`, the applied document's other owned sections `owned`
+    /// riding the head's extensions under `EXT_OWNED` as the loader's `refresh_door` lays them
+    /// (absent when empty): one line, the plane's own words on a refusal.
     fn refresh_owning(p: &Plugin<Plane>, generation: u64, owned: &[u8]) -> String {
         use busbar_contract::abi::mechanism::call::Blob;
         let extensions = if owned.is_empty() {
@@ -636,6 +650,7 @@ mod both_ways {
     }
 
     /// AN APPLY CARRYING A MALFORMED `agent_push:` IS REFUSED AT `refresh`, in the push section's
+    /// own words, linked and dropped in alike, and publishes nothing.
     #[test]
     fn an_apply_carrying_a_malformed_agent_push_section_is_refused_at_refresh() {
         let d = Dispatcher::new(DispatchConfig::default());
@@ -813,6 +828,8 @@ mod both_ways {
     }
 
     /// `project`: the `{tool, arguments}` view of the request (the envelope the HTTP+JSON line's
+    /// request spells), the plane's key as the dialect, the addressed agent as the pool, the
+    /// message's `contextId` as the session, and one `user` turn of the params as the prompt view.
     #[test]
     fn project_writes_the_hook_view_of_the_request() {
         let d = Dispatcher::new(DispatchConfig::default());
@@ -976,6 +993,7 @@ mod both_ways {
     }
 
     /// `open` over [`GOOD`] on `d`, then `ready` (the held cards warmed from the host's `card`
+    /// records), into a fresh host log: the log's lines.
     fn ready_lines(d: &Dispatcher, dropped_in: bool) -> Vec<String> {
         let log = Arc::new(HostLog::default());
         let bound = Bind {

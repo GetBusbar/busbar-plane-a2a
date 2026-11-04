@@ -78,7 +78,7 @@ fn arrive(door: &Door, unit: u64) {
 }
 
 #[test]
-fn pending_piece_retains_its_frames_and_loans_and_rejects_replacement_inputs() {
+fn fixture_preserves_pending_piece_loans_and_refuses_invalid_host_reentry() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
     let _reset = Reset;
     store().clear();

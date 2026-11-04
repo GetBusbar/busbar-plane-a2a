@@ -10,6 +10,7 @@ opinion on the spec. If the honest fake and the control disagree, one of the
 two is wrong and the harness author needs to know before trusting either.
 """
 
+import copy
 import json
 import threading
 import time
@@ -138,8 +139,10 @@ class FakePeer:
             card["signatures"] = b.card_signatures
         for field in b.card_missing_fields:
             card.pop(field, None)
+        with self._lock:
+            card_fetches = self.card_fetches
         if (b.card_mutate_after_n_fetches is not None
-                and self.card_fetches > b.card_mutate_after_n_fetches):
+                and card_fetches > b.card_mutate_after_n_fetches):
             card = _deep_merge(card, b.card_mutation)
         return card
 
@@ -252,7 +255,8 @@ def _make_handler(peer):
             peer.record("GET", self.path, self.headers, body)
             b = peer.behaviour
             if urlsplit(self.path).path.endswith("/.well-known/agent-card.json"):
-                peer.card_fetches += 1
+                with peer._lock:
+                    peer.card_fetches += 1
                 if b.card_delay_seconds:
                     time.sleep(b.card_delay_seconds)
                 if b.card_status != 200:
@@ -264,7 +268,8 @@ def _make_handler(peer):
                                   content_type=b.card_content_type)
             if self.path.startswith("/tasks/"):
                 task_id = self.path.split("/tasks/", 1)[1].split("?")[0]
-                task = peer.tasks.get(task_id)
+                with peer._lock:
+                    task = copy.deepcopy(peer.tasks.get(task_id))
                 if task is None:
                     return self._error(404, "TaskNotFoundError",
                                        "task not found")
@@ -327,8 +332,9 @@ def _make_handler(peer):
 
             # A governance continuation is still the same interrupted task.
             # Keep its identity and context when the caller supplies its taskId.
-            if b.input_required and message.get("taskId") in peer.tasks:
-                return peer.tasks[message["taskId"]]
+            with peer._lock:
+                if b.input_required and message.get("taskId") in peer.tasks:
+                    return copy.deepcopy(peer.tasks[message["taskId"]])
 
             task_id = ("duplicate-task-id" if b.emit_duplicate_task_ids
                        else str(uuid.uuid4()))
@@ -355,7 +361,8 @@ def _make_handler(peer):
                     "parts": [part],
                 }],
             }
-            peer.tasks[task_id] = task
+            with peer._lock:
+                peer.tasks[task_id] = copy.deepcopy(task)
             return task
 
         def _send(self, body):
@@ -376,14 +383,16 @@ def _make_handler(peer):
         def _cancel(self, body):
             params = _params(body)
             task_id = (params or {}).get("id")
-            task = peer.tasks.get(task_id)
+            with peer._lock:
+                held = peer.tasks.get(task_id)
+                terminal = held is not None and held["status"]["state"] in spec.TERMINAL_STATES
+                if held is not None and not terminal:
+                    held["status"] = {"state": "TASK_STATE_CANCELED", "timestamp": _now()}
+                task = copy.deepcopy(held)
             if task is None:
                 return self._error(404, "TaskNotFoundError", "task not found")
-            if task["status"]["state"] in spec.TERMINAL_STATES:
-                return self._error(400, "TaskNotCancelableError",
-                                   "task already in a terminal state")
-            task["status"] = {"state": "TASK_STATE_CANCELED",
-                              "timestamp": _now()}
+            if terminal:
+                return self._error(400, "TaskNotCancelableError", "task already in a terminal state")
             return self._json({"task": task})
 
         def _stream(self, body):

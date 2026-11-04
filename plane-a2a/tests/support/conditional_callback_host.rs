@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! Raw callback fixture host: atomic logical mutations and exact operation replay. This models
+//! //! the bridge exchange and its store decision, not chain sealing or a real backend.
 
 use super::*;
 use busbar_contract::abi::sdk::plane::conditional as wire;

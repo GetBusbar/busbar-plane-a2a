@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! THE gRPC LINE'S MESSAGES, generated from the a2aproject's own `a2a.proto` (vendored verbatim in
+//! THE gRPC LINE'S MESSAGES, generated from the a2aproject's own `a2a.proto` (vendored verbatim in `proto/`, with the minimal `google.api` option stubs it imports, from the `a2a-pb` 0.2.0 crate, Apache-2.0), as `a2a-pb` generated them: the prost messages with the well-known types mapped to the plane's own (`crate::wkt`, `pbjson-types`' mapping without its calendar crate), and pbjson's ProtoJSON serde for the `lf.a2a.v1` package, patched as `a2a-pb` patched it so a JSON `null` for a repeated or map member reads as empty (ARCHITECT ruling Q1 (C), 2026-10-04: the plane generates its messages; no gRPC server stack in a plane's closure).
 
 use std::error::Error;
 use std::path::PathBuf;
@@ -45,19 +45,7 @@ const NULL_MAP: (&str, &str) = (
 const NULL_MAP_FIELDS: usize = 7;
 
 fn main() -> Result<(), Box<dyn Error>> {
-    println!("cargo:rerun-if-changed=proto");
-
-    let path = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR")?)
-        .join("tests/data/method-inventory.json");
-    println!("cargo:rerun-if-changed={}", path.display());
-    let text = std::fs::read_to_string(&path)?;
-    std::fs::write(
-        PathBuf::from(std::env::var("OUT_DIR")?).join("method_inventory.rs"),
-        format!(
-            "/// `tests/data/method-inventory.json`, read at build time.\n\
-             pub(crate) const METHOD_INVENTORY: &str = {text:?};\n"
-        ),
-    )?;
+    println!("cargo::rerun-if-changed=proto");
 
     println!(
         "cargo::metadata=cells={}",
@@ -72,7 +60,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             .join("tests/blackbox")
             .display()
     );
-    println!("cargo:rerun-if-changed=tests/blackbox");
+    println!("cargo::rerun-if-changed=tests/blackbox");
     let out_dir = PathBuf::from(std::env::var("OUT_DIR")?);
     let descriptor_path = out_dir.join("a2a-descriptor.bin");
     let mut config = prost_build::Config::new();
@@ -125,7 +113,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// How many fields named `name` the proto source `proto` declares `repeated`: every line
+/// How many fields named `name` the proto source `proto` declares `repeated`: every line `repeated <type> <name> = <tag>;`.
 fn repeated_fields(proto: &str, name: &str) -> usize {
     proto
         .lines()

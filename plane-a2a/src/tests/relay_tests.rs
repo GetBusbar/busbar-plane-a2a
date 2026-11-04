@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! The unary hop, piece by piece: the request each attempt sends, the body relayed verbatim, and
+//! The unary hop, piece by piece: the request each attempt sends, the body relayed verbatim,
+//! and the caller's answer in the served engine's bytes (`busbar-a2a` `relay`,
+//! `refusal_client`, `receive::refuse_hop_early`).
 
 use super::*;
 
@@ -112,6 +114,7 @@ fn an_agent_url_with_no_path_is_posted_to_at_its_root() {
 }
 
 /// The target read off a url's own bytes is the one a parse serializes, for every url the fast
+/// read takes, and a url it does not take is parsed: the answer never depends on which ran.
 #[test]
 fn a_target_read_without_a_parse_is_the_parsed_target() {
     let parsed = |url: &str| {
@@ -245,7 +248,10 @@ fn a_reply_that_is_not_a_json_rpc_answer_is_refused() {
     }
 }
 
-/// A REDIRECTING RELAY PEER IS A FAILURE, NEVER FOLLOWED (docs/security.md: no surface follows an
+/// A REDIRECTING RELAY PEER IS A FAILURE, NEVER FOLLOWED (docs/security.md: no surface follows
+/// an upstream's redirect): every 3xx the agent answers a relayed hop with is the backend-
+/// status refusal, its `Location` named nowhere in the caller's answer, and the relay asks for
+/// no second attempt at it.
 #[test]
 fn a_redirecting_relay_peer_is_a_failure() {
     for status in [301, 302, 303, 307, 308] {
@@ -469,7 +475,8 @@ fn a_task_hops_answer_leaves_under_busbars_identity_and_says_what_the_far_end_re
     assert_eq!(r.take_settled(), Vec::new());
 }
 
-/// The engine's task-hop refusal body: `code`, `message`, its `ErrorInfo` when A2A defines the code,
+/// The engine's task-hop refusal body: `code`, `message`, its `ErrorInfo` when A2A defines the
+/// code, and the task's `ResourceInfo`.
 fn about(code: i64, reason: &str, message: &str) -> serde_json::Value {
     json!({ "jsonrpc": "2.0", "id": 7, "error": { "code": code, "message": message,
         "data": [
@@ -713,6 +720,42 @@ fn an_http_json_answer_that_is_not_json_is_a_bad_reply_and_fails_the_task_it_ope
     );
 }
 
+/// A FAILOVER FROM A COMPOSED BINDING TO JSON-RPC SENDS THE JSON-RPC REQUEST: the body an
+/// HTTP+JSON (or gRPC) attempt composed is that attempt's alone, so the next member, bound to
+/// JSON-RPC, gets the translated envelope, or the caller's own bytes when nothing was translated.
+#[test]
+fn a_json_rpc_attempt_after_a_composed_one_never_sends_the_composed_body() {
+    let envelope: serde_json::Value = serde_json::from_slice(SEND).unwrap();
+    let translated = br#"{"jsonrpc":"2.0","id":7,"method":"SendMessage","params":{"t":1}}"#;
+    for instead in [Some(&translated[..]), None] {
+        let mut r = HopRelay::new(json!(7), "1.0");
+        if let Some(body) = instead {
+            r.send_instead(body.to_vec());
+        }
+        r.bind(Binding::HttpJson, &envelope);
+        assert!(matches!(
+            r.on_piece(kernel(Some(URL))),
+            PieceAnswer::Attempt(_)
+        ));
+        let composed = r.on_piece(caller(SEND));
+        assert!(
+            matches!(&composed, PieceAnswer::ToFarEnd(body) if !body.starts_with(b"{\"jsonrpc\"")),
+            "the HTTP+JSON attempt sends its composed body: {composed:?}"
+        );
+
+        r.bind(Binding::JsonRpc, &envelope);
+        assert!(matches!(
+            r.on_piece(kernel(Some(URL))),
+            PieceAnswer::Attempt(_)
+        ));
+        let expected = match instead {
+            Some(body) => PieceAnswer::ToFarEnd(body.to_vec().into()),
+            None => PieceAnswer::ToFarEndLent,
+        };
+        assert_eq!(r.on_piece(caller(SEND)), expected, "{instead:?}");
+    }
+}
+
 #[test]
 fn a_request_the_binding_cannot_carry_is_refused_at_the_attempt() {
     let mut r = HopRelay::new(json!(7), "1.0");
@@ -800,6 +843,7 @@ fn an_events_attempt_accepts_an_event_stream_or_one_document() {
 }
 
 /// Each event goes out as it is framed, under busbar's identity: the first starts the caller's
+/// answer, the last piece ends it, and every state the events report is settled as it passes.
 #[test]
 fn events_are_answered_as_they_come_and_settled_as_they_pass() {
     let (mut r, _) = events_sent();
@@ -853,6 +897,12 @@ fn events_are_answered_as_they_come_and_settled_as_they_pass() {
 }
 
 /// AN ERROR FRAME MID-STREAM PASSES THROUGH AND THE STREAM ENDS WHERE THE FAR END CLOSES IT
+/// (coordinator ruling, parity principle: "do exactly what v1.5.5 did"). v1.5.5 had no A2A
+/// stream to relay one on: its tree holds no a2a crate or module (`git ls-tree -r --name-only
+/// v1.5.5` names no path matching `a2a`), no JSON-RPC reader (`git grep -il jsonrpc v1.5.5`
+/// matches no file), and names A2A only as work to come (v1.5.5 `qa/segments.toml:61` "a2a ->
+/// 1.5.6" and `:169-172`, the `a2a` segment `status = "reserved"`;
+/// `crates/busbar/src/config/named_map.rs:16`, "`agents:` (1.5.6 A2A)").
 #[test]
 fn an_error_frame_mid_stream_passes_through_and_the_stream_ends_where_the_far_end_closes() {
     let (mut r, _) = events_sent();
@@ -877,7 +927,12 @@ fn an_error_frame_mid_stream_passes_through_and_the_stream_ends_where_the_far_en
     assert_eq!(got.len(), 1, "the error frame goes out as one event");
     assert_eq!(got[0]["id"], 7, "under the caller's id");
     assert_eq!(got[0]["error"]["code"], -32603);
-    assert_eq!(got[0]["error"]["message"], "far end broke");
+    assert_eq!(
+        got[0]["error"]["message"],
+        crate::events::BACKEND_ERROR_TEXT,
+        "the far end's prose never travels"
+    );
+    assert!(!String::from_utf8_lossy(&middle.body).contains("far end broke"));
     assert!(got[0].get("result").is_none());
     assert!(!r.answered, "the stream goes on after the error frame");
     assert_eq!(
@@ -920,7 +975,8 @@ fn one_document_to_an_events_hop_is_the_unary_answer() {
     );
 }
 
-/// A frame answering another request refuses the hop before its answer started, the task failed;
+/// A frame answering another request refuses the hop before its answer started, the task
+/// failed; after it started, the answer ends there and the task fails.
 #[test]
 fn an_uncorrelated_event_refuses_before_the_answer_and_ends_it_after() {
     let other = b"data: {\"jsonrpc\":\"2.0\",\"id\":99,\"result\":{}}\n\n";
@@ -1054,6 +1110,11 @@ fn the_far_ends_whole_answer_states_the_breakers_reading() {
 }
 
 /// A HOP THE KERNEL REFUSED FOR BUSBAR'S OWN CREDENTIAL (`credential_unavailable`: the agent's
+/// `upstream_credential` no longer resolves), in the engine's bytes (`receive.rs`, the
+/// `mint_from` arm): a task hop is `fail_task`'s answer, `502` `-32006` "the backend agent did
+/// not complete this task" naming the task, and the task ends `failed` — whether the hop opened
+/// it or addressed it, as `fail_task` ended either; the extended-card read opened no task, so
+/// it is refused in its own words and nothing is settled.
 #[test]
 fn a_hop_refused_for_busbars_own_credential_answers_in_the_engines_words() {
     for addressed in [false, true] {
@@ -1246,7 +1307,7 @@ fn journaled(run: impl FnOnce() -> RelayReply) -> (RelayReply, Vec<(tracing::Lev
 
 /// Ported from origin/predev `crates/busbar-a2a/src/a2a/tests/refusal_leak_tests.rs`
 #[test]
-fn a_refused_hops_journal_line_names_the_backend_and_the_callers_answer_does_not() {
+fn a_refused_hops_journal_and_answer_do_not_name_the_backend_endpoint() {
     let host = "vendor.example";
     let submission = crate::diagnostics::A2A_RELAYED_SUBMISSION_FAILED
         .banner()
@@ -1304,8 +1365,8 @@ fn a_refused_hops_journal_line_names_the_backend_and_the_callers_answer_does_not
             .unwrap_or_else(|| panic!("{what}: nothing journaled under {banner}: {lines:?}"));
         assert_eq!(journal.0, tracing::Level::DEBUG, "{what}: at debug");
         assert!(
-            journal.1.contains(host),
-            "{what}: the operator's line names the backend: {}",
+            !journal.1.contains(host),
+            "{what}: the operator's line must redact the backend endpoint: {}",
             journal.1
         );
         assert!(
@@ -1315,7 +1376,49 @@ fn a_refused_hops_journal_line_names_the_backend_and_the_callers_answer_does_not
     }
 }
 
+/// Diagnostics identify the agent without revealing its registered endpoint.
+#[test]
+fn a_refused_hops_journal_line_omits_the_backend_urls_query() {
+    let (_, lines) = journaled(|| answered(&mut sent(), 503, b"{}"));
+    let banner = crate::diagnostics::A2A_RELAYED_SUBMISSION_FAILED
+        .banner()
+        .to_string();
+    let (_, line) = lines
+        .iter()
+        .find(|(_, line)| line.contains(&banner))
+        .unwrap_or_else(|| panic!("nothing journaled: {lines:?}"));
+    assert!(!line.contains("vendor.example/a2a/v1"), "{line}");
+    assert!(!line.contains("tenant=t1"), "{line}");
+}
+
+/// AN AGENT URL WITH NO SENDABLE TARGET IS REFUSED LOUDLY: the attempt is refused and the
+/// operator's journal says why, as every other refused attempt's does.
+#[test]
+fn an_agent_url_with_no_target_is_refused_with_a_journal_line() {
+    let (_, lines) = journaled(|| {
+        let mut r = HopRelay::new(json!(7), "1.0");
+        assert_eq!(
+            r.on_piece(kernel(Some("https://bad host/a2a"))),
+            PieceAnswer::Refused
+        );
+        RelayReply {
+            status: 0,
+            content_type: "",
+            body: Vec::new(),
+        }
+    });
+    assert!(
+        lines
+            .iter()
+            .any(|(_, line)| line.contains(HopRefusal::EndpointRefused.client_code())),
+        "{lines:?}"
+    );
+}
+
 /// A MESSAGE-ONLY ANSWER SETTLES THE TASK THE HOP OPENED `completed`: a server message names a
+/// task only if one was created (A2A v1.0 `Message`, a2a.proto:254-259), so a standalone
+/// message is the whole interaction, and busbar's task for it is terminal (and so swept by
+/// retention), never left `working`.
 #[test]
 fn a_message_only_answer_settles_the_opened_task_completed() {
     for far in [
@@ -1370,7 +1473,8 @@ fn a_message_only_answer_settles_the_opened_task_completed() {
     );
 }
 
-/// THE FAR END'S RESULT LEAVES AS ITS OWN BYTES, BUSBAR'S IDENTITY SPLICED IN (Law 5: a relay sends
+/// THE FAR END'S RESULT LEAVES AS ITS OWN BYTES, BUSBAR'S IDENTITY SPLICED IN (Law 5: a relay
+/// sends the bytes with governed byte-level splices; Q128 a2a M8).
 #[test]
 fn a_relayed_result_is_the_far_ends_bytes_with_busbars_identity_spliced_in() {
     let mut r = task_sent(false);
@@ -1395,6 +1499,7 @@ fn a_relayed_result_is_the_far_ends_bytes_with_busbars_identity_spliced_in() {
 }
 
 /// A RESULT THAT IS NO OBJECT IS NO ANSWER ABOUT A TASK (Law 11: no invented answer): the plane
+/// cannot read it and refuses it as it refuses an answer that is not JSON.
 #[test]
 fn a_task_hops_result_that_is_no_object_is_refused_not_invented() {
     for result in ["\"done\"", "[1]", "7", "null"] {
@@ -1440,4 +1545,91 @@ fn http_json_reply_ceiling_counts_only_the_backend_document() {
     let reply: Value = serde_json::from_slice(&reply.body).unwrap();
     assert_eq!(reply["id"], id);
     assert_eq!(reply["result"], json!({}));
+}
+
+#[test]
+fn admission_time_refusals_settle_only_new_tasks() {
+    for addressed in [false, true] {
+        for unspeakable in [false, true] {
+            let mut relay = task_sent(addressed);
+            let answer = if unspeakable {
+                relay.refuse_unspeakable("unknown")
+            } else {
+                relay.refuse_demoted()
+            };
+            let PieceAnswer::ToCaller(reply) = answer else {
+                panic!("a refusal answers the caller")
+            };
+            assert!(String::from_utf8_lossy(&reply.body).contains("a2a-p-0102030405060708"));
+            assert_eq!(
+                relay.take_settled(),
+                if addressed {
+                    vec![]
+                } else {
+                    vec![TaskSettled::Failed]
+                }
+            );
+        }
+    }
+}
+
+#[test]
+fn relay_debug_and_journal_never_expose_registered_url() {
+    let mut relay = sent();
+    let secret = "https://private-host.example/private-path?credential=private-secret";
+    relay.name_backend("registered-agent", secret);
+    assert!(!format!("{relay:?}").contains("private-"));
+    let (_, lines) = journaled(|| relay.refuse_transport().0);
+    assert!(lines.iter().all(|(_, line)| !line.contains("private-")));
+}
+
+#[test]
+fn ending_a_relay_releases_payloads_but_keeps_billing_and_refusal_facts() {
+    use crate::tests::raw_custody_probe::{Probe, SECRET};
+    let mut relay = task_sent(false);
+    relay.send_shared_instead(SECRET.to_vec().into());
+    assert_eq!(relay.replacement_bytes(), Some(SECRET));
+    let before = (
+        relay.sent,
+        relay.far_answered(),
+        relay.moved(),
+        relay.task().cloned(),
+    );
+    let probe = Probe::start();
+    relay.release_payloads();
+    probe.checkpoint();
+    assert!(relay.replacement_bytes().is_none());
+    assert_eq!(
+        (
+            relay.sent,
+            relay.far_answered(),
+            relay.moved(),
+            relay.task().cloned()
+        ),
+        before
+    );
+}
+
+#[test]
+fn raw_serialization_starts_with_amortized_room() {
+    let mut raw = RawBytes::default();
+    raw.extend_from_slice(b"{");
+    let pointer = raw.0.as_ptr();
+    for _ in 1..256 {
+        raw.extend_from_slice(b" ");
+    }
+    assert_eq!(raw.0.as_ptr(), pointer);
+}
+
+#[test]
+fn oversized_grpc_answer_is_not_copied_before_refusal() {
+    let mut relay = HopRelay::new(json!(7), "1.0");
+    relay.binding = Binding::Grpc;
+    relay.far = vec![b'x'; MAX_REPLY_BYTES + 1].into();
+    let allocation = relay.far.as_slice().as_ptr();
+    let PieceAnswer::ToCaller(reply) = relay.whole(STATUS_OK) else {
+        panic!("oversize answer refused")
+    };
+    assert_eq!(reply.status, STATUS_BAD_GATEWAY);
+    assert_eq!(relay.far.as_slice().as_ptr(), allocation);
 }

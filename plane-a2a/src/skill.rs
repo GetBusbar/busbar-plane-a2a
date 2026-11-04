@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! The skill a request matches on an agent's card: busbar's own namespaced annotation,
+//! The skill a request matches on an agent's card: busbar's own namespaced annotation, `metadata["busbar/skill"]` on the answer.
 
 use serde_json::Value;
 
 use crate::a2a::agent_card::AgentCard;
 
-/// EVERY PLACE A2A SPELLS the push-callback config object, in both revisions: v0.3's
+/// EVERY PLACE A2A SPELLS the push-callback config object, in both revisions: v0.3's `pushNotificationConfig`, v1.0's `taskPushNotificationConfig`, flat or nested.
 pub const CALLBACK_CONFIG_POINTERS: [&str; 8] = [
     "/params/configuration/pushNotificationConfig",
     "/params/configuration/push_notification_config",
@@ -19,13 +19,13 @@ pub const CALLBACK_CONFIG_POINTERS: [&str; 8] = [
     "/params/configuration/task_push_notification_config",
 ];
 
-/// DOES THIS METHOD NAME ASK FOR A STREAM? Both eras of the name: v0.3's `message/stream` and
+/// DOES THIS METHOD NAME ASK FOR A STREAM?
 #[must_use]
 pub fn reads_as_stream(method: &str) -> bool {
-    method.ends_with("/stream")
-        || method == "tasks/resubscribe"
-        || method == "SendStreamingMessage"
-        || method == "SubscribeToTask"
+    crate::ops::row_for(method).map_or_else(
+        || method.ends_with(crate::ops::STREAM_SUFFIX),
+        |row| row.multi_frame,
+    )
 }
 
 /// THE SHAPE OF A TASK, as the fit is allowed to see it: typed metadata only, never prose.
@@ -43,7 +43,7 @@ pub struct TaskShape {
 }
 
 impl TaskShape {
-    /// The shape an inbound envelope asks for. Send requests have their field types checked at
+    /// The shape an inbound envelope asks for.
     #[must_use]
     pub fn of(envelope: &Value) -> Self {
         let params = envelope.get("params");
@@ -132,6 +132,10 @@ impl Unfit {
             Unfit::Unreadable(Unreadable::NotAnObject) => {
                 "this agent's held card cannot be read: it is not a JSON object".to_string()
             }
+            Unfit::Unreadable(Unreadable::NotACard) => {
+                "this agent's held card cannot be read: a member it declares has the wrong type"
+                    .to_string()
+            }
             Unfit::NoCachedCard => "busbar holds no card for this agent yet, so the request \
                                     cannot be judged against what the agent declares"
                 .to_string(),
@@ -142,19 +146,14 @@ impl Unfit {
 /// Why a held card cannot be read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Unreadable {
-    /// The document is not a card.
+    /// The document is not a JSON object.
     NotAnObject,
-}
-
-/// THE FIT of a held card DOCUMENT to `shape`: [`judge`] over the card read.
-pub fn fit(card: &Value, shape: &TaskShape) -> Result<Option<String>, Unfit> {
-    let card =
-        crate::a2a::agent_card::parse(card).ok_or(Unfit::Unreadable(Unreadable::NotAnObject))?;
-    judge(&card, shape)
+    /// The document is an object, but a member busbar reads has the wrong type.
+    NotACard,
 }
 
 /// The HTTP status of the unsupported-operation refusal when an agent's card does not fit.
-pub const STATUS_UNFIT: u32 = 400;
+pub const STATUS_UNFIT: u32 = crate::agent_arrival::STATUS_BAD_REQUEST;
 
 /// The refusal of a request an agent's held card does not fit:
 #[must_use]
@@ -167,7 +166,7 @@ pub fn refusal(unfit: &Unfit) -> crate::agent_arrival::AgentRefusal {
     )
 }
 
-/// JUDGE WHETHER AN AGENT CARD FITS A TASK SHAPE: the matched skill id (`None` when the shape
+/// JUDGE WHETHER AN AGENT CARD FITS A TASK SHAPE: the matched skill id (`None` when the shape names none), or why it does not fit.
 pub fn judge(card: &AgentCard, shape: &TaskShape) -> Result<Option<String>, Unfit> {
     if shape.requires_stream && !card.capabilities.is_stream {
         return Err(Unfit::CapabilityNotDeclared("streaming"));
@@ -197,7 +196,7 @@ fn pick<'a>(specific: &'a [String], fallback: &'a [String]) -> &'a [String] {
     }
 }
 
-/// The caller must be able to RECEIVE something the agent produces; a side that names no modes
+/// The caller must be able to RECEIVE something the agent produces; a side that names no modes constrains nothing.
 fn check_modes(shape: &TaskShape, agent_outputs: &[String]) -> Result<(), Unfit> {
     let wanted = &shape.output_modes;
     if wanted.is_empty()

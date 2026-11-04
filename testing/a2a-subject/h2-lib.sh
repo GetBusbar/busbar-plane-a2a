@@ -4,7 +4,7 @@
 #
 # Shared boot/mint/call helpers for the H2 A2A gating scenarios (testing/a2a-subject/h2-*.sh),
 # the Teller-steps rule H2 (BUSBAR-1.6.0.md THE DESIGN, §1). Each h2-*.sh script sources this, boots its OWN
-# throwaway busbar + its own instance of h2-mock-agent.py on its own ports (the same isolation
+# throwaway busbar + its own instance of h2-mock-agent.mjs on its own ports (the same isolation
 # testing/shadow-oracle/scripts/teller-*.sh use for the llm plane, and scripts/mcp-subject/h2-lib.sh
 # uses for the sibling plane).
 #
@@ -33,15 +33,9 @@ umask 077
 # (#71), "the card in force at `arrived_ms`" (#79) and "a hit class with no entry REFUSES" (#42) are
 # even questions that can be asked.
 #
-# IT IS EMPTY, AND THE EMPTINESS IS THE HONEST SHAPE — not a stub left unfilled. The config grammar
-# in this tree keys `rate_card:` by CONFIG MODEL NAME and validates every key against `models:`
-# (`crates/busbar-kernel/src/config_validate/mod.rs:1465-1472`: "rate_card names model 'X', which is
-# not defined under models:"), and each entry's only members are the four LLM token tiers
-# (`RateEntryCfg`, `crates/busbar-kernel/src/config/sections.rs:324`, `deny_unknown_fields`). An a2a
-# lane is `agent:<id>` and an a2a meter class is `bytes`; neither is a `models:` key and neither is
-# one of the four tiers, so THERE IS NO CONFIGURATION THAT PRICES THIS PLANE'S DECLARED CLASS. An
-# empty map is therefore the most a billing-ON a2a deployment can say today, and `h2-class-price.sh`
-# is the leg that says what that costs.
+# The default prices the plane's one declared class `bytes` at an explicit 0, so the subject is a
+# BILLING-ON deployment that bills bytes nothing; `h2-class-price.sh` prices `bytes` at 2 and
+# `h2-unpriced-refuses.sh` leaves it unpriced.
 # The card is the PLANE's own (`agents.rate_card`, keyed by lane): it must configure every class the plane
 # declares, and an explicit 0 counts. Written inside the `agents:` section, two-space indented.
 H2_RATE_CARD_DEFAULT='  rate_card:
@@ -67,8 +61,8 @@ PY
 }
 
 # h2_boot <workdir> <group-yaml-block>
-# Boots busbar with one registered A2A agent "probe" (testing/a2a-subject/h2-mock-agent.py,
-# `pin: unpinned`), and the group(s) named in <group-yaml-block>.
+# Boots busbar with one registered A2A agent "probe" (testing/a2a-subject/h2-mock-agent.mjs,
+# `pin.mechanism: jws_issuer_key`), and the group(s) named in <group-yaml-block>.
 # Sets: H2_DATA_PORT H2_ADMIN_PORT H2_AGENT_PORT H2_PLANE_URL H2_ADMIN_TOKEN H2_SIGNING_KEY
 #       H2_AGENT_PID H2_BUSBAR_PID H2_EGRESS_DIR H2_WORKDIR H2_CONTROL_FILE
 h2_boot() {
@@ -560,7 +554,7 @@ h2_stop() { :; }
 h2_approve_agent() { return 0; }
 h2_mint() { echo "kid-selftest tok-selftest"; }
 h2_bind() { echo "bound-selftest"; }
-h2_call() { if [ "${H2_RATE_CARD_YAML-unset}" = " " ]; then echo "200 {}"; else echo "${H2_ST_CALL:-200} {}"; fi; }
+h2_call() { if [ "${H2_RATE_CARD_YAML-unset}" = " " ]; then echo "200 {}"; else echo "${H2_ST_CALL:-200} ${H2_ST_BODY:-unpriced}"; fi; }
 h2_usage_field() { _st_next usage "${H2_ST_USAGE:-1}"; }
 h2_put_fee() { echo '{"applied":true}'; }
 h2_admin_usage_total() { echo 80000; }
@@ -630,10 +624,12 @@ _h2_st_case_class_price() {
 
 _h2_st_case_unpriced_refuses() {
   _h2_st_want "unpriced-refuses: control arm 2 refused 400 passes" 0 "$(_h2_st_rig h2-unpriced-refuses.sh H2_ST_CALL=400 H2_ST_USAGE='1|0')"
+  _h2_st_want "unpriced-refuses: unrelated 400 is red" red "$(_h2_st_rig h2-unpriced-refuses.sh H2_ST_CALL=400 H2_ST_BODY=bad-json H2_ST_USAGE='1|0')"
   _h2_st_want "unpriced-refuses: arm 2 served 200 is red" red "$(_h2_st_rig h2-unpriced-refuses.sh H2_ST_CALL=200 H2_ST_USAGE='1|1')"
   _h2_st_want "unpriced-refuses: arm 2 no connection (000) is red, not a refusal" red "$(_h2_st_rig h2-unpriced-refuses.sh H2_ST_CALL=000 H2_ST_USAGE='1|0')"
   _h2_st_want "unpriced-refuses: arm 2 node failure (502) is red, not a refusal" red "$(_h2_st_rig h2-unpriced-refuses.sh H2_ST_CALL=502 H2_ST_USAGE='1|0')"
   _h2_st_want "unpriced-refuses: arm 2 other success (202) is red, not a refusal" red "$(_h2_st_rig h2-unpriced-refuses.sh H2_ST_CALL=202 H2_ST_USAGE='1|0')"
+  _h2_st_want "unpriced-refuses: arm 2 grant refusal (403) is red, not the unpriced refusal" red "$(_h2_st_rig h2-unpriced-refuses.sh H2_ST_CALL=403 H2_ST_USAGE='1|0')"
 }
 
 h2_selftest() {

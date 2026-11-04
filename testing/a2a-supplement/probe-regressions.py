@@ -19,6 +19,33 @@ from selftest import FakeBinding, _two_binding_target
 
 
 class ProbeRegressions(unittest.TestCase):
+    def test_authentication_probe_rejects_anonymous_and_forged_acceptance(self):
+        target = Target("fixture", "https://fixture.invalid/card")
+        target.card = {"securitySchemes": {"bearer": {"httpAuthSecurityScheme": {"scheme": "Bearer"}}},
+                       "securityRequirements": [{"schemes": {"bearer": []}}]}
+        class Binding:
+            admitted = "none"
+            def call(self, op, params, token=None):
+                accepted = self.admitted == "all" or (self.admitted == "anonymous" and token is None)
+                return Reply(ok=accepted, http_status=200 if accepted else 401, code=None if accepted else 401)
+        binding = Binding()
+        target.bindings = lambda: {"jsonrpc": binding}
+        self.assertEqual(checks_auth.check_auth_server_002(target).verdict, Verdict.PASS)
+        for mode in ("all", "anonymous"):
+            binding.admitted = mode
+            self.assertEqual(checks_auth.check_auth_server_002(target).verdict, Verdict.FAIL)
+
+    def test_binding_drivers_are_reused_and_closed(self):
+        target = Target("fixture", "https://fixture.invalid/card")
+        target.interfaces = [Interface("https://fixture.invalid/a2a", "grpc", "1.0")]
+        driver = Mock()
+        with patch("a2asup.target.GrpcBinding", return_value=driver) as create:
+            self.assertIs(target.bindings()["grpc"], target.bindings()["grpc"])
+            create.assert_called_once()
+            target.close()
+            driver.close.assert_called_once()
+            self.assertIsNone(target._bindings)
+
     def paired(self, a, b):
         return _two_binding_target({
             "jsonrpc": FakeBinding("jsonrpc", {"send_message": a}),
@@ -159,18 +186,26 @@ class ProbeRegressions(unittest.TestCase):
 
     def test_undeclared_legacy_version_can_be_refused(self):
         class OneVersion:
+            # Serves each requested version's own vocabulary and refuses an absent/empty header,
+            # so the declared-version loop passes in both halves and ONLY the supports_0_3 rule
+            # can turn the second half red.
             def call(self, op, params, *, version="1.0", method_override=None, **kwargs):
                 if version in (None, ""):
                     return Reply(ok=False, code=-32009, http_status=400)
-                if method_override == "message/send":
+                if (method_override == "message/send") != (version == "0.3"):
                     return Reply(ok=False, code=-32601, http_status=400)
                 return Reply(ok=True, payload={"task": {"id": "t"}}, http_status=200)
         target = Target("one", "http://example.invalid/card", token="tok")
         target.interfaces = [Interface("http://example.invalid/", "jsonrpc", "1.0")]
         target.bindings = lambda: {"jsonrpc": OneVersion()}
-        self.assertEqual(checks_ver.check_ver_server_001(target).verdict, Verdict.PASS)
+        result = checks_ver.check_ver_server_001(target)
+        self.assertEqual(result.verdict, Verdict.PASS)
+        self.assertNotIn("answered as 0.3", result.summary)
         target.interfaces.append(Interface("http://example.invalid/", "jsonrpc", "0.3"))
-        self.assertEqual(checks_ver.check_ver_server_001(target).verdict, Verdict.FAIL)
+        result = checks_ver.check_ver_server_001(target)
+        self.assertEqual(result.verdict, Verdict.FAIL)
+        self.assertNotIn("did not complete", result.summary)
+        self.assertIn("no A2A-Version header", result.summary)
 
     def test_scope_requires_authenticated_success(self):
         class RefusesEverybody:

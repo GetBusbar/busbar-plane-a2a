@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! THE HTTP+JSON LINE'S ARRIVAL: the JSON-RPC envelope the line's request spells, composed from
+//! THE HTTP+JSON LINE'S ARRIVAL: the JSON-RPC envelope the line's request spells, composed from the route, the path, the query and the body, and decided as the JSON-RPC line decides it.
 
 use std::collections::HashMap;
 
@@ -11,10 +11,10 @@ use crate::agent_arrival::AgentRefusal;
 use crate::request_json::RequestJson;
 use crate::statement::Route;
 
-/// THE JSON-RPC ID OF A COMPOSED ENVELOPE. A JSON-RPC id is a correlation handle for a channel
+/// THE JSON-RPC ID OF A COMPOSED ENVELOPE.
 pub const REST_RPC_ID: &str = "a2a-http-json";
 
-/// THE METHOD NAMES, in A2A v1.0's spelling. Both supported revisions define HTTP+JSON;
+/// THE METHOD NAMES, in A2A v1.0's spelling.
 pub mod method {
     /// `POST /message:send`.
     pub const SEND_MESSAGE: &str = "SendMessage";
@@ -40,11 +40,11 @@ pub mod method {
     pub const GET_EXTENDED_AGENT_CARD: &str = "GetExtendedAgentCard";
 }
 
-/// The two operations `POST /tasks/{id}:<verb>` spells. The verb is a suffix INSIDE the captured
+/// The two operations `POST /tasks/{id}:<verb>` spells.
 const VERB_CANCEL: &str = "cancel";
 const VERB_SUBSCRIBE: &str = "subscribe";
 
-/// `404`: the status of a `POST /tasks/…` naming no verb this binding defines, of an arrival no
+/// `404`: the status of a `POST /tasks/…` naming no verb this binding defines, of an arrival no line of the door serves, and of a task the caller does not hold (A2A section 5.4, `TaskNotFoundError`).
 pub(crate) const STATUS_NOT_FOUND: u32 = 404;
 
 use crate::agent_arrival::CODE_METHOD_NOT_FOUND;
@@ -76,11 +76,11 @@ impl Params {
         self
     }
 
-    /// Set `name` only if the caller supplied it: typed by [`json_scalar`] where the proto's field
+    /// Set `name` only if the caller supplied it: typed by [`json_scalar`] where the proto's field is not a string ([`query_type`]), the string as sent otherwise.
     #[must_use]
     pub fn maybe(mut self, name: &str, value: Option<&String>) -> Self {
         if let Some(v) = value {
-            let value = if TYPED_QUERY_MEMBERS.contains(&name) {
+            let value = if query_type(name).is_some() {
                 json_scalar(v)
             } else {
                 Value::String(v.clone())
@@ -91,11 +91,14 @@ impl Params {
     }
 
     /// Merge a request body in, VERBATIM (the REST body IS the `params`). A path-derived member is
+    /// set AFTER this, so the URL a caller addressed cannot be re-pointed by a member it posted.
     #[must_use]
-    pub fn merge(mut self, body: &Value) -> Self {
-        if let Some(obj) = body.as_object() {
-            for (k, v) in obj {
-                self.insert(k, v.clone());
+    pub fn merge(mut self, body: Value) -> Self {
+        let mut body = RequestJson::new(body);
+        if let Some(obj) = body.as_object_mut() {
+            for (mut k, v) in std::mem::take(obj) {
+                self.insert(&k, v);
+                zeroize::Zeroize::zeroize(&mut k);
             }
         }
         self
@@ -114,10 +117,21 @@ impl Drop for Params {
     }
 }
 
-/// THE QUERY MEMBERS WHOSE PROTO FIELD IS NOT A STRING (`ListTasksRequest`'s `page_size`,
-pub const TYPED_QUERY_MEMBERS: &[&str] = &["pageSize", "historyLength", "includeArtifacts"];
+/// THE QUERY MEMBERS WHOSE PROTO FIELD IS NOT A STRING (`ListTasksRequest`'s `page_size`, `history_length` and `include_artifacts`, `GetTaskRequest`'s `history_length`, `ListTaskPushNotificationConfigsRequest`'s `page_size`): only these are typed by [`json_scalar`].
+enum QueryType {
+    Integer,
+    Boolean,
+}
 
-/// A QUERY-STRING VALUE, TYPED THE WAY THE ENVELOPE WANTS IT: an integer is a number, `true` and
+fn query_type(name: &str) -> Option<QueryType> {
+    match name {
+        "pageSize" | "historyLength" => Some(QueryType::Integer),
+        "includeArtifacts" => Some(QueryType::Boolean),
+        _ => None,
+    }
+}
+
+/// A QUERY-STRING VALUE, TYPED THE WAY THE ENVELOPE WANTS IT: an integer is a number, `true` and `false` are booleans, anything else (a task id, a page token, a status name) stays a string.
 #[must_use]
 pub fn json_scalar(raw: &str) -> Value {
     if let Ok(n) = raw.parse::<i64>() {
@@ -130,7 +144,7 @@ pub fn json_scalar(raw: &str) -> Value {
     }
 }
 
-/// THE QUERY STRING AS A `name -> value` MAP, decoded as `application/x-www-form-urlencoded`
+/// Decode the query into a name-to-value map using form encoding.
 #[must_use]
 pub fn query_map(query: Option<&str>) -> Option<HashMap<String, String>> {
     let mut map = HashMap::new();
@@ -145,48 +159,24 @@ pub fn query_map(query: Option<&str>) -> Option<HashMap<String, String>> {
 }
 
 /// Decode ONE `application/x-www-form-urlencoded` component: `+` is a space, `%XX` the byte,
+/// anything else verbatim; invalid UTF-8 is refused.
 #[must_use]
 pub fn form_decode(s: &str) -> Option<String> {
+    percent_decode(s, true)
+}
+
+/// The one `%XX` decoding loop: `%XX` is the byte, `+` a space only where `plus_is_space`, anything
+/// else verbatim; `None` when the decoded bytes are not UTF-8.
+fn percent_decode(s: &str, plus_is_space: bool) -> Option<String> {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
-        match bytes[i] {
-            b'+' => {
-                out.push(b' ');
-                i += 1;
-            }
-            b'%' if i + 2 < bytes.len() => match (hex(bytes[i + 1]), hex(bytes[i + 2])) {
-                (Some(h), Some(l)) => {
-                    out.push(h * 16 + l);
-                    i += 3;
-                }
-                _ => {
-                    out.push(bytes[i]);
-                    i += 1;
-                }
-            },
-            b => {
-                out.push(b);
-                i += 1;
-            }
+        if plus_is_space && bytes[i] == b'+' {
+            out.push(b' ');
+            i += 1;
+            continue;
         }
-    }
-    String::from_utf8(out).ok()
-}
-
-/// One hex digit's value.
-fn hex(b: u8) -> Option<u8> {
-    (b as char).to_digit(16).and_then(|d| u8::try_from(d).ok())
-}
-
-/// One path capture, percent-decoded as the router decoded it (`%XX` is the byte; `+` stays a
-#[must_use]
-pub fn path_decode(s: &str) -> Option<String> {
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
             if let (Some(h), Some(l)) = (hex(bytes[i + 1]), hex(bytes[i + 2])) {
                 out.push(h * 16 + l);
@@ -200,12 +190,24 @@ pub fn path_decode(s: &str) -> Option<String> {
     String::from_utf8(out).ok()
 }
 
-/// A request object's `params`, or the empty object when no body was supplied. Malformed
+/// One hex digit's value.
+fn hex(b: u8) -> Option<u8> {
+    (b as char).to_digit(16).and_then(|d| u8::try_from(d).ok())
+}
+
+/// One path capture, percent-decoded as the router decoded it (`%XX` is the byte; `+` stays a
+/// `+`), or `None` when the decoded bytes are not UTF-8.
+#[must_use]
+pub fn path_decode(s: &str) -> Option<String> {
+    percent_decode(s, false)
+}
+
+/// A request object's `params`, or the empty object when no body was supplied.
 pub fn json_body(body: &[u8]) -> Result<Value, AgentRefusal> {
     if body.is_empty() {
         return Ok(json!({}));
     }
-    let document = serde_json::from_slice::<RequestJson>(body).map_err(|_| {
+    let document = crate::request_json::parse(body).map_err(|_| {
         AgentRefusal::new(
             crate::agent_arrival::STATUS_BAD_REQUEST,
             None,
@@ -225,8 +227,7 @@ pub fn json_body(body: &[u8]) -> Result<Value, AgentRefusal> {
 }
 
 /// `body` less its `members`: the path names the task, so the body's spellings of it go.
-fn without(body: &Value, members: &[&str]) -> Value {
-    let mut body = RequestJson::new(body.clone());
+fn without(mut body: RequestJson, members: &[&str]) -> Value {
     if let Some(obj) = body.as_object_mut() {
         for m in members {
             if let Some(removed) = obj.remove(*m) {
@@ -237,7 +238,7 @@ fn without(body: &Value, members: &[&str]) -> Value {
     body.into_value()
 }
 
-/// The refusal for a `POST /tasks/…` that names no verb this binding defines: `404` +
+/// The refusal for a `POST /tasks/…` that names no verb this binding defines: `404` + `MethodNotFound`.
 #[must_use]
 pub fn not_a_verb(addressed: &str) -> AgentRefusal {
     AgentRefusal::new(
@@ -251,27 +252,23 @@ pub fn not_a_verb(addressed: &str) -> AgentRefusal {
     )
 }
 
-/// The path variables `target` binds against `route`'s pattern, by name, each decoded as the
+/// The path variables `target` binds against `route`'s pattern, by name, each decoded as the router decoded it.
 pub fn captures(
     route: &Route,
     target: &str,
 ) -> Result<Option<Vec<(&'static str, String)>>, AgentRefusal> {
     let path = target.split(['?', '#']).next().unwrap_or(target);
-    let want: Vec<&'static str> = route.target.split('/').collect();
-    let got: Vec<&str> = path.split('/').collect();
-    if want.len() != got.len() {
-        return Ok(None);
-    }
-
-    if want
-        .iter()
-        .zip(&got)
-        .any(|(&w, &g)| !(w.starts_with('{') && w.ends_with('}')) && w != g)
+    let want = || route.target.split('/');
+    let got = || path.split('/');
+    if want().count() != got().count()
+        || want()
+            .zip(got())
+            .any(|(w, g)| !(w.starts_with('{') && w.ends_with('}')) && w != g)
     {
         return Ok(None);
     }
     let mut out = Vec::new();
-    for (&w, &g) in want.iter().zip(got.iter()) {
+    for (w, g) in want().zip(got()) {
         if let Some(name) = w.strip_prefix('{').and_then(|w| w.strip_suffix('}')) {
             let value = path_decode(g).ok_or_else(|| {
                 AgentRefusal::new(
@@ -304,7 +301,7 @@ fn query_of(target: &str) -> Option<&str> {
     rest.split_once('?').map(|(_, q)| q)
 }
 
-/// Compose the envelope a request on the HTTP+JSON line spells: `route` is the line's route the
+/// Compose the envelope a request on the HTTP+JSON line spells: `route` is the line's route the arrival matched, `target` the request target as sent (its path captures and query read here), `body` the request body.
 pub fn compose(route: &Route, target: &str, body: &[u8]) -> Result<Option<Vec<u8>>, AgentRefusal> {
     let Some(vars) = captures(route, target)? else {
         return Ok(None);
@@ -318,7 +315,7 @@ pub fn compose(route: &Route, target: &str, body: &[u8]) -> Result<Option<Vec<u8
     compose_from(route, var, query_of(target), body)
 }
 
-/// [`compose`] over captures a router already decoded: `var` answers a path capture by name (the
+/// [`compose`] over captures a router already decoded: `var` answers a path capture by name (the empty string for one the route does not have), `query` is the raw query string.
 pub fn compose_from(
     route: &Route,
     var: impl Fn(&str) -> String,
@@ -335,10 +332,10 @@ pub fn compose_from(
     };
     let query = query_map(query).ok_or_else(|| invalid("the query must decode as UTF-8"))?;
     for (name, value) in &query {
-        let valid = match name.as_str() {
-            "includeArtifacts" => matches!(value.as_str(), "true" | "false"),
-            "pageSize" | "historyLength" => value.parse::<i32>().is_ok(),
-            _ => true,
+        let valid = match query_type(name) {
+            Some(QueryType::Boolean) => matches!(value.as_str(), "true" | "false"),
+            Some(QueryType::Integer) => value.parse::<i32>().is_ok(),
+            None => true,
         };
         if !valid {
             return Err(invalid(
@@ -396,15 +393,11 @@ pub fn compose_from(
             json!({})
         });
 
-        let posted = RequestJson::new(without(&posted, &crate::task_identity::TASK_ID_MEMBERS));
-        (
-            name,
-            Params::new().merge(&posted).set("id", id).into_value(),
-        )
+        let posted = without(posted, &crate::task_identity::TASK_ID_MEMBERS);
+        (name, Params::new().merge(posted).set("id", id).into_value())
     } else if at("POST", crate::ROUTE_PUSH_CONFIGS) {
-        let posted = RequestJson::new(json_body(body)?);
-        let posted = RequestJson::new(without(&posted, &["task_id"]));
-        let params = Params::new().merge(&posted).set("taskId", var("id"));
+        let posted = without(RequestJson::new(json_body(body)?), &["task_id"]);
+        let params = Params::new().merge(posted).set("taskId", var("id"));
         (method::CREATE_PUSH_CONFIG, params.into_value())
     } else if at("GET", crate::ROUTE_PUSH_CONFIGS) {
         let params = Params::new()

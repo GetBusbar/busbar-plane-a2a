@@ -10,7 +10,7 @@ fn c(v: &Value) -> String {
     canonicalize(v).expect("canonicalizable")
 }
 
-/// RFC 8785 section 3.2.3: members are sorted on the UTF-16 code units of their NAMES, and the
+/// RFC 8785 section 3.2.3: members are sorted on the UTF-16 code units of their NAMES, and the sorting is recursive.
 #[test]
 fn object_members_sort_by_name() {
     let v = json!({
@@ -46,7 +46,7 @@ fn object_members_sort_by_name() {
     }
 }
 
-/// UTF-16 order is not code-point order, and the disagreement is the reason this is not left to the
+/// UTF-16 order is not code-point order, and the disagreement is the reason this is not left to the map's own `Ord`.
 #[test]
 fn a_supplementary_name_sorts_below_a_high_bmp_name() {
     let out = c(&json!({ "\u{fffd}": 1, "\u{10000}": 2 }));
@@ -58,7 +58,7 @@ fn a_supplementary_name_sorts_below_a_high_bmp_name() {
     );
 }
 
-/// RFC 8785 section 3.2.2.2: the two-character escapes are used where they exist, `\u` only below
+/// RFC 8785 section 3.2.2.2: the two-character escapes are used where they exist, `\u` only below U+0020, and everything else is emitted literally.
 #[test]
 fn strings_use_the_shortest_escape_and_nothing_more() {
     assert_eq!(
@@ -70,7 +70,7 @@ fn strings_use_the_shortest_escape_and_nothing_more() {
     assert_eq!(c(&json!("\u{20ac}\u{1f600}")), "\"\u{20ac}\u{1f600}\"");
 }
 
-/// RFC 8785 section 3.2.2.3 defers to ECMAScript `Number.prototype.toString`, where a whole number
+/// RFC 8785 section 3.2.2.3 defers to ECMAScript `Number.prototype.toString`, where a whole number has no fractional part and negative zero prints as `0`.
 #[allow(clippy::excessive_precision)]
 #[test]
 fn numbers_print_as_ecmascript() {
@@ -87,7 +87,7 @@ fn numbers_print_as_ecmascript() {
     assert_eq!(c(&json!(1e-6)), "0.000001");
 }
 
-/// RFC 8785 section 3.2.2.3: a number is an IEEE-754 double whatever its spelling, so an integer
+/// RFC 8785 section 3.2.2.3: a number is an IEEE-754 double whatever its spelling, so an integer beyond 2^53 canonicalizes as the double it rounds to.
 #[test]
 fn a_large_integer_canonicalizes_as_its_double() {
     assert_eq!(c(&json!(9007199254740992u64)), "9007199254740992");
@@ -99,7 +99,7 @@ fn a_large_integer_canonicalizes_as_its_double() {
     assert_eq!(c(&json!(-9007199254740993i64)), "-9007199254740992");
 }
 
-/// RFC 8785 Appendix B, the IEEE-754 to ECMAScript table, one row per vector. The hex is the double's
+/// RFC 8785 Appendix B, the IEEE-754 to ECMAScript table, one row per vector.
 #[test]
 fn rfc8785_appendix_b_number_vectors() {
     let rows: &[(u64, &str)] = &[
@@ -135,7 +135,7 @@ fn rfc8785_appendix_b_number_vectors() {
     }
 }
 
-/// The same table reached through the PARSER, since that is the path a card takes: text to `Value`
+/// Check the same number vectors through the JSON parser used for incoming cards.
 #[test]
 fn parsed_number_spellings_canonicalize_as_doubles() {
     for (text, want) in [
@@ -153,7 +153,7 @@ fn parsed_number_spellings_canonicalize_as_doubles() {
     }
 }
 
-/// Whitespace is not canonical, and neither is anything decorative. The canonical form of a
+/// Whitespace is not canonical, and neither is anything decorative.
 #[test]
 fn two_spellings_of_one_document_canonicalize_identically() {
     let pretty: Value =
@@ -164,14 +164,14 @@ fn two_spellings_of_one_document_canonicalize_identically() {
     assert_eq!(c(&terse), r#"{"a":{"y":true,"z":1},"b":[1,2]}"#);
 }
 
-/// ARRAY order is data, not presentation, so it is preserved exactly. Sorting an array would make
+/// ARRAY order is data, not presentation, so it is preserved exactly.
 #[test]
 fn array_order_is_preserved() {
     assert_eq!(c(&json!([3, 1, 2])), "[3,1,2]");
     assert_ne!(c(&json!([3, 1, 2])), c(&json!([1, 2, 3])));
 }
 
-/// NON-FINITE NUMBERS ARE UNREPRESENTABLE BEFORE THEY REACH THE CANONICALIZER — which is the honest
+/// NON-FINITE NUMBERS ARE UNREPRESENTABLE BEFORE THEY REACH THE CANONICALIZER — which is the honest name for what this checks, and NOT "the canonicalizer refuses one".
 #[test]
 fn a_non_finite_number_cannot_be_built_into_a_value_at_all() {
     assert!(serde_json::Number::from_f64(f64::NAN).is_none());
@@ -198,7 +198,7 @@ fn a_non_finite_number_cannot_be_built_into_a_value_at_all() {
     );
 }
 
-/// Empty containers still canonicalize, and an absent member is not an empty one. A card that
+/// Empty containers still canonicalize, and an absent member is not an empty one.
 #[test]
 fn empty_containers_are_distinct_from_absent_ones() {
     assert_eq!(c(&json!({})), "{}");
@@ -208,4 +208,65 @@ fn empty_containers_are_distinct_from_absent_ones() {
         c(&json!({ "skills": Value::Null })),
         c(&json!({ "skills": [] }))
     );
+}
+
+/// The full-precision halfway reading the screen in [`shortest_digits`] stands in front of.
+fn shortest_digits_at_full_precision(abs: f64) -> (String, i32) {
+    let (digits, exp) = split_scientific(&format!("{abs:e}"));
+    let (exact, exact_exp) = split_scientific(&format!("{abs:.800e}"));
+    let exact = exact.trim_end_matches('0');
+    let k = digits.len();
+    if !(exact_exp == exp && exact.len() == k + 1 && exact.ends_with('5')) {
+        return (digits, exp);
+    }
+    let lower = exact[..k].to_string();
+    let mut upper = lower.clone().into_bytes();
+    if let Some(last) = upper.last_mut() {
+        if *last == b'9' {
+            return (digits, exp);
+        }
+        *last += 1;
+    }
+    let upper = String::from_utf8(upper).unwrap();
+    let round_trips = |d: &str| format!("{d}e{}", exp - (k as i32 - 1)).parse::<f64>() == Ok(abs);
+    if !(round_trips(&lower) && round_trips(&upper)) {
+        return (digits, exp);
+    }
+    if (lower.as_bytes()[k - 1] - b'0').is_multiple_of(2) {
+        (lower, exp)
+    } else {
+        (upper, exp)
+    }
+}
+
+/// The cheap halfway screen changes no digit: every double read here prints as the full reading does.
+#[test]
+fn the_halfway_screen_agrees_with_the_full_precision_reading() {
+    let mut bits: u64 = 0x9e37_79b9_7f4a_7c15;
+    let mut checked = vec![
+        f64::from_bits(0x4314_3ff3_c1cb_0959),
+        f64::from_bits(0x41b3_de43_5555_5554),
+        f64::from_bits(0x41b3_de43_5555_5557),
+        2_251_799_813_685_248.5,
+        0.5,
+        5e-324,
+    ];
+    for _ in 0..20_000 {
+        bits ^= bits << 13;
+        bits ^= bits >> 7;
+        bits ^= bits << 17;
+        let f = f64::from_bits(bits).abs();
+        if f.is_finite() && f != 0.0 {
+            checked.push(f);
+        }
+        let near = f64::from_bits(0x4314_3ff3_c1cb_0959 ^ (bits & 0xff));
+        checked.push(near);
+    }
+    for f in checked {
+        assert_eq!(
+            shortest_digits(f),
+            shortest_digits_at_full_precision(f),
+            "{f:e}"
+        );
+    }
 }

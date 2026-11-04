@@ -2,6 +2,8 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! The task store, over host records. The plane holds no store: it reads through `records.get` /
+//! `records.list`, then conditionally publishes exact row comparisons and mutations through the
+//! host's atomic record exchange.
 
 use busbar_contract::vocab::{EV_ARTIFACT, EV_DELEGATED, EV_SUBMITTED};
 use serde::{Deserialize, Serialize};
@@ -9,24 +11,26 @@ use serde::{Deserialize, Serialize};
 use crate::a2a::task::{plan_transition, readable_row, TaskState};
 use crate::record::DIGEST_VERSION_LEN_PREFIXED;
 use crate::records::{retention_of, KIND_PUSH_CONFIG, KIND_TASK, KIND_TASK_EVENT};
+use crate::relay::RawBytes;
 use crate::{TaskEventRow, TaskRow};
 
 /// How long a terminal task stays readable after its terminal transition, in seconds.
 pub const TERMINAL_TTL_SECS: u64 = 300;
 /// The most terminal tasks kept; past it the oldest go first. An active task is never counted
+/// against it and never evicted.
 pub const MAX_RETAINED: usize = 4096;
-/// The existing replay-token TTL, retained for legacy claim callers. Task publication and
-#[cfg(test)]
-pub const CLAIM_TTL_MS: u64 = 60_000;
 /// How many times a change rereads after a definitive atomic condition conflict.
 const TRIES: usize = 3;
 /// The most settled tasks one submit's [`retention_sweep`] retires: a submit opens one task, so a
+/// sweep that may retire this many keeps the settled tasks bounded under any mix of submits, the
+/// rest waiting for the next submit's.
 pub const SWEEP_BUDGET: usize = 32;
 
 /// How long a sweep that left nothing behind holds off the next one, in seconds: the sweep reads
+/// every caller's task rows, so it is not paid on every submit.
 pub const SWEEP_INTERVAL_SECS: u64 = 30;
 
-/// WHEN THE NEXT [`retention_sweep`] IS DUE, per instance: at once while the last one spent its
+/// WHEN THE NEXT [`retention_sweep`] IS DUE, per instance: after one second when the last spent its
 /// whole budget (more may wait), else [`SWEEP_INTERVAL_SECS`] after it. Plane memory; a restart
 /// sweeps on its first submit.
 #[derive(Debug, Default)]
@@ -35,13 +39,17 @@ pub struct SweepGate {
 }
 
 impl SweepGate {
-    /// Whether a submit at `now` sweeps.
+    /// Reserve the next sweep at `now`; failures retain the interval backoff.
     #[must_use]
     pub fn due(&self, now: u64) -> bool {
         self.last.with_all(|m| {
-            m.get(&()).is_none_or(|(at, backlog)| {
-                *backlog || now >= at.saturating_add(SWEEP_INTERVAL_SECS)
-            })
+            let due = m.get(&()).is_none_or(|(at, backlog)| {
+                (*backlog && now > *at) || now >= at.saturating_add(SWEEP_INTERVAL_SECS)
+            });
+            if due {
+                m.insert((), (now, false));
+            }
+            due
         })
     }
 
@@ -62,16 +70,15 @@ pub enum Halt {
 }
 
 /// The host records as the store reaches them. Every call is made in the same order on every entry
+/// of an op, so a re-run reads the answers the host stored for it (the replay rule).
 pub trait Records {
     /// The record of `kind` under `key`; `None` when absent or a tombstone.
     fn get(&mut self, kind: &str, key: &str) -> Result<Option<Vec<u8>>, Halt>;
     /// Every live record of `kind` whose key starts with `prefix`, in key order.
     fn list(&mut self, kind: &str, prefix: &str) -> Result<Vec<(String, Vec<u8>)>, Halt>;
-    /// Put `key` of `kind` if absent, for `ttl_ms`: `true` when this call made the claim.
-    #[cfg(test)]
-    fn claim(&mut self, kind: &str, key: &str, ttl_ms: u64) -> Result<bool, Halt>;
 
     /// Compare every predicate and publish all writes in one host transaction. `true` means
+    /// Applied; `false` means a definitive condition conflict with no effects.
     fn publish(
         &mut self,
         _predicates: &[Predicate],
@@ -83,7 +90,8 @@ pub trait Records {
         ))
     }
 
-    /// Observe the chain incarnation before reading the task for a mutation. Replayed reads
+    /// Observe the chain incarnation before reading the task for a mutation. Replayed reads retain
+    /// this exact answer; a definitive conflict starts a fresh observation and task read.
     fn observe_chain_life(&mut self, _kind: &str, _scope: &str) -> Result<Option<Vec<u8>>, Halt> {
         Err(Halt::Failed(
             "conditional chain observation unavailable".into(),
@@ -140,6 +148,8 @@ fn observe(rec: &mut dyn Records, key: &str) -> Result<ChainLife, Halt> {
 }
 
 /// THE RECORDS AS ONE PIECE SEES THEM ONCE IT HAS WRITTEN: a read of a record the piece already
+/// wrote answers that write, so several changes of one chain in one answer chain over each other
+/// (each claims the sequence the one before it left) rather than over the store's older value.
 pub struct Staged<'r> {
     rec: &'r mut dyn Records,
     written: &'r [Write],
@@ -153,6 +163,7 @@ impl<'r> Staged<'r> {
 }
 
 /// Whether `kind` is the chained kind: its writes are appends the host seals once the store took
+/// them, so a read never answers them from the piece's writes.
 fn chained(kind: &str) -> bool {
     kind == KIND_TASK_EVENT
 }
@@ -194,11 +205,6 @@ impl Records for Staged<'_> {
             }
         }
         Ok(listed.take().into_iter().collect())
-    }
-
-    #[cfg(test)]
-    fn claim(&mut self, kind: &str, key: &str, ttl_ms: u64) -> Result<bool, Halt> {
-        self.rec.claim(kind, key, ttl_ms)
     }
 
     fn publish(
@@ -265,13 +271,6 @@ pub fn task_key(caller: &str, task: &str) -> String {
     format!("{caller}/{task}")
 }
 
-/// The key of event `seq` of `caller`'s task `task`: the host's listed key of record `seq` of the
-#[must_use]
-#[cfg(test)]
-pub fn event_key(caller: &str, task: &str, seq: u64) -> String {
-    format!("{caller}/{task}/{seq:020}")
-}
-
 /// Whether `caller` is a reference a key may start with: non-empty lower-case hex.
 #[must_use]
 pub fn is_caller(caller: &str) -> bool {
@@ -287,18 +286,21 @@ fn terminal(state: &str) -> bool {
 }
 
 /// The cutoff of the task kind's purge at `now`: a row unchanged since before it is past its
+/// window.
 fn cutoff(now: u64) -> u64 {
     now.saturating_sub(TERMINAL_TTL_SECS)
 }
 
 /// Whether a held task is past its window at `now`: the task kind's rule
+/// ([`retention_of`]`(KIND_TASK)`, terminal-only) drops it against the cutoff, so it is terminal
+/// and unchanged for longer than [`TERMINAL_TTL_SECS`].
 #[must_use]
 pub fn expired(row: &TaskRow, now: u64) -> bool {
     retention_of(KIND_TASK).drops(row.updated_at, cutoff(now), terminal(&row.state))
 }
 
 fn decode(bytes: &[u8]) -> Option<HeldTask> {
-    serde_json::from_slice(bytes).ok()
+    crate::request_json::from_slice(bytes).ok()
 }
 
 fn encode<T: Serialize>(v: &T) -> Result<Vec<u8>, Halt> {
@@ -306,6 +308,7 @@ fn encode<T: Serialize>(v: &T) -> Result<Vec<u8>, Halt> {
 }
 
 /// One event's own bytes on its task's chain, in the declared length-prefixed framing: `ts` (its eight big-endian bytes), `kind`, `context_id`,
+/// `principal`, `agent_id`, `state`, each after its length as eight big-endian bytes.
 #[must_use]
 pub fn suffix(ev: &TaskEventRow) -> Vec<u8> {
     let mut out = Vec::new();
@@ -327,6 +330,7 @@ pub fn suffix(ev: &TaskEventRow) -> Vec<u8> {
 }
 
 /// Event `kind` over `row` at `held`'s chain position, stamped `ts`; its chain fields are the
+/// host's.
 fn seal_event(
     held: &HeldTask,
     row: &TaskRow,
@@ -351,6 +355,7 @@ fn seal_event(
 }
 
 /// `caller`'s task `task` as held, or `None`: absent, another caller's, unreadable, or past its
+/// window at `now`.
 pub fn get(
     rec: &mut dyn Records,
     caller: &str,
@@ -362,6 +367,7 @@ pub fn get(
     }
     Ok(rec
         .get(KIND_TASK, &task_key(caller, task))?
+        .map(RawBytes::from)
         .and_then(|b| decode(&b))
         .filter(|h| !expired(&h.row, now)))
 }
@@ -374,7 +380,7 @@ pub fn list(rec: &mut dyn Records, caller: &str, now: u64) -> Result<Vec<TaskRow
     let mut rows: Vec<TaskRow> = rec
         .list(KIND_TASK, &scope(caller))?
         .into_iter()
-        .filter_map(|(_, b)| decode(&b))
+        .filter_map(|(_, b)| decode(&RawBytes::from(b)))
         .map(|h| h.row)
         .filter(|r| !expired(r, now))
         .collect();
@@ -398,11 +404,18 @@ pub struct Restored {
     pub chain_breaks: Vec<(String, String)>,
 }
 
-/// The restore, over host records: every task row read and
+/// The restore, over host records: every task row read and counted active, terminal or unreadable;
+/// then each in-flight task's chain, and no other, read back through the host, which verifies the
+/// chains it lists, and a break it announces on that task's chain is named.
 pub fn restore(rec: &mut dyn Records) -> Result<Restored, Halt> {
     let mut out = Restored::default();
     let mut active = Vec::new();
-    for (key, bytes) in rec.list(KIND_TASK, "")? {
+    let listed: Vec<_> = rec
+        .list(KIND_TASK, "")?
+        .into_iter()
+        .map(|(key, bytes)| (key, RawBytes::from(bytes)))
+        .collect();
+    for (key, bytes) in listed {
         let Some(held) = decode(&bytes).filter(|h| readable_row(&h.row).is_ok()) else {
             out.unreadable += 1;
             continue;
@@ -415,7 +428,11 @@ pub fn restore(rec: &mut dyn Records) -> Result<Restored, Halt> {
         }
     }
     for (chain_scope, next_seq) in active {
-        let listed = rec.list(KIND_TASK_EVENT, &chain_scope)?;
+        let listed: Vec<_> = rec
+            .list(KIND_TASK_EVENT, &chain_scope)?
+            .into_iter()
+            .map(|(key, bytes)| (key, RawBytes::from(bytes)))
+            .collect();
         if let Some((_, words)) = listed.iter().find(|(key, _)| *key == chain_scope) {
             out.chain_breaks
                 .push((chain_scope, String::from_utf8_lossy(words).into_owned()));
@@ -509,37 +526,6 @@ fn commit(
     Ok(applied.then_some(next))
 }
 
-/// The genesis commit of a task, answering it as held.
-#[cfg(test)]
-fn submit_held(
-    rec: &mut dyn Records,
-    at: &Stamp<'_>,
-    genesis: &HeldTask,
-    row: TaskRow,
-    _out: &mut Vec<Write>,
-) -> Result<HeldTask, Halt> {
-    let id = row.task_id.clone();
-    let key = task_key(at.caller, &id);
-    let chain = observe(rec, &key)?;
-    if rec.get(KIND_TASK, &key)?.is_some() {
-        return Err(Halt::Failed(format!("task `{id}` already exists")));
-    }
-    commit(rec, at, genesis, (None, chain), row, EV_SUBMITTED, None)?
-        .ok_or_else(|| Halt::Failed(format!("task `{id}` already exists")))
-}
-
-/// Open a relayed task with one atomic publication: the final row and the submitted/delegated
-#[cfg(test)]
-pub fn open(
-    rec: &mut dyn Records,
-    at: &Stamp<'_>,
-    row: TaskRow,
-    agent_id: &str,
-    _out: &mut Vec<Write>,
-) -> Result<TaskRow, Halt> {
-    open_configured(rec, at, row, agent_id, None)
-}
-
 /// Open a task and its optional inline config in the same publication as both genesis events.
 pub(crate) fn open_configured(
     rec: &mut dyn Records,
@@ -629,6 +615,7 @@ pub(crate) fn open_configured(
 }
 
 /// What a change does to one held row: the new row and its event, `None` for nothing to do, or the
+/// refusal's words.
 pub type Planned = Result<Option<(TaskRow, &'static str)>, String>;
 
 /// A change's plan over the held row.
@@ -701,7 +688,8 @@ pub fn transition(
     change(rec, at, task, &mut plan, out)
 }
 
-/// ADVANCE the artifact cursor by one chunk, with a `task.artifact` event, per
+/// ADVANCE the artifact cursor by one chunk, with a `task.artifact` event, per relayed artifact
+/// event, counted on from where the task left off (a resumed stream does not count from zero).
 pub fn bump_cursor(
     rec: &mut dyn Records,
     at: &Stamp<'_>,
@@ -730,6 +718,10 @@ pub fn record_push_delivery(
 }
 
 /// THE RETENTION SWEEP at `now`, the plane's own purge of the task kind under its rule
+/// ([`retention_of`]`(KIND_TASK)`, [`crate::records::Retention::TerminalOnly`]: busbar dev's tail
+/// declares no retention, so the plane holds it), over the TERMINAL tasks this instance holds and
+/// no others: one past its window is tombstoned with its events and its push config; while
+/// more than [`MAX_RETAINED`] terminal ones are held, the oldest go too.
 pub fn retention_sweep(
     rec: &mut dyn Records,
     now: u64,
@@ -737,29 +729,57 @@ pub fn retention_sweep(
     _out: &mut Vec<Write>,
 ) -> Result<usize, Halt> {
     let rule = retention_of(KIND_TASK);
-    let mut held: Vec<(String, HeldTask, Vec<u8>)> = rec
+    if budget == 0 {
+        return Ok(0);
+    }
+    let mut held: Vec<(String, HeldTask, RawBytes)> = Vec::new();
+    let mut kept = 0usize;
+    let listed: Vec<_> = rec
         .list(KIND_TASK, "")?
         .into_iter()
-        .filter_map(|(key, bytes)| {
-            let held = decode(&bytes)?;
-            let (caller, _) = key.split_once('/')?;
-            (is_caller(caller) && key == task_key(caller, &held.row.task_id))
-                .then_some((key, held, bytes))
-        })
-        .filter(|(_, held, _)| rule.reaches(terminal(&held.row.state)))
+        .map(|(key, bytes)| (key, RawBytes::from(bytes)))
         .collect();
-    held.sort_by(|a, b| {
-        (a.1.row.updated_at, &a.1.row.task_id).cmp(&(b.1.row.updated_at, &b.1.row.task_id))
-    });
+    for (key, bytes) in listed {
+        let Some(candidate) = decode(&bytes) else {
+            return Err(Halt::Failed(
+                "unreadable task record during retention".into(),
+            ));
+        };
+        let Some((caller, _)) = key.split_once('/') else {
+            return Err(Halt::Failed(
+                "invalid task record key during retention".into(),
+            ));
+        };
+        if !is_caller(caller) || key != task_key(caller, &candidate.row.task_id) {
+            return Err(Halt::Failed(
+                "task record identity mismatch during retention".into(),
+            ));
+        }
+        if !rule.reaches(terminal(&candidate.row.state)) {
+            continue;
+        }
+        kept += 1;
+        let position = held.partition_point(|(_, prior, _)| {
+            (prior.row.updated_at, &prior.row.task_id)
+                <= (candidate.row.updated_at, &candidate.row.task_id)
+        });
+        if position < budget {
+            held.insert(position, (key, candidate, bytes));
+            if held.len() > budget {
+                held.pop();
+            }
+        }
+    }
     let mut touched = 0usize;
-    let mut kept = held.len();
     for (key, candidate, expected) in &held {
         let row = &candidate.row;
-        if touched < budget && (kept >= MAX_RETAINED || expired(row, now)) {
+        if touched < budget && (kept > MAX_RETAINED || expired(row, now)) {
             let chain = observe(rec, key)?;
 
-            let current = rec.get(KIND_TASK, key)?;
-            if current.as_ref() != Some(expected) || !forget(rec, key, expected, chain)? {
+            let current = rec.get(KIND_TASK, key)?.map(RawBytes::from);
+            if current.as_deref() != Some(expected.as_slice())
+                || !forget(rec, key, expected, chain)?
+            {
                 continue;
             }
             kept -= 1;

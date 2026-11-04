@@ -82,6 +82,18 @@ class GovernanceFixtureRegressions(unittest.TestCase):
         self.assertEqual(resumed["id"], first["id"])
         self.assertEqual(resumed["contextId"], first["contextId"])
 
+    def test_recovery_drives_that_never_reach_the_peer_are_not_configured(self):
+        # F300: a broken --client-drive leaves both counts 0, which must not read as
+        # "recovery is held back". Red before: the row recorded immediately_retrusted=False.
+        peer = TrafficPeer([])
+        peer.behaviour = Behaviour()
+        ctx = Context(None, {})
+        result = {"returncode": 2, "timed_out": False, "stdout": "", "stderr": "no such command"}
+        with patch.object(governance, "FakePeer", return_value=peer), \
+                patch.object(governance, "drive", return_value=result):
+            with self.assertRaises(NotConfigured):
+                governance.test_detection_recovery_asymmetry(ctx)
+
 
 if __name__ == "__main__":
     unittest.main()

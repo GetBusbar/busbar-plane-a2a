@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! The cards busbar serves: busbar's
+//! The cards busbar serves: busbar's own card at the well-known path, and a fronted agent's card
+//! with every URL rewritten through busbar.
 
 use serde_json::{json, Map, Value};
 
@@ -18,12 +19,18 @@ pub const INBOUND_AUTH_SCHEME: &str = "Bearer";
 pub const CREDENTIAL_KIND_A2A_INBOUND: &str = "a2a_inbound";
 
 /// THE BINDINGS BUSBAR SERVES AT THE PLANE'S OWN MOUNT, in the card's spelling (the plane's
-pub const SERVABLE_BINDINGS: &[&str] = &["JSONRPC", "HTTP+JSON", "GRPC"];
+/// wire-format names upper-cased, the canonical one first).
+pub const SERVABLE_BINDINGS: &[&str] = &[BINDING_JSONRPC, BINDING_HTTP_JSON, GRPC_BINDING];
 
 /// THE BINDINGS BUSBAR SERVES AT ONE FRONTED AGENT'S ADDRESS (`/a2a/agents/{id}`): the JSON-RPC
-pub const AGENT_ADDRESS_BINDINGS: &[&str] = &["JSONRPC"];
+/// envelope alone.
+pub const AGENT_ADDRESS_BINDINGS: &[&str] = &[BINDING_JSONRPC];
 
-use crate::binding::BINDING_GRPC as GRPC_BINDING;
+use crate::binding::{BINDING_GRPC as GRPC_BINDING, BINDING_HTTP_JSON, BINDING_JSONRPC};
+
+/// The one protocol version the gRPC line serves: its route is v1.0's `lf.a2a.v1` service, and
+/// v0.3's `a2a.v1` package is not routed, so the card never offers gRPC at v0.3.
+const GRPC_VERSION: &str = crate::local::Dialect::V10.version();
 
 /// The `cache-control` busbar's own card is served with.
 pub const OWN_CARD_CACHE_CONTROL: &str = "public, max-age=3600";
@@ -50,6 +57,7 @@ pub fn b64url(bytes: &[u8]) -> String {
 }
 
 /// SIGN `card` with busbar's key: the card with busbar's signature under `signatures`, any earlier
+/// one replaced.
 pub fn sign_card(card: &Value, signer: &mut dyn Signer) -> Result<Value, String> {
     let Some(kid) = signer.kid() else {
         return Ok(card.clone());
@@ -87,6 +95,7 @@ pub fn grpc_endpoint(public_url: &str) -> Option<String> {
 }
 
 /// The URL a served card publishes for one binding: gRPC takes the authority, every other binding
+/// the busbar address `http_endpoint` its HTTP bindings answer at.
 fn binding_url(binding: &str, public_url: &str, http_endpoint: &str) -> Option<String> {
     if binding.eq_ignore_ascii_case(GRPC_BINDING) {
         return grpc_endpoint(public_url);
@@ -112,7 +121,8 @@ fn inbound_description() -> String {
     )
 }
 
-/// THE ONE DESCRIPTION of how a caller authenticates to this plane (proto `SecurityScheme`, a
+/// THE ONE DESCRIPTION of how a caller authenticates to this plane (proto `SecurityScheme`, a oneof
+/// whose variant key names the mechanism).
 fn inbound_security_schemes() -> Map<String, Value> {
     let mut schemes = Map::new();
     schemes.insert(
@@ -146,7 +156,8 @@ fn inbound_security_requirement() -> Value {
     json!([{ "schemes": { INBOUND_SCHEME_NAME: { "list": [] } } }])
 }
 
-/// THE INTERFACES BUSBAR PUBLISHES: every binding it serves, at every protocol version it admits,
+/// THE INTERFACES BUSBAR PUBLISHES: every binding it serves, at every protocol version it admits
+/// on that binding (gRPC at [`GRPC_VERSION`] only), newest version first.
 fn published_interfaces(public_url: &str) -> Option<Vec<Value>> {
     let http_endpoint = crate::a2a::public::absolute(public_url, crate::MOUNT_PATH)?;
     let mut versions: Vec<&str> = crate::agent_arrival::SUPPORTED_VERSIONS.to_vec();
@@ -155,6 +166,9 @@ fn published_interfaces(public_url: &str) -> Option<Vec<Value>> {
     for binding in SERVABLE_BINDINGS {
         let url = binding_url(binding, public_url, &http_endpoint)?;
         for version in &versions {
+            if *binding == GRPC_BINDING && *version != GRPC_VERSION {
+                continue;
+            }
             out.push(json!({
                 "url": url,
                 "protocolBinding": binding,
@@ -165,7 +179,8 @@ fn published_interfaces(public_url: &str) -> Option<Vec<Value>> {
     Some(out)
 }
 
-/// BUSBAR'S OWN CARD AS A DOCUMENT, before signing, with `skills`: the public card carries none
+/// BUSBAR'S OWN CARD AS A DOCUMENT, before signing, with `skills`: the public card carries none (no
+/// fronted agent is enumerated from an unauthenticated path), the extended card the caller's.
 #[must_use]
 pub fn self_card_document(public_url: &str, skills: Vec<Value>) -> Option<Value> {
     Some(json!({
@@ -202,6 +217,7 @@ pub enum ServeError {
 }
 
 /// Keep each interface entry once, in the order first offered: two entries a rewrite pointed at the
+/// same address on the same binding are one interface.
 fn dedup(interfaces: &mut Vec<Value>) {
     let mut kept: Vec<Value> = Vec::with_capacity(interfaces.len());
     for iface in interfaces.drain(..) {
@@ -347,6 +363,8 @@ pub struct EntitledAgent<'a> {
 }
 
 /// BUSBAR'S EXTENDED CARD (before signing): busbar's own card with one skill per agent the caller
+/// is entitled to, each identified by busbar's agent id; an agent whose card names its backend in
+/// text busbar cannot rewrite is omitted.
 #[must_use]
 pub fn extended_card_document(public_url: &str, entitled: &[EntitledAgent<'_>]) -> Option<Value> {
     let skills = entitled.iter().filter_map(agent_skill).collect();
@@ -376,6 +394,7 @@ fn agent_skill(agent: &EntitledAgent<'_>) -> Option<Value> {
 }
 
 /// Replace every URL-shaped string whose host is the backend's with busbar's endpoint, at every
+/// depth (member names are never rewritten).
 fn rewrite_backend_urls(v: &mut Value, backend_host: &str, endpoint: &str) {
     match v {
         Value::String(s) => {
@@ -398,44 +417,57 @@ fn rewrite_backend_urls(v: &mut Value, backend_host: &str, endpoint: &str) {
 }
 
 /// Whether `text` names the backend `host` (lowercase): an occurrence bounded by characters no
+/// hostname continues with (so `notexample.com`, `example.community` and `10.0.0.15` do not name
+/// `example.com` or `10.0.0.1`).
 fn names_host(text: &str, host: &str) -> bool {
-    let text = text.to_lowercase();
     let b = text.as_bytes();
     let label = |c: u8| c.is_ascii_alphanumeric() || c == b'-';
     let one_label = !host.contains(['.', ':']);
-    text.match_indices(host).any(|(at, _)| {
-        let end = at + host.len();
-        let before = at.checked_sub(1).map(|i| b[i]);
-        let after = b.get(end).copied();
+    if host.is_empty() {
+        return false;
+    }
+    b.windows(host.len())
+        .enumerate()
+        .filter(|(_, bytes)| bytes.eq_ignore_ascii_case(host.as_bytes()))
+        .any(|(at, _)| {
+            let end = at + host.len();
+            let before = at.checked_sub(1).map(|i| b[i]);
+            let after = b.get(end).copied();
 
-        let longer_before =
-            before.is_some_and(|c| label(c) || (c == b'.' && at >= 2 && label(b[at - 2])));
-        let longer_after = after
-            .is_some_and(|c| label(c) || (c == b'.' && b.get(end + 1).is_some_and(|n| label(*n))));
-        if longer_before || longer_after {
-            return false;
-        }
-        if !one_label {
-            return true;
-        }
-        let authority = text[..at].ends_with("//") || before == Some(b'@');
-        let ported = after == Some(b':') && b.get(end + 1).is_some_and(u8::is_ascii_digit);
-        authority || ported
-    })
+            let longer_before =
+                before.is_some_and(|c| label(c) || (c == b'.' && at >= 2 && label(b[at - 2])));
+            let longer_after = after.is_some_and(|c| {
+                label(c) || (c == b'.' && b.get(end + 1).is_some_and(|n| label(*n)))
+            });
+            if longer_before || longer_after {
+                return false;
+            }
+            if !one_label {
+                return true;
+            }
+            let authority = b[..at].ends_with(b"//") || before == Some(b'@');
+            let ported = after == Some(b':') && b.get(end + 1).is_some_and(u8::is_ascii_digit);
+            authority || ported
+        })
 }
 
 /// Every remaining mention of the backend host ([`names_host`]), with its JSON path; busbar's own
+/// endpoint (`ours`, exact) is never a mention.
 fn collect_mentions(v: &Value, backend_host: &str, ours: &str, out: &mut Vec<String>) {
-    fn walk(v: &Value, host: &str, ours: &str, path: &str, out: &mut Vec<String>) {
+    fn walk(v: &Value, host: &str, ours: &str, path: &mut String, out: &mut Vec<String>) {
         match v {
             Value::String(s) => {
                 if s != ours && names_host(s, host) {
-                    out.push(path.to_string());
+                    out.push(path.clone());
                 }
             }
             Value::Array(a) => {
                 for (i, x) in a.iter().enumerate() {
-                    walk(x, host, ours, &format!("{path}[{i}]"), out);
+                    use std::fmt::Write;
+                    let old = path.len();
+                    write!(path, "[{i}]").expect("writing to a String cannot fail");
+                    walk(x, host, ours, path, out);
+                    path.truncate(old);
                 }
             }
             Value::Object(o) => {
@@ -443,13 +475,17 @@ fn collect_mentions(v: &Value, backend_host: &str, ours: &str, out: &mut Vec<Str
                     if names_host(k, host) {
                         out.push(format!("{path}.{k} (member NAME)"));
                     }
-                    walk(x, host, ours, &format!("{path}.{k}"), out);
+                    let old = path.len();
+                    path.push('.');
+                    path.push_str(k);
+                    walk(x, host, ours, path, out);
+                    path.truncate(old);
                 }
             }
             _ => {}
         }
     }
-    walk(v, backend_host, ours, "$", out);
+    walk(v, backend_host, ours, &mut "$".to_string(), out);
 }
 
 #[cfg(test)]

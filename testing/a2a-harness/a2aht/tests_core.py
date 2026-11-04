@@ -394,6 +394,7 @@ def test_terminal_task_rejects(ctx):
         "TASK_STATE_CANCELED, TASK_STATE_REJECTED) cannot accept further "
         "messages.'",
     )
+    _assert_error(ctx, call, "UnsupportedOperationError")
     ctx.observe("terminal_reject_error", call.error_name or call.error_code)
 
 
@@ -620,6 +621,12 @@ def test_absent_version_header(ctx):
                            version=None)
     ctx.observe("no_version_header_error",
                 call.error_name or call.error_code or "ok")
+    declared_03 = any(str(iface.get("protocolVersion", "")).split(".")[:2] == ["0", "3"]
+                      for iface in ctx.target.interfaces())
+    if call.error is not None and call.error_code == spec.ERROR_MAP["VersionNotSupportedError"][0]:
+        ctx.assert_must(not declared_03,
+                        "an interface declaring 0.3 refused the implicit 0.3 version",
+                        "SPEC 3.6.2 requires an absent version to select 0.3.")
     # SPEC 3.6.2 says the agent MUST interpret an empty value as 0.3. An agent
     # that does not serve 0.3 at all may legitimately answer
     # VersionNotSupportedError, so success cannot be asserted. What must not
@@ -909,6 +916,7 @@ def test_extended_card(ctx):
             "present, attempts to call the Get Extended Agent Card operation "
             "MUST return UnsupportedOperationError.'",
         )
+        _assert_error(ctx, call, "UnsupportedOperationError")
         ctx.observe("extended_card_denied_error",
                     call.error_name or call.error_code)
     else:

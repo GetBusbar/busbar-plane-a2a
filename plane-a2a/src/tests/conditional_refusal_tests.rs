@@ -33,7 +33,7 @@ fn submitted() -> (Journal, wire::Request) {
             &[Write {
                 kind: KIND_PUSH_CONFIG,
                 key: "caller/task".into(),
-                value: b"config".to_vec(),
+                value: Vec::new(),
             }]
         ),
         Err(Halt::Pending)
@@ -84,7 +84,7 @@ fn only_the_exact_definitive_commit_refusal_selects_the_write_error() {
             &[Write {
                 kind: KIND_PUSH_CONFIG,
                 key: "caller/task".into(),
-                value: b"config".to_vec(),
+                value: Vec::new(),
             }]
         ),
         Err(failed())
@@ -243,7 +243,7 @@ fn a_later_refusal_does_not_discard_already_applied_metadata_obligations() {
     let writes = journal.committed_writes();
     assert_eq!(writes.len(), 1);
     assert_eq!(writes[0].key, "caller/task");
-    assert_eq!(writes[0].value, b"config");
+    assert!(writes[0].value.is_empty());
     journal.finished();
     assert!(journal.completed());
     assert!(journal.response_only());

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! The listing unit fixture's kernel model. It answers the original journal intent through the
+//! The listing unit fixture's kernel model.
 
 use super::*;
 

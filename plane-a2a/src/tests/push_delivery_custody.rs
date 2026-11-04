@@ -150,9 +150,6 @@ impl Records for UnavailableConfig {
     fn list(&mut self, _: &str, _: &str) -> Result<Vec<(String, Vec<u8>)>, Halt> {
         panic!("config is one record read")
     }
-    fn claim(&mut self, _: &str, _: &str, _: u64) -> Result<bool, Halt> {
-        panic!("queueing cannot mutate the task")
-    }
 }
 #[test]
 fn failed_configuration_read_retains_notification_intent_for_the_driver() {

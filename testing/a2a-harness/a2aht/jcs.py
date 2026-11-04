@@ -13,7 +13,11 @@ so out loud; it never reports an unverified signature as verified.
 import base64
 import json
 import math
+import urllib.parse
 import urllib.request
+
+# Ceiling on a fetched jku key set; a real JWKS is a few KiB.
+JKU_MAX_BYTES = 1 << 20
 
 
 def canonicalize(obj):
@@ -119,12 +123,29 @@ def verify_jws(signature_obj, canonical_payload, jwks=None, timeout=10.0):
         out.update(verified=False, reason="unsupported critical protected-header extension")
         return out
 
+    if jwks is not None and not isinstance(jwks, list):
+        out.update(verified=False, reason="key set must be a list")
+        return out
     keys = list(jwks or [])
     jku = header.get("jku")
     if not keys and jku:
+        # The jku is chosen by the card under test: fetch only http(s), and
+        # read a bounded key set, never a local file or an unbounded body.
+        try:
+            valid_url = isinstance(jku, str) and urllib.parse.urlsplit(jku).scheme in ("http", "https")
+        except ValueError:
+            valid_url = False
+        if not valid_url:
+            out.update(verified=False, reason="jku is not an http(s) URL")
+            return out
         try:
             with urllib.request.urlopen(jku, timeout=timeout) as resp:
-                keys = json.loads(resp.read()).get("keys", [])
+                raw = resp.read(JKU_MAX_BYTES + 1)
+            if len(raw) > JKU_MAX_BYTES:
+                raise ValueError("key set exceeds %d bytes" % JKU_MAX_BYTES)
+            keys = json.loads(raw).get("keys", [])
+            if not isinstance(keys, list):
+                raise ValueError("key set must be a list")
         except Exception as exc:
             out["reason"] = "could not fetch jku %s: %s" % (jku, exc)
             return out
@@ -134,7 +155,7 @@ def verify_jws(signature_obj, canonical_payload, jwks=None, timeout=10.0):
         return out
 
     key = None
-    for candidate in keys:
+    for candidate in (k for k in keys if isinstance(k, dict)):
         if not header.get("kid") or candidate.get("kid") == header.get("kid"):
             key = candidate
             break
@@ -149,9 +170,14 @@ def verify_jws(signature_obj, canonical_payload, jwks=None, timeout=10.0):
         out.update(verified=False, reason="algorithm does not match the selected public key")
         return out
 
-    signing_input = (signature_obj["protected"].encode("ascii") + b"."
-                     + b64url_encode(canonical_payload.encode("utf-8")).encode("ascii"))
-    sig = b64url_decode(signature_obj["signature"])
+    try:
+        signing_input = (signature_obj["protected"].encode("ascii") + b"."
+                         + b64url_encode(canonical_payload.encode("utf-8")).encode("ascii"))
+        sig = b64url_decode(signature_obj["signature"])
+    except Exception as exc:
+        out.update(verified=False, reason="signature is not base64url: %s: %s"
+                   % (type(exc).__name__, exc))
+        return out
 
     try:
         out["verified"] = _verify(key, header.get("alg"), signing_input, sig)

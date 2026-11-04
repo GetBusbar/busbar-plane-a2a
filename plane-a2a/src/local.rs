@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! THE VERBS THE PLANE ANSWERS ITSELF, over the task store ([`crate::tasks`]): `ListTasks`, the
+//! push-notification config CRUD, and the two refusals of `SubscribeToTask`.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -12,7 +13,7 @@ use crate::push::DeliveryAuth;
 use crate::records::KIND_PUSH_CONFIG;
 use crate::tasks::{self, task_key, Halt, Records, Write};
 use busbar_contract::abi::sdk::cred::Cred;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 /// WHICH SPELLING OF THE PUSH-CONFIG VERBS A CALLER USED: v0.3 nests the config under
 /// `pushNotificationConfig`, v1.0 flattens it, so the dialect decides the envelope.
@@ -26,6 +27,8 @@ pub enum Dialect {
 
 impl Dialect {
     /// The version a JSON-RPC method name is spelled in: v0.3's are slash paths
+    /// (`message/send`, `tasks/pushNotificationConfig/set`), v1.0's are PascalCase
+    /// (`SendMessage`, `CreateTaskPushNotificationConfig`).
     #[must_use]
     pub fn of_method(method: &str) -> Self {
         if method.contains('/') {
@@ -83,16 +86,34 @@ pub fn verb_of(method: &str) -> Option<LocalVerb> {
 /// The host's reach the verbs need beyond the records: the destination judge.
 pub trait Reach: Records {
     /// `dest.judge` of `dest` under the open-web class, its name resolved and private reach
+    /// refused whatever the deployment's private-address setting: a `DEST_*` verdict.
+    ///
+    /// # Errors
+    /// [`Halt`].
     fn judge(&mut self, dest: &str) -> Result<u64, Halt>;
 }
 
 /// One local answer: its status and its JSON body.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct LocalAnswer {
     /// The status.
     pub status: u32,
     /// The body.
     pub body: Vec<u8>,
+}
+
+impl Drop for LocalAnswer {
+    fn drop(&mut self) {
+        self.body.zeroize();
+    }
+}
+impl std::fmt::Debug for LocalAnswer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LocalAnswer")
+            .field("status", &self.status)
+            .field("body", &"<redacted>")
+            .finish()
+    }
 }
 
 use crate::agent_arrival::{
@@ -101,16 +122,17 @@ use crate::agent_arrival::{
 };
 
 /// The refusal every verb gives for a task id it does not hold for this caller: one string, so the
+/// verbs cannot drift into different existence oracles.
 pub const NO_SUCH_TASK: &str = "no task with that id is open for this caller";
 
 /// A JSON-RPC success under the caller's id.
 fn ok(rpc_id: &Value, result: Value) -> LocalAnswer {
+    let result = crate::request_json::RequestJson::new(result);
+    let id_bytes = Zeroizing::new(serde_json::to_vec(rpc_id).unwrap_or_default());
+    let result_bytes = Zeroizing::new(serde_json::to_vec(&*result).unwrap_or_default());
     LocalAnswer {
         status: 200,
-        body: busbar_contract::jsonrpc::result_bytes(
-            &serde_json::to_vec(&rpc_id).unwrap_or_default(),
-            &serde_json::to_vec(&result).unwrap_or_default(),
-        ),
+        body: busbar_contract::jsonrpc::result_bytes(&id_bytes, &result_bytes),
     }
 }
 
@@ -141,10 +163,12 @@ fn err(rpc_id: &Value, code: i64, message: impl Into<String>) -> LocalAnswer {
 pub const CONFIG_UNRECORDED: &str = "the push notification config could not be recorded";
 
 /// The words when the store would not take a push config's removal: the config stays and the
+/// caller retries.
 pub const CONFIG_UNDELETED: &str =
     "the push notification config could not be deleted; retry the delete";
 
-/// The answer when the store refuses verb `verb`'s own record write (the kernel ends its unit
+/// The answer when the store refuses verb `verb`'s own record write: the internal error (`500`,
+/// `-32603`) echoing `rpc_id`, or `None` for a verb whose answer does not depend on a write.
 #[must_use]
 pub fn unrecorded(verb: LocalVerb, rpc_id: &Value) -> Option<AgentRefusal> {
     Some(refusal(rpc_id, INTERNAL, unrecorded_message(verb)?))
@@ -170,6 +194,10 @@ pub fn unreadable(rpc_id: &Value) -> LocalAnswer {
 }
 
 /// ANSWER local verb `verb` of `envelope` for `caller` at `now`; its writes go to `out`. `None`
+/// when the answer is not the plane's (a subscribe to a live task).
+///
+/// # Errors
+/// [`Halt::Pending`] when a records call pends; nothing is written then.
 pub fn answer_local(
     reach: &mut dyn Reach,
     verb: LocalVerb,
@@ -210,6 +238,9 @@ pub fn answer_local(
 }
 
 /// `ListTasks`'s answer over `rec` (the refreshed rows, seen through the piece's own writes).
+///
+/// # Errors
+/// [`Halt`].
 pub(crate) fn list_answer(
     rec: &mut dyn Records,
     envelope: &Value,
@@ -249,6 +280,7 @@ pub fn task_json(task: &Task) -> Value {
 /// The page size a caller that asks for none gets.
 pub const DEFAULT_PAGE_SIZE: usize = 50;
 /// The largest page size: `ListTasksRequest.page_size` "The maximum value is 100" (a2a.proto); a
+/// caller asking for more gets this many.
 pub const MAX_PAGE_SIZE: usize = 100;
 
 /// An integer that arrives as a number or, per the schema's `anyOf`, as a decimal string.
@@ -269,18 +301,6 @@ fn member<'a>(params: &'a Value, camel: &str, snake: &str) -> Option<&'a Value> 
 #[must_use]
 pub fn cursor_of(task: &Task) -> String {
     format!("{}:{}", task.updated_at, task.task_id)
-}
-
-/// Is `task` strictly after `cursor` in the descending order? An unreadable cursor selects all.
-#[must_use]
-pub fn after_cursor(task: &Task, cursor: &str) -> bool {
-    let Some((ts, id)) = cursor.split_once(':') else {
-        return true;
-    };
-    let Ok(ts) = ts.parse::<u64>() else {
-        return true;
-    };
-    (task.updated_at, task.task_id.as_str()) < (ts, id)
 }
 
 /// `ListTasks`: the caller's own rows, filtered, newest first, one page.
@@ -333,6 +353,16 @@ fn list_tasks(
             Some(state)
         }
     };
+    if member(params, "pageSize", "page_size")
+        .filter(|v| !v.is_null())
+        .is_some_and(|v| as_int(Some(v)).is_none_or(|n| n < 0))
+    {
+        return Ok(err(
+            rpc_id,
+            INVALID_PARAMS,
+            "`pageSize` must be a non-negative integer",
+        ));
+    }
     let page_size = as_int(member(params, "pageSize", "page_size"))
         .and_then(|n| usize::try_from(n).ok())
         .filter(|n| *n > 0)
@@ -379,7 +409,9 @@ fn list_tasks(
 
     let mut rows: Vec<Task> = tasks::list(rec, caller, now)?
         .iter()
-        .filter_map(|r| Task::from_row(r).ok())
+        .map(|r| Task::from_row(r).map_err(|_| Halt::Failed("task record is malformed".into())))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
         .filter(|t| context_id.is_empty() || t.context_id == context_id)
         .filter(|t| wanted.is_none_or(|w| t.state == w))
         .filter(|t| since.is_none_or(|s| i128::from(t.updated_at) * 1_000_000_000 >= s))
@@ -387,14 +419,15 @@ fn list_tasks(
     rows.sort_by(|a, b| {
         (b.updated_at, b.task_id.as_str()).cmp(&(a.updated_at, a.task_id.as_str()))
     });
-    let start: Vec<&Task> = rows
-        .iter()
-        .filter(|t| token.is_empty() || after_cursor(t, token))
-        .collect();
-    let page: Vec<&Task> = start.iter().take(page_size).copied().collect();
-
-    let next = if start.len() > page.len() {
-        page.last().map(|t| cursor_of(t)).unwrap_or_default()
+    let cursor = token
+        .split_once(':')
+        .and_then(|(ts, id)| ts.parse::<u64>().ok().map(|ts| (ts, id)));
+    let start = cursor.map_or(0, |cursor| {
+        rows.partition_point(|t| (t.updated_at, t.task_id.as_str()) >= cursor)
+    });
+    let page = &rows[start..rows.len().min(start.saturating_add(page_size))];
+    let next = if start + page.len() < rows.len() {
+        page.last().map(cursor_of).unwrap_or_default()
     } else {
         String::new()
     };
@@ -413,7 +446,7 @@ fn list_tasks(
 /// `id` and `url` only; the `authentication` credential is a [`Cred`] the SDK's record encoder
 /// alone writes ([`crate::push::record_value`]), never a member of any answer, and its `Debug` is
 /// redacted.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct PushConfig {
     /// The caller's id for it.
     pub id: String,
@@ -427,6 +460,44 @@ pub struct PushConfig {
     /// notifications take. A record written before the field existed reads empty, as `1.0`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub version: String,
+}
+
+impl<'de> Deserialize<'de> for PushConfig {
+    fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Wire {
+            id: String,
+            #[serde(deserialize_with = "crate::record::callback_field")]
+            url: crate::proto::custody::Guard<String>,
+            #[serde(default)]
+            authentication: Option<DeliveryAuth>,
+            #[serde(default)]
+            version: String,
+        }
+        let mut wire = Wire::deserialize(de)?;
+        Ok(Self {
+            id: wire.id,
+            url: wire.url.take(),
+            authentication: wire.authentication,
+            version: wire.version,
+        })
+    }
+}
+
+impl Drop for PushConfig {
+    fn drop(&mut self) {
+        crate::request_json::wipe_string(&mut self.url);
+    }
+}
+impl std::fmt::Debug for PushConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PushConfig")
+            .field("id", &self.id)
+            .field("url", &"<redacted>")
+            .field("authentication", &"<redacted>")
+            .field("version", &self.version)
+            .finish()
+    }
 }
 
 /// The config as `dialect` spells it; never with `authentication`.
@@ -448,17 +519,26 @@ pub fn config_params(params: &Value) -> &Value {
 }
 
 /// THE CONFIG ID a get/delete names: `id` on v1.0, `pushNotificationConfigId` on v0.3 (where `id`
+/// is the TASK); empty when absent.
 #[must_use]
 pub fn config_id_wanted(dialect: Dialect, params: &Value) -> &str {
+    config_id_value(dialect, params)
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+}
+
+fn config_id_value(dialect: Dialect, params: &Value) -> Option<&Value> {
     match dialect {
         Dialect::V10 => config_params(params).get("id"),
         Dialect::V03 => params.get("pushNotificationConfigId"),
     }
-    .and_then(Value::as_str)
-    .unwrap_or_default()
 }
 
 /// THE CREDENTIAL a config names, out of `{scheme, credentials}` or `{schemes: [..], credentials}`;
+/// `Ok(None)` for none.
+///
+/// # Errors
+/// A credential busbar cannot present, in words that never quote it back.
 pub fn delivery_auth(cfg: &Value) -> Result<Option<DeliveryAuth>, String> {
     let Some(auth) = cfg.get("authentication").filter(|v| !v.is_null()) else {
         return Ok(None);
@@ -473,7 +553,6 @@ pub fn delivery_auth(cfg: &Value) -> Result<Option<DeliveryAuth>, String> {
                 .and_then(Value::as_str)
         })
         .unwrap_or_default()
-        .trim()
         .to_string();
     if scheme.is_empty() {
         return Err(
@@ -485,7 +564,7 @@ pub fn delivery_auth(cfg: &Value) -> Result<Option<DeliveryAuth>, String> {
     }
     if !scheme
         .bytes()
-        .all(|b| b.is_ascii_graphic() && b != b'"' && b != b',')
+        .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b))
     {
         return Err(format!(
             "the push notification config's authentication scheme `{scheme}` is not an HTTP \
@@ -494,7 +573,7 @@ pub fn delivery_auth(cfg: &Value) -> Result<Option<DeliveryAuth>, String> {
     }
     let credentials = match auth.get("credentials") {
         None | Some(Value::Null) => "",
-        Some(Value::String(c)) => c.trim(),
+        Some(Value::String(c)) => c.as_str(),
         Some(_) => {
             return Err(
                 "a push notification config's authentication `credentials` must be a string \
@@ -520,7 +599,11 @@ pub fn delivery_auth(cfg: &Value) -> Result<Option<DeliveryAuth>, String> {
     }))
 }
 
-/// The callback floor: the push-notification guard, its words rendered here and its
+/// The callback floor: the push-notification guard, its words rendered here and its decision the
+/// host's destination judge, asked at registration as push delivery asks it on every attempt.
+///
+/// # Errors
+/// [`Halt`] from the judge; `Ok(Err(words))` for a refused callback, in the guard's words.
 pub fn judge_callback(reach: &mut dyn Reach, url: &str) -> Result<Result<(), String>, Halt> {
     use busbar_contract::abi::host::service::{
         DEST_ALLOWED, DEST_INTERNAL, DEST_METADATA, DEST_NO_ADDRESSES, DEST_NO_HOST,
@@ -577,6 +660,7 @@ pub fn judge_callback(reach: &mut dyn Reach, url: &str) -> Result<Result<(), Str
 }
 
 /// THE TASK a push-config request names, through the same scoped read every verb uses: its
+/// FIRST task member present, and that one only.
 pub(crate) fn addressed(
     rec: &mut dyn Records,
     dialect: Dialect,
@@ -587,7 +671,11 @@ pub(crate) fn addressed(
     let Some(id) = addressed_id(dialect, params) else {
         return Ok(None);
     };
-    Ok(tasks::get(rec, caller, id, now)?.and_then(|held| Task::from_row(&held.row).ok()))
+    tasks::get(rec, caller, id, now)?
+        .map(|held| {
+            Task::from_row(&held.row).map_err(|_| Halt::Failed("task record is malformed".into()))
+        })
+        .transpose()
 }
 
 /// The first supplied task member, preserving dialect precedence and empty-string semantics.
@@ -608,12 +696,18 @@ pub(crate) fn held_config(
     caller: &str,
     task_id: &str,
 ) -> Result<Option<PushConfig>, Halt> {
-    Ok(rec
-        .get(KIND_PUSH_CONFIG, &task_key(caller, task_id))?
-        .and_then(|b| serde_json::from_slice(&Zeroizing::new(b)).ok()))
+    rec.get(KIND_PUSH_CONFIG, &task_key(caller, task_id))?
+        .map(|b| decode_config(&Zeroizing::new(b)))
+        .transpose()
+}
+
+fn decode_config(bytes: &[u8]) -> Result<PushConfig, Halt> {
+    crate::request_json::from_slice(bytes)
+        .map_err(|_| Halt::Failed("push config record is malformed".into()))
 }
 
 /// The refusal for a push config's non-null `token`, which no delivery presents. Shared with
+/// inline callbacks so the two entry points make the same promise.
 pub const TOKEN_UNCARRIED: &str =
     "busbar does not carry a push notification config `token`: there is no header or body \
      member the delivery puts it in, so storing it would promise the receiver a value it \
@@ -634,7 +728,10 @@ fn create_push_config(
         return Ok(err(rpc_id, TASK_NOT_FOUND, NO_SUCH_TASK));
     };
     let cfg = config_params(params);
-    if cfg.get("token").is_some_and(|value| !value.is_null()) {
+    if cfg
+        .get("token")
+        .is_some_and(|value| !value.is_null() && value.as_str() != Some(""))
+    {
         return Ok(err(rpc_id, UNSUPPORTED_OPERATION, TOKEN_UNCARRIED));
     }
     let authentication = match delivery_auth(cfg) {
@@ -651,7 +748,8 @@ fn create_push_config(
     let id = cfg
         .get("id")
         .and_then(Value::as_str)
-        .unwrap_or_default()
+        .filter(|id| !id.is_empty())
+        .unwrap_or(&task.task_id)
         .to_string();
     let stored = PushConfig {
         id,
@@ -667,13 +765,14 @@ fn create_push_config(
         request_id: &task.task_id,
         now,
     };
+    if let Err(message) = judge_callback(reach, url)? {
+        return Ok(err(rpc_id, INVALID_PARAMS, message));
+    }
     for _ in tasks::attempts() {
         let expected = reach
             .get(KIND_PUSH_CONFIG, &task_key(caller, &task.task_id))?
             .map(crate::relay::RawBytes::from);
-        let current = expected
-            .as_deref()
-            .and_then(|bytes| serde_json::from_slice::<PushConfig>(bytes).ok());
+        let current = expected.as_deref().map(decode_config).transpose()?;
         if current.is_some_and(|config| config.id != stored.id) {
             return Ok(err(
                 rpc_id,
@@ -682,9 +781,6 @@ fn create_push_config(
                  per task: its durable task row carries one callback and its delivery is one \
                  request. Delete the existing config before registering another.",
             ));
-        }
-        if let Err(message) = judge_callback(reach, url)? {
-            return Ok(err(rpc_id, INVALID_PARAMS, message));
         }
         if tasks::write_config(
             reach,
@@ -713,10 +809,7 @@ fn get_push_config(
     let Some(task) = addressed(rec, dialect, params, caller, now)? else {
         return Ok(err(rpc_id, TASK_NOT_FOUND, NO_SUCH_TASK));
     };
-    let supplied_id = match dialect {
-        Dialect::V03 => params.get("pushNotificationConfigId"),
-        Dialect::V10 => config_params(params).get("id"),
-    };
+    let supplied_id = config_id_value(dialect, params);
     if supplied_id.is_some_and(|value| !value.is_null() && !value.is_string()) {
         return Ok(err(
             rpc_id,
@@ -764,6 +857,8 @@ fn list_push_configs(
 }
 
 /// `DeleteTaskPushNotificationConfig` / `tasks/pushNotificationConfig/delete`. IDEMPOTENT: a
+/// config that is not there is no error; a different held id is not found, and a matching id
+/// goes as a tombstone.
 fn delete_push_config(
     rec: &mut dyn Records,
     dialect: Dialect,
@@ -786,9 +881,7 @@ fn delete_push_config(
         let expected = rec
             .get(KIND_PUSH_CONFIG, &task_key(caller, &task.task_id))?
             .map(crate::relay::RawBytes::from);
-        let current = expected
-            .as_deref()
-            .and_then(|bytes| serde_json::from_slice::<PushConfig>(bytes).ok());
+        let current = expected.as_deref().map(decode_config).transpose()?;
         if current.as_ref().is_some_and(|config| config.id != wanted) {
             return Ok(err(
                 rpc_id,

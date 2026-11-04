@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! WHAT THE ROOT LEG (`tests/root/mod.rs`) NAMES OF THE PLANE'S PRIVATE ITEMS. The root leg is
+//! //! compiled into the composition root's test binary and reaches the plane only through `door`.
 
 /// `statement::PUSH_SECTION`: the plane's own `agent_push:` section.
 pub const PUSH_SECTION: &str = "agent_push";

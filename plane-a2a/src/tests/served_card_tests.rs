@@ -55,6 +55,9 @@ fn a_fronted_card_names_busbar_and_nothing_of_the_backend() {
 }
 
 /// A FRONTED AGENT'S CAPABILITIES ARE THE AGENT'S: busbar relays the agent's extended card read to
+/// the agent itself, so the served card carries `extendedAgentCard` (and every other capability)
+/// exactly as the agent's card states it, `false` included, and never promises one the agent's card
+/// does not.
 #[test]
 fn a_fronted_card_carries_the_agents_own_capabilities_and_promises_no_extended_card() {
     let backend = "https://internal.corp.example/a2a";
@@ -243,6 +246,9 @@ fn the_extended_card_names_each_entitled_agent_once_and_omits_a_leaking_one() {
 }
 
 /// The card tells a caller where to send its request. If that string and the path the door claims
+/// were derived separately, the card would advertise an endpoint that 404s and nothing would
+/// notice, because each half is individually correct: so the advertised endpoint IS a claimed
+/// route.
 #[test]
 fn the_served_endpoint_and_the_mounted_path_are_one_derivation() {
     let endpoint = agent_endpoint(PUBLIC, "planner").expect("an endpoint");
@@ -278,6 +284,7 @@ fn the_served_endpoint_and_the_mounted_path_are_one_derivation() {
 const BACKEND: &str = "https://internal.corp.example/a2a";
 
 /// A backend card rich enough for the ported cells: a vendor scheme, a vendor requirement, a vendor
+/// signature, a provider URL that is provenance, and an unmodelled member carrying the endpoint.
 fn rich_backend_card() -> Value {
     json!({
         "protocolVersion": "0.3.0",
@@ -564,6 +571,8 @@ fn the_extended_card_publishes_one_skill_per_agent_and_never_a_duplicate_id() {
 }
 
 /// A deterministic stand-in for the host's card-signing service: 64 bytes that are a pure function
+/// of the exact signing input, so a verifier that recomputes it proves WHICH BYTES the door handed
+/// the host to sign (the door holds no key and no ed25519; the host's `sign` service is the key).
 fn stand_in_signature(input: &[u8]) -> Vec<u8> {
     use std::hash::{Hash, Hasher};
     (0u8..8)
@@ -606,6 +615,7 @@ enum NotVerified {
 }
 
 /// Verify `doc` the way the inbound verifier reads a card: signing input is
+/// `protected.b64url(signing_payload(doc))`, checked against the signature.
 fn verify_served(doc: &Value) -> Result<String, NotVerified> {
     use base64::Engine as _;
     let sig = doc["signatures"].get(0).ok_or(NotVerified::NoSignature)?;
@@ -743,6 +753,8 @@ fn the_card_signing_domain_derives_the_exact_pinned_bytes() {
 }
 
 /// A v0.3 CARD'S `additionalInterfaces` AND `preferredTransport` name only what busbar serves at
+/// the agent's address (the JSON-RPC envelope): an entry on another binding is dropped, the rest
+/// point at busbar, and an entry on a host other than the registration's is never published.
 #[test]
 fn a_v03_cards_additional_interfaces_and_preferred_transport_name_only_what_busbar_serves_there() {
     let backend = json!({
@@ -771,7 +783,9 @@ fn a_v03_cards_additional_interfaces_and_preferred_transport_name_only_what_busb
     assert!(!text.contains("a.example.com"), "{text}");
 }
 
-/// ONE SERVABLE-BINDING RULE IN BOTH VERSIONS: a v0.3 card that prefers gRPC and offers no
+/// ONE SERVABLE-BINDING RULE IN BOTH VERSIONS: a v0.3 card that prefers gRPC and offers no JSON-RPC
+/// entry is refused exactly as a v1.0 card offering only gRPC is, never served as a JSON-RPC card
+/// its agent does not speak.
 #[test]
 fn a_v03_card_offering_no_binding_busbar_serves_is_refused_like_a_v10_one() {
     let grpc_only = json!({
@@ -808,6 +822,7 @@ fn a_v03_card_offering_no_binding_busbar_serves_is_refused_like_a_v10_one() {
 }
 
 /// A v1.0 card's interfaces the rewrite points at the same address on the same binding are
+/// published once.
 #[test]
 fn a_v10_cards_duplicate_interfaces_are_published_once() {
     let mut card = backend_card();
@@ -830,6 +845,9 @@ fn a_v10_cards_duplicate_interfaces_are_published_once() {
 }
 
 /// G1-4: A FRONTED v0.3 CARD ADVERTISES BUSBAR'S CREDENTIAL IN v0.3's OWN SPELLING (v0.3.0
+/// `types.ts`: an `HTTPAuthSecurityScheme` is `{type: "http", scheme, description?}`, and the
+/// requirement is `security: [{name: scopes}]`), never in v1.0's proto spelling, which a v0.3
+/// reader cannot read.
 #[test]
 fn a_v03_cards_inbound_scheme_is_written_in_v03s_spelling() {
     for card in [
@@ -865,6 +883,8 @@ fn a_v03_cards_inbound_scheme_is_written_in_v03s_spelling() {
 }
 
 /// G1-5: THE BACKEND AUTHORITY IS MATCHED AS A NAME, NOT AS A SUBSTRING: a word that merely
+/// contains the host (a one-label service name in prose, a longer domain, a longer address) is no
+/// mention of it; the host itself, a one-label host with its port or in a URL, still is.
 #[test]
 fn a_word_that_only_contains_the_backend_host_is_not_a_leak() {
     let card = |backend: &str, description: &str| {

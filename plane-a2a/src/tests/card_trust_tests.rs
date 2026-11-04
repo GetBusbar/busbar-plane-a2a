@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! The trust surface, plane side, against the served engine's words: the card fetch's refusals,
+//! The trust surface, plane side, against the served engine's words: the card fetch's refusals, the
+//! verification per mechanism, the kernel's verdict in the admission's words, the `connect` view
+//! and the cadence.
 
 use serde_json::json;
 
@@ -182,6 +184,9 @@ fn skills_of(card: &Value) -> BTreeMap<String, String> {
 }
 
 /// A FIRST `connect` previews a card nobody approved: every skill it presents is `added` (predev
+/// `busbar-kernel/src/trust/mod.rs:319`, a skill with no standing approval, read by
+/// `busbar-a2a/src/a2a/verbs.rs:229` off `Approval::registered()`), corrected from this cell's
+/// lane-written empty lists under the standing rule.
 #[test]
 fn the_connect_view_is_a_preview_of_the_card_under_the_key_s_state() {
     let s = seen(&card("plans"));
@@ -249,6 +254,7 @@ fn the_connect_view_is_a_preview_of_the_card_under_the_key_s_state() {
 }
 
 /// Ported from busbar-a2a registry_tests.rs::the_records_trust_answers_are_the_machines_answers_and_not_a_second_opinion
+/// (its drift half; the serving half is the kernel's trust book).
 #[test]
 fn the_records_trust_answers_are_the_machines_answers_and_not_a_second_opinion() {
     let seen_at = |skills: &[(&str, &str)]| {
@@ -343,6 +349,9 @@ fn connect_never_reports_approved_even_when_the_card_matches_a_locked_pin() {
 }
 
 /// Each axis in the served engine's order (predev `busbar-kernel/src/trust/mod.rs:310-327`): a
+/// skill offered and never approved is `added`, one approved and no longer offered `removed`, each
+/// list in skill-id order; a key the kernel holds no approval for (`pending`) approved nothing,
+/// whatever skills the plane last held for it.
 #[test]
 fn the_drift_lists_are_the_sighted_skills_against_the_approved_ones() {
     let offered = json!({
@@ -628,7 +637,8 @@ fn an_address_literal_is_read_as_one_and_a_name_is_not() {
     assert_eq!(literal_url("agent.example"), None);
 }
 
-/// THE CONNECTION'S FAILURE IN predev's WORDS: the engine's HTTP client error with its cause
+/// THE CONNECTION'S FAILURE IN predev's WORDS: the engine's HTTP client error with its cause chain,
+/// by the stage the connector named; with none named, the connector's own text.
 #[test]
 fn a_failed_card_hop_is_named_as_the_engines_client_named_it() {
     use busbar_contract::abi::host::conn::connector::{
@@ -674,6 +684,10 @@ fn hop(peer_key_pin: Option<&str>, client_identity_offered: bool) -> Handshake {
 }
 
 /// THE TRANSPORT PIN (Q-DEL-A2A-SPKI), the served engine's verdicts and words: the connector's
+/// observed key matching the pin is observed and approvable (`cert_spki`, and `mtls` once busbar
+/// presented its client identity), the OBSERVED key is what is recorded; no key observed is refused
+/// as not observed; another key as a mismatch naming both; `mtls` whose hop presented no identity
+/// of busbar's as one-way, the peer half judged first.
 #[test]
 fn a_transport_pin_is_observed_approvable_and_enforced_as_the_engine_judged_it() {
     let c = card("plans");
@@ -730,6 +744,8 @@ fn a_transport_pin_is_observed_approvable_and_enforced_as_the_engine_judged_it()
 }
 
 /// A card fetch the connector refused for the pinned key reads as the pin's refusal (the key it
+/// served named); a refused plaintext card URL of a transport-pinned registration as not observed;
+/// any other fetch failure, and any other mechanism, keeps the fetch's own words.
 #[test]
 fn a_refused_hop_of_a_transport_pinned_registration_reads_as_the_pin_s_refusal() {
     let key = "R2V0IHRoZSBrZXkgcmlnaHQ=";
@@ -752,6 +768,8 @@ fn a_refused_hop_of_a_transport_pinned_registration_reads_as_the_pin_s_refusal()
 }
 
 /// `file:` and `data:` are the two that turn a fetch into a local read. Neither is reachable by
+/// opting into plaintext, because `allow_private` is about TRANSPORT confidentiality and these are
+/// not transports at all: any scheme other than `https` (and `http` under the opt-in) is refused.
 #[test]
 fn a_non_http_scheme_is_refused_however_the_plaintext_knob_is_set() {
     for allow_private in [false, true] {
@@ -774,6 +792,7 @@ fn a_non_http_scheme_is_refused_however_the_plaintext_knob_is_set() {
 }
 
 /// The redirect target is an ordinary-looking public NAME; only judging what it RESOLVED to catches
+/// it.
 #[test]
 fn a_redirect_to_a_name_that_resolves_internally_is_refused_on_the_answer() {
     let next = next_hop(
@@ -882,6 +901,7 @@ fn the_mechanism_is_part_of_the_identity_not_a_label_beside_it() {
 }
 
 /// G1-7: `pin_changed` says the kernel quarantined a MOVED card, whatever the latest fetch did: a
+/// moved, quarantined card whose next look failed still reports it.
 #[test]
 fn a_moved_cards_pin_changed_survives_a_failed_look() {
     let failed = Sighting::Failed("down".to_string());

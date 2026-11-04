@@ -115,7 +115,12 @@ def cmd_run(args):
     # rather than emitting one stack trace per test. Fourteen tracebacks is
     # not a legible failure, and a gate nobody can read is a gate nobody acts
     # on.
-    problem = _preflight(target)
+    try:
+        problem = _preflight(target)
+    except BaseException:
+        # A launched subject must not outlive a preflight that raised.
+        target.stop()
+        raise
     if problem:
         sys.stderr.write("\n")
         sys.stderr.write("=" * 72 + "\n")

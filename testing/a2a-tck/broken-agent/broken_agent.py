@@ -83,4 +83,7 @@ class Relay(BaseHTTPRequestHandler):
     do_PUT = do_POST
 
 
-ThreadingHTTPServer(("127.0.0.1", LISTEN), Relay).serve_forever()
+server = ThreadingHTTPServer(("127.0.0.1", LISTEN), Relay)
+if LISTEN == 0:
+    print(server.server_port, flush=True)
+server.serve_forever()

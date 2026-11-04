@@ -2,6 +2,8 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! THE CARD FETCH'S PRE-CHECK FAILS CLOSED (docs/security.md, the A2A card fetch: every hop is
+//! guarded): a door that has a connector but no host services has no destination judgement to ask,
+//! and a hop no judgement admitted is never dialled.
 
 use std::cell::Cell;
 use std::ffi::c_void;
@@ -106,7 +108,8 @@ fn card_door(with_judgements: bool) -> A2aDoor {
     }
 }
 
-/// A card fetch of `planner` by a door that holds a connector and NO host services is refused,
+/// A card fetch of `planner` by a door that holds a connector and NO host services is refused, and
+/// nothing is dialled.
 #[test]
 fn a_card_fetch_without_host_services_is_refused() {
     let plane = card_door(false);
@@ -223,6 +226,8 @@ fn planner_def(url: &str) -> crate::a2a::config::AgentDefCfg {
 }
 
 /// G1-45: THE CANONICAL PATH'S REFUSAL IS NOT LOST TO THE LEGACY PATH'S: a card whose canonical
+/// well-known path is refused for one reason and whose legacy path is refused for another reports
+/// the canonical reason too.
 #[test]
 fn the_canonical_paths_refusal_survives_the_legacy_paths() {
     let plane = card_door(true);

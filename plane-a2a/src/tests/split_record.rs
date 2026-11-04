@@ -132,6 +132,7 @@ fn an_unreadable_head_is_refused() {
 }
 
 /// A STORED HEAD CANNOT SIZE AN ALLOCATION: one claiming more parts than the read answered is
+/// refused before any key list is built, however large the length it states.
 #[test]
 fn a_head_naming_more_parts_than_were_read_is_refused_before_it_allocates() {
     let len = MAX_RECORD_BYTES * (1 << 40);

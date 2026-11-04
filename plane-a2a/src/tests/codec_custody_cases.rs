@@ -93,7 +93,7 @@ fn rest_replaced_params_wipe_before_the_replacement_is_retained() {
     assert_wiped(|| {
         let params = crate::rest::Params::new()
             .set("authentication", json!({"credentials":SECRET}))
-            .merge(&json!({"authentication":{"scheme":"None"}}));
+            .merge(json!({"authentication":{"scheme":"None"}}));
         let value = params.into_value();
         assert_eq!(value, json!({"authentication":{"scheme":"None"}}));
     });

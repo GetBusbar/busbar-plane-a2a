@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! The task a relayed hop is for: opened at the unit's first ATTEMPT over the task store's host
+//! records, and settled on the far end's answer.
 
 use std::collections::BTreeMap;
 
@@ -22,22 +23,22 @@ use crate::TaskRow;
 
 use crate::agent_arrival::{
     CODE_INTERNAL, CODE_INVALID_PARAMS, CODE_TASK_NOT_CANCELABLE, CODE_TASK_NOT_FOUND,
+    STATUS_BAD_REQUEST, STATUS_UNAVAILABLE,
 };
-/// The status a callback busbar cannot honour, or a task verb naming no task, answers with: the
-const STATUS_BAD_REQUEST: u32 = 400;
 /// The plane's words for a task verb whose `params` name no task id as a string.
 pub const TASK_UNNAMED: &str = "a task verb must name its task: `params.id` is required, a string";
-/// The status a task that cannot be recorded answers with.
-const STATUS_UNAVAILABLE: u32 = 503;
-/// The status an interrupted task that cannot resume answers with.
-const STATUS_CONFLICT: u32 = 409;
+/// The status a cancel of a task busbar holds as terminal answers with (`TaskNotCancelableError`).
+const STATUS_CONFLICT: u32 = STATUS_BAD_REQUEST;
 /// The words for a task that could not be recorded.
 pub const TASK_UNRECORDED: &str = "the task could not be recorded";
 /// The plane's words for a cancel of a task it holds as terminal (in the style of the subscribe
+/// refusal, `local::subscribe_refusal`).
 pub const TASK_NOT_CANCELABLE: &str =
     "this task has reached a terminal state, so it cannot be canceled";
 /// The words for an interrupted task that could not be moved back to `working`.
 pub const TASK_UNRESUMED: &str = "this task cannot be resumed";
+/// The words for a held task whose inline push callback could not be recorded.
+pub const CALLBACK_UNRECORDED: &str = "this task's push notification config could not be recorded";
 pub const TASK_NAMED_TWICE: &str = "a request must name only one task";
 
 /// Different aliases cannot choose different task owners before admission.
@@ -48,7 +49,8 @@ pub fn conflicting_tasks(envelope: &Value) -> bool {
         .is_some_and(|first| named.iter().any(|id| id != first))
 }
 
-/// The host's reach opening a task needs beyond the records and the destination judge: the
+/// The host's reach opening a task needs beyond the records and the destination judge: the kernel's
+/// random bytes.
 pub trait Mint: Reach {
     /// `random.fill` into `buf`.
     fn random(&mut self, buf: &mut [u8]) -> Result<(), Halt>;
@@ -99,14 +101,15 @@ pub enum Opened {
         task: Box<TaskHop>,
         /// The translated request, if any id was.
         instead: Option<Vec<u8>>,
-        /// The push callback the request carried inline, registered on the task.
+        /// Always `None`: an inline callback and its credential are held durably in the task's
+        /// push config, never by the hop.
         callback: Option<Callback>,
         /// Completed retention work, for the instance gate.
         swept: Option<usize>,
-        /// The caller's answer if the store refuses the opening's record writes (the kernel ends
-        /// the unit `durability_unavailable` and the door's `refusal` renders it). A fresh task: `503`, `-32603`
-        /// ([`TASK_UNRECORDED`]); a resumed one: `503`, `-32603` ([`TASK_UNRESUMED`]). `None` for an
-        /// addressed task, whose hop is sent whether or not its callback was recorded.
+        /// The refusal matching this opening's record writes (a fresh task: `503`, `-32603`,
+        /// [`TASK_UNRECORDED`]; a resumed one: `503`, `-32603`, [`TASK_UNRESUMED`]; `None` for an
+        /// addressed task). `open` publishes those writes itself and answers [`Opened::Refused`]
+        /// when the store refuses them, so this is never the answer of a write already refused.
         unrecorded: Option<AgentRefusal>,
     },
     /// The hop does not go ahead: the caller's whole answer.
@@ -128,19 +131,29 @@ fn refused(status: u32, rpc_id: &Value, code: i64, message: &str) -> Opened {
 
 /// The newest of the caller's tasks under `context_id` on `member` that is interrupted.
 fn resumable(rows: Vec<TaskRow>, context_id: &str, member: &str) -> Option<TaskRow> {
-    let mut candidates: Vec<TaskRow> = rows
-        .into_iter()
+    newest_interrupted(rows, context_id, |agent| agent == member)
+}
+
+/// The newest (the last listed among equals) of `rows` under `context_id` that is interrupted and
+/// whose agent `on` admits: the one rule [`resumable`] and [`holder`] both pick by.
+fn newest_interrupted(
+    rows: Vec<TaskRow>,
+    context_id: &str,
+    on: impl Fn(&str) -> bool,
+) -> Option<TaskRow> {
+    rows.into_iter()
         .filter(|r| {
             r.context_id == context_id
-                && r.agent_id == member
+                && on(&r.agent_id)
                 && TaskState::parse(&r.state).is_ok_and(TaskState::is_interrupted)
         })
-        .collect();
-    candidates.sort_by_key(|r| r.updated_at);
-    candidates.pop()
+        .max_by_key(|r| r.updated_at)
 }
 
 /// The member holding the task a request to a failover pool is about, read off the caller's task records: the `agent_id` of the task
+/// the request names (in its `params` or its message) and the caller holds, else of the newest of
+/// the caller's interrupted tasks under the `contextId` it names held by ANY of the pool's
+/// `members` (it resumes AT that member).
 pub fn holder(
     reach: &mut dyn Records,
     envelope: &Value,
@@ -153,26 +166,22 @@ pub fn holder(
     }
     for named in task_identity::translatable(envelope) {
         if let Some(held) = tasks::get(reach, caller, named, now)? {
-            return Ok(Some(held.row.agent_id));
+            return Ok(Some(held.row.agent_id.clone()));
         }
     }
     let context = task_identity::context_of(envelope);
     if context.is_empty() {
         return Ok(None);
     }
-    let mut candidates: Vec<TaskRow> = tasks::list(reach, caller, now)?
-        .into_iter()
-        .filter(|r| {
-            r.context_id == context
-                && members.contains(&r.agent_id)
-                && TaskState::parse(&r.state).is_ok_and(TaskState::is_interrupted)
-        })
-        .collect();
-    candidates.sort_by_key(|r| r.updated_at);
-    Ok(candidates.pop().map(|r| r.agent_id))
+    let rows = tasks::list(reach, caller, now)?;
+    Ok(
+        newest_interrupted(rows, context, |agent| members.iter().any(|m| m == agent))
+            .map(|r| r.agent_id.clone()),
+    )
 }
 
 /// OPEN the task request `req` is for; its record writes go to `out`. `backends` answers the far
+/// end's id busbar learnt for one of the caller's task ids.
 pub fn open(
     reach: &mut dyn Mint,
     req: &Request<'_>,
@@ -241,6 +250,7 @@ pub fn open(
         ),
         _ => None,
     };
+    let held_id = addressed.as_ref().map(|row| row.task_id.clone());
     let (task, unrecorded) = match (addressed, resumed) {
         (Some(row), _)
             if is_cancel(req.envelope)
@@ -254,10 +264,22 @@ pub fn open(
             ));
         }
         (Some(row), _) => {
-            put_config(reach, req, callback.as_ref(), version, &row.task_id)?;
+            match put_config(reach, req, callback.as_ref(), version, &row.task_id) {
+                Err(Halt::Pending) => return Err(Halt::Pending),
+                Err(Halt::Failed(_)) => {
+                    unrecorded_warning("callback", req.member, &row.task_id);
+                    return Ok(refused(
+                        STATUS_UNAVAILABLE,
+                        rpc_id,
+                        CODE_INTERNAL,
+                        CALLBACK_UNRECORDED,
+                    ));
+                }
+                Ok(()) => {}
+            }
             let task = TaskHop {
-                task_id: row.task_id,
-                context_id: row.context_id,
+                task_id: row.task_id.clone(),
+                context_id: row.context_id.clone(),
                 addressed: true,
                 skill: None,
                 references: Vec::new(),
@@ -267,13 +289,13 @@ pub fn open(
         (None, Some(row)) => {
             let at = Stamp {
                 caller: req.caller,
-                request_id: &row.task_id,
+                request_id: &row.task_id.clone(),
                 now: req.now,
             };
             let mut plan = |held: &TaskRow| -> Planned {
                 plan_transition(TaskState::Working, at.now)(held).map(|(mut next, kind)| {
                     if url.is_some() {
-                        next.push_callback.clear();
+                        crate::request_json::wipe_string(&mut next.push_callback);
                         next.push_version.clear();
                     }
                     Some((next, kind))
@@ -281,21 +303,28 @@ pub fn open(
             };
             let config =
                 config_value(req, callback.as_ref(), version)?.map(crate::relay::RawBytes::from);
-            match tasks::change_configured(reach, &at, &row.task_id, &mut plan, config.as_deref()) {
+            match tasks::change_configured(
+                reach,
+                &at,
+                &row.task_id.clone(),
+                &mut plan,
+                config.as_deref(),
+            ) {
                 Err(Halt::Pending) => return Err(Halt::Pending),
                 Err(Halt::Failed(_)) => {
+                    unrecorded_warning("task_resume", req.member, &row.task_id);
                     return Ok(refused(
                         STATUS_UNAVAILABLE,
                         rpc_id,
                         CODE_INTERNAL,
                         TASK_UNRESUMED,
-                    ))
+                    ));
                 }
                 Ok(_) => {}
             }
             let task = TaskHop {
-                task_id: row.task_id,
-                context_id: row.context_id,
+                task_id: row.task_id.clone(),
+                context_id: row.context_id.clone(),
                 addressed: false,
                 skill: None,
                 references: Vec::new(),
@@ -340,12 +369,13 @@ pub fn open(
             match opened {
                 Err(Halt::Pending) => return Err(Halt::Pending),
                 Err(Halt::Failed(_)) => {
+                    unrecorded_warning("task_open", req.member, &task_id);
                     return Ok(refused(
                         STATUS_UNAVAILABLE,
                         rpc_id,
                         CODE_INTERNAL,
                         TASK_UNRECORDED,
-                    ))
+                    ));
                 }
                 Ok(_) => {}
             }
@@ -374,7 +404,7 @@ pub fn open(
             (task, Some(unrecorded))
         }
     };
-    let (instead, references) = translated(reach, req, backends)?;
+    let (instead, references) = translated(reach, req, backends, held_id.as_deref())?;
     Ok(Opened::Hop {
         task: Box::new(TaskHop { references, ..task }),
         instead,
@@ -383,6 +413,18 @@ pub fn open(
         swept,
         unrecorded,
     })
+}
+
+/// Warn that an opening's record writes at `stage` failed for `task` on `agent`; the store's words
+/// are never logged (they may carry stored bytes), only where the write failed.
+fn unrecorded_warning(stage: &str, agent: &str, task: &str) {
+    busbar_contract::diag_warn!(
+        crate::diagnostics::A2A_TASK_STATE_UNREAD,
+        stage = %stage,
+        agent = %agent,
+        task = %task,
+        "a2a: the task's record writes did not complete; the request is refused"
+    );
 }
 
 fn put_config(
@@ -440,7 +482,8 @@ fn addresses_a_task(envelope: &Value) -> bool {
     is_task_verb(envelope) || !task_identity::message_tasks(envelope).is_empty()
 }
 
-/// Whether `envelope` is a task verb (`GetTask`, `CancelTask`, `SubscribeToTask`, either
+/// Whether `envelope` is a task verb (`GetTask`, `CancelTask`, `SubscribeToTask`, either spelling):
+/// a request about one task, which it must name.
 fn is_task_verb(envelope: &Value) -> bool {
     use crate::ops::{row_for, OP_TASK_CANCEL, OP_TASK_GET, OP_TASK_SUBSCRIBE};
     envelope
@@ -459,7 +502,8 @@ fn is_cancel(envelope: &Value) -> bool {
         .is_some_and(|row| row.op == crate::ops::OP_TASK_CANCEL)
 }
 
-/// THE INLINE CONFIG OBJECT whose `url` is the callback: the first supported spelling that
+/// THE INLINE CONFIG OBJECT whose `url` is the callback: the first supported spelling that carries
+/// a non-empty one, so the credential is read out of the same object as the URL.
 fn inline_config(envelope: &Value) -> Option<&Value> {
     CALLBACK_CONFIG_POINTERS.into_iter().find_map(|p| {
         envelope.pointer(p).filter(|cfg| {
@@ -471,6 +515,7 @@ fn inline_config(envelope: &Value) -> Option<&Value> {
 }
 
 /// THE PUSH CALLBACK `envelope` carries inline, judged: `Ok(None)` for none, the callback as it
+/// passed, or the refusal's words (a credential busbar cannot present, or a URL the floor refuses).
 fn inline_callback(
     reach: &mut dyn Reach,
     envelope: &Value,
@@ -478,7 +523,10 @@ fn inline_callback(
     let Some(cfg) = inline_config(envelope) else {
         return Ok(Ok(None));
     };
-    if cfg.get("token").is_some_and(|token| !token.is_null()) {
+    if cfg
+        .get("token")
+        .is_some_and(|token| !token.is_null() && token.as_str() != Some(""))
+    {
         return Ok(Err(local::TOKEN_UNCARRIED.to_string()));
     }
     let auth = match local::delivery_auth(cfg) {
@@ -494,10 +542,13 @@ fn inline_callback(
 }
 
 /// The request with every task id the caller holds, and whose far-end id busbar learnt, sent on as
+/// the far end's; `None` when none is. `held` is the task id [`open`] already read as held, not
+/// read again.
 fn translated(
     reach: &mut dyn Mint,
     req: &Request<'_>,
     backends: &dyn Fn(&str) -> Option<String>,
+    held: Option<&str>,
 ) -> Result<Translated, Halt> {
     let mut owned = BTreeMap::new();
     let relayed = req.relayed.unwrap_or(req.envelope);
@@ -510,7 +561,7 @@ fn translated(
         let Some(backend) = backends(id).filter(|b| b != id) else {
             continue;
         };
-        if tasks::get(reach, req.caller, id, req.now)?.is_some() {
+        if held == Some(id) || tasks::get(reach, req.caller, id, req.now)?.is_some() {
             owned.insert(id.to_string(), backend);
         }
     }
@@ -536,6 +587,7 @@ fn translated(
 }
 
 /// What [`translated`] answers: the request to send in place of the caller's bytes, when an id was
+/// translated, and each translated task as the far end's id then busbar's, for the answer.
 type Translated = (Option<Vec<u8>>, Vec<(String, String)>);
 
 /// The error-once latches of the refused record writes, one per condition: a store outage persists across
@@ -545,6 +597,15 @@ type Translated = (Option<Vec<u8>>, Vec<(String, String)>);
 pub struct Latches {
     tripped: Keyed<u8, ()>,
 }
+
+/// The [`Latches`] kind of a refused unary outcome write.
+const LATCH_RELAYED: u8 = 0;
+/// The [`Latches`] kind of a refused streamed transition write.
+const LATCH_STREAMED: u8 = 1;
+/// The [`Latches`] kind of a refused `failed` write.
+const LATCH_FAILURE: u8 = 2;
+/// The [`Latches`] kind of a refused artifact cursor write.
+const LATCH_CURSOR: u8 = 3;
 
 impl Latches {
     /// Trip latch `kind`; `true` when this is the first trip.
@@ -565,6 +626,7 @@ macro_rules! latched {
 }
 
 /// A record write the store refused, reported and never fatal: the hop SUCCEEDED, the caller is
+/// owed its answer, and the stream keeps flowing.
 pub(crate) enum WriteRefused {
     /// The unary hop's reported state.
     Relayed,
@@ -581,14 +643,14 @@ impl WriteRefused {
         use crate::diagnostics::{A2A_FAILURE_UNRECORDED, A2A_RELAYED_OUTCOME_UNRECORDED};
         match self {
             Self::Relayed => latched!(
-                latches, 0,
+                latches, LATCH_RELAYED,
                 A2A_RELAYED_OUTCOME_UNRECORDED,
                 task = %task,
                 error = %error,
                 "a2a: the relayed task's outcome could not be recorded"
             ),
             Self::Streamed(state) => latched!(
-                latches, 1,
+                latches, LATCH_STREAMED,
                 A2A_RELAYED_OUTCOME_UNRECORDED,
                 task = %task,
                 state = %state.as_str(),
@@ -596,14 +658,14 @@ impl WriteRefused {
                 "a2a: a streamed task transition could not be recorded"
             ),
             Self::Failure => latched!(
-                latches, 2,
+                latches, LATCH_FAILURE,
                 A2A_FAILURE_UNRECORDED,
                 task = %task,
                 error = %error,
                 "a2a: a failed task could not be recorded as failed"
             ),
             Self::Cursor => latched!(
-                latches, 3,
+                latches, LATCH_CURSOR,
                 A2A_RELAYED_OUTCOME_UNRECORDED,
                 task = %task,
                 error = %error,
@@ -614,6 +676,7 @@ impl WriteRefused {
 }
 
 /// SETTLE `task` on what its answer said; the record writes go to `out`. A write the store refuses
+/// is not the caller's failure: the answer stands.
 pub fn settle_on_answer(
     rec: &mut dyn Records,
     task: &TaskHop,

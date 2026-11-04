@@ -12,7 +12,7 @@ pub const DEFAULT_REVERIFY_TTL: &str = "5s";
 /// WHAT ONE `agents:` ENTRY IS CALLED in the section's refusals and in the plane's declaration.
 pub const SUBJECT_NOUN: &str = "fronted agent";
 
-/// THE REFUSAL FOR `upstream_credentials: passthrough` ON THIS PLANE, written once so the per-entry
+/// THE REFUSAL FOR `upstream_credentials: passthrough` ON THIS PLANE, written once so the per-entry and section-level paths cannot say different things about the same rule.
 pub const REFUSE_PASSTHROUGH_SECTION: &str =
     "`upstream_credentials: passthrough` is refused on the `agents:` plane. busbar delegates AS \
      ITSELF: the caller's key authenticated them to busbar and means nothing to a third-party \
@@ -40,7 +40,7 @@ pub enum PinMechanism {
 }
 
 impl PinMechanism {
-    /// The config token, for diagnostics, pin renderings and audit rows. Deliberately the same
+    /// The config token, for diagnostics, pin renderings and audit rows.
     pub fn token(self) -> &'static str {
         match self {
             PinMechanism::JwsIssuerKey => "jws_issuer_key",
@@ -200,7 +200,7 @@ pub struct AgentsCfg {
 }
 
 impl AgentsCfg {
-    /// Report accepted-but-ignored version settings once when the successfully judged section
+    /// Report accepted-but-ignored version settings once when the successfully judged section opens.
     pub(crate) fn warn_ignored_protocol_versions(&self) {
         let agents: Vec<&str> = self
             .agents
@@ -217,7 +217,7 @@ impl AgentsCfg {
         }
     }
 
-    /// The pool `agent` is a member of, by name, and its members in declared order: the first pool
+    /// The pool `agent` is a member of, by name, and its members in declared order: the first pool naming it, in the order the section states them.
     #[must_use]
     pub fn pool_of(&self, agent: &str) -> Option<(&str, &[String])> {
         self.pools
@@ -254,17 +254,34 @@ impl<'de> Deserialize<'de> for AgentsCfg {
 }
 
 /// `url` as a refusal may repeat it: any userinfo in its authority (everything before the last `@`
+/// ahead of the path, found where the URL reader finds it) replaced by `***`; a malformed URL, or one
+/// whose userinfo cannot be located in the raw spelling, is omitted entirely.
 #[must_use]
 pub fn without_userinfo(url: &str) -> std::borrow::Cow<'_, str> {
-    if busbar_contract::net::parse_url(url).is_err() {
+    let Ok(parts) = busbar_contract::net::parse_url(url) else {
         return std::borrow::Cow::Borrowed("<malformed URL omitted>");
-    }
-    let start = url.find("://").map_or(0, |i| i + 3);
+    };
+    let after_scheme = url.find(':').map_or(0, |i| i + 1);
+    let rest = &url[after_scheme..];
+    let start = after_scheme
+        + match parts.family {
+            busbar_contract::net::UrlFamily::Web => {
+                rest.len() - rest.trim_start_matches(['/', '\\']).len()
+            }
+            busbar_contract::net::UrlFamily::Generic => {
+                if rest.starts_with("//") {
+                    2
+                } else {
+                    0
+                }
+            }
+        };
     let authority_end = url[start..]
         .find(['/', '?', '#'])
         .map_or(url.len(), |i| start + i);
     match url[start..authority_end].rfind('@') {
         Some(at) => std::borrow::Cow::Owned(format!("{}***{}", &url[..start], &url[start + at..])),
+        None if parts.userinfo => std::borrow::Cow::Borrowed("<URL with userinfo omitted>"),
         None => std::borrow::Cow::Borrowed(url),
     }
 }

@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! BUSBAR AS AN A2A CLIENT OVER gRPC (the engine's `client_leg_tests.rs` `grpc_client_issues_*`,
+//! BUSBAR AS AN A2A CLIENT OVER gRPC (the engine's `client_leg_tests.rs`
+//! `grpc_client_issues_*`, ported to the door's hop): what each attempt asks to have sent (the
+//! rpc's path, its request message) and the caller's answer read off the grpc transport's
+//! pieces (its head, each message length-prefixed, its trailers).
 
 use super::tests::{body, caller, far, kernel, part};
 use super::*;
@@ -51,7 +54,8 @@ fn stream_event(state: pb::TaskState) -> Vec<u8> {
     })
 }
 
-/// The v1.0 submission a caller reaching a gRPC agent sends: its params ARE the request message's
+/// The v1.0 submission a caller reaching a gRPC agent sends: its params ARE the request
+/// message's ProtoJSON.
 fn submission(method: &str) -> serde_json::Value {
     json!({
         "jsonrpc": "2.0", "id": 7, "method": method,
@@ -60,7 +64,9 @@ fn submission(method: &str) -> serde_json::Value {
     })
 }
 
-/// A hop bound to the gRPC binding for `envelope` (`translated`: the envelope with the far end's
+/// A hop bound to the gRPC binding for `envelope` (`translated`: the envelope with the far
+/// end's own task id, as the door hands it over), through its attempt and the caller's body:
+/// the request and the message it sends.
 fn dialled(
     envelope: &serde_json::Value,
     translated: Option<&serde_json::Value>,
@@ -88,6 +94,7 @@ fn dialled(
 }
 
 /// The far end's answer, piece by piece as the grpc transport hands it: its head (no status of
+/// its own: `0`), `messages`, its trailers (stating `code`), then the end.
 fn answer(r: &mut HopRelay, messages: &[Vec<u8>], code: Option<u32>) -> Vec<PieceAnswer> {
     let mut answers = vec![r.on_piece(far(Some(0), &[], false))];
     for m in messages {
@@ -108,7 +115,10 @@ fn whole(answers: Vec<PieceAnswer>) -> RelayReply {
         .expect("the caller is answered")
 }
 
-/// `grpc_client_issues_send_message`: the rpc's own path under the service (never the operator's
+/// `grpc_client_issues_send_message`: the rpc's own path under the service (never the
+/// operator's path), a POST, the gRPC media type, and the caller's content surviving the
+/// transcode into the request message; the far end's message reaches the caller as the JSON-RPC
+/// result it is.
 #[test]
 fn grpc_client_issues_send_message() {
     let (mut r, attempt, message) = dialled(&submission("SendMessage"), None, false);
@@ -144,6 +154,7 @@ fn grpc_client_issues_send_message() {
 }
 
 /// A task hop's answer leaves under busbar's identity and settles the task on what the far end
+/// reported, as on the other bindings.
 #[test]
 fn a_grpc_answer_about_a_task_leaves_under_busbars_identity() {
     let (mut r, _, _) = dialled(&submission("SendMessage"), None, false);
@@ -203,7 +214,8 @@ fn grpc_client_issues_cancel_task() {
     assert_eq!(req.id, BACKEND);
 }
 
-/// `grpc_client_issues_send_stream_message`: the streaming rpc, and each length-prefixed message
+/// `grpc_client_issues_send_stream_message`: the streaming rpc, and each length-prefixed
+/// message of its answer reaching the caller as one JSON-RPC response in an event-stream frame.
 #[test]
 fn grpc_client_issues_send_stream_message() {
     let (mut r, attempt, message) = dialled(&submission("SendStreamingMessage"), None, true);
@@ -270,7 +282,8 @@ fn grpc_client_issues_subscribe_to_task() {
         .any(|a| matches!(a, PieceAnswer::Part(p) if p.head)));
 }
 
-/// `grpc_client_issues_get_extended_agent_card`: a task-less hop; the card the far end answers is
+/// `grpc_client_issues_get_extended_agent_card`: a task-less hop; the card the far end answers
+/// is the caller's result.
 #[test]
 fn grpc_client_issues_get_extended_agent_card() {
     let asked =
@@ -287,7 +300,9 @@ fn grpc_client_issues_get_extended_agent_card() {
     assert_eq!(body(&reply)["result"]["name"], "planner-extended");
 }
 
-/// THE STATUS THE TRAILERS STATE IS READ: a call that ends with an error is the backend refusing
+/// THE STATUS THE TRAILERS STATE IS READ: a call that ends with an error is the backend
+/// refusing the request (its A2A code where the status binds one, the task's own refusal on a
+/// task hop), never a reply busbar cannot read.
 #[test]
 fn a_grpc_error_status_is_the_backends_refusal_with_its_a2a_code() {
     let asked =
@@ -320,6 +335,9 @@ fn a_grpc_error_status_is_the_backends_refusal_with_its_a2a_code() {
 }
 
 /// A gRPC agent refusing busbar at the HTTP layer (`401`/`403`, no gRPC answer) refuses busbar
+/// itself, as on every binding (predev `relay.rs:1583`: `RelayRefusal::Status`, read by the one
+/// status table, an auth status hard): the hop's reading is hard, so the kernel takes the
+/// member out of its pool's walk.
 #[test]
 fn a_grpc_agent_refusing_busbar_at_the_http_layer_reads_hard() {
     let asked = submission("SendMessage");
@@ -362,6 +380,7 @@ fn params_that_are_not_the_request_message_are_refused_before_the_hop() {
 }
 
 /// THE TRAILERS ARE NEVER BYTES OF THE ANSWER: on the JSON-RPC binding a field block after the
+/// body is ignored.
 #[test]
 fn trailers_after_a_json_rpc_answer_are_not_read_as_its_body() {
     let mut r = HopRelay::new(json!(7), "1.0");
@@ -383,6 +402,7 @@ fn trailers_after_a_json_rpc_answer_are_not_read_as_its_body() {
 }
 
 /// THE NEED AN ATTEMPT RIDES: the gRPC binding names the door's gRPC need; the others name none
+/// (the member's own).
 #[test]
 fn a_grpc_attempt_rides_the_doors_grpc_need() {
     use crate::plane_door::attempt_need;
@@ -452,6 +472,7 @@ fn a_status_handed_on_with_the_last_trailers_ends_the_call() {
 }
 
 /// MONEY (this cell touches money: it reads the count the door reports as the hop's billed
+/// `bytes` class, `relay::moved`).
 #[test]
 fn a_grpc_hop_bills_its_framed_request_and_answer_and_never_its_trailers() {
     use busbar_contract::abi::transport::fields::{LINE_END, SEPARATOR};
@@ -576,6 +597,8 @@ fn a_grpc_stream_ending_with_an_error_status_fails_its_task() {
 }
 
 /// A STREAM MESSAGE THE PLANE CANNOT READ REFUSES THE HOP, never stepped over or waited on: a
+/// compressed message before any event refuses it outright, its task failed; an undecodable one
+/// after the events began ends the answer there, its task failed.
 #[test]
 fn an_unreadable_grpc_stream_message_refuses_the_hop() {
     let mut compressed = stream_event(pb::TaskState::Working);

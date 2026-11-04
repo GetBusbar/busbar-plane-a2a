@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! The two hashes taken over an agent card, and the per-skill digests. The plane computes them and
+//! The two hashes taken over an agent card, and the per-skill digests.
 
 use std::collections::BTreeMap;
 
@@ -63,15 +63,17 @@ pub fn fingerprint(card: &Value) -> Result<String, CardError> {
     Ok(sha256_tagged(canonicalize(card)?.as_bytes()))
 }
 
-/// THE JWS PAYLOAD: the canonical card with `signatures` removed, because a signature cannot cover
+/// THE JWS PAYLOAD: the canonical card with `signatures` removed, because a signature cannot cover itself.
 pub fn signing_payload(card: &Value) -> Result<String, CardError> {
-    let mut stripped = card.clone();
-    let obj = stripped.as_object_mut().ok_or(CardError::NotAnObject)?;
-    obj.remove("signatures");
-    if obj.get("supportedInterfaces").is_some_and(Value::is_array) {
-        omit_defaults(&mut stripped, CARD);
-    }
-    Ok(canonicalize(&stripped)?)
+    let obj = card.as_object().ok_or(CardError::NotAnObject)?;
+    let message = if obj.get("supportedInterfaces").is_some_and(Value::is_array) {
+        CARD
+    } else {
+        &[]
+    };
+    let mut out = String::new();
+    write_message(card, message, true, &mut out)?;
+    Ok(out)
 }
 
 /// How one member of an agent card's messages reads under proto3 field presence (A2A v1.0 §5.7),
@@ -131,7 +133,7 @@ const SCHEME: Message = &[
     ("openIdConnectSecurityScheme", Member::Of(DESCRIBED)),
     ("mtlsSecurityScheme", Member::Of(DESCRIBED)),
 ];
-/// `APIKeySecurityScheme`, `OpenIdConnectSecurityScheme`, `MutualTlsSecurityScheme`: only
+/// `APIKeySecurityScheme`, `OpenIdConnectSecurityScheme`, `MutualTlsSecurityScheme`: only `description` is implicit.
 const DESCRIBED: Message = &[("description", Member::Implicit)];
 /// `HTTPAuthSecurityScheme`.
 const HTTP_AUTH: Message = &[
@@ -184,41 +186,74 @@ fn is_default(v: &Value) -> bool {
     }
 }
 
-/// Omit `v`'s default-valued implicit members, as `message` declares them, at every depth.
-fn omit_defaults(v: &mut Value, message: Message) {
-    let Some(obj) = v.as_object_mut() else {
-        return;
+/// Canonicalize borrowed card fields while omitting the proto defaults in their message schema.
+fn write_message(
+    value: &Value,
+    message: Message,
+    root: bool,
+    out: &mut String,
+) -> Result<(), CanonicalError> {
+    use super::canonical::{write_string, write_value};
+    let Some(obj) = value.as_object() else {
+        return write_value(value, out);
     };
-    for (name, member) in message {
-        let Some(value) = obj.get_mut(*name) else {
+    let mut fields: Vec<_> = obj.iter().collect();
+    fields.sort_by(|(a, _), (b, _)| a.encode_utf16().cmp(b.encode_utf16()));
+    out.push('{');
+    let mut separator = "";
+    for (name, value) in fields {
+        if root && name == "signatures" {
             continue;
-        };
-        let omit = match member {
-            Member::Implicit => is_default(value),
-            Member::List(inner, required) => {
-                if let Value::Array(entries) = value {
-                    entries.iter_mut().for_each(|e| omit_defaults(e, inner));
+        }
+        let member = message
+            .iter()
+            .find(|(key, _)| *key == name.as_str())
+            .map(|(_, m)| *m);
+        if matches!(
+            member,
+            Some(Member::Implicit | Member::List(_, false) | Member::Map(_))
+        ) && is_default(value)
+        {
+            continue;
+        }
+        out.push_str(separator);
+        separator = ",";
+        write_string(name, out);
+        out.push(':');
+        match member {
+            Some(Member::Of(inner)) => write_message(value, inner, false, out)?,
+            Some(Member::List(inner, _)) if value.is_array() => {
+                out.push('[');
+                for (index, item) in value.as_array().into_iter().flatten().enumerate() {
+                    if index != 0 {
+                        out.push(',');
+                    }
+                    write_message(item, inner, false, out)?;
                 }
-                !required && is_default(value)
+                out.push(']');
             }
-            Member::Map(inner) => {
-                if let Value::Object(entries) = value {
-                    entries.values_mut().for_each(|e| omit_defaults(e, inner));
+            Some(Member::Map(inner)) if value.is_object() => {
+                let mut entries: Vec<_> = value.as_object().into_iter().flatten().collect();
+                entries.sort_by(|(a, _), (b, _)| a.encode_utf16().cmp(b.encode_utf16()));
+                out.push('{');
+                for (index, (key, item)) in entries.into_iter().enumerate() {
+                    if index != 0 {
+                        out.push(',');
+                    }
+                    write_string(key, out);
+                    out.push(':');
+                    write_message(item, inner, false, out)?;
                 }
-                is_default(value)
+                out.push('}');
             }
-            Member::Of(inner) => {
-                omit_defaults(value, inner);
-                false
-            }
-        };
-        if omit {
-            obj.remove(*name);
+            _ => write_value(value, out)?,
         }
     }
+    out.push('}');
+    Ok(())
 }
 
-/// The capability set the plane-neutral machine compares: skill id to a digest of that skill's
+/// The capability set the plane-neutral machine compares: skill id to a digest of that skill's canonical form.
 pub fn skill_digests(card: &Value) -> Result<BTreeMap<String, String>, CardError> {
     let skills = match card
         .as_object()

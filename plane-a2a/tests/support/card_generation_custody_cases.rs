@@ -309,7 +309,7 @@ fn pending_connect_and_approve_keep_the_original_registration_through_reload() {
                 (route, target, changed_fields.as_slice(), body.as_slice()),
                 (route, target, fields.as_slice(), b"different".as_slice()),
             ] {
-                assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let refusal = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     door.verb_audited_flags(
                         changed_route,
                         changed_target,
@@ -318,7 +318,16 @@ fn pending_connect_and_approve_keep_the_original_registration_through_reload() {
                         FLAG_RESUME,
                     )
                 }))
-                .is_err());
+                .expect_err("changed admin input must be refused by the fixture");
+                let message = refusal
+                    .downcast_ref::<String>()
+                    .map(String::as_str)
+                    .or_else(|| refusal.downcast_ref::<&str>().copied())
+                    .unwrap_or("");
+                assert!(
+                    message.contains("a pending serve must resume its exact logical input"),
+                    "{message}"
+                );
                 assert_eq!(
                     loans(),
                     original_loans,
@@ -402,6 +411,7 @@ fn a_refresh_inside_the_preview_verdict_cannot_publish_stale_card_records() {
 }
 
 /// G1-48: a wake only permits replay. The actual sighting answer must land successfully before
+/// the card can be published or approved, even when the trust book's old verdict still serves.
 #[test]
 fn a_failed_sighting_completion_cannot_publish_or_approve_the_card() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);

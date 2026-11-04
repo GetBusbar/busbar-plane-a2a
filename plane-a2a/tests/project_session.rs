@@ -19,6 +19,8 @@ fn ops() -> &'static Ops {
 }
 
 /// One `project` of `body` arriving on claim `claim` at `target`, through the door's own entry,
+/// checked as the loader checks every answer (`check_project`): the outcome and the session the
+/// view names, as text (`None` = absent).
 fn project_session(claim: usize, target: &str, body: &[u8]) -> (Outcome, Option<String>) {
     let (outcome, session, _) = project_view(claim, target, body);
     (outcome, session)

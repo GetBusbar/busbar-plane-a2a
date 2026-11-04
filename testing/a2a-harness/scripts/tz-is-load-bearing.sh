@@ -90,6 +90,18 @@ EOF
   exit 1
 fi
 
+others="$(grep -E ' baseline=' "$OUT/utc-baseline.txt" | grep -vF "$TEST_ID")"
+if [ -n "$others" ]; then
+  cat >&2 <<EOF
+
+FAIL: TZ=UTC moved ${TEST_ID} as expected, but other rows moved too:
+${others}
+
+Only the one understood, timezone-dependent finding may move; these are masked by it.
+EOF
+  exit 1
+fi
+
 echo
 echo "OK: the timezone pin is load-bearing."
 echo "    Under TZ=UTC, ${TEST_ID} reports DEVIATION_FIXED and the pinned baseline breaks."

@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! The A2A plane: the agent-to-agent protocol, spelled two ways (v0.3 and v1.0) over three
+//! The A2A plane: the agent-to-agent protocol, spelled two ways (v0.3 and v1.0) over three bindings (JSON-RPC, HTTP+JSON and gRPC), as one plugin door ([`door`]).  ## What this crate is  The whole plane.
 
 #![cfg_attr(not(test), forbid(unsafe_code))]
 #![cfg_attr(test, deny(unsafe_code))]
 #![deny(missing_docs)]
 
-/// The wire dialect's own modules (the card, the config grammar, the credentials, the public URL
+/// The wire dialect's own modules (the card, the config grammar, the credentials, the public URL and the task), under their own `a2a::` parent.
 mod a2a {
     pub mod agent_card;
     pub mod canonical;
@@ -44,6 +44,7 @@ mod relay;
 mod request_json;
 mod rest;
 mod served_card;
+mod served_card_cache;
 mod skill;
 mod split_record;
 mod sse;
@@ -70,10 +71,10 @@ use record::{TaskEventRow, TaskRow};
 /// THE REGISTRY KEY A2A IS KNOWN BY, in the plane registry and in the plugin contract alike.
 const PLANE_KEY: &str = "a2a";
 
-/// THE CONFIGURATION SECTION THIS PLANE OWNS, named once for the same reason [`PLANE_KEY`] is: the
+/// THE CONFIGURATION SECTION THIS PLANE OWNS, named once for the same reason [`PLANE_KEY`] is: the Statement declares it and the section's grammar reads under it.
 const CONFIG_SECTION: &str = "agents";
 
-/// THE PLANE'S MOUNT, the path prefix the A2A plane's HTTP bindings are served under. Every route
+/// THE PLANE'S MOUNT, the path prefix the A2A plane's HTTP bindings are served under.
 const MOUNT_PATH: &str = "/a2a";
 
 /// `POST` — the message-send operation.
@@ -82,7 +83,7 @@ const ROUTE_MESSAGE_SEND: &str = "/message:send";
 const ROUTE_MESSAGE_STREAM: &str = "/message:stream";
 /// `GET` — the task list; its filters ride the query string.
 const ROUTE_TASKS: &str = "/tasks";
-/// `GET` one task, and `POST` the colon-suffixed verbs against it. ONE template, two methods: the
+/// `GET` one task, and `POST` the colon-suffixed verbs against it.
 const ROUTE_TASK: &str = "/tasks/{id}";
 /// `POST` a push-notification config, `GET` the list.
 const ROUTE_PUSH_CONFIGS: &str = "/tasks/{id}/pushNotificationConfigs";
@@ -90,21 +91,21 @@ const ROUTE_PUSH_CONFIGS: &str = "/tasks/{id}/pushNotificationConfigs";
 const ROUTE_PUSH_CONFIG: &str = "/tasks/{id}/pushNotificationConfigs/{config_id}";
 /// `GET` — the extended agent card.
 const ROUTE_EXTENDED_AGENT_CARD: &str = "/extendedAgentCard";
-/// One FRONTED agent's endpoint, derived from the agent id so a caller's endpoint is stable and
+/// One FRONTED agent's endpoint, derived from the agent id so a caller's endpoint is stable and says which agent it reaches.
 const ROUTE_AGENT: &str = "/agents/{agent_id}";
-/// One FRONTED agent's own card, at the protocol's well-known discovery path under the agent's
+/// One FRONTED agent's own card, at the protocol's well-known discovery path under the agent's endpoint (R-15): a client handed the agent's endpoint discovers its card there, and the card's `url` names that endpoint.
 const ROUTE_AGENT_CARD: &str = "/agents/{agent_id}/.well-known/agent-card.json";
 
-/// THE PROTOCOL'S CANONICAL CARD DISCOVERY PATH, from protocol v0.3 onward. Absolute, not under
+/// THE PROTOCOL'S CANONICAL CARD DISCOVERY PATH, from protocol v0.3 onward.
 const WELL_KNOWN_CARD_PATH: &str = "/.well-known/agent-card.json";
 
-/// THE RFC 9728 PROTECTED-RESOURCE METADATA PATH for this plane — the well-known prefix with the
+/// THE RFC 9728 PROTECTED-RESOURCE METADATA PATH for this plane — the well-known prefix with the plane's mount appended, exactly as the sibling plane composes its own.
 const METADATA_PATH: &str = "/.well-known/oauth-protected-resource/a2a";
 
-/// THE SUFFIX OF BUSBAR'S OWN PUSH CALLBACK under [`MOUNT_PATH`]: `/a2a/push`, the URL a mirrored
+/// THE SUFFIX OF BUSBAR'S OWN PUSH CALLBACK under [`MOUNT_PATH`]: `/a2a/push`, the URL a mirrored push config names at the agent.
 const PUSH_PATH_SUFFIX: &str = "/push";
 
-/// [`MOUNT_PATH`] joined to one of the route suffixes above. One join, called from both sides,
+/// [`MOUNT_PATH`] joined to one of the route suffixes above.
 #[must_use]
 fn mounted_route(suffix: &str) -> String {
     format!("{MOUNT_PATH}{suffix}")
@@ -123,21 +124,12 @@ const ERRORS: &[(i64, &str)] = &[
     (-32009, "VERSION_NOT_SUPPORTED"),
 ];
 
-/// The `@type` of the detail entry an A2A error carries in `error.data` — `google.rpc.ErrorInfo`,
+/// The `@type` of the detail entry an A2A error carries in `error.data` — `google.rpc.ErrorInfo`, spelled as the protobuf type URL the specification names.
 const ERROR_INFO_TYPE: &str = "type.googleapis.com/google.rpc.ErrorInfo";
 
-/// The `ErrorInfo.domain` every A2A error is reported under. The protocol's own, not busbar's: the
+/// The `ErrorInfo.domain` every A2A error is reported under.
 const ERROR_INFO_DOMAIN: &str = "a2a-protocol.org";
 
-/// The crate's tests that reach past [`door`]: once integration tests (`tests/*.rs`), now in-crate
 #[cfg(test)]
-mod tests {
-    pub(crate) mod capture;
-    mod codec_custody_cases;
-    mod conformance;
-    mod door_facts;
-    mod purity;
-    pub(crate) mod raw_custody_probe;
-    mod request_borrow_cases;
-    pub(crate) mod request_custody_probe;
-}
+#[path = "tests/mod.rs"]
+mod tests;

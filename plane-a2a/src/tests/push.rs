@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! Push delivery in plane memory: the retry schedule and what it retries, the per-task order, the
+//! bounded queue and its count, the credential's path, and busbar's own callback tokens.
 
 use super::*;
 
@@ -20,6 +21,7 @@ impl Deliveries {
     }
 
     /// The deliveries to attempt now: each task's head, when its time has come and no attempt on
+    /// it is open. Each is marked open until [`Deliveries::settle`].
     #[must_use]
     pub(crate) fn due(&self, now_ns: u64) -> Vec<Delivery> {
         self.with(|b| {
@@ -41,6 +43,66 @@ impl Deliveries {
     pub(crate) fn unfiled(&self) -> u64 {
         self.with(|b| b.unfiled)
     }
+
+    pub(crate) fn forget_config(&self, key: &str) {
+        self.with(|book| book.forget_config(key));
+        self.wake_unconditionally();
+    }
+
+    /// File `delivery` behind its task's earlier ones. Answers whether the oldest waiting one was
+    /// dropped (and counted) to make room; an attempt in progress is never the one dropped.
+    pub fn enqueue(&self, delivery: Delivery, now_ns: u64) -> bool {
+        self.with(|book| book.enqueue(delivery, now_ns))
+    }
+
+    /// TAKE what `caller`'s chains are owed, oldest first: at most one per task, and none for
+    /// `except` (the task the piece itself changes); the rest stay owed.
+    #[must_use]
+    pub fn take_owed(&self, caller: &str, except: Option<&str>) -> Vec<Owed> {
+        self.with(|b| {
+            let mut taken: Vec<Owed> = Vec::new();
+            let mut kept = VecDeque::with_capacity(b.owed.len());
+            for receipt in b.owed.drain(..) {
+                let owed = &receipt.outcome;
+                let mine = owed.caller == caller
+                    && receipt.owner.is_none()
+                    && except != Some(owed.task_id.as_str())
+                    && !taken.iter().any(|t| t.task_id == owed.task_id);
+                if mine {
+                    taken.push(receipt.outcome);
+                } else {
+                    kept.push_back(receipt);
+                }
+            }
+            b.owed = kept;
+            taken
+        })
+    }
+
+    /// FORGET what `task_id`'s deleted push config was queued for: every waiting delivery queued for
+    /// the config ([`Delivery::from_config`]) is dropped, credential and all.
+    pub fn forget_task(&self, task_id: &str) {
+        self.with(|b| {
+            let Some(queue) = b.queues.get_mut(task_id) else {
+                return;
+            };
+            queue.retain(|w| !w.delivery.from_config);
+            if queue.is_empty() {
+                b.queues.remove(task_id);
+            }
+        });
+
+        self.wake_unconditionally();
+    }
+}
+
+/// What a test spends from the push-volume bound.
+impl PushLimiter {
+    /// Spend one push from `task_id`'s budget at `now` (unix seconds): `false` once the window's
+    /// budget is spent.
+    pub fn admit(&self, task_id: &str, now: u64) -> bool {
+        self.charge(task_id, now).is_some()
+    }
 }
 use crate::a2a::task::{Direction, TaskState};
 use busbar_contract::abi::host::service::DEST_METADATA;
@@ -52,6 +114,7 @@ use busbar_contract::abi::sdk::test_support::chip::{cred, framed_head};
 const MS: u64 = 1_000_000;
 
 /// The bytes `seal` puts on the wire: the value of the one sealed field an exchange frames for it
+/// (`x: <value>\r\n`, nothing else in the head).
 pub(crate) fn sealed_bytes(seal: Seal) -> Vec<u8> {
     let head = framed_head(
         &Exchange::request_sealed(Request::default(), vec![(0, b"x".to_vec(), seal)])
@@ -232,6 +295,7 @@ fn a_full_queue_drops_its_oldest_waiting_notification_and_counts_it() {
 }
 
 /// THE REQUEST AS IT WAS BEFORE THE CHIP (plane-a2a dev at 28bd001, `push::request` and
+/// `DeliveryAuth::header_value`), kept verbatim as the oracle the sealed request is held to.
 fn legacy_request(delivery: &Delivery, auth: Option<(&str, &str)>) -> Request {
     let target = url::Url::parse(&delivery.url).map_or_else(
         |_| "/".to_string(),
@@ -295,6 +359,10 @@ fn the_request_is_a_post_to_the_callbacks_path_with_the_credential_only_once_hel
 }
 
 /// THE WIRE IS THE ONE THE PLANE SENT BEFORE THE CHIP: for every shape of credential a caller
+/// registers (a scheme and a credential, a bare scheme, a credential with inner spaces, none), and
+/// a callback with and without a query, the sealed request frames exactly the head the plain
+/// request framed: the field order, the separator, every byte. RED against a sealed field placed
+/// anywhere but after the content type, or a recipe that writes the scheme its own way.
 #[test]
 fn the_sealed_request_frames_the_bytes_the_plain_one_did() {
     let shapes: [Option<(&str, &str)>; 5] = [
@@ -310,11 +378,10 @@ fn the_sealed_request_frames_the_bytes_the_plain_one_did() {
         "https://hook.example/a/b",
     ] {
         for shape in shapes {
-            let x = Delivery {
-                url: url.to_string(),
-                auth: shape.map(|(s, c)| auth(s, c)),
-                ..delivery("t1")
-            };
+            let mut x = delivery("t1");
+            crate::request_json::wipe_string(&mut x.url);
+            x.url = url.to_string();
+            x.auth = shape.map(|(s, c)| auth(s, c));
             let old = Exchange::request(legacy_request(&x, shape)).expect("frames");
             assert_eq!(
                 framed(&x),
@@ -342,14 +409,11 @@ fn the_sealed_credential_requires_the_secured_stream_its_https_callback_names() 
 fn forgetting_a_task_withdraws_all_its_config_deliveries() {
     let d = Deliveries::default();
     for body in [b"pending".as_slice(), b"waiting".as_slice()] {
-        d.enqueue(
-            Delivery {
-                body: body.to_vec(),
-                from_config: true,
-                ..delivery("t1")
-            },
-            0,
-        );
+        let mut notification = delivery("t1");
+        crate::record_custody::bytes(&mut notification.body);
+        notification.body = body.to_vec();
+        notification.from_config = true;
+        d.enqueue(notification, 0);
     }
     assert!(d.next_due(0).is_some());
     d.forget_task("t1");
@@ -391,6 +455,9 @@ fn the_notification_is_the_task_nested_under_task_with_an_rfc3339_timestamp() {
 }
 
 /// THE NOTIFICATION TAKES THE SHAPE OF THE VERSION ITS CALLBACK WAS REGISTERED UNDER (Q128 a2a M13,
+/// ruled version-consistent). v1.0: a `StreamResponse` carrying the task, its state a ProtoJSON
+/// `TASK_STATE_*` token and no `kind`. v0.3: the `Task` object itself, `kind: "task"` and the
+/// lower-case state word. RED before the fix: one mixed body, the v1.0 wrapper around v0.3 words.
 #[test]
 fn the_notification_is_the_registered_versions_shape() {
     let mut t = task("t1", TaskState::Completed);
@@ -472,6 +539,7 @@ fn tokens_are_bounded() {
 }
 
 /// 1.5.5's push-volume bound: 60 per task per fixed 60 s window, other tasks untouched, a fresh
+/// window refills, and a clock that steps back cannot reopen a spent window.
 #[test]
 fn the_push_volume_bound_is_one_point_five_point_fives() {
     let limiter = PushLimiter::default();
@@ -621,6 +689,8 @@ fn the_push_trust_path_names_the_owned_agent_push_section() {
 }
 
 /// THE `agent_push:` SECTION'S SHAPE, as the plane judges it at `open` and `refresh`: absent (or
+/// null) is off; present, a mapping holding `ca` alone, non-empty text. Whether the text is a
+/// usable trust anchor is the host's to judge.
 #[test]
 fn the_agent_push_section_holds_its_ca_alone() {
     use crate::statement::read_push_section;
@@ -708,6 +778,7 @@ fn the_credential_round_trips_through_the_record_and_stays_redacted() {
 }
 
 /// A `serde_json` line of the credential (a log line, an assert message) is refused and quotes
+/// nothing: only the SDK's record encoder writes it.
 #[test]
 fn the_credential_serializes_into_the_record_and_nowhere_else() {
     let a = auth("Bearer", "s3cret");
@@ -717,6 +788,7 @@ fn the_credential_serializes_into_the_record_and_nowhere_else() {
 }
 
 /// One `tick` op attempts one notification: the next task's head in turn (task-id order), marked
+/// open so the next op takes another; a task's later notification waits behind its open head.
 #[test]
 fn the_next_due_is_one_head_at_a_time_each_task_in_turn() {
     let d = Deliveries::default();
@@ -725,8 +797,14 @@ fn the_next_due_is_one_head_at_a_time_each_task_in_turn() {
     d.enqueue(delivery("t1"), 9 * MS);
     d.enqueue(delivery("t2"), 6 * MS);
     assert_eq!(d.next_due(4 * MS), None, "nothing is due yet");
-    assert_eq!(d.next_due(10 * MS).map(|x| x.task_id), Some("t1".into()));
-    assert_eq!(d.next_due(10 * MS).map(|x| x.task_id), Some("t2".into()));
+    assert_eq!(
+        d.next_due(10 * MS).map(|x| x.task_id.clone()),
+        Some("t1".into())
+    );
+    assert_eq!(
+        d.next_due(10 * MS).map(|x| x.task_id.clone()),
+        Some("t2".into())
+    );
     assert_eq!(
         d.next_due(10 * MS),
         None,
@@ -736,7 +814,10 @@ fn the_next_due_is_one_head_at_a_time_each_task_in_turn() {
         d.settle("t2", Attempted::Delivered, 11 * MS, 0),
         DeliverySettled::Done(vocab::EV_PUSH_DELIVERED)
     );
-    assert_eq!(d.next_due(11 * MS).map(|x| x.task_id), Some("t2".into()));
+    assert_eq!(
+        d.next_due(11 * MS).map(|x| x.task_id.clone()),
+        Some("t2".into())
+    );
 }
 
 /// A delivery is keyed to the caller holding its task: the row's principal.
@@ -746,6 +827,7 @@ fn a_delivery_names_the_caller_holding_its_task() {
 }
 
 /// What an attempt owes its chain is taken by its caller only, at most one per task and never for
+/// the task the taking piece changes itself; the rest stay owed.
 #[test]
 fn owed_outcomes_are_taken_per_caller_one_per_task() {
     let d = Deliveries::default();
@@ -797,6 +879,9 @@ fn the_owed_book_is_bounded_and_counts_what_it_drops() {
 }
 
 /// `the_callback_mac_is_compared_in_constant_time` (the engine's source-shape guard, ported): the
+/// presented MAC on the push callback is compared through the tree's one constant-time primitive,
+/// and no variable-time compare of it sits beside that one. A presence-only check would pass a fix
+/// that added the helper next to a leftover fast-path `==`.
 #[test]
 fn the_callback_mac_is_compared_in_constant_time() {
     let source = include_str!("../push.rs");
@@ -861,19 +946,27 @@ fn the_pump_serves_each_tasks_queue_in_turn() {
     d.enqueue(delivery("a"), 0);
     d.enqueue(delivery("a"), 0);
     d.enqueue(delivery("b"), 0);
-    let first = d.next_due(0).expect("due").task_id;
+    let first = d.next_due(0).expect("due").task_id.clone();
     assert_eq!(first, "a");
     d.settle("a", Attempted::Delivered, 0, 0);
     assert_eq!(
-        d.next_due(0).map(|x| x.task_id).as_deref(),
+        d.next_due(0).map(|x| x.task_id.clone()).as_deref(),
         Some("b"),
         "b waited behind a second notification of a"
     );
     d.settle("b", Attempted::Delivered, 0, 0);
-    assert_eq!(d.next_due(0).map(|x| x.task_id).as_deref(), Some("a"));
+    assert_eq!(
+        d.next_due(0).map(|x| x.task_id.clone()).as_deref(),
+        Some("a")
+    );
 }
 
 /// AN AGENT'S PUSH MOVES ITS TASK ONLY TO A STATE IT REPORTS, AND ONLY WHEN THE TASK IS NOT ALREADY
+/// IN IT (`POST /a2a/push`, step 6): an artifact update, a message or any document with no
+/// readable `status.state` moves nothing (`202`, nothing recorded, no notification), and a retried
+/// push of the state already held queues no second notification. RED: a push with no readable state
+/// read as `working`, moving a submitted or input-required task, and a re-reported state queued a
+/// notification each time.
 #[test]
 fn a_push_moves_its_task_only_to_a_new_state_it_reports() {
     use crate::push_serve::push_move;

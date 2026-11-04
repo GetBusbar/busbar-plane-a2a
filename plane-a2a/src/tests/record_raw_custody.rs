@@ -27,9 +27,6 @@ impl Records for Host {
     fn list(&mut self, _: &str, _: &str) -> Result<Vec<(String, Vec<u8>)>, Halt> {
         unreachable!()
     }
-    fn claim(&mut self, _: &str, _: &str, _: u64) -> Result<bool, Halt> {
-        unreachable!()
-    }
     fn observe_chain_life(&mut self, _: &str, _: &str) -> Result<Option<Vec<u8>>, Halt> {
         Ok(None)
     }
@@ -94,4 +91,44 @@ fn refused_config_identity_retires_inputs_before_any_host_crossing() {
     .is_err());
     assert_eq!(probe.retirements(), 2);
     probe.checkpoint();
+}
+
+/// A held task whose row carries the custody canary, active so no sweep retires it.
+fn canary_book() -> tests::Book {
+    let mut book = tests::Book::default();
+    let mut row = tests::row("task", 100);
+    row.push_callback = std::str::from_utf8(SECRET).unwrap().to_string();
+    book.hold(tests::ALICE, &HeldTask { row, next_seq: 2 });
+    book
+}
+
+/// RED before the fix: the task-row bytes a read, a listing, a restore or a sweep took from the host
+/// were dropped as plain heap bytes, unlike the same bytes in a predicate or a write; every path now
+/// retires them through the wiping owner.
+#[test]
+fn task_row_bytes_every_read_path_takes_are_wiped() {
+    let reads: [(&str, fn(&mut tests::Book)); 4] = [
+        ("get", |book| {
+            assert!(get(book, tests::ALICE, "task", 100).unwrap().is_some());
+        }),
+        ("list", |book| {
+            assert_eq!(list(book, tests::ALICE, 100).unwrap().len(), 1);
+        }),
+        ("restore", |book| {
+            assert_eq!(restore(book).unwrap().active, 1);
+        }),
+        ("retention_sweep", |book| {
+            assert_eq!(retention_sweep(book, 100, 32, &mut Vec::new()).unwrap(), 0);
+        }),
+    ];
+    for (path, read) in reads {
+        let mut book = canary_book();
+        let probe = Probe::start();
+        read(&mut book);
+        assert!(
+            probe.retirements() >= 1,
+            "{path}: the row bytes retire wiped"
+        );
+        probe.checkpoint();
+    }
 }

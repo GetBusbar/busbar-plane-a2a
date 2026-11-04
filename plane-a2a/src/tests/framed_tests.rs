@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! The gRPC line's codec: the service path, the transcoding both ways, and the status table it
+//! answers with (the engine's `grpc_tests.rs`, ported).
 
 use super::*;
 use crate::proto::pb;
@@ -61,6 +62,7 @@ fn an_rpc_is_named_by_its_target_alone() {
 }
 
 /// A REQUEST MESSAGE IS THE v1.0 JSON-RPC REQUEST IT IS: the rpc's name as the method, its
+/// ProtoJSON as the params.
 #[test]
 fn a_request_message_composes_the_json_rpc_request_it_is() {
     let message = crate::proto::custody::initialized::<pb::GetTaskRequest>(|__custody_message| {
@@ -242,6 +244,7 @@ fn an_http_refusal_takes_the_grpc_specifications_own_mapping() {
 }
 
 /// AN A2A REFUSAL CARRIES ITS `google.rpc.ErrorInfo` IN THE STATUS DETAILS (A2A 10.6, TCK
+/// `GRPC-ERR-001`), transcribed from the envelope with its metadata.
 #[test]
 fn an_a2a_refusal_carries_error_info_in_the_status_details() {
     let err = serde_json::json!({
@@ -366,38 +369,50 @@ fn the_legacy_message_id_helper_uses_a_v7_uuid() {
     assert!(minted["params"]["message"].get("parts").is_none());
 }
 
-/// The next complete frame of `buf`, consumed from it ([`frame_end`]).
+/// The next complete frame of `buf`, consumed from it using the shared SSE parser.
 fn take_frame(buf: &mut Vec<u8>) -> Option<String> {
-    let (at, len) = frame_end(buf)?;
-    let frame = String::from_utf8_lossy(&buf[..at]).into_owned();
-    buf.drain(..at + len);
+    let mut frames = busbar_contract::protocol::SseFrames::new();
+    frames.push(buf);
+    let span = frames.next_span()?;
+    let frame = String::from_utf8_lossy(&frames.buffer()[span]).into_owned();
+    let consumed = buf.len() - frames.pending();
+    buf.drain(..consumed);
     Some(frame)
 }
 
 /// SSE FRAMES ARE TAKEN WHOLE OR NOT AT ALL (the engine's `grpc_tests.rs`, ported): a frame split
+/// across two chunks is not delivered as two, and a buffer holding half a frame yields nothing
+/// rather than a truncated one.
 #[test]
 fn a_frame_is_taken_only_once_it_is_complete() {
     let mut buf = b"data: {\"a\":1}\n\ndata: {\"b\"".to_vec();
-    assert_eq!(take_frame(&mut buf).as_deref(), Some("data: {\"a\":1}"));
+    assert_eq!(take_frame(&mut buf).as_deref(), Some("data: {\"a\":1}\n\n"));
     assert_eq!(take_frame(&mut buf), None);
     buf.extend_from_slice(b":2}\n\n");
-    assert_eq!(take_frame(&mut buf).as_deref(), Some("data: {\"b\":2}"));
+    assert_eq!(take_frame(&mut buf).as_deref(), Some("data: {\"b\":2}\n\n"));
     assert_eq!(take_frame(&mut buf), None);
 }
 
 /// AND IN EVERY LINE ENDING THE SSE GRAMMAR ALLOWS (the engine's `grpc_tests.rs`, ported): a
+/// backend that frames with CRLF or CR is not a broken backend.
 #[test]
 fn every_sse_frame_terminator_is_recognised() {
     for terminator in ["\r\n\r\n", "\n\n", "\r\r"] {
-        let mut buf = format!("data: {{\"x\":1}}{terminator}").into_bytes();
+        let expected = format!("data: {{\"x\":1}}{terminator}");
+        let mut buf = format!("{expected}:").into_bytes();
         assert_eq!(
             take_frame(&mut buf).as_deref(),
-            Some("data: {\"x\":1}"),
+            Some(expected.as_str()),
             "terminator {terminator:?} was not recognised"
         );
+        assert_eq!(buf, b":");
     }
 }
 /// Ported from busbar-a2a a2a/tests/served_methods_tests.rs::the_extended_card_is_served_over_grpc_at_the_path_the_proto_defines.
+/// The door's half of the gRPC binding: the generated service's own path names the rpc, and busbar's
+/// extended card (the document the JSON-RPC line answers) comes back as the proto's `AgentCard`
+/// message, preserving the skills supplied in that document. Caller entitlement filtering is
+/// outside this transcode test.
 #[test]
 fn the_extended_card_is_served_over_grpc_at_the_path_the_proto_defines() {
     let target = format!("{SERVICE_PATH}/GetExtendedAgentCard");
@@ -456,4 +471,20 @@ fn protojson_backend_errors_do_not_echo_backend_bytes() {
     let bytes = br#"{"jsonrpc":"2.0","id":1,"result":{"secret-backend-member":true}}"#;
     let error = answer_message(Rpc::GetTask, 200, bytes).unwrap_err();
     assert!(!format!("{error:?}").contains("secret-backend-member"));
+}
+
+#[test]
+fn null_error_does_not_override_unary_result() {
+    assert!(answer_message(
+        Rpc::DeleteTaskPushNotificationConfig,
+        200,
+        br#"{"result":{},"error":null}"#
+    )
+    .is_ok());
+}
+
+#[test]
+fn invalid_json_event_is_an_explicit_stream_failure() {
+    assert!(matches!(event("data: not-json"), Some(Err(_))));
+    assert!(event(": heartbeat").is_none());
 }

@@ -20,6 +20,7 @@ import os
 import shlex
 import signal
 import subprocess
+import tempfile
 import time
 import urllib.parse
 
@@ -48,6 +49,7 @@ class Target:
         self.cwd = cwd
         self.env = env
         self._proc = None
+        self._log = None
         self._card = None
         self._card_response = None
         self._interface = None
@@ -70,12 +72,21 @@ class Target:
             )
         env = dict(os.environ)
         env.update(self.env or {})
-        self._proc = subprocess.Popen(
-            self.launch if isinstance(self.launch, list) else shlex.split(self.launch),
-            cwd=self.cwd, env=env,
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
+        # The child's output goes to an unlinked temporary file, never a pipe:
+        # nobody reads a pipe while the battery runs, so a target that logs
+        # per request would fill the pipe buffer and block in its logger.
+        self._log = tempfile.TemporaryFile()
+        try:
+            self._proc = subprocess.Popen(
+                self.launch if isinstance(self.launch, list) else shlex.split(self.launch),
+                cwd=self.cwd, env=env,
+                stdout=self._log, stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+        except BaseException:
+            self._log.close()
+            self._log = None
+            raise
         deadline = time.monotonic() + self.launch_ready_seconds
         ready = False
         # Observe exit without reaping: the reserved child PID also protects
@@ -100,18 +111,12 @@ class Target:
             self.endpoint = "http://%s:%s" % (self.host, self.port)
 
     def _drain(self):
-        if not self._proc or not self._proc.stdout:
+        if not self._log:
             return "(no output captured)"
         try:
-            self._proc.stdout.flush()
-        except Exception:
-            pass
-        try:
-            import fcntl
-            fd = self._proc.stdout.fileno()
-            flags = fcntl.fcntl(fd, fcntl.F_GETFL)
-            fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
-            return (self._proc.stdout.read() or b"").decode("utf-8", "replace")
+            self._log.seek(0, os.SEEK_END)
+            self._log.seek(max(0, self._log.tell() - 65536))
+            return (self._log.read(65536) or b"").decode("utf-8", "replace")
         except Exception:
             return "(output unavailable)"
 
@@ -144,8 +149,9 @@ class Target:
                     pass
             proc.wait()
         finally:
-            if proc.stdout:
-                proc.stdout.close()
+            if self._log:
+                self._log.close()
+                self._log = None
             self._proc = None
 
     def __enter__(self):
@@ -484,8 +490,15 @@ class Call:
     @classmethod
     def from_jsonrpc(cls, resp, method, body):
         payload = resp.json_or_none()
-        if not isinstance(payload, dict):
-            return cls(resp, method, body, binding="JSONRPC")
+        if not isinstance(payload, dict) or ("result" not in payload
+                                             and "error" not in payload):
+            # No JSON-RPC response object (a refused connection's synthetic
+            # 599, an HTML or empty 4xx/5xx) is never a success: report the
+            # HTTP status as the error, as from_rest does.
+            return cls(resp, method, body, binding="JSONRPC",
+                       error={"code": resp.status,
+                              "message": "no JSON-RPC response object "
+                                         "(HTTP %s)" % resp.status})
         return cls(resp, method, body, result=payload.get("result"),
                    error=payload.get("error"), binding="JSONRPC")
 

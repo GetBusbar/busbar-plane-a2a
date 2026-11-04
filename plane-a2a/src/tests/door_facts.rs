@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! THE DOOR-DRIVEN TESTS' FACTS ARE THE DOOR'S. `tests/unit_lifetime.rs`,
+//! THE DOOR-DRIVEN TESTS' FACTS ARE THE DOOR'S.
 
 #[path = "../../tests/support/door_facts.rs"]
 #[allow(dead_code)]
@@ -48,7 +48,7 @@ fn the_door_driven_tests_restate_the_doors_own_constants() {
 #[allow(dead_code)]
 mod root_stated;
 
-/// THE ROOT LEG'S RESTATED FACTS ARE THE DOOR'S OWN: each constant `tests/root/mod.rs` names is
+/// THE ROOT LEG'S RESTATED FACTS ARE THE DOOR'S OWN: each constant `tests/root/mod.rs` names is equal to the private item it restates.
 #[test]
 fn the_root_leg_restates_the_doors_own_constants() {
     use crate::statement as ds;
@@ -69,7 +69,7 @@ fn the_root_leg_restates_the_doors_own_constants() {
     );
 }
 
-/// THE ROOT LEG'S PROTOBUF WORDS ARE THE GENERATED MESSAGES': the requests it writes decode, as the
+/// THE ROOT LEG'S PROTOBUF WORDS ARE THE GENERATED MESSAGES': the requests it writes decode, as the generated messages, to what the plane's own encoder writes for the same params, and the readers it holds the far end's bytes to read what the plane's encoder wrote and what the generated response encodes.
 #[test]
 fn the_root_leg_writes_and_reads_the_generated_messages() {
     use crate::framed::{request_message, Rpc};
