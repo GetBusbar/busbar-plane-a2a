@@ -18,7 +18,8 @@
 #       the battery (--battery). A subject that cannot be built or booted is `fail`, never a skip.
 #
 # testing/a2a-supplement is busbar-authored and weaker evidence, and testing/a2a-governance is policy:
-# neither is run here and neither is ever merged into these numbers.
+# their protocol probes are not run here or merged into these numbers; the supplement judge
+# selftests run separately before the conformance legs.
 #
 # Tools: ModernCI compute has no go and no pip. go is a sha256-pinned release tarball below; every
 # python dependency installs from a hash-pinned requirements file (--require-hashes) into a venv
@@ -100,8 +101,6 @@ die() { say "$*"; verdict fail true "$*"; exit 1; }
 # tools: go (pinned tarball), a venv with the TCK's hash-pinned dependencies, one for the python
 # control and the scenario agent.
 # ------------------------------------------------------------------------------------------------
-sha256_of() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi; }
-
 ensure_go() {
   local os arch sha dir tgz
   case "$(uname -s)" in Linux) os=linux ;; Darwin) os=darwin ;; *) return 1 ;; esac
@@ -115,12 +114,11 @@ ensure_go() {
   dir="$CACHE/$GO_VERSION-$os-$arch"
   tgz="$CACHE/$GO_VERSION.$os-$arch.tar.gz"
   if [ ! -x "$dir/go/bin/go" ]; then
-    if [ ! -f "$tgz" ] || [ "$(sha256_of "$tgz")" != "$sha" ]; then
-      curl -fsSL --retry 3 -o "$tgz.part" "https://go.dev/dl/$GO_VERSION.$os-$arch.tar.gz" || return 1
-      [ "$(sha256_of "$tgz.part")" = "$sha" ] || { echo "go tarball sha256 mismatch" >&2; rm -f "$tgz.part"; return 1; }
-      mv "$tgz.part" "$tgz"
-    fi
-    rm -rf "$dir"; mkdir -p "$dir" && tar -xzf "$tgz" -C "$dir" || return 1
+    _ct_fetch "https://go.dev/dl/$GO_VERSION.$os-$arch.tar.gz" "$sha" "$tgz" || return 1
+    local stage
+    stage="$(mktemp -d "$dir.stage.XXXXXX")" || return 1
+    tar -xzf "$tgz" -C "$stage" || { rm -rf "$stage"; return 1; }
+    _ct_publish "$stage" "$dir" go/bin/go || { rm -rf "$stage"; return 1; }
   fi
   export PATH="$dir/go/bin:$PATH"
   export GOPATH="$W/gopath" GOCACHE="$W/gocache" GOFLAGS=-mod=mod GOTOOLCHAIN=local
@@ -138,12 +136,11 @@ ensure_python() {
   dir="$CACHE/cpython-$PY_VER-$PY_TAG-$arch"
   tgz="$CACHE/cpython-$PY_VER-$PY_TAG-$arch.tar.gz"
   if [ ! -x "$dir/python/bin/python3" ]; then
-    if [ ! -f "$tgz" ] || [ "$(sha256_of "$tgz")" != "$sha" ]; then
-      curl -fsSL --retry 3 -o "$tgz.part" "https://github.com/astral-sh/python-build-standalone/releases/download/$PY_TAG/cpython-$PY_VER%2B$PY_TAG-$arch-unknown-linux-gnu-install_only.tar.gz" || return 1
-      [ "$(sha256_of "$tgz.part")" = "$sha" ] || { echo "python tarball sha256 mismatch" >&2; rm -f "$tgz.part"; return 1; }
-      mv "$tgz.part" "$tgz"
-    fi
-    rm -rf "$dir"; mkdir -p "$dir" && tar -xzf "$tgz" -C "$dir" || return 1
+    _ct_fetch "https://github.com/astral-sh/python-build-standalone/releases/download/$PY_TAG/cpython-$PY_VER%2B$PY_TAG-$arch-unknown-linux-gnu-install_only.tar.gz" "$sha" "$tgz" || return 1
+    local stage
+    stage="$(mktemp -d "$dir.stage.XXXXXX")" || return 1
+    tar -xzf "$tgz" -C "$stage" || { rm -rf "$stage"; return 1; }
+    _ct_publish "$stage" "$dir" python/bin/python3 || { rm -rf "$stage"; return 1; }
   fi
   export PATH="$dir/python/bin:$PATH"
   python3 --version
@@ -159,6 +156,7 @@ venv_from() {
 }
 
 provision() {
+  source "$ROOT/testing/conformance/tools.sh" node || return 1
   ensure_python || return 1
   ensure_go || return 1
   # The TCK's venv is where run-tck.sh expects it; its own installer then finds it and only checks
@@ -374,6 +372,11 @@ subject_battery() { A2A_SUBJECT_BUSBAR_BIN="$SUBJECT_BIN" A2A_SUBJECT_WORKDIR="$
 # ------------------------------------------------------------------------------------------------
 say "tck pin $TCK_REF; busbar pin ${BUSBAR_PIN:-?}; checkout $BUSBAR_CHECKOUT"
 provision > "$LOGS/provision.log" 2>&1 || { tail -30 "$LOGS/provision.log" >&2; die "the pinned tools (go $GO_VERSION, hash-pinned python venvs, a2a-go) could not be provisioned"; }
+
+# Validate each local judge after its pinned interpreters and dependencies are ready.
+leg supplement-selftest "$A2A_TCK_WORK/venv/bin/python" testing/a2a-supplement/selftest.py
+leg relay-regressions "$A2A_TCK_WORK/venv/bin/python" testing/a2a-tck/broken-agent/relay-regressions.py
+leg subject-selftest bash testing/a2a-subject/boot.sh --selftest
 
 leg control-tck-http-json   tck_control control-http-json
 leg control-tck-jsonrpc     tck_control control-jsonrpc
