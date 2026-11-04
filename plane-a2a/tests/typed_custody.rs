@@ -18,6 +18,16 @@ pub(crate) mod custody_impl;
 mod proto {
     pub(crate) use crate::custody_impl as custody;
 }
+
+#[allow(dead_code)]
+#[path = "../src/tests/string_custody_probe.rs"]
+pub(crate) mod string_custody_probe;
+mod tests {
+    pub(crate) use crate::string_custody_probe as request_custody_probe;
+}
+#[allow(dead_code)]
+#[path = "../src/request_json.rs"]
+mod request_json;
 #[allow(dead_code)]
 #[path = "../src/wkt.rs"]
 mod wkt;
