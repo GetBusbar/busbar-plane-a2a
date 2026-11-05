@@ -18,7 +18,6 @@ use std::sync::{Arc, Mutex};
 
 #[derive(Debug)]
 struct ConfigDiagnostic {
-    severity: u8,
     text: String,
 }
 
@@ -34,7 +33,6 @@ impl EnvelopeSink for ConfigEvents {
     fn diag(&self, diagnostic: Diagnostic<'_>) {
         // The real loader validates and lends this envelope to its sink before lease release.
         self.diagnostics.lock().unwrap().push(ConfigDiagnostic {
-            severity: diagnostic.severity,
             text: String::from_utf8(diagnostic.text.to_vec()).unwrap(),
         });
     }
@@ -277,59 +275,27 @@ fn open_malformed_url_refusals_omit_all_raw_credential_fragments() {
 }
 
 #[test]
-fn ignored_protocol_version_warns_once_at_open_without_echoing_its_value() {
-    let mut stated = section("planner", "https://agent.example/a2a");
-    stated["planner"]["protocol_version"] = json!("VERSION_VALUE_CANARY");
-    stated["worker"] = json!({"url": "https://worker.example/a2a", "pin": {"mechanism": "unpinned"}, "protocol_version": "OTHER_VERSION_CANARY"});
-    let (outcome, mut events) = validate(&stated);
-    assert_eq!(outcome, Outcome::Ready);
-    let (outcome, reason, claims, diagnostics) = open(&stated);
-    events.extend(diagnostics);
-    assert_eq!(outcome, Outcome::Ready, "{reason}");
-    assert!(claims.iter().any(|claim| claim == "/a2a/agents/planner/"));
-    for _ in 0..2 {
-        let (outcome, diagnostics) = validate(&stated);
+fn unsupported_protocol_version_is_refused_without_echoing_its_value() {
+    for version in [
+        json!("VERSION_VALUE_CANARY"),
+        json!("1.0"),
+        json!(null),
+        json!(7),
+    ] {
+        let mut stated = section("planner", "https://agent.example/a2a");
+        stated["planner"]["protocol_version"] = version;
+        let (outcome, mut events) = validate(&stated);
+        assert_ne!(outcome, Outcome::Ready);
+        let (outcome, reason, claims, diagnostics) = open(&stated);
+        assert_ne!(outcome, Outcome::Ready);
+        assert!(claims.is_empty());
+        assert!(reason.contains("protocol_version"), "{reason}");
+        assert!(!reason.contains("VERSION_VALUE_CANARY"));
         events.extend(diagnostics);
-        assert_eq!(outcome, Outcome::Ready);
-    }
-    let warnings: Vec<_> = events
-        .iter()
-        .filter(|event| event.text.contains("BUSBAR-7051"))
-        .collect();
-    assert_eq!(
-        warnings.len(),
-        1,
-        "one warning per successful section OPEN: {events:?}"
-    );
-    assert_eq!(
-        warnings[0].severity,
-        busbar_contract::abi::mechanism::call::SEVERITY_WARN
-    );
-    assert!(warnings[0].text.contains("protocol_version") && warnings[0].text.contains("ignored"));
-    for event in events {
-        let text = event.text;
-        assert!(
-            !text.contains("VERSION_VALUE_CANARY") && !text.contains("OTHER_VERSION_CANARY"),
-            "{text}"
-        );
-    }
-
-    let (outcome, _, _, mut events) = open(&section("planner", "https://agent.example/a2a"));
-    assert_eq!(outcome, Outcome::Ready);
-    let mut nonstring = section("planner", "https://agent.example/a2a");
-    nonstring["planner"]["protocol_version"] = json!(7);
-    let (outcome, _, _, diagnostics) = open(&nonstring);
-    events.extend(diagnostics);
-    assert_ne!(outcome, Outcome::Ready);
-    let mut invalid = stated;
-    invalid["planner"]["egress_scopes"] = json!(["billing"]);
-    let (outcome, _, _, diagnostics) = open(&invalid);
-    events.extend(diagnostics);
-    assert_ne!(outcome, Outcome::Ready);
-    assert!(
-        events
+        assert!(events
             .iter()
-            .all(|event| !event.text.contains("BUSBAR-7051")),
-        "failed/unstated configurations must not warn as if opened"
-    );
+            .all(|event| !event.text.contains("VERSION_VALUE_CANARY")));
+    }
+    let (outcome, reason, _, _) = open(&section("planner", "https://agent.example/a2a"));
+    assert_eq!(outcome, Outcome::Ready, "{reason}");
 }

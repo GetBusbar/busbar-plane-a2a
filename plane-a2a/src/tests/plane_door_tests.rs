@@ -275,7 +275,7 @@ fn the_hook_projection_is_the_method_and_its_params() {
 
 /// THE INVOKE REWRITE CONTRACT, as the served engine applied a `prompt: rw` hook's reply to an A2A
 /// submission's params: an object `content`, a JSON-string `content` that parses to an object, or a
-/// role-less entry itself; the last usable entry wins; nothing usable is not applied; a reply that
+/// role-less entry itself; the last usable entry wins; nothing usable refuses the submission; a reply that
 /// cannot be read back is no rewrite at all (`Err`, the unit refused).
 #[test]
 fn a_rewrite_replaces_the_params_by_the_invoke_contract() {
@@ -301,15 +301,9 @@ fn a_rewrite_replaces_the_params_by_the_invoke_contract() {
         ] })),
         Ok(Some(object.clone()))
     );
-    assert_eq!(
-        params(json!({ "messages": [{ "role": "user" }] })),
-        Ok(None)
-    );
-    assert_eq!(
-        params(json!({ "messages": [{ "role": "user", "content": "7" }] })),
-        Ok(None)
-    );
-    assert_eq!(params(json!({ "messages": [] })), Ok(None));
+    assert!(params(json!({ "messages": [{ "role": "user" }] })).is_err());
+    assert!(params(json!({ "messages": [{ "role": "user", "content": "7" }] })).is_err());
+    assert!(params(json!({ "messages": [] })).is_err());
     assert!(params(json!({ "tools": [] })).is_err());
     assert!(rewritten_params(b"not json").is_err());
 
@@ -910,17 +904,17 @@ fn diags_of<R>(f: impl FnOnce() -> R) -> (R, Vec<String>) {
     (r, heard.try_iter().map(|(_, line)| line).collect())
 }
 
-/// A rewrite yielding no object leaves the original request intact and reports that it was not applied.
+/// A committed rewrite yielding no object refuses the submission and reports why.
 #[test]
-fn a_rewrite_that_yields_no_object_is_not_applied_and_says_so() {
+fn a_rewrite_that_yields_no_object_refuses_the_submission_and_says_so() {
     let reply = br#"{"messages": [{"role": "user", "content": "[REDACTED]"}]}"#;
     let (read, lines) = diags_of(|| rewritten_params(reply));
-    assert_eq!(read, Ok(None), "the request is left as it came");
+    assert!(read.is_err(), "the original params must not be relayed");
     assert_eq!(lines.len(), 1, "{lines:?}");
     assert!(
         lines[0].contains("7045")
             && lines[0].contains("request")
-            && lines[0].contains("not applied"),
+            && lines[0].contains("submission is refused"),
         "{lines:?}"
     );
 }
@@ -1131,7 +1125,11 @@ fn authored_configuration_profile_uses_actual_raw_agents_and_push_parsers() {
         (r#"{}"#, true),
         (r#"{"agents":null,"agent_push":null}"#, true),
         (
-            r#"{"agents":{"a":{"url":"https://agent.example/a2a","pin":{"mechanism":"unpinned"},"protocol_version":"ignored","hooks":["audit"]}},"agent_push":{"ca":"PUBLIC CERTIFICATE"}}"#,
+            r#"{"agents":{"a":{"url":"https://agent.example/a2a","pin":{"mechanism":"unpinned"},"protocol_version":"1.0"}}}"#,
+            false,
+        ),
+        (
+            r#"{"agents":{"a":{"url":"https://agent.example/a2a","pin":{"mechanism":"unpinned"},"hooks":["audit"]}},"agent_push":{"ca":"PUBLIC CERTIFICATE"}}"#,
             true,
         ),
         (

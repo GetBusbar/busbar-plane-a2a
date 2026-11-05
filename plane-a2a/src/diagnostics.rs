@@ -289,19 +289,20 @@ pub const A2A_CARD_RECORD_UNREAD: Diagnostic = Diagnostic {
     retired: false,
 };
 
-/// A request-stage hook's rewrite yielded no params object: the request is relayed unmodified.
+/// A request-stage hook's rewrite yielded no params object: the submission is refused.
 pub const A2A_HOOK_REWRITE_NOT_APPLIED: Diagnostic = Diagnostic {
     code: 7045,
     class: Class::Plane,
     slug: "a2a-hook-rewrite-not-applied",
-    title: "A2A request hook rewrite not applied (it yields no params object)",
+    title: "A2A request hook rewrite yields no params object; submission refused",
     severity: Severity::Actionable,
-    summary: "A request-stage hook attached to an A2A agent returned a rewrite whose messages yield no \
+    summary:
+        "A request-stage hook attached to an A2A agent returned a rewrite whose messages yield no \
              JSON object to replace the request's params with (for example a content of plain text \
-             such as '[REDACTED]'). As 1.5.5's rewrite contract has it, a rewrite that cannot be \
-             applied leaves the request unmodified: the request is relayed with its original params. \
-             The `stage` field names the hook stage.",
-    action: "Check the hook: an A2A rewrite replaces the request's `params` object, so the hook must \
+             such as '[REDACTED]'). The submission is refused rather than relayed with the \
+             original params. The `stage` field names the hook stage.",
+    action:
+        "Check the hook: an A2A rewrite replaces the request's `params` object, so the hook must \
             return the rewritten params as a JSON object (an object content, or a JSON string that \
             parses to one). A hook meant to redact must return the redacted params, not a \
             placeholder string.",
@@ -337,19 +338,6 @@ pub const A2A_PUSH_CHECK_UNAVAILABLE: Diagnostic = Diagnostic {
     severity: Severity::Actionable,
     summary: "A push callback could not complete a required host verification, durable task transition, store, or signer operation. This is an internal availability fault, not a caller or token refusal. The diagnostic names the failed stage so an operator can distinguish the fault from a malformed or unauthorized callback. Emitted on each such failure.",
     action: "Check the named host service and durable task store, including signer availability and the surrounding fault diagnostic; restore service before relying on callback delivery.",
-    since: "1.6.0",
-    retired: false,
-};
-
-/// A2A protocol_version settings are ignored by this build.
-pub const A2A_PROTOCOL_VERSION_IGNORED: Diagnostic = Diagnostic {
-    code: 7051,
-    class: Class::Plane,
-    slug: "a2a-protocol-version-ignored",
-    title: "A2A protocol_version settings are ignored by this build",
-    severity: Severity::Actionable,
-    summary: "A successfully opened agents section contains protocol_version settings. These strings are accepted for configuration compatibility but do not pin discovery or select a protocol version; the plane discovers and reads the agent card independently of them. Emitted once per successful section open, naming only registrations and never the supplied version values.",
-    action: "Remove the ignored protocol_version fields and use the agent card and supported protocol bindings to establish the peer protocol; do not rely on these fields as an enforced pin.",
     since: "1.6.0",
     retired: false,
 };

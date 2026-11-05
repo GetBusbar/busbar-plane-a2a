@@ -26,7 +26,6 @@ fn def(url: &str, pin: PinMechanism) -> AgentDefCfg {
         client_identity: None,
         reverify_ttl: None,
         recovery_backoff: None,
-        protocol_version: None,
         allow_private: false,
         upstream_credentials: None,
         upstream_credential: None,
@@ -264,7 +263,6 @@ fn an_entry_round_trips_through_its_document_form() {
         },
         reverify_ttl: Some("15m".to_string()),
         recovery_backoff: Some("1h".to_string()),
-        protocol_version: Some("1.0".to_string()),
         allow_private: true,
         upstream_credentials: Some(UpstreamCreds::Own),
         upstream_credential: Some(crate::a2a::creds::OutboundCredential {

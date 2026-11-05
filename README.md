@@ -32,8 +32,8 @@ Off by default: a document with no `agents:` section states no route.
     references); required under `pin.mechanism: mtls`.
   - `agents.<name>.reverify_ttl`: the longest a card verification is reused (default `5s`).
   - `agents.<name>.recovery_backoff`: how long after a drift a clean answer is disbelieved.
-  - `agents.<name>.protocol_version`: accepted but ignored; a successful section open warns once
-    with `BUSBAR-7051`, without logging the supplied values.
+  - `agents.<name>.protocol_version` is unsupported and refused. Remove this field; supported
+    protocol versions are negotiated on the wire.
   - `agents.<name>.allow_private`: may the agent live on a private or loopback address (default
     `false`).
   - `agents.<name>.upstream_credentials`: the outbound credential mode (`passthrough` is refused).
@@ -73,8 +73,14 @@ The codes this plane raises (stated in `plane-a2a/declares.json`):
 | `BUSBAR-7045` | `a2a-hook-rewrite-not-applied` | actionable |
 | `BUSBAR-7046` | `a2a-hook-rewrite-unreadable` | actionable |
 | `BUSBAR-7050` | `a2a-push-check-unavailable` | actionable |
-| `BUSBAR-7051` | `a2a-protocol-version-ignored` | actionable |
 | `BUSBAR-7104` | `plane-sse-frame-not-utf8` | actionable |
+
+## Request rewrites and served cards
+
+A committed request-hook rewrite must produce a JSON params object. An empty messages list or
+plain text such as `[REDACTED]` refuses the submission; the original params are not relayed.
+Fronted cards omit explicitly advertised interface versions outside the supported `0.3` and
+`1.0` families, and a card with no servable interface is refused.
 
 ## Active task capacity and upgrades
 

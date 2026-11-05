@@ -924,3 +924,49 @@ fn a_word_that_only_contains_the_backend_host_is_not_a_leak() {
         );
     }
 }
+
+#[test]
+fn fronted_card_omits_explicitly_unsupported_protocol_versions() {
+    let mut card = backend_card();
+    card["supportedInterfaces"] = json!([
+        {"url": BACKEND, "protocolBinding": "JSONRPC", "protocolVersion": "2.0"},
+        {"url": BACKEND, "protocolBinding": "JSONRPC", "protocolVersion": "1.0"},
+        {"url": BACKEND, "protocolBinding": "JSONRPC", "protocolVersion": "0.3.0"},
+        {"url": BACKEND, "protocolBinding": "JSONRPC", "protocolVersion": "0.2"},
+        {"url": BACKEND, "protocolBinding": "JSONRPC", "protocolVersion": "1.1"},
+        {"url": BACKEND, "protocolBinding": "GRPC", "protocolVersion": "1.0"},
+    ]);
+    let served =
+        rewrite_card(&card, BACKEND, PUBLIC, "planner").expect("supported interfaces remain");
+    assert_eq!(
+        served["supportedInterfaces"],
+        json!([
+            {"url":"https://gw.example/a2a/agents/planner", "protocolBinding":"JSONRPC", "protocolVersion":"1.0"},
+            {"url":"https://gw.example/a2a/agents/planner", "protocolBinding":"JSONRPC", "protocolVersion":"0.3.0"},
+        ])
+    );
+}
+
+#[test]
+fn fronted_card_with_only_explicitly_unsupported_versions_is_refused() {
+    for version in [
+        json!("0.2"),
+        json!("2.0"),
+        json!("1.1"),
+        json!(""),
+        json!(null),
+        json!(7),
+    ] {
+        let mut card = backend_card();
+        card["supportedInterfaces"] = json!([
+            {"url":BACKEND, "protocolBinding":"JSONRPC", "protocolVersion":version}
+        ]);
+        assert!(
+            matches!(
+                rewrite_card(&card, BACKEND, PUBLIC, "planner"),
+                Err(ServeError::NoServableBinding)
+            ),
+            "{version}"
+        );
+    }
+}

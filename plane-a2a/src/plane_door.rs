@@ -1307,7 +1307,6 @@ impl PlaneLife for A2aDoor {
         let cfg = agents_section(input.open().settings().bytes())?;
 
         statement::read_push_section(input.owned().bytes()).map_err(Refusal::refused)?;
-        cfg.warn_ignored_protocol_versions();
         let plane = A2aDoor {
             public_url: input.public_url().stated(),
             host: input.open().host().map(Host::of),
@@ -4912,9 +4911,10 @@ pub fn rewritten_params(rewrite: &[u8]) -> Result<Option<serde_json::Value>, Str
             crate::diagnostics::A2A_HOOK_REWRITE_NOT_APPLIED,
             stage = "request",
             "a2a: the request hook stage's rewrite was not applied: none of its {} messages \
-             yields a params object; the request is relayed unmodified",
+             yields a params object; the submission is refused",
             messages.len()
         );
+        return Err("the committed rewrite yields no params object".to_string());
     }
     Ok(params.map(crate::request_json::RequestJson::into_value))
 }

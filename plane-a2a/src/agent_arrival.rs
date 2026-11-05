@@ -340,6 +340,11 @@ fn major_minor(asked: &str) -> String {
     }
 }
 
+/// An explicitly advertised version this endpoint can speak, compared as ingress compares it.
+pub(crate) fn supports_version(version: &str) -> bool {
+    SUPPORTED_VERSIONS.contains(&major_minor(version.trim()).as_str())
+}
+
 /// The request line's refusal, judged before the body: the media type, then the version. `Ok`
 pub fn head_refusal<'a>(
     field: impl Fn(&str) -> Option<&'a str>,

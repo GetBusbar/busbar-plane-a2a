@@ -132,13 +132,6 @@ pub struct AgentDefCfg {
     /// within its gift.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recovery_backoff: Option<String>,
-    /// The A2A protocol version an operator states for this registration. ACCEPTED AND READ BY
-    /// NOTHING: the key is accepted so a config that states it still parses, but the
-    /// plane pins nothing on it: the card is fetched at both well-known paths, canonical first
-    /// ([`crate::card_trust`]), whatever version it names. A successful section open warns once
-    /// that these settings are ignored; it never logs their values.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub protocol_version: Option<String>,
     /// MAY THIS AGENT LIVE ON A PRIVATE OR LOOPBACK ADDRESS, AND BE REACHED OVER PLAINTEXT.
     ///
     /// The SAME spelling, the same semantics and the same fail-closed default as the MCP plane's
@@ -200,23 +193,6 @@ pub struct AgentsCfg {
 }
 
 impl AgentsCfg {
-    /// Report accepted-but-ignored version settings once when the successfully judged section opens.
-    pub(crate) fn warn_ignored_protocol_versions(&self) {
-        let agents: Vec<&str> = self
-            .agents
-            .iter()
-            .filter(|(_, definition)| definition.protocol_version.is_some())
-            .map(|(name, _)| name.as_str())
-            .collect();
-        if !agents.is_empty() {
-            busbar_contract::diag_warn!(
-                crate::diagnostics::A2A_PROTOCOL_VERSION_IGNORED,
-                agents = ?agents,
-                "A2A protocol_version settings are ignored; card discovery does not pin a protocol version from this setting"
-            );
-        }
-    }
-
     /// The pool `agent` is a member of, by name, and its members in declared order: the first pool naming it, in the order the section states them.
     #[must_use]
     pub fn pool_of(&self, agent: &str) -> Option<(&str, &[String])> {

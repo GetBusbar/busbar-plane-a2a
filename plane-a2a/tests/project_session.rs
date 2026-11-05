@@ -31,6 +31,15 @@ fn project_view(
     target: &str,
     body: &[u8],
 ) -> (Outcome, Option<String>, Option<serde_json::Value>) {
+    project_view_with_rewrite(claim, target, body, &[])
+}
+
+fn project_view_with_rewrite(
+    claim: usize,
+    target: &str,
+    body: &[u8],
+    rewrite: &[u8],
+) -> (Outcome, Option<String>, Option<serde_json::Value>) {
     use busbar_contract::abi::hook::SignalEntry;
     use busbar_contract::abi::mechanism::call::{AbiStr, Blob, BLOB_OCTETS};
     use busbar_contract::abi::sdk::door::{blank_in, blank_out};
@@ -50,6 +59,8 @@ fn project_view(
         target: unsafe { AbiStr::from_raw_parts(target.as_ptr(), target.len()) },
         // SAFETY: as `target`.
         body: unsafe { Blob::from_raw_parts(body.as_ptr(), body.len(), BLOB_OCTETS, 0) },
+        // SAFETY: rewrite outlives the synchronous project call, just as body does.
+        rewrite: unsafe { Blob::from_raw_parts(rewrite.as_ptr(), rewrite.len(), BLOB_OCTETS, 0) },
         signals_buf: signals.as_mut_ptr(),
         signals_cap: signals.len(),
         arena_buf: arena.as_mut_ptr(),
@@ -94,11 +105,14 @@ fn project_view(
                 messages: &messages,
                 messages_cap: messages.len() as u64,
                 arena: (arena.as_ptr(), arena.len() as u64),
-                rewrite: false,
+                rewrite: !rewrite.is_empty(),
             },
         )
     }
     .expect("the answer passes the loader's check");
+    if outcome != Outcome::Ready {
+        return (outcome, None, None);
+    }
     let s = out.view.session;
     let session = (!s.ptr().is_null()).then(|| {
         assert_eq!(s.fmt, BLOB_OCTETS);
@@ -184,4 +198,41 @@ fn project_writes_the_messages_context_id_as_the_session() {
         project_session(target, "/a2a/message:send", &rest),
         (Outcome::Ready, Some("ctx-9".to_string()))
     );
+}
+
+#[test]
+fn committed_unusable_rewrites_refuse_document_and_rest_projection() {
+    let params = json!({"message":{"role":"user","parts":[{"text":"sensitive-original"}]}});
+    let envelope = serde_json::to_vec(&json!({
+        "jsonrpc":"2.0", "id":7, "method":"message/send", "params":params
+    }))
+    .unwrap();
+    let rest_body = serde_json::to_vec(&params).unwrap();
+    for (claim, target, body) in [
+        (claim_of("POST", "/a2a"), "/a2a", envelope.as_slice()),
+        (
+            claim_of("POST", "/a2a/message:send"),
+            "/a2a/message:send",
+            rest_body.as_slice(),
+        ),
+    ] {
+        for rewrite in [
+            json!({"messages":[]}),
+            json!({"messages":[{"role":"user","content":"[REDACTED]"}]}),
+            json!({"messages":[{"role":"user","content":"7"}]}),
+            json!({"messages":[{"role":"user"}]}),
+        ] {
+            let bytes = serde_json::to_vec(&rewrite).unwrap();
+            let (outcome, session, projection) =
+                project_view_with_rewrite(claim, target, body, &bytes);
+            assert_eq!(outcome, Outcome::Refused, "{target}: {rewrite}");
+            assert!(session.is_none() && projection.is_none());
+        }
+        let rewritten = json!({"message":{"parts":[{"text":"redacted"}]}});
+        let rewrite =
+            serde_json::to_vec(&json!({"messages":[{"role":"user","content":rewritten}]})).unwrap();
+        let (outcome, _, projection) = project_view_with_rewrite(claim, target, body, &rewrite);
+        assert_eq!(outcome, Outcome::Ready);
+        assert_eq!(projection.unwrap()["arguments"], rewritten);
+    }
 }

@@ -257,9 +257,19 @@ pub fn rewrite_card(
     let mut servable = false;
     if let Some(Value::Array(interfaces)) = out.get_mut("supportedInterfaces") {
         offered |= !interfaces.is_empty();
-        interfaces.retain(|iface| match iface.get("protocolBinding") {
-            Some(Value::String(b)) => can_serve(b),
-            _ => true,
+        interfaces.retain(|iface| {
+            let binding = match iface.get("protocolBinding") {
+                Some(Value::String(b)) => can_serve(b),
+                _ => true,
+            };
+            // Only advertise explicit versions the mounted endpoint accepts. An omitted version
+            // remains omitted; this does not add whole-card schema validation.
+            let version = iface.get("protocolVersion").is_none_or(|version| {
+                version
+                    .as_str()
+                    .is_some_and(crate::agent_arrival::supports_version)
+            });
+            binding && version
         });
         servable |= !interfaces.is_empty();
         for iface in interfaces.iter_mut() {

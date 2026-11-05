@@ -154,17 +154,6 @@
             }
           ]
         },
-        "protocol_version": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Accepted and ignored; discovery reads the card version."
-        },
         "allow_private": {
           "type": "boolean",
           "default": false
@@ -491,7 +480,6 @@
       "native source-bound validation/apply is authoritative"
     ],
     "read_only_or_unsupported": {
-      "agents.*.protocol_version": "accepted and ignored; card discovery determines protocol version",
       "agents.*.egress_scopes": "nonempty is refused because enforcement is not implemented"
     }
   }
