@@ -461,6 +461,12 @@ fn decode_notification_config(bytes: Option<&[u8]>) -> Result<Option<local::Push
 }
 
 impl Records for Via<'_> {
+    fn quota_bootstrap_allowed(&mut self) -> Result<bool, Halt> {
+        self.issue((0, 0), |services, handle, _, _| {
+            Poll::Ready(services.entitled(handle, "record-quota-bootstrap:"))
+        })
+    }
+
     fn observe_chain_life(&mut self, kind: &str, scope: &str) -> Result<Option<Vec<u8>>, Halt> {
         let journal = self
             .publication

@@ -110,7 +110,7 @@ pub enum Opened {
         /// [`TASK_UNRECORDED`]; a resumed one: `503`, `-32603`, [`TASK_UNRESUMED`]; `None` for an
         /// addressed task). `open` publishes those writes itself and answers [`Opened::Refused`]
         /// when the store refuses them, so this is never the answer of a write already refused.
-        unrecorded: Option<AgentRefusal>,
+        unrecorded: Option<Box<AgentRefusal>>,
     },
     /// The hop does not go ahead: the caller's whole answer.
     Refused(RelayReply),
@@ -368,6 +368,14 @@ pub fn open(
             });
             match opened {
                 Err(Halt::Pending) => return Err(Halt::Pending),
+                Err(Halt::Failed(words)) if words == crate::task_quota::CAPACITY_REFUSAL => {
+                    return Ok(refused(
+                        STATUS_UNAVAILABLE,
+                        rpc_id,
+                        CODE_INTERNAL,
+                        crate::task_quota::CAPACITY_REFUSAL,
+                    ));
+                }
                 Err(Halt::Failed(_)) => {
                     unrecorded_warning("task_open", req.member, &task_id);
                     return Ok(refused(
@@ -411,7 +419,7 @@ pub fn open(
 
         callback: None,
         swept,
-        unrecorded,
+        unrecorded: unrecorded.map(Box::new),
     })
 }
 

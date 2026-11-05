@@ -20,6 +20,9 @@ pub const KIND_CARD: &str = "card";
 /// agent, keyed like its `card` record.
 pub const KIND_CARD_APPROVAL: &str = "card_approval";
 
+/// Durable active-task quota gate and epoch-scoped principal counts; never retention-swept.
+pub const KIND_TASK_QUOTA: &str = "task_quota";
+
 /// The host-record kinds the door's tail states (`PlaneTail::record_kinds`), in order: a record
 /// write names its kind by its index here.
 pub const HELD_KINDS: &[&str] = &[
@@ -28,6 +31,7 @@ pub const HELD_KINDS: &[&str] = &[
     KIND_PUSH_CONFIG,
     KIND_CARD,
     KIND_CARD_APPROVAL,
+    KIND_TASK_QUOTA,
 ];
 
 /// WHICH rows of a held kind a retention purge may drop: every row older than the cutoff

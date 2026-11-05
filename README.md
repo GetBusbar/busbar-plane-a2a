@@ -76,6 +76,39 @@ The codes this plane raises (stated in `plane-a2a/declares.json`):
 | `BUSBAR-7051` | `a2a-protocol-version-ignored` | actionable |
 | `BUSBAR-7104` | `plane-sse-frame-not-utf8` | actionable |
 
+## Active task capacity and upgrades
+
+Each instance admits at most 4096 active tasks, with the same 4096 bound per
+principal. Admission, the task row, both genesis events and any inline push
+configuration commit atomically. The first terminal transition releases capacity
+in that same transaction. Completed tasks remain readable under the existing
+terminal retention policy. A capacity refusal creates no task, events or push
+configuration and answers `503` with `active task capacity reached`.
+
+Quota metadata lives in the declared `task_quota` record kind alongside task
+records. Preserve it in backups and restores; do not delete or independently
+repair its counters. Normal restarts retain the counters and need no bootstrap
+grant. Missing, malformed or inconsistent metadata refuses mutations rather than
+resetting capacity.
+
+A store created before quota accounting requires a cold upgrade. Stop every
+writer sharing the instance and store, settle all previously admitted writes,
+and supply the host's instance/store-bound cold bootstrap receipt. The host must
+attest this barrier through its reserved `record-quota-bootstrap:` capability;
+an ordinary principal grant cannot authorize it. Without that host proof this
+build refuses initial bootstrap, including on an empty store. A hot generation
+reload does not establish quiescence.
+
+Bootstrap holds a durable initializing gate, reconstructs principal counters in
+bounded transactions, then activates the complete instance count. Interrupted
+bootstrap can resume with a newly authorized cold host; a stale initializer
+cannot overwrite activated accounting. Existing active tasks above the bound
+are preserved and may complete or cancel, while new admissions remain refused.
+Unparseable rows or a listing exceeding the host's bounded scan capacity refuse
+bootstrap; such legacy stores require an offline migration, with no claim that a
+partial listing is sufficient. The active-task limits do not impose a separate
+byte or event-history quota.
+
 ## Build
 
 ```bash

@@ -159,6 +159,29 @@ fn a_fresh_request_mints_busbars_id_and_opens_the_task_dispatched_to_the_agent()
 }
 
 #[test]
+fn quota_capacity_refusal_is_explicit_and_creates_no_task_events_or_inline_config() {
+    let mut desk = desk();
+    desk.book.apply(&[Write {
+        kind: crate::records::KIND_TASK_QUOTA,
+        key: "active/v1".into(),
+        value: br#"{"version":1,"epoch":1,"active":4096}"#.to_vec(),
+    }]);
+    let before = desk.book.clone();
+    let result = opened(
+        &mut desk,
+        &send(json!({
+            "message": { "messageId": "new" },
+            "configuration": { "pushNotificationConfig": { "url": "https://hook.example/new" } }
+        })),
+        ALICE,
+    );
+    let (status, code, message) = refusal_of(result);
+    assert_eq!((status, code), (STATUS_UNAVAILABLE, CODE_INTERNAL));
+    assert_eq!(message, crate::task_quota::CAPACITY_REFUSAL);
+    assert_eq!(desk.book, before);
+}
+
+#[test]
 fn a_fresh_request_keeps_the_callers_context() {
     let mut desk = desk();
     let (task, _) = hop(opened(

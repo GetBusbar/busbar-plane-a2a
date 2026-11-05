@@ -6,6 +6,9 @@ use std::rc::Rc;
 
 use super::*;
 
+#[path = "task_quota_tests.rs"]
+mod task_quota_tests;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Candidate {
     predicates: Vec<Predicate>,
@@ -23,6 +26,8 @@ enum Answer {
 
 /// A callback's replayed host handles and its explicitly driven conditional exchange. Keeping the
 /// candidate and host receipt separate lets a test lose a commit reply without redoing it.
+type ReadInterleaving = (String, String, fn(&mut Book));
+
 struct Call {
     host: Rc<RefCell<Book>>,
     answers: Vec<Answer>,
@@ -30,6 +35,7 @@ struct Call {
     pending: Option<usize>,
     committed: BTreeMap<usize, bool>,
     unsupported: bool,
+    before_get: Option<ReadInterleaving>,
 }
 
 impl Call {
@@ -41,6 +47,7 @@ impl Call {
             pending: None,
             committed: BTreeMap::new(),
             unsupported: false,
+            before_get: None,
         }
     }
 
@@ -88,7 +95,18 @@ impl Call {
 }
 
 impl Records for Call {
+    fn quota_bootstrap_allowed(&mut self) -> Result<bool, Halt> {
+        self.host.borrow_mut().quota_bootstrap_allowed()
+    }
     fn get(&mut self, kind: &str, key: &str) -> Result<Option<Vec<u8>>, Halt> {
+        if self
+            .before_get
+            .as_ref()
+            .is_some_and(|(k, wanted, _)| k == kind && wanted == key)
+        {
+            let (_, _, interleave) = self.before_get.take().unwrap();
+            interleave(&mut self.host.borrow_mut());
+        }
         let index = self.index();
         if index == self.answers.len() {
             self.answers
@@ -381,7 +399,11 @@ fn pending_creation_is_one_atomic_final_row_with_both_events() {
         ),
         Err(Halt::Pending)
     );
-    assert!(host.borrow().rows.is_empty());
+    assert!(host
+        .borrow()
+        .rows
+        .keys()
+        .all(|(kind, _)| kind == crate::records::KIND_TASK_QUOTA));
     assert_eq!(
         call.offered()
             .writes
@@ -585,8 +607,19 @@ fn fresh_open_and_resume_publish_the_inline_config_with_the_task_events() {
         ),
         Err(Halt::Pending)
     );
-    assert!(host.borrow().rows.is_empty());
-    assert_eq!(call.offered().writes.len(), 4);
+    assert!(host
+        .borrow()
+        .rows
+        .keys()
+        .all(|(kind, _)| kind == crate::records::KIND_TASK_QUOTA));
+    assert_eq!(
+        call.offered()
+            .writes
+            .iter()
+            .filter(|w| w.kind != crate::records::KIND_TASK_QUOTA)
+            .count(),
+        4
+    );
     assert!(call.commit(true));
     call.replay();
     assert!(open_configured(

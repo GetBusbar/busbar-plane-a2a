@@ -15,6 +15,9 @@ enum End {
 struct Host(End);
 impl Records for Host {
     fn get(&mut self, kind: &str, _: &str) -> Result<Option<Vec<u8>>, Halt> {
+        if kind == crate::records::KIND_TASK_QUOTA {
+            return Ok(Some(br#"{"version":1,"epoch":1,"active":1}"#.to_vec()));
+        }
         assert_eq!(kind, KIND_TASK);
         Ok(Some(
             serde_json::to_vec(&HeldTask {
@@ -71,8 +74,8 @@ fn config_publication_keeps_old_and_new_raw_credentials_wiping_across_every_outc
         assert_eq!(result.is_err(), matches!(end, End::Unwind));
         assert_eq!(
             probe.retirements(),
-            2,
-            "the exact old/new owners both retire"
+            4,
+            "both input owners and every guarded transaction copy retire wiped"
         );
         probe.checkpoint();
     }

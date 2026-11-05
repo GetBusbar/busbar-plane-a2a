@@ -120,7 +120,7 @@ pub(crate) fn advance_cursor(
 }
 
 /// THE HOST RECORDS, as a test holds them.
-#[derive(Debug, Default, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Book {
     rows: BTreeMap<(String, String), Vec<u8>>,
     claims: BTreeSet<(String, String)>,
@@ -129,6 +129,21 @@ pub(crate) struct Book {
     /// Complete atomic publications acknowledged by this host.
     pub(crate) publications: Vec<Vec<Write>>,
     lives: BTreeMap<(String, String), Vec<u8>>,
+}
+
+impl Default for Book {
+    fn default() -> Self {
+        Self {
+            rows: BTreeMap::from([(
+                (crate::records::KIND_TASK_QUOTA.into(), "active/v1".into()),
+                br#"{"version":1,"epoch":1,"active":0}"#.to_vec(),
+            )]),
+            claims: BTreeSet::new(),
+            race: None,
+            publications: Vec::new(),
+            lives: BTreeMap::new(),
+        }
+    }
 }
 
 /// One length-prefixed field: its length as eight big-endian bytes, then the bytes.
@@ -304,15 +319,67 @@ impl Book {
 
     /// Put `held` as `caller`'s task, as a write would.
     pub(crate) fn hold(&mut self, caller: &str, held: &HeldTask) {
+        // Direct fixture insertion into an initialized store must retain its durable quota
+        // invariant. Legacy migration fixtures deliberately remove the gate first.
+        let quota = crate::records::KIND_TASK_QUOTA;
+        let key = task_key(caller, &held.row.task_id);
+        if let Some(total) = self.value(quota, "active/v1").and_then(|bytes| {
+            serde_json::from_slice::<serde_json::Value>(bytes).ok()?["active"].as_u64()
+        }) {
+            let is_active = |row: &TaskRow| !terminal(&row.state);
+            let before = self
+                .value(KIND_TASK, &key)
+                .and_then(|bytes| decode(bytes))
+                .is_some_and(|old| is_active(&old.row));
+            let after = is_active(&held.row);
+            let principal = format!("1/{caller}");
+            let count = self
+                .value(quota, &principal)
+                .map(|bytes| {
+                    serde_json::from_slice::<serde_json::Value>(bytes).unwrap()["active"]
+                        .as_u64()
+                        .unwrap()
+                })
+                .unwrap_or(0);
+            let adjust = |value: u64| {
+                value
+                    .checked_sub(u64::from(before))
+                    .unwrap()
+                    .checked_add(u64::from(after))
+                    .unwrap()
+            };
+            let total = adjust(total);
+            let count = adjust(count);
+            self.apply(&[
+                Write {
+                    kind: quota,
+                    key: "active/v1".into(),
+                    value: format!(r#"{{"version":1,"epoch":1,"active":{total}}}"#).into_bytes(),
+                },
+                Write {
+                    kind: quota,
+                    key: principal,
+                    value: if count == 0 {
+                        Vec::new()
+                    } else {
+                        format!(r#"{{"version":1,"epoch":1,"active":{count}}}"#).into_bytes()
+                    },
+                },
+            ]);
+        }
         self.apply(&[Write {
             kind: KIND_TASK,
-            key: task_key(caller, &held.row.task_id),
+            key,
             value: serde_json::to_vec(held).unwrap(),
         }]);
     }
 }
 
 impl Records for Book {
+    fn quota_bootstrap_allowed(&mut self) -> Result<bool, Halt> {
+        // This isolated test store has no other writers or unsettled requests.
+        Ok(true)
+    }
     fn get(&mut self, kind: &str, key: &str) -> Result<Option<Vec<u8>>, Halt> {
         Ok(self.value(kind, key).cloned())
     }
@@ -917,7 +984,12 @@ fn a_mutation_against_an_unknown_task_is_refused() {
         }
     }
     assert!(out.is_empty(), "nothing was written: {out:?}");
-    assert_eq!(book.rows.len(), 0, "and nothing was created");
+    assert!(
+        book.rows
+            .keys()
+            .all(|(kind, _)| kind == crate::records::KIND_TASK_QUOTA),
+        "and no task, config or event was created"
+    );
 }
 
 /// Ported from busbar-a2a a2a/tests/taskstore_tests.rs::an_illegal_transition_writes_neither_a_row_nor_an_event.

@@ -52,6 +52,7 @@ mod statement;
 mod task_door;
 mod task_hop;
 mod task_identity;
+mod task_quota;
 mod tasks;
 mod wkt;
 

@@ -220,6 +220,7 @@ const RECORD_KINDS: &[AbiStr] = &[
     abi_str(crate::records::HELD_KINDS[2]),
     abi_str(crate::records::HELD_KINDS[3]),
     abi_str(crate::records::HELD_KINDS[4]),
+    abi_str(crate::records::HELD_KINDS[5]),
 ];
 
 const _: () = assert!(RECORD_KINDS.len() == crate::records::HELD_KINDS.len());

@@ -72,6 +72,12 @@ pub enum Halt {
 /// The host records as the store reaches them. Every call is made in the same order on every entry
 /// of an op, so a re-run reads the answers the host stored for it (the replay rule).
 pub trait Records {
+    /// Host attestation that pre-quota writers are fenced and all their writes settled. Only
+    /// needed before first quota bootstrap; unsupported hosts refuse that migration.
+    fn quota_bootstrap_allowed(&mut self) -> Result<bool, Halt> {
+        Ok(false)
+    }
+
     /// The record of `kind` under `key`; `None` when absent or a tombstone.
     fn get(&mut self, kind: &str, key: &str) -> Result<Option<Vec<u8>>, Halt>;
     /// Every live record of `kind` whose key starts with `prefix`, in key order.
@@ -169,6 +175,10 @@ fn chained(kind: &str) -> bool {
 }
 
 impl Records for Staged<'_> {
+    fn quota_bootstrap_allowed(&mut self) -> Result<bool, Halt> {
+        self.rec.quota_bootstrap_allowed()
+    }
+
     fn get(&mut self, kind: &str, key: &str) -> Result<Option<Vec<u8>>, Halt> {
         match self
             .written
@@ -522,7 +532,7 @@ fn commit(
             value,
         });
     }
-    let applied = rec.publish(&predicates, &[chain], &writes)?;
+    let applied = crate::task_quota::publish(rec, &predicates, &[chain], &writes)?;
     Ok(applied.then_some(next))
 }
 
@@ -539,79 +549,80 @@ pub(crate) fn open_configured(
         return Err(Halt::Failed("no caller to hold the task under".into()));
     }
     row.principal = at.caller.to_string();
-    let key = task_key(at.caller, &row.task_id);
-    let chain = observe(rec, &key)?;
-    if rec.get(KIND_TASK, &key)?.is_some() {
-        return Err(Halt::Failed(format!(
-            "task `{}` already exists",
-            row.task_id
-        )));
-    }
-    let genesis = HeldTask {
-        row: row.clone(),
-        next_seq: 1,
-    };
-    let stamped = Stamp {
-        now: row.created_at,
-        ..*at
-    };
-    let submitted = seal_event(&genesis, &row, EV_SUBMITTED, at.request_id, stamped.now);
-    let held = HeldTask {
-        row: row.clone(),
-        next_seq: 2,
-    };
-    let mut next = row;
-    next.agent_id = agent_id.to_string();
-    next.updated_at = at.now;
-    let delegated = seal_event(&held, &next, EV_DELEGATED, at.request_id, at.now);
-    let next = HeldTask {
-        row: next,
-        next_seq: 3,
-    };
-    let key = task_key(at.caller, &next.row.task_id);
-    let mut writes = vec![
-        Write {
+    for _ in 0..TRIES {
+        let key = task_key(at.caller, &row.task_id);
+        let chain = observe(rec, &key)?;
+        if rec.get(KIND_TASK, &key)?.is_some() {
+            return Err(Halt::Failed(format!(
+                "task `{}` already exists",
+                row.task_id
+            )));
+        }
+        let genesis = HeldTask {
+            row: row.clone(),
+            next_seq: 1,
+        };
+        let stamped = Stamp {
+            now: row.created_at,
+            ..*at
+        };
+        let submitted = seal_event(&genesis, &row, EV_SUBMITTED, at.request_id, stamped.now);
+        let held = HeldTask {
+            row: row.clone(),
+            next_seq: 2,
+        };
+        let mut next = row.clone();
+        next.agent_id = agent_id.to_string();
+        next.updated_at = at.now;
+        let delegated = seal_event(&held, &next, EV_DELEGATED, at.request_id, at.now);
+        let next = HeldTask {
+            row: next,
+            next_seq: 3,
+        };
+        let key = task_key(at.caller, &next.row.task_id);
+        let mut writes = vec![
+            Write {
+                kind: KIND_TASK,
+                key: key.clone(),
+                value: encode(&next)?,
+            },
+            Write {
+                kind: KIND_TASK_EVENT,
+                key: key.clone(),
+                value: suffix(&submitted),
+            },
+            Write {
+                kind: KIND_TASK_EVENT,
+                key: key.clone(),
+                value: suffix(&delegated),
+            },
+        ];
+        let mut predicates = vec![Predicate {
             kind: KIND_TASK,
             key: key.clone(),
-            value: encode(&next)?,
-        },
-        Write {
-            kind: KIND_TASK_EVENT,
-            key: key.clone(),
-            value: suffix(&submitted),
-        },
-        Write {
-            kind: KIND_TASK_EVENT,
-            key: key.clone(),
-            value: suffix(&delegated),
-        },
-    ];
-    let mut predicates = vec![Predicate {
-        kind: KIND_TASK,
-        key: key.clone(),
-        expected: None,
-    }];
-    if let Some(value) = config {
-        let expected = rec.get(KIND_PUSH_CONFIG, &key)?;
-        predicates.push(Predicate {
-            kind: KIND_PUSH_CONFIG,
-            key: key.clone(),
-            expected,
-        });
-        writes.push(Write {
-            kind: KIND_PUSH_CONFIG,
-            key,
-            value: value.into_vec(),
-        });
+            expected: None,
+        }];
+        if let Some(value) = config.as_deref() {
+            let expected = rec.get(KIND_PUSH_CONFIG, &key)?;
+            predicates.push(Predicate {
+                kind: KIND_PUSH_CONFIG,
+                key: key.clone(),
+                expected,
+            });
+            writes.push(Write {
+                kind: KIND_PUSH_CONFIG,
+                key,
+                value: value.to_vec(),
+            });
+        }
+        if crate::task_quota::publish(rec, &predicates, &[chain], &writes)? {
+            return Ok(next.row);
+        }
     }
-    if rec.publish(&predicates, &[chain], &writes)? {
-        Ok(next.row)
-    } else {
-        Err(Halt::Failed(format!(
-            "task `{}` already exists",
-            next.row.task_id
-        )))
-    }
+    Err(Halt::Failed(format!(
+        "task `{}` kept changing under this open",
+        row.task_id
+    )))
 }
 
 /// What a change does to one held row: the new row and its event, `None` for nothing to do, or the
@@ -801,7 +812,8 @@ fn forget(
         key: key.to_string(),
         value: Vec::new(),
     });
-    rec.publish(
+    crate::task_quota::publish(
+        rec,
         &[Predicate {
             kind: KIND_TASK,
             key: key.to_string(),
@@ -836,7 +848,8 @@ pub(crate) fn write_config(
     {
         return Err(Halt::Failed(format!("no such task `{task}`")));
     }
-    rec.publish(
+    crate::task_quota::publish(
+        rec,
         &[
             Predicate {
                 kind: KIND_TASK,

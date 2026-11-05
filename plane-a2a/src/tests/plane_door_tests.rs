@@ -1117,3 +1117,60 @@ fn settings_schema_integer_tokens_match_native_parser() {
         }
     }
 }
+
+#[test]
+fn authored_configuration_profile_uses_actual_raw_agents_and_push_parsers() {
+    let document: serde_json::Value = serde_json::from_slice(SETTINGS_SCHEMA).unwrap();
+    let profile = &document["x-busbar-user-configuration"];
+    assert_eq!(profile["version"], 1);
+    assert_eq!(profile["context"], "raw_user_configuration");
+    assert_eq!(profile["schema_ref"], "#/$defs/user_configuration");
+    let schema = serde_json::json!({"$schema":"https://json-schema.org/draft/2020-12/schema","x-busbar-settings-profile":"integer-token-v1","$defs":document["$defs"],"$ref":profile["schema_ref"]});
+    let validator = settings_profile::validator(&schema).unwrap();
+    for (source, accepted) in [
+        (r#"{}"#, true),
+        (r#"{"agents":null,"agent_push":null}"#, true),
+        (
+            r#"{"agents":{"a":{"url":"https://agent.example/a2a","pin":{"mechanism":"unpinned"},"protocol_version":"ignored","hooks":["audit"]}},"agent_push":{"ca":"PUBLIC CERTIFICATE"}}"#,
+            true,
+        ),
+        (
+            r#"{"agents":{"a":{"url":"https://agent.example/a2a","pin":{"mechanism":"unpinned"},"upstream_credential":{"secret":{"env":"TOKEN"},"lease_ttl_ms":1}}}}"#,
+            true,
+        ),
+        (
+            r#"{"agents":{"a":{"url":"https://agent.example/a2a"}}}"#,
+            false,
+        ),
+        (
+            r#"{"agents":{"a":{"url":"https://agent.example/a2a","pin":{"mechanism":"unpinned"},"egress_scopes":["b"]}}}"#,
+            false,
+        ),
+        (r#"{"agents":{"pools":{"p":{"members":["a"]}}}}"#, false),
+        (r#"{"agent_push":{"ca":" "}}"#, false),
+    ] {
+        let value: serde_json::Value = serde_json::from_str(source).unwrap();
+        let agents = value
+            .get("agents")
+            .filter(|value| !value.is_null())
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({}));
+        let actual = serde_json::from_value::<crate::a2a::config::AgentsCfg>(agents).is_ok()
+            && statement::read_push_section(source.as_bytes()).is_ok();
+        assert_eq!(actual, accepted, "parser: {source}");
+        assert_eq!(validator.is_valid(&value), accepted, "schema: {source}");
+    }
+    // `pools` is host-reserved even when its value looks like a valid registration.
+    // Standalone plane parsers do not replace the host's reserved-name boundary.
+    let reserved: serde_json::Value = serde_json::from_str(r#"{"agents":{"pools":{"url":"https://example.test/endpoint","pin":{"mechanism":"unpinned"}}}}"#).unwrap();
+    assert!(
+        !validator.is_valid(&reserved),
+        "raw authoring must not offer the runtime pool projection as a registration"
+    );
+    assert!(
+        document["$defs"]["section"]["properties"]
+            .get("pools")
+            .is_some(),
+        "existing lifecycle pool projection stays intact"
+    );
+}

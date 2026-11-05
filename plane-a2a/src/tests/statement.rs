@@ -53,6 +53,8 @@ fn known_bytes(a: AbiStr) -> &'static [u8] {
         AUDIT_KIND,
         CARD_SIGNING_DOMAIN,
         CARD_KID_PREFIX,
+        METRIC_PUSH_DROPPED,
+        METRIC_PUSH_UNFILED,
         "pin",
         "reverify_ttl",
         "recovery_backoff",
@@ -69,6 +71,7 @@ fn known_bytes(a: AbiStr) -> &'static [u8] {
         crate::records::KIND_PUSH_CONFIG,
         crate::records::KIND_CARD,
         crate::records::KIND_CARD_APPROVAL,
+        crate::records::KIND_TASK_QUOTA,
     ]
     .into_iter()
     .find(|c| c.as_ptr() == a.ptr() && c.len() == a.len())
