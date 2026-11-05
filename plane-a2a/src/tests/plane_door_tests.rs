@@ -3,6 +3,9 @@
 
 //! The door's own glue over the relay: what a unit's line does to the caller's answer.
 
+#[path = "../../../testing/settings/integer_token.rs"]
+mod settings_profile;
+
 use super::*;
 
 #[path = "task_door_listing_cases.rs"]
@@ -970,4 +973,147 @@ fn repeated_warm_failures_log_once_without_host_error_text() {
     assert_eq!(logs.len(), 1);
     assert!(logs[0].contains("stored card records"));
     assert!(!logs[0].contains("secret-host-detail"));
+}
+
+/// The schema is the actual lifecycle contract, not the protocol's request schema.
+#[test]
+fn settings_schema_matches_lifecycle_grammar() {
+    assert_eq!(STATEMENT.settings_schema.ptr, SETTINGS_SCHEMA.as_ptr());
+    assert_eq!(STATEMENT.settings_schema.len, SETTINGS_SCHEMA.len());
+    let schema: serde_json::Value = serde_json::from_slice(SETTINGS_SCHEMA).unwrap();
+    assert_eq!(
+        schema["$defs"]["secret"],
+        busbar_contract::secret_ref::oneof_schema()
+    );
+    let validator = settings_profile::validator(&schema).unwrap();
+    for (source, accepted) in [
+        (r#"{}"#, true),
+        (r#"{"agents":{}}"#, true),
+        (
+            r#"{"a":{"url":"https://agent.example/a2a","pin":{"mechanism":"unpinned"}}}"#,
+            true,
+        ),
+        (
+            r#"{"a":{"url":"https://agent.example/a2a","pin":{"mechanism":"mtls"},"client_identity":{"cert":{"env":"CERT"},"key":{"file":"/run/key"}},"upstream_credential":{"secret":{"env":"TOKEN"},"lease_ttl_ms":5000}}}"#,
+            true,
+        ),
+        (
+            r#"{"hooks":["audit"],"upstream_credentials":"own","pools":{"p":{"members":["a",{"name":"b"}]}}}"#,
+            true,
+        ),
+        (r#"{"pools":{"p":{"members":[null,1,{}]}}}"#, true),
+        (r#"{"a":{"url":"https://agent.example/a2a"}}"#, false),
+        (
+            r#"{"a":{"url":"https://agent.example/a2a","pin":{"mechanism":"mtls"}}}"#,
+            false,
+        ),
+        (r#"{"upstream_credentials":"passthrough"}"#, false),
+        (r#"{"upstream_credentials":null}"#, false),
+        (
+            r#"{"a":{"url":"https://agent.example/a2a","pin":{"mechanism":"unpinned"},"egress_scopes":["b"]}}"#,
+            false,
+        ),
+        (
+            r#"{"a":{"url":"https://agent.example/a2a","pin":{"mechanism":"unpinned"},"upstream_credential":{"secret":"literal-key","lease_ttl_ms":5000}}}"#,
+            false,
+        ),
+        (
+            r#"{"a":{"url":"https://agent.example/a2a","pin":{"mechanism":"unpinned"},"upstream_credential":{"secret":{"env":"TOKEN"},"lease_ttl_ms":0}}}"#,
+            false,
+        ),
+        (
+            r#"{"a":{"url":"https://agent.example/a2a","pin":{"mechanism":"unpinned"},"typo":true}}"#,
+            false,
+        ),
+    ] {
+        let value: serde_json::Value = serde_json::from_str(source).unwrap();
+        let bytes = serde_json::to_vec(&value).unwrap();
+        assert_eq!(
+            agents_section(&statement::dealt_section(&bytes)).is_ok(),
+            accepted,
+            "lifecycle: {source}"
+        );
+        assert_eq!(validator.is_valid(&value), accepted, "schema: {source}");
+    }
+}
+
+#[test]
+fn settings_schema_describes_owned_push_trust_separately() {
+    let schema: serde_json::Value = serde_json::from_slice(SETTINGS_SCHEMA).unwrap();
+    let validator = jsonschema::validator_for(&schema["$defs"]["owned_sections"]).unwrap();
+    for (source, accepted) in [
+        (r#"{}"#, true),
+        (r#"{"agent_push":null}"#, true),
+        (r#"{"agent_push":{}}"#, true),
+        (r#"{"agent_push":{"ca":"PUBLIC CERTIFICATE"}}"#, true),
+        (r#"{"agent_push":{"ca":" "}}"#, false),
+        (r#"{"agent_push":{"cert":"PUBLIC CERTIFICATE"}}"#, false),
+        (r#"{"agent_push":"PUBLIC CERTIFICATE"}"#, false),
+    ] {
+        let value: serde_json::Value = serde_json::from_str(source).unwrap();
+        let bytes = serde_json::to_vec(&value).unwrap();
+        assert_eq!(
+            statement::read_push_section(&bytes).is_ok(),
+            accepted,
+            "lifecycle: {source}"
+        );
+        assert_eq!(validator.is_valid(&value), accepted, "schema: {source}");
+    }
+}
+
+#[test]
+fn settings_schema_integer_tokens_match_native_parser() {
+    let schema: serde_json::Value = serde_json::from_slice(SETTINGS_SCHEMA).unwrap();
+    let profile = settings_profile::validator(&schema).unwrap();
+    let standard = jsonschema::validator_for(&schema).unwrap();
+    assert_eq!(schema["x-busbar-settings-profile"], "integer-token-v1");
+    for (pointer, template, integer, kind) in [(
+        r#"/$defs/agent/properties/upstream_credential/anyOf/0/properties/lease_ttl_ms"#,
+        r#"{"a":{"url":"https://agent.example/a2a","pin":{"mechanism":"unpinned"},"upstream_credential":{"secret":{"env":"API_KEY"},"lease_ttl_ms":TOKEN}}}"#,
+        "1",
+        "unsigned",
+    )] {
+        assert_eq!(
+            schema.pointer(pointer).unwrap()["x-busbar-integer-token"],
+            kind
+        );
+        for (token, accepted) in [
+            (integer.to_string(), true),
+            (format!("{integer}.0"), false),
+            (format!("{integer}e0"), false),
+            (format!("{integer}E+0"), false),
+        ] {
+            let text = template.replace("TOKEN", &token);
+            let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert!(
+                standard.is_valid(&value),
+                "standard mathematical integer: {text}"
+            );
+            assert_eq!(profile.is_valid(&value), accepted, "profile: {text}");
+            assert_eq!(
+                agents_section(&statement::dealt_section(text.as_bytes())).is_ok(),
+                accepted,
+                "native: {text}"
+            );
+        }
+        // Do not infer signed negative-zero behavior from a regular expression:
+        // the profile must agree with the actual lifecycle parser.
+        for token in [
+            "null",
+            "0",
+            "-0",
+            "-0.0",
+            "0e0",
+            "-1",
+            "18446744073709551616",
+        ] {
+            let text = template.replace("TOKEN", token);
+            let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(
+                profile.is_valid(&value),
+                agents_section(&statement::dealt_section(text.as_bytes())).is_ok(),
+                "native sign/range: {text}"
+            );
+        }
+    }
 }

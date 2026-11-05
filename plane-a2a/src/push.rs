@@ -113,7 +113,10 @@ impl DeliveryAuth {
     pub fn authorization(&self, url: &str) -> Seal {
         self.credentials
             .clone()
-            .secure_for(url)
+            .require_secure_if(
+                url.split_once("://")
+                    .is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("https")),
+            )
             .scheme(self.scheme.as_bytes())
     }
 }

@@ -47,6 +47,9 @@ const MAX_INFLIGHT: u32 = 64;
 /// The version the Statement names: the crate's (a test pins the two equal).
 pub const VERSION: &str = "1.6.0";
 
+/// The lifecycle section schema, independent of A2A request/card schemas.
+const SETTINGS_SCHEMA: &[u8] = include_bytes!("settings.schema.json");
+
 /// The Statement: the plane's name and version, the settings section it declares
 /// ([`statement::SECTIONS`]), its three outbound needs ([`statement::NEEDS`]), the secret
 /// references its section holds ([`statement::SECRET_REFS`]) and its tail ([`statement::TAIL`]).
@@ -57,6 +60,7 @@ pub const STATEMENT: Statement = {
         .with_needs(statement::NEEDS)
         .with_secret_refs(statement::SECRET_REFS)
         .with_families(statement::FAMILIES);
+    s.settings_schema = busbar_contract::abi::mechanism::call::Blob::json(SETTINGS_SCHEMA);
     s.extensions = EXTENSIONS;
     s
 };

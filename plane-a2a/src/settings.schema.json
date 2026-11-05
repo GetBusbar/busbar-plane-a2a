@@ -1,0 +1,395 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "a2a plane lifecycle settings",
+  "anyOf": [
+    {
+      "$ref": "#/$defs/section"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "agents": {
+          "$ref": "#/$defs/section"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "agents"
+      ]
+    }
+  ],
+  "$defs": {
+    "section": {
+      "type": "object",
+      "properties": {
+        "hooks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "upstream_credentials": {
+          "const": "own"
+        },
+        "pools": {
+          "description": "Host-injected pools: the reader extracts pool.members entries that are strings or objects with a string name. Missing or malformed pools/members are ignored, preserving its tolerant grammar.",
+          "examples": [
+            {
+              "fallback": {
+                "members": [
+                  "primary",
+                  {
+                    "name": "secondary"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/agent"
+      },
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9._~-]+$",
+        "not": {
+          "enum": [
+            ".",
+            ".."
+          ]
+        }
+      }
+    },
+    "agent": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "pattern": "^[hH][tT][tT][pP][sS]?://",
+          "description": "Lifecycle verifies URL syntax and refuses userinfo."
+        },
+        "pin": {
+          "type": "object",
+          "properties": {
+            "mechanism": {
+              "enum": [
+                "jws_issuer_key",
+                "cert_spki",
+                "mtls",
+                "unpinned"
+              ]
+            },
+            "key": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "fingerprint": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "mechanism"
+          ]
+        },
+        "client_identity": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "cert": {
+                  "$ref": "#/$defs/secret",
+                  "x-busbar-secret": true,
+                  "writeOnly": true
+                },
+                "key": {
+                  "$ref": "#/$defs/secret",
+                  "x-busbar-secret": true,
+                  "writeOnly": true
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "cert",
+                "key"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reverify_ttl": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": "5s"
+        },
+        "recovery_backoff": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "protocol_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Accepted and ignored; discovery reads the card version."
+        },
+        "allow_private": {
+          "type": "boolean",
+          "default": false
+        },
+        "upstream_credentials": {
+          "enum": [
+            "own",
+            null
+          ]
+        },
+        "upstream_credential": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "secret": {
+                  "$ref": "#/$defs/secret",
+                  "x-busbar-secret": true,
+                  "writeOnly": true
+                },
+                "placement": {
+                  "anyOf": [
+                    {
+                      "const": "bearer"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "header": {
+                          "type": "string",
+                          "pattern": "\\S"
+                        }
+                      },
+                      "additionalProperties": false,
+                      "required": [
+                        "header"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "bearer": true
+                      },
+                      "additionalProperties": false,
+                      "required": [
+                        "bearer"
+                      ]
+                    }
+                  ],
+                  "default": "bearer"
+                },
+                "lease_ttl_ms": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 18446744073709551615,
+                  "x-busbar-integer-token": "unsigned"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "secret",
+                "lease_ttl_ms"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "egress_scopes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 0,
+          "default": []
+        },
+        "hooks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "url",
+        "pin"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "pin": {
+                "properties": {
+                  "mechanism": {
+                    "const": "mtls"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "client_identity"
+            ],
+            "properties": {
+              "client_identity": {
+                "type": "object",
+                "properties": {
+                  "cert": {
+                    "$ref": "#/$defs/secret",
+                    "x-busbar-secret": true,
+                    "writeOnly": true
+                  },
+                  "key": {
+                    "$ref": "#/$defs/secret",
+                    "x-busbar-secret": true,
+                    "writeOnly": true
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "cert",
+                  "key"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "client_identity"
+            ],
+            "properties": {
+              "client_identity": {
+                "type": "object"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "url": {
+                "pattern": "^[hH][tT][tT][pP][sS]://"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "secret": {
+      "oneOf": [
+        {
+          "const": "none"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "module": {
+              "type": "string",
+              "pattern": "\\S"
+            },
+            "settings": {
+              "type": "object"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "module"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "env": {
+              "type": "string",
+              "pattern": "\\S"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "env"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "file": {
+              "type": "string",
+              "pattern": "\\S"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "file"
+          ]
+        }
+      ]
+    },
+    "owned_sections": {
+      "description": "PlaneOpenIn.owned / PlaneRefreshIn.owned, separate from the settings argument described by the schema root.",
+      "properties": {
+        "agent_push": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "ca": {
+                  "type": "string",
+                  "pattern": "\\S",
+                  "description": "Public CA certificate PEM; not a secret."
+                }
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "description": "Lifecycle agents settings (bare section, or validate envelope). URL validity, TLS compatibility and registration rules are also checked by validate_agent.",
+  "x-busbar-settings-profile": "integer-token-v1"
+}

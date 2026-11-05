@@ -2170,7 +2170,14 @@ fn caller_counts(s: &Served) -> Vec<Counted> {
                 .usage
                 .lines
                 .iter()
-                .map(|l| (l.class.as_str().to_string(), l.quantity))
+                .map(|l| {
+                    (
+                        l.class.as_str().to_string(),
+                        l.quantity
+                            .whole_u64()
+                            .expect("A2A byte and fee fixture counts are exact whole units"),
+                    )
+                })
                 .collect(),
             fee_count: r.usage.fee_count,
         })
@@ -2414,10 +2421,14 @@ impl Billed {
             s.gov
                 .bucket_model_tokens(&s.key.id, busbar_kernel::governance::WINDOW_TOTAL, now);
         let sum = |class: &str| -> u64 {
-            lanes
-                .iter()
-                .map(|(_, units)| units.get(class).copied().unwrap_or(0))
-                .sum()
+            busbar_contract::Count::total(
+                lanes
+                    .iter()
+                    .map(|(_, units)| units.get(class).copied().unwrap_or_default()),
+            )
+            .expect("A2A fixture totals fit exactly")
+            .whole_u64()
+            .expect("A2A byte and fee fixture totals are exact whole units")
         };
         Billed {
             requests: usage.requests,

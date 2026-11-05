@@ -39,19 +39,31 @@ fn guarded_decoder_preserves_json_values_and_rejects_invalid_unicode() {
     for bytes in [
         br#"null"#.as_slice(),
         br#"[true,false,-1,1.25,1e10]"#,
+        // The SDK enables arbitrary_precision: JSON numbers are not limited to f64.
+        br#"[1e999,-1e999,18446744073709551616,1.0000000000000000001]"#,
         br#"{"a":[{"b":"x\\y\"z"}],"a":null}"#,
     ] {
         let expected: serde_json::Value = serde_json::from_slice(bytes).unwrap();
         assert_eq!(*super::parse(bytes).unwrap(), expected);
+        assert!(super::valid(bytes), "{bytes:?}");
     }
     for bytes in [
         br#""\ud800""#.as_slice(),
         br#""\udc00""#,
         br#""\ud800\u0041""#,
-        br#"[1e999]"#,
+        br#"[1e]"#,
+        br#"[1e+]"#,
+        br#"[01]"#,
+        br#"[+1]"#,
+        br#"[NaN]"#,
+        br#"[Infinity]"#,
         b"\"\xff\"",
         br#"{"a":true,}"#,
     ] {
+        assert!(
+            serde_json::from_slice::<serde_json::Value>(bytes).is_err(),
+            "reference: {bytes:?}"
+        );
         assert!(super::parse(bytes).is_err(), "{bytes:?}");
         assert!(!super::valid(bytes), "{bytes:?}");
     }
