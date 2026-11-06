@@ -120,6 +120,106 @@ mod actual_admission {
     }
 
     #[test]
+    fn actual_a2a_linked_and_dropped_open_ready_close_cross_once() {
+        use busbar_contract::abi::mechanism::call::{
+            AbiStr, Blob, InHead, OutHead, Outcome, BLOB_JSON,
+        };
+        use busbar_contract::abi::mechanism::lifecycle::slot;
+        use busbar_contract::abi::plane::{PlaneOpenIn, PlaneOpenOut};
+        use busbar_plugin_loader::dispatch::{in_head, out_head, Frame};
+        use std::sync::atomic::Ordering;
+
+        let row = LinkedRow::of_macro(busbar_plane_a2a::MACRO_DOOR).unwrap();
+        let library = image();
+        let (door_address, ops_address) =
+            busbar_plugin_loader::dispatch::load::door_addresses_of_library(&library)
+                .expect("fresh actual A2A image loads")
+                .expect("fresh actual A2A image exports a door");
+        let linked_address = busbar_plane_a2a::door();
+        // SAFETY: the actual published A2A door owns a complete immutable operation table.
+        let linked_parts =
+            unsafe { busbar_contract::abi::mechanism::door::Door::read_parts(linked_address) };
+        assert_ne!(
+            door_address, linked_address as *const _ as usize,
+            "independent images"
+        );
+        assert_ne!(ops_address, linked_parts.ops as usize, "independent tables");
+
+        let settings = serde_json::to_vec(
+            &serde_json::from_str::<serde_json::Value>(include_str!("conformance.json")).unwrap()
+                ["settings"],
+        )
+        .unwrap();
+        for dropped in [false, true] {
+            let origin = if dropped { "dropped" } else { "linked" };
+            let d = Dispatcher::new(DispatchConfig::default());
+            let product = if dropped {
+                load_dropped::<Plane>(&library, &row.statement, bind(&d))
+            } else {
+                load_linked::<Plane>(&row, bind(&d))
+            }
+            .expect("actual A2A image loads");
+            assert!(!product.is_open(), "{origin}: no instance before OPEN");
+            assert!(
+                product.has_ready(),
+                "{origin}: actual READY callback exists"
+            );
+            let first_crossings = || {
+                product.inner.crossings.load(Ordering::SeqCst)
+                    - product.inner.resumes.load(Ordering::SeqCst)
+            };
+            // SAFETY: these C frames contain integer/pointer fields with valid zero defaults;
+            // their typed heads are initialized before crossing the actual ABI.
+            let mut open: Frame<PlaneOpenIn, PlaneOpenOut> =
+                Frame::new(unsafe { std::mem::zeroed() }, unsafe { std::mem::zeroed() });
+            open.input.open.head = in_head();
+            open.out.open.head = out_head();
+            open.input.open.generation = 1;
+            // SAFETY: settings remains live until the synchronous OPEN crossing returns.
+            open.input.open.settings =
+                unsafe { Blob::from_raw_parts(settings.as_ptr(), settings.len(), BLOB_JSON, 0) };
+            open.input.public_url = AbiStr::of("https://gw.example");
+            let before = first_crossings();
+            let (answer, snapshot) = product.open(&mut open);
+            assert_eq!(answer.outcome, Outcome::Ready, "{origin}: OPEN {answer:?}");
+            assert_eq!(first_crossings() - before, 1, "{origin}: one OPEN crossing");
+            assert!(snapshot.is_some(), "{origin}: OPEN publishes its snapshot");
+            assert!(product.is_open(), "{origin}: actual instance is installed");
+
+            let before = first_crossings();
+            product
+                .ready(&d, std::time::Duration::from_secs(30))
+                .expect("actual A2A READY completes");
+            assert_eq!(
+                first_crossings() - before,
+                1,
+                "{origin}: one READY crossing"
+            );
+            assert!(product.is_open(), "{origin}: READY keeps the instance");
+            assert!(
+                !product.is_faulted(),
+                "{origin}: READY did not quarantine it"
+            );
+
+            let mut close: Frame<InHead, OutHead> = Frame::new(in_head(), out_head());
+            let before = first_crossings();
+            let answer = product.call(slot::CLOSE, &mut close);
+            assert_eq!(answer.outcome, Outcome::Ready, "{origin}: CLOSE {answer:?}");
+            assert_eq!(
+                first_crossings() - before,
+                1,
+                "{origin}: one CLOSE crossing"
+            );
+            assert!(!product.is_open(), "{origin}: CLOSE removes the instance");
+            assert!(
+                !product.is_faulted(),
+                "{origin}: CLOSE did not quarantine it"
+            );
+            assert_eq!(product.inflight(), 0, "{origin}: no crossing remains held");
+        }
+    }
+
+    #[test]
     fn a_mismatched_statement_is_refused_for_both_actual_a2a_doors() {
         let row = LinkedRow::of_macro(busbar_plane_a2a::MACRO_DOOR).unwrap();
         let mut stated = row.statement.clone();
