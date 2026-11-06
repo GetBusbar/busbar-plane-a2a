@@ -1,0 +1,4 @@
+V3 targeted validation against published a2a-sdk==1.1.2, installed using --require-hashes from unchanged frozen requirements.txt.
+New ListTasks regression failed on frozen v2 (artifacts:[] present by default); fixed fixture passed.
+Five runtime tests passed: single interface, version defaults, malformed types, terminal immutability, ListTasks omitted/false/true projection with real artifact preserved and GetTask unchanged.
+Ruff 0.17.4 format/check passed. No full suites run locally.

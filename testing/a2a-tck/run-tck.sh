@@ -237,7 +237,7 @@ await_card () {
 # serve_control <port> <transport>  -> exports CONTROL_PID
 serve_control () {
   local port="$1" transport="$2"
-  "$BIN_DIR/a2a" serve --echo --port "$port" --quiet --transport "$transport" \
+  "$HERE/../a2a-reference/go/serve.sh" "$port" "$transport" \
     > "$OUT/control-$transport.log" 2>&1 &
   CONTROL_PID=$!
   trap 'stop_control || exit 2' EXIT
@@ -277,7 +277,8 @@ install_crypto () {
 control_leg () {          # control_leg <transport> <port> <name>
   local transport="$1" port="$2" name="$3"
   fetch_tck; install_tck; install_control
-  say "control: a2a-go ${CONTROL_GO_VERSION} / ${transport}  (TZ=$TZ)"
+  "$HERE/../a2a-reference/go/build.sh"
+  say "control: declared scenario fixture using a2a-go ${CONTROL_GO_VERSION} / ${transport} (TZ=$TZ)"
   serve_control "$port" "$transport"
   trap 'stop_control || exit 2' EXIT
   run_tck "http://127.0.0.1:$port" "$name"

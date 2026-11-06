@@ -158,13 +158,14 @@ fn an_unwrapped_update_takes_busbars_id_where_its_kind_names_its_task() {
 }
 
 #[test]
-fn the_reading_copy_reads_a_number_past_f64_and_keeps_the_rest() {
+fn the_reading_copy_keeps_exact_numbers_and_every_original_byte() {
     let b = br#"{"a":1e400,"s":"1e400","b":-2E999,"c":12345678901234567890123}"#;
     let r = readable(b);
-    assert_eq!(
-        std::str::from_utf8(&r).unwrap(),
-        r#"{"a":0,"s":"1e400","b":0,"c":12345678901234567890123}"#
-    );
+    assert_eq!(&*r, b);
+    assert!(matches!(r, Cow::Borrowed(_)));
+    let exact = read_json(b).expect("exact guarded numbers");
+    assert_eq!(exact["a"].to_string(), "1e+400");
+    assert_eq!(exact["b"].to_string(), "-2e+999");
     assert!(serde_json::from_slice::<Value>(&r).is_ok());
     assert!(matches!(readable(br#"{"a":1}"#), Cow::Borrowed(_)));
 }
@@ -205,4 +206,66 @@ fn a_request_is_translated_at_its_ids_spans_only() {
         translate_ids(br#"{"params":7}"#, &["taskId"], &[], &to),
         None
     );
+}
+
+#[test]
+fn exact_protocol_id_unary_response_correlates_without_number_conversion() {
+    let sent = crate::request_json::parse(b"1e400").expect("valid numeric ID");
+    let body =
+        br#"{"jsonrpc":"2.0","id":1e400,"result": {"opaque":1e400,"n":18446744073709551617} }"#;
+    let span = crate::relay::read_answer(200, body, &sent).expect("exact ID matches");
+    assert_eq!(&body[span], br#"{"opaque":1e400,"n":18446744073709551617}"#);
+    let zero = crate::request_json::parse(b"0").unwrap();
+    assert_eq!(
+        crate::relay::read_answer(200, body, &zero),
+        Err(crate::relay::HopRefusal::Uncorrelated)
+    );
+    assert_eq!(
+        crate::relay::read_answer(200, br#"{"jsonrpc":"2.0","id":0,"result":{}}"#, &sent),
+        Err(crate::relay::HopRefusal::Uncorrelated)
+    );
+}
+
+#[test]
+fn exact_protocol_id_event_response_correlates_without_number_conversion() {
+    let sent = crate::request_json::parse(b"1e400").expect("valid numeric ID");
+    let frame = "data: {\"jsonrpc\":\"2.0\",\"id\":1e400,\"result\":{\"kind\":\"status-update\",\"taskId\":\"far\",\"opaque\":1e400}}\n\n";
+    let event =
+        crate::events::read_event(frame, &sent, "t", "c", None, &[]).expect("exact ID matches");
+    assert!(std::str::from_utf8(&event.sse)
+        .unwrap()
+        .contains("\"opaque\":1e400"));
+    let zero = crate::request_json::parse(b"0").unwrap();
+    assert!(matches!(
+        crate::events::read_event(frame, &zero, "t", "c", None, &[]),
+        Err(crate::relay::HopRefusal::Uncorrelated)
+    ));
+    let zero_frame = frame.replacen("\"id\":1e400", "\"id\":0", 1);
+    assert!(matches!(
+        crate::events::read_event(&zero_frame, &sent, "t", "c", None, &[]),
+        Err(crate::relay::HopRefusal::Uncorrelated)
+    ));
+}
+
+#[test]
+fn exact_protocol_id_marker_objects_do_not_become_numeric_ids() {
+    let sent = crate::request_json::parse(b"27").unwrap();
+    for marker in [
+        r#"{"$serde_json::private::Number":"27"}"#,
+        r#"{"\u0024serde_json::private::Number":"27"}"#,
+    ] {
+        let body =
+            format!(r#"{{"jsonrpc":"2.0","id":{marker},"result":{{"kind":"status-update"}}}}"#);
+        let (envelope, _) = envelope_reading(body.as_bytes()).unwrap();
+        assert!(envelope["id"].is_object());
+        assert_eq!(
+            crate::relay::read_answer(200, body.as_bytes(), &sent),
+            Err(crate::relay::HopRefusal::Uncorrelated)
+        );
+        let frame = format!("data: {body}\n\n");
+        assert!(matches!(
+            crate::events::read_event(&frame, &sent, "t", "c", None, &[]),
+            Err(crate::relay::HopRefusal::Uncorrelated)
+        ));
+    }
 }

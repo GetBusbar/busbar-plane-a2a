@@ -103,47 +103,19 @@ fn last<'m>(members: &'m [ObjectMember], key: &str) -> Option<&'m ObjectMember> 
     members.iter().rev().find(|m| m.key == key)
 }
 
-/// THE READING COPY of `b`: `b` itself, unless a number in it lies past `f64`'s range, which is then spelled `0` (the reading never decides on a number's value; the caller's bytes keep it).
+/// Borrow the original JSON bytes. The guarded parser stores numbers exactly, including
+/// protocol IDs outside f64's range; replacing them would change response correlation.
 #[must_use]
 pub fn readable(b: &[u8]) -> Cow<'_, [u8]> {
-    let mut out: Option<RawBytes> = None;
-    let mut copied = 0;
-    let mut i = 0;
-    while i < b.len() {
-        match b[i] {
-            b'"' => i = value_at(b, i).map_or(b.len(), |v| v.end),
-            b'-' | b'0'..=b'9' => {
-                let end = value_at(b, i).map_or(i + 1, |v| v.end);
-                let past = std::str::from_utf8(&b[i..end])
-                    .ok()
-                    .and_then(|t| t.parse::<f64>().ok())
-                    .is_some_and(f64::is_infinite);
-                if past {
-                    let o = out.get_or_insert_with(RawBytes::default);
-                    o.extend_from_slice(&b[copied..i]);
-                    o.extend_from_slice(b"0");
-                    copied = end;
-                }
-                i = end;
-            }
-            _ => i += 1,
-        }
-    }
-    out.map_or(Cow::Borrowed(b), |mut o| {
-        o.extend_from_slice(&b[copied..]);
-        Cow::Owned(o.into_vec())
-    })
+    Cow::Borrowed(b)
 }
 
-/// Read through a number-normalized copy, retiring any owned scratch before returning.
+/// Read the original bytes without a numeric conversion or an extra owned scratch copy.
 pub(crate) fn with_readable<T>(bytes: &[u8], read: impl FnOnce(&[u8]) -> T) -> T {
-    match readable(bytes) {
-        Cow::Borrowed(bytes) => read(bytes),
-        Cow::Owned(bytes) => read(&RawBytes::from(bytes)),
-    }
+    read(bytes)
 }
 
-/// Parse a reading copy directly into the DOM's wiping owner.
+/// Parse the original bytes directly into the exact DOM's wiping owner.
 pub(crate) fn read_json(bytes: &[u8]) -> Result<RequestJson, serde_json::Error> {
     with_readable(bytes, crate::request_json::parse)
 }

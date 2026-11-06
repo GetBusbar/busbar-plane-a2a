@@ -8,7 +8,9 @@
 #   THE CONTROLS (always run): the official a2aproject/a2a-tck at TCK_REF against a2a-go v2.4.0 over
 #       both bindings, with the suite's own protocol verdict preserved;
 #       and the independent battery (testing/a2a-harness) against a2a-go v2.4.0 (both bindings) and
-#       a2a-python 1.1.2, each held to its pinned baseline.
+#       a2a-python 1.1.2 through declared server fixtures, with unwaived current verdicts.
+#       A separate Go CLI leg exercises its client role. Historical baselines are immutable
+#       diagnostics; these controls do not qualify Python client or SDK relay roles.
 #   THE NEGATIVE CONTROLS: the battery's deliberately broken fake peer MUST grade red, with every
 #       injected violation caught on it and absent from the honest twin; and the TCK pointed at a
 #       separate state-only and version-only relays MUST attribute each injected violation to a
@@ -89,7 +91,7 @@ suite, status, armed, reason, tck, out = sys.argv[1:7]
 v = {"suite": suite, "status": status, "armed": armed == "true",
      "standard": "Agent2Agent (A2A) protocol, specification v1.0",
      "plan": "a2aproject/a2a-tck + the independent a2aht battery; controls a2a-go v2.4.0 and "
-             "a2a-python 1.1.2; subject busbar at the pin with this plane",
+             "a2a-python 1.1.2 as declared server scenario fixtures, plus the Go CLI client (reference relay unmeasured); subject busbar at the pin with this plane",
      "spec_version": "a2a-tck@" + tck, "reason": reason}
 json.dump(v, open(out, "w"), indent=2, sort_keys=True)
 PY
@@ -187,41 +189,42 @@ provision() {
 # ------------------------------------------------------------------------------------------------
 tck_control() { testing/a2a-tck/run-tck.sh "$1"; }
 
-battery_go() {   # battery_go <rest|jsonrpc> <baseline>
-  local binding="$1" baseline="$2" extra=""
-  [ "$binding" = jsonrpc ] && extra="--transport jsonrpc"
+# These fixtures declare a server role. Client and relay roles are reported as
+# unmeasured by role_audit; they require their own configured drivers. Historical
+# baselines remain diagnostic assets, never the verdict for a repaired fixture.
+battery_go() {   # battery_go <rest|jsonrpc>; direct unwaived server verdict
+  local binding="$1" transport=http_json
+  [ "$binding" = jsonrpc ] && transport=jsonrpc
   ( cd testing/a2a-harness && mkdir -p reports \
     && rm -f "reports/control-$binding.json" \
     && python3 -m a2aht run \
-         --launch "$A2AHT_CONTROL_BIN/a2a serve --echo --port 9099 --quiet $extra" --port 9099 \
-         --label "control:a2a-go/$binding" --tier pre-release \
-         --client-drive "$A2AHT_CONTROL_BIN/a2a send {url} hello-from-harness" \
-         --known-deviations baselines/known-deviations-a2a-go.json \
-         --json "reports/control-$binding.json" --allow-red || exit $?
-    python3 -m a2aht baseline --report "reports/control-$binding.json" --baseline "baselines/$baseline" )
+         --launch "$ROOT/testing/a2a-reference/go/serve.sh 9099 $transport" --port 9099 \
+         --label "reference-fixture:a2a-go/$binding/server" --tier pre-release --role server \
+         --json "reports/control-$binding.json" )
+}
+
+battery_go_client() {
+  A2A_REFERENCE_OUT="$CONFORMANCE_OUT/reference-client" \
+    "$ROOT/testing/a2a-reference/run-controls.sh" battery-go-client
 }
 
 battery_python() {
   ( cd testing/a2a-harness && mkdir -p reports
-    "$A2AHT_CONTROL_SRC/venv/bin/python" "$A2AHT_CONTROL_SRC/a2a-python/samples/hello_world_agent.py" \
+    "$ROOT/testing/a2a-reference/python/serve.sh" 41241 \
       > "$LOGS/a2a-python-agent.log" 2>&1 &
     local pid=$!
     trap 'fixture_stop "$pid" || exit 1' EXIT
     fixture_exit_on_signal
     fixture_track_pid "$pid"
-    if ! fixture_await_card "$pid" 41241 60 1; then echo "the a2a-python control never owned its card listener"; cat "$LOGS/a2a-python-agent.log"; exit 1; fi
+    if ! fixture_await_card "$pid" 41241 60 1; then echo "the Python reference fixture never owned its card listener"; cat "$LOGS/a2a-python-agent.log"; exit 1; fi
     rm -f reports/control-python.json
     local run_rc=0
-    # This multi-interface control remains incomplete on interface coverage:
-    # acknowledgment of GRPC does not pass the required coverage row. The
-    # baseline comparison records outcomes, not qualification of every binding.
-    python3 -m a2aht run --endpoint http://127.0.0.1:41241 --label "control:a2a-python" \
-      --tier pre-release --known-deviations baselines/known-deviations-a2a-python.json \
-      --role server --allow-undriven-bindings GRPC --json reports/control-python.json --allow-red || run_rc=$?
+    python3 -m a2aht run --endpoint http://127.0.0.1:41241 \
+      --label "reference-fixture:a2a-python/server" --tier pre-release --role server \
+      --json reports/control-python.json || run_rc=$?
     fixture_stop "$pid" || exit 1
     pid=""
-    [ "$run_rc" -eq 0 ] || exit "$run_rc"
-    python3 -m a2aht baseline --report reports/control-python.json --baseline baselines/control-a2a-python.json )
+    exit "$run_rc" )
 }
 
 # ------------------------------------------------------------------------------------------------
@@ -376,13 +379,15 @@ provision > "$LOGS/provision.log" 2>&1 || { tail -30 "$LOGS/provision.log" >&2; 
 # Validate each local judge after its pinned interpreters and dependencies are ready.
 leg supplement-selftest "$A2A_TCK_WORK/venv/bin/python" testing/a2a-supplement/selftest.py
 leg relay-regressions "$A2A_TCK_WORK/venv/bin/python" testing/a2a-tck/broken-agent/relay-regressions.py
+leg relay-drive-selftest python3 testing/a2a-harness/scripts/relay-drive-selftest.py -v
 leg subject-selftest bash testing/a2a-subject/boot.sh --selftest
 
 leg control-tck-http-json   tck_control control-http-json
 leg control-tck-jsonrpc     tck_control control-jsonrpc
-leg control-battery-go-rest battery_go rest control-a2a-go-rest.json
-leg control-battery-go-jsonrpc battery_go jsonrpc control-a2a-go-jsonrpc.json
+leg control-battery-go-rest battery_go rest
+leg control-battery-go-jsonrpc battery_go jsonrpc
 leg control-battery-python  battery_python
+leg control-battery-go-client battery_go_client
 leg negative-battery        negative_battery
 leg negative-tck            negative_tck
 
@@ -397,7 +402,7 @@ fi
 
 if [ "${#FAILED[@]}" -eq 0 ]; then
   say "all ${#LEGS[@]} legs held"
-  verdict pass true "the TCK controls completed with their suite verdicts, battery controls matched their baselines, isolated negative controls identified their injected violations, and busbar at the pin with this plane passed the TCK and battery"
+  verdict pass true "the TCK controls completed with their suite verdicts, declared server reference fixtures and the Go CLI client passed the unwaived battery (reference relay role not measured), isolated negative controls identified their injected violations, and busbar at the pin with this plane passed the TCK and battery"
   exit 0
 fi
 reason="$(printf '%s; ' "${FAILED[@]}")"

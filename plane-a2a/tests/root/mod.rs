@@ -23,6 +23,7 @@ use busbar_kernel::{
 mod root_facts;
 
 mod binding_lifetime;
+mod conditional_quota_negotiation;
 mod reported_observations;
 
 use crate::root::loader::dispatch::{

@@ -582,7 +582,7 @@ SAFE_WORKDIR
     : > "$SUBJECT_UPSTREAM_RECORD"
   fi
   A2A_VENDOR_RECORD="$SUBJECT_UPSTREAM_RECORD" \
-  node testing/a2a-subject/signing-vendor.mjs "$vendor_port" "$agent_port" "$dir/issuer.spki" \
+  A2A_VENDOR_ROUTE_FILE="$dir/relay-route.json" node testing/a2a-subject/signing-vendor.mjs "$vendor_port" "$agent_port" "$dir/issuer.spki" \
     >"$dir/signing-vendor.log" 2>&1 &
   local vendor_pid=$!
   subject_track_pid "$vendor_pid"
@@ -969,6 +969,13 @@ leg_probe() {
   arm_subject "${1:-shim}"
   say "   subject endpoint: $SUBJECT_URL"
   say "   fronted agent:    $SUBJECT_AGENT_URL"
+  if [ -n "${A2A_COLD_TASK_PROBE:-}" ]; then
+    A2A_PROBE_URL="$SUBJECT_AGENT_URL" A2A_PROBE_TOKEN="$SUBJECT_TOKEN" \
+      A2A_PROBE_OUT="$SUBJECT_DIR/cold-task-proof" \
+      A2A_RELAY_ADMIN_BASE="$SUBJECT_ADMIN_BASE" A2A_RELAY_ADMIN_TOKEN="$SUBJECT_ADMIN_TOKEN" \
+      A2A_RELAY_VENDOR_URL="$SUBJECT_VENDOR_URL" A2A_RELAY_SUBJECT_DIR="$SUBJECT_DIR" \
+      python3 "$A2A_COLD_TASK_PROBE"
+  fi
   # A held boot, for a human who wants to look at the subject with their own tools. Never used by
   # a gate: it does not terminate.
   if [ -n "${A2A_SUBJECT_HOLD:-}" ]; then

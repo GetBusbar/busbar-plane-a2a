@@ -42,6 +42,10 @@ def _target_args(p):
                    help="record a comma-separated acknowledgment of undriven "
                         "bindings (e.g. GRPC). Missing interface execution still "
                         "makes the required coverage row NOT_CONFIGURED.")
+    p.add_argument("--relay-drive",
+                   help="command that configures the running target to relay to "
+                        "{url}; {card_url} and {endpoint} are also substituted. "
+                        "The harness owns the correlated upstream call. See RELAY-DRIVE.md.")
     p.add_argument("--client-drive",
                    help="command that makes the target act as an A2A CLIENT. "
                         "{url} is replaced with the fake peer base URL and "
@@ -68,6 +72,7 @@ def build_target(args):
 def build_config(args):
     config = {
         "client_drive": getattr(args, "client_drive", None),
+        "relay_drive": getattr(args, "relay_drive", None),
         "cwd": getattr(args, "cwd", None),
         "concurrency": getattr(args, "concurrency", 8),
         "allow_undriven_bindings": getattr(args, "allow_undriven_bindings", ""),
@@ -89,6 +94,8 @@ def cmd_run(args):
                              needs=set(args.needs) if args.needs else None,
                              include_governance=getattr(
                                  args, "include_governance", False))
+    if getattr(args, "roles", None):
+        selected = [test for test in selected if test.role in args.roles]
     if not selected:
         sys.stderr.write("no tests selected\n")
         return 2
@@ -147,6 +154,7 @@ def cmd_run(args):
                         meta={"tier": args.tier,
                               "client_drive_configured":
                                   bool(config["client_drive"]),
+                              "relay_drive_configured": bool(config["relay_drive"]),
                               "selected_interface": target.selection_metadata(),
                               "interface_coverage": "one selected interface; see "
                                   "card.every_declared_binding_is_exercised for gaps",
@@ -321,8 +329,13 @@ def main(argv=None):
     r.add_argument("--tier", choices=[EVERY_COMMIT, PULL_REQUEST, PRE_RELEASE],
                    default=PULL_REQUEST,
                    help="run tests up to and including this tier")
-    r.add_argument("--role",
-                   choices=["server", "client", "seam", "governance"])
+    role_selection = r.add_mutually_exclusive_group()
+    role_selection.add_argument("--role",
+                                choices=["server", "client", "seam", "governance"])
+    role_selection.add_argument("--roles", nargs="+",
+                                choices=["server", "client", "seam"],
+                                help="Explicitly select several protocol roles; the role audit "
+                                     "still names every unmeasured role.")
     r.add_argument("--include-governance", action="store_true",
                    help="also run the GOVERNANCE tier. These are NOT "
                         "conformance tests and never contribute to a "

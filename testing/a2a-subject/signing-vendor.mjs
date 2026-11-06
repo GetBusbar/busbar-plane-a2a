@@ -60,6 +60,31 @@ function signCard(card) {
 
 const CARD_PATHS = new Set(["/.well-known/agent-card.json", "/.well-known/agent.json"]);
 
+// Optional operator-owned routing for the bounded relay fixture. The boot process owns this
+// vendor's lifetime and issuer key. A relay configuration command changes only this private
+// route, then asks the real subject to fetch/verify and approve the newly signed peer card.
+// No challenge or operation body is interpreted here; the card is signed as fetched.
+const ROUTE_FILE = process.env.A2A_VENDOR_ROUTE_FILE || "";
+function target(reqPath) {
+  if (!ROUTE_FILE || !fs.existsSync(ROUTE_FILE)) {
+    return new URL(reqPath, `http://127.0.0.1:${backendPort}`);
+  }
+  const route = JSON.parse(fs.readFileSync(ROUTE_FILE, "utf8"));
+  const downstream = new URL(route.downstream);
+  const card = new URL(route.card_url);
+  for (const url of [downstream, card]) {
+    if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || url.username || url.password) {
+      throw new Error("relay fixture route must be explicit loopback HTTP");
+    }
+  }
+  if (downstream.origin !== card.origin || downstream.pathname !== "/" || downstream.search || downstream.hash) {
+    throw new Error("relay fixture card must belong to its downstream origin");
+  }
+  return CARD_PATHS.has(new URL(reqPath, "http://x").pathname)
+    ? card : new URL(reqPath, downstream);
+}
+
+
 // OPTIONAL: RECORD WHAT THE SUBJECT ORIGINATES, for the requirements about the CLIENT role.
 //
 // SPEC 3.6.1 ("Clients MUST send the A2A-Version header with each request") is a requirement on
@@ -104,13 +129,16 @@ http
     req.on("data", (c) => chunks.push(c));
     req.on("end", () => {
       const body = Buffer.concat(chunks);
+      let destination;
+      try { destination = target(req.url); }
+      catch (error) { res.writeHead(502).end(String(error)); return; }
       const up = http.request(
         {
-          host: "127.0.0.1",
-          port: Number(backendPort),
-          path: req.url,
+          host: destination.hostname,
+          port: Number(destination.port || 80),
+          path: destination.pathname + destination.search,
           method: req.method,
-          headers: { ...req.headers, host: `127.0.0.1:${backendPort}` },
+          headers: { ...req.headers, host: destination.host },
         },
         (ur) => {
           if (!CARD_PATHS.has(url.pathname)) {

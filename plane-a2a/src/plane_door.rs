@@ -79,9 +79,10 @@ busbar_contract::statement_extensions!(
         busbar_contract::abi::sdk::plane::conditional::CAPABILITY,
         b"1"
     ), (
-        // HELD_KINDS[0..3]: task, task_event and push_config. Cards keep their existing writes.
+        // Task, event, push configuration and durable quota share conditional publication.
+        // Cards (indices 3 and 4) keep their existing ordinary writes.
         busbar_contract::abi::sdk::plane::conditional::REQUIRED_KINDS,
-        &[3_u8, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0]
+        &[4_u8, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 5, 0, 0, 0]
     )]
 );
 
