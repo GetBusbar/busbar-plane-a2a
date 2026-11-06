@@ -79,10 +79,9 @@ pub struct Selected<'a> {
 }
 
 /// Select HOW the configured endpoint speaks without changing WHERE the operator sends it.
-/// Matching advertised interfaces take precedence. If the configured endpoint is an operator
-/// alias/private route and none matches, retain the primary HOW: v0.3's preferred transport
-/// (JSONRPC when unstated), or v1.0's first speakable interface as before. Never choose a v0.3
-/// additional transport merely because a different endpoint offers it.
+/// Matching declared interfaces take precedence. For an operator alias/private route, use the
+/// first speakable declared interface. An absent or malformed interface declaration never
+/// implies an older protocol or an invented transport.
 #[must_use]
 pub fn select<'a>(card: Option<&Value>, configured_url: &'a str) -> Selected<'a> {
     let configured = url::Url::parse(configured_url).ok();
@@ -96,7 +95,7 @@ pub fn select<'a>(card: Option<&Value>, configured_url: &'a str) -> Selected<'a>
     };
     let word = match card {
         Some(card) => match card.get("supportedInterfaces").and_then(Value::as_array) {
-            Some(interfaces) => {
+            Some(interfaces) if crate::a2a::agent_card::validate_interfaces(card).is_ok() => {
                 let words = || {
                     interfaces
                         .iter()
@@ -116,32 +115,7 @@ pub fn select<'a>(card: Option<&Value>, configured_url: &'a str) -> Selected<'a>
                     .unwrap_or("INVALID")
                     .to_string()
             }
-            None => {
-                let preferred = match card.get("preferredTransport") {
-                    None | Some(Value::Null) => BINDING_JSONRPC,
-                    Some(value) => value.as_str().unwrap_or("INVALID"),
-                };
-                let primary_matches = card
-                    .get("url")
-                    .and_then(Value::as_str)
-                    .is_none_or(&endpoint_matches);
-                if primary_matches && speakable(preferred).is_some() {
-                    preferred.to_string()
-                } else {
-                    card.get("additionalInterfaces")
-                        .and_then(Value::as_array)
-                        .into_iter()
-                        .flatten()
-                        .find_map(|interface| {
-                            let word = interface.get("transport")?.as_str()?;
-                            (speakable(word).is_some()
-                                && endpoint_matches(interface.get("url")?.as_str()?))
-                            .then_some(word)
-                        })
-                        .unwrap_or(preferred)
-                        .to_string()
-                }
-            }
+            _ => "INVALID".to_string(),
         },
         None => BINDING_JSONRPC.to_string(),
     };

@@ -19,8 +19,10 @@ fn pin(mechanism: PinMechanism, key: Option<&str>) -> AgentPinCfg {
 
 fn card(description: &str) -> Value {
     json!({
-        "name": "planner",
-        "skills": [{"id": "plan", "name": "Plan", "description": description}],
+        "name": "planner", "description": "Plans", "version": "1",
+        "supportedInterfaces": [{"url":"https://agent.example/a2a", "protocolBinding":"JSONRPC", "protocolVersion":"1.0"}],
+        "capabilities": {}, "defaultInputModes": ["text/plain"], "defaultOutputModes": ["text/plain"],
+        "skills": [{"id": "plan", "name": "Plan", "description": description, "tags": ["planning"]}],
     })
 }
 
@@ -354,14 +356,12 @@ fn connect_never_reports_approved_even_when_the_card_matches_a_locked_pin() {
 /// whatever skills the plane last held for it.
 #[test]
 fn the_drift_lists_are_the_sighted_skills_against_the_approved_ones() {
-    let offered = json!({
-        "name": "planner",
-        "skills": [
-            {"id": "write", "name": "Write", "description": "w"},
-            {"id": "plan", "name": "Plan", "description": "p"},
-            {"id": "audit", "name": "Audit", "description": "a"},
-        ],
-    });
+    let mut offered = card("p");
+    offered["skills"] = json!([
+        {"id": "write", "name": "Write", "description": "w", "tags": ["planning"]},
+        {"id": "plan", "name": "Plan", "description": "p", "tags": ["planning"]},
+        {"id": "audit", "name": "Audit", "description": "a", "tags": ["planning"]},
+    ]);
     let approved: BTreeMap<String, String> = skills_of(&offered)
         .into_iter()
         .filter(|(id, _)| id == "plan")
@@ -944,4 +944,201 @@ fn card_read_accepts_exact_byte_ceiling_and_only_success_statuses() {
     }
     bytes.push(b' ');
     assert!(read_card(url, Ok((200, &bytes))).is_err());
+}
+
+#[test]
+fn required_card_fields_are_rejected_before_trust_or_approval() {
+    let valid = card("plans");
+    for field in [
+        "name",
+        "description",
+        "version",
+        "supportedInterfaces",
+        "capabilities",
+        "defaultInputModes",
+        "defaultOutputModes",
+        "skills",
+    ] {
+        for replacement in [None, Some(Value::Null), Some(json!(42))] {
+            let mut invalid = valid.clone();
+            match replacement {
+                Some(value) => {
+                    invalid[field] = value;
+                }
+                None => {
+                    invalid.as_object_mut().unwrap().remove(field);
+                }
+            }
+            for root in [signed_root(), pin(PinMechanism::Unpinned, None)] {
+                assert!(
+                    verify_card(&root, &invalid, &Handshake::default(), || {
+                        panic!("invalid {field} must be refused before trust verification")
+                    })
+                    .is_err(),
+                    "{field}"
+                );
+            }
+        }
+    }
+    for field in ["url", "protocolBinding", "protocolVersion"] {
+        let mut invalid = valid.clone();
+        invalid["supportedInterfaces"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove(field);
+        assert!(
+            verify_card(&signed_root(), &invalid, &Handshake::default(), || {
+                panic!("invalid interface {field} must be refused before trust verification")
+            })
+            .is_err()
+        );
+    }
+    for field in [
+        "supportedInterfaces",
+        "defaultInputModes",
+        "defaultOutputModes",
+        "skills",
+    ] {
+        let mut invalid = valid.clone();
+        invalid[field] = json!([]);
+        assert!(
+            verify_card(&signed_root(), &invalid, &Handshake::default(), || {
+                panic!("empty required {field} must be refused before trust verification")
+            })
+            .is_err(),
+            "{field}"
+        );
+    }
+    for field in ["id", "name", "description", "tags"] {
+        for replacement in [None, Some(Value::Null), Some(json!(42))] {
+            let mut invalid = valid.clone();
+            match replacement {
+                Some(value) => {
+                    invalid["skills"][0][field] = value;
+                }
+                None => {
+                    invalid["skills"][0].as_object_mut().unwrap().remove(field);
+                }
+            }
+            assert!(
+                verify_card(&signed_root(), &invalid, &Handshake::default(), || {
+                    panic!("invalid skill {field} must be refused before trust verification")
+                })
+                .is_err(),
+                "{field}"
+            );
+        }
+    }
+    for tags in [json!([]), json!([42])] {
+        let mut invalid = valid.clone();
+        invalid["skills"][0]["tags"] = tags;
+        assert!(
+            verify_card(&signed_root(), &invalid, &Handshake::default(), || {
+                panic!("invalid skill tags must be refused before trust verification")
+            })
+            .is_err()
+        );
+    }
+    let mut declared_v03 = valid.clone();
+    declared_v03["supportedInterfaces"][0]["protocolVersion"] = json!("0.3");
+    assert!(
+        verify_card(&signed_root(), &declared_v03, &Handshake::default(), || Ok(
+            ()
+        ))
+        .is_ok()
+    );
+    assert!(verify_card(&signed_root(), &valid, &Handshake::default(), || Ok(())).is_ok());
+    let mut empty = valid.clone();
+    for field in ["name", "description", "version"] {
+        empty[field] = json!("");
+    }
+    assert!(
+        verify_card(&signed_root(), &empty, &Handshake::default(), || Ok(())).is_ok(),
+        "required presence does not invent nonempty constraints"
+    );
+}
+
+#[test]
+fn supplied_provider_requires_its_fields_before_any_pin_can_be_recorded() {
+    let mut valid = card("plans");
+    valid["provider"] = json!({"url":"https://agent.example", "organization":"Vendor"});
+    let certificate_pin = pin(PinMechanism::CertKeyPin, Some("c29tZSBrZXk="));
+    let handshake = hop(Some("c29tZSBrZXk="), false);
+    for field in ["url", "organization"] {
+        for replacement in [None, Some(Value::Null), Some(json!(42))] {
+            let mut invalid = valid.clone();
+            match replacement {
+                Some(value) => {
+                    invalid["provider"][field] = value;
+                }
+                None => {
+                    invalid["provider"].as_object_mut().unwrap().remove(field);
+                }
+            }
+            for root in [
+                signed_root(),
+                certificate_pin.clone(),
+                pin(PinMechanism::Unpinned, None),
+            ] {
+                assert!(verify_card(&root, &invalid, &handshake, || {
+                    panic!("invalid provider {field} must be refused before signature verification")
+                }).is_err(), "{field}");
+            }
+        }
+    }
+    valid["provider"] = json!({});
+    assert!(verify_card(&certificate_pin, &valid, &handshake, || unreachable!()).is_err());
+    for provider in [
+        json!({"url":"https://agent.example", "organization":"Vendor"}),
+        Value::Null,
+    ] {
+        valid["provider"] = provider;
+        assert!(verify_card(&certificate_pin, &valid, &handshake, || unreachable!()).is_ok());
+    }
+}
+
+#[test]
+fn supplied_signatures_require_their_fields_even_for_a_certificate_pin() {
+    let mut valid = card("plans");
+    valid["signatures"] = json!([{"protected":"e30", "signature":"c2ln"}]);
+    let certificate_pin = pin(PinMechanism::CertKeyPin, Some("c29tZSBrZXk="));
+    let handshake = hop(Some("c29tZSBrZXk="), false);
+    for field in ["protected", "signature"] {
+        for replacement in [None, Some(Value::Null), Some(json!(42))] {
+            let mut invalid = valid.clone();
+            match replacement {
+                Some(value) => {
+                    invalid["signatures"][0][field] = value;
+                }
+                None => {
+                    invalid["signatures"][0]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove(field);
+                }
+            }
+            for root in [
+                signed_root(),
+                certificate_pin.clone(),
+                pin(PinMechanism::Unpinned, None),
+            ] {
+                assert!(verify_card(&root, &invalid, &handshake, || {
+                    panic!("invalid signature {field} must be refused before signature verification")
+                }).is_err(), "{field}");
+            }
+        }
+    }
+    for signatures in [json!([{}]), json!([null]), json!([42]), json!({})] {
+        valid["signatures"] = signatures;
+        assert!(verify_card(&certificate_pin, &valid, &handshake, || unreachable!()).is_err());
+    }
+    // These are structural checks; a certificate pin does not assert JWS authenticity.
+    for signatures in [
+        json!([{"protected":"e30", "signature":"c2ln"}]),
+        json!([]),
+        Value::Null,
+    ] {
+        valid["signatures"] = signatures;
+        assert!(verify_card(&certificate_pin, &valid, &handshake, || unreachable!()).is_ok());
+    }
 }

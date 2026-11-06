@@ -688,7 +688,8 @@ pub(crate) fn change_configured(
 }
 
 /// Guard a backend mapping against the exact live task and its original chain incarnation.
-/// This publishes no record, event, quota grant or state transition; the journal owns the mapping.
+/// Republish the exact row bytes so the Store receives a supported nonempty transaction.
+/// No event, quota grant or state transition is created; the journal owns the mapping.
 pub(crate) fn guard_backend(rec: &mut dyn Records, at: &Stamp<'_>, task: &str) -> Result<(), Halt> {
     if !is_caller(at.caller) {
         return Err(Halt::Failed("no caller to hold the task under".into()));
@@ -696,8 +697,10 @@ pub(crate) fn guard_backend(rec: &mut dyn Records, at: &Stamp<'_>, task: &str) -
     let key = task_key(at.caller, task);
     for _ in attempts() {
         let chain = observe(rec, &key)?;
-        let raw = rec.get(KIND_TASK, &key)?;
-        let held = raw.as_deref().and_then(decode).filter(|held| {
+        let raw = rec
+            .get(KIND_TASK, &key)?
+            .ok_or_else(|| Halt::Failed(format!("no such task `{task}`")))?;
+        let held = decode(&raw).filter(|held| {
             !expired(&held.row, at.now)
                 && held.row.task_id == task
                 && held.row.principal == at.caller
@@ -709,10 +712,14 @@ pub(crate) fn guard_backend(rec: &mut dyn Records, at: &Stamp<'_>, task: &str) -
             &[Predicate {
                 kind: KIND_TASK,
                 key: key.clone(),
-                expected: raw,
+                expected: Some(raw.clone()),
             }],
             &[chain],
-            &[],
+            &[Write {
+                kind: KIND_TASK,
+                key: key.clone(),
+                value: raw,
+            }],
         )? {
             return Ok(());
         }

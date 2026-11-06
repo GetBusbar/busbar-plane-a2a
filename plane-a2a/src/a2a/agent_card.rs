@@ -165,3 +165,94 @@ pub fn parse(card: &Value) -> Option<AgentCard> {
     }
     AgentCard::deserialize(card).ok()
 }
+
+/// Validate the required interface declaration before selecting a transport. Protocol versions
+/// are explicit on every interface; a missing declaration is not a version negotiation.
+pub fn validate_interfaces(card: &Value) -> Result<(), &'static str> {
+    let interfaces = card
+        .get("supportedInterfaces")
+        .and_then(Value::as_array)
+        .ok_or("agent card supportedInterfaces must be an array")?;
+    if interfaces.is_empty() {
+        return Err("agent card supportedInterfaces must declare at least one interface");
+    }
+    for interface in interfaces {
+        for field in ["url", "protocolBinding", "protocolVersion"] {
+            if !interface.get(field).is_some_and(Value::is_string) {
+                return Err(
+                    "agent card interface requires string url, protocolBinding and protocolVersion",
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Validate the required A2A v1.0.1 card fields before trust or skill approval can be recorded.
+/// This is separate from `parse`, the partial projection used to inspect stored documents.
+/// It validates required fields in the modeled discovery objects, not the complete protocol
+/// schema: open security-scheme bodies and extension semantics remain outside this projection.
+pub fn validate(card: &Value) -> Result<(), &'static str> {
+    for field in ["name", "description", "version"] {
+        if !card.get(field).is_some_and(Value::is_string) {
+            return Err("agent card requires string name, description and version");
+        }
+    }
+    validate_interfaces(card)?;
+    if !card.get("capabilities").is_some_and(Value::is_object) {
+        return Err("agent card capabilities must be an object");
+    }
+    for field in ["defaultInputModes", "defaultOutputModes"] {
+        if !card
+            .get(field)
+            .and_then(Value::as_array)
+            .is_some_and(|values| !values.is_empty() && values.iter().all(Value::is_string))
+        {
+            return Err("agent card default input and output modes must be string arrays");
+        }
+    }
+    let skills = card
+        .get("skills")
+        .and_then(Value::as_array)
+        .ok_or("agent card skills must be an array")?;
+    if skills.is_empty() {
+        return Err("agent card skills must contain at least one skill");
+    }
+    for skill in skills {
+        for field in ["id", "name", "description"] {
+            if !skill.get(field).is_some_and(Value::is_string) {
+                return Err("agent card skills require string id, name and description");
+            }
+        }
+        if !skill
+            .get("tags")
+            .and_then(Value::as_array)
+            .is_some_and(|tags| !tags.is_empty() && tags.iter().all(Value::is_string))
+        {
+            return Err("agent card skill tags must be a string array");
+        }
+    }
+    if let Some(provider) = card.get("provider").filter(|value| !value.is_null()) {
+        for field in ["url", "organization"] {
+            if !provider.get(field).is_some_and(Value::is_string) {
+                return Err("agent card provider requires string url and organization");
+            }
+        }
+    }
+    if let Some(signatures) = card.get("signatures").filter(|value| !value.is_null()) {
+        let signatures = signatures
+            .as_array()
+            .ok_or("agent card signatures must be an array")?;
+        for signature in signatures {
+            for field in ["protected", "signature"] {
+                if !signature.get(field).is_some_and(Value::is_string) {
+                    return Err("agent card signatures require string protected and signature");
+                }
+            }
+        }
+    }
+    if parse(card).is_none() {
+        return Err("agent card contains a malformed field");
+    }
+    Ok(())
+}

@@ -447,21 +447,8 @@ impl Journal {
                         writes
                             .iter()
                             .find(|w| w.kind == crate::records::KIND_TASK && !w.value.is_empty())
-                            .map(|w| w.value.as_slice())
-                            .or_else(|| {
-                                // A mapping-only publication checks a live row without rewriting
-                                // it or inventing a task event. Its exact predicate owns the row.
-                                (!draft.notify && draft.backend.is_some() && writes.is_empty())
-                                    .then(|| {
-                                        predicates
-                                            .iter()
-                                            .find(|p| p.kind == crate::records::KIND_TASK)
-                                            .and_then(|p| p.expected.as_deref())
-                                    })
-                                    .flatten()
-                            })
-                            .and_then(|raw| {
-                                crate::request_json::from_slice::<crate::TaskRow>(raw).ok()
+                            .and_then(|w| {
+                                crate::request_json::from_slice::<crate::TaskRow>(&w.value).ok()
                             })
                             .ok_or_else(|| {
                                 failed_at("required value missing or sequence exhausted")

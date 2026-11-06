@@ -541,6 +541,7 @@ pub fn verify_card(
     hop: &Handshake,
     signed: impl FnOnce() -> Result<(), String>,
 ) -> Result<CardObservation, String> {
+    crate::a2a::agent_card::validate(card).map_err(str::to_string)?;
     let key = pin.key.as_deref().map(str::trim).filter(|k| !k.is_empty());
     let mechanism = pin.mechanism;
     let fingerprint = |card: &Value| card::fingerprint(card).map_err(|e: CardError| e.to_string());

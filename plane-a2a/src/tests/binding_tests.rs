@@ -11,14 +11,14 @@ use crate::answer_bytes::rewrap;
 
 fn card(words: &[&str]) -> Value {
     json!({ "supportedInterfaces": words.iter()
-        .map(|w| json!({ "url": "https://ignored.example", "protocolBinding": w }))
+        .map(|w| json!({ "url": "https://ignored.example", "protocolBinding": w, "protocolVersion": "1.0" }))
         .collect::<Vec<_>>() })
 }
 
 #[test]
-fn no_card_or_no_interfaces_is_json_rpc() {
+fn absent_card_defaults_but_an_invalid_card_never_invents_a_binding() {
     assert_eq!(binding_of(None), BINDING_JSONRPC);
-    assert_eq!(binding_of(Some(&json!({}))), BINDING_JSONRPC);
+    assert_eq!(binding_of(Some(&json!({}))), "INVALID");
     assert_eq!(binding_of(Some(&card(&[" "]))), "INVALID");
 }
 
@@ -245,7 +245,7 @@ fn http_json_client_issues_get_extended_agent_card() {
 fn the_cards_interface_url_never_moves_the_hop() {
     let card = json!({ "supportedInterfaces": [{
         "url": "https://attacker.example/elsewhere",
-        "protocolBinding": "HTTP+JSON",
+        "protocolBinding": "HTTP+JSON", "protocolVersion": "1.0",
     }] });
     assert_eq!(binding_of(Some(&card)), BINDING_HTTP_JSON);
     let f = compose(AGENT, "SendMessage", &json!({ "message": {} })).unwrap();
@@ -308,42 +308,27 @@ fn a_dot_segment_id_is_refused_rather_than_composed() {
 }
 
 #[test]
-fn a_v03_primary_binding_is_not_replaced_by_another_endpoints_binding() {
-    let card = json!({
-        "url": "https://agent.example/rest", "preferredTransport": "HTTP+JSON",
-        "additionalInterfaces": [{"url":"https://agent.example/rpc", "transport":"JSONRPC"}],
-    });
-    assert_eq!(binding_of(Some(&card)), BINDING_HTTP_JSON);
-    let framed = compose(
-        "https://operator.example/pinned?key=K",
-        "GetTask",
-        &json!({"id":"t"}),
-    )
-    .unwrap();
-    assert_eq!(framed.target, "/pinned/tasks/t?key=K");
-    let mut unsupported = card.clone();
-    unsupported["preferredTransport"] = json!("SOAP");
-    assert_eq!(
-        binding_of(Some(&unsupported)),
-        "SOAP",
-        "an additional JSONRPC endpoint cannot relabel an unsupported primary"
-    );
-}
-
-#[test]
-fn a_v03_matching_additional_interface_can_supply_the_primary_endpoints_binding() {
-    let card = json!({
-        "url":"https://agent.example/base/rpc", "preferredTransport":"SOAP",
-        "additionalInterfaces":[
-            {"url":"https://other.example/rpc", "transport":"JSONRPC"},
-            {"url":"rpc", "transport":"HTTP+JSON"},
-        ],
-    });
-    assert_eq!(binding_of(Some(&card)), BINDING_HTTP_JSON);
-    assert_eq!(
-        binding_of(Some(&json!({"url":"https://agent.example"}))),
-        BINDING_JSONRPC
-    );
+fn missing_interfaces_do_not_infer_a_legacy_binding() {
+    for card in [
+        json!({"url":"https://agent.example", "preferredTransport":"JSONRPC"}),
+        json!({"protocolVersion":"1.0", "url":"https://agent.example"}),
+        json!({"supportedInterfaces":null}),
+        json!({"supportedInterfaces":{}}),
+        json!({"supportedInterfaces":[]}),
+    ] {
+        assert_eq!(binding_of(Some(&card)), "INVALID");
+    }
+    let mut declared = card(&["JSONRPC"]);
+    for field in ["url", "protocolBinding", "protocolVersion"] {
+        let mut malformed = declared.clone();
+        malformed["supportedInterfaces"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove(field);
+        assert_eq!(binding_of(Some(&malformed)), "INVALID", "{field}");
+    }
+    declared["supportedInterfaces"][0]["protocolVersion"] = json!("0.3");
+    assert_eq!(binding_of(Some(&declared)), "JSONRPC");
 }
 
 #[test]
@@ -387,14 +372,11 @@ fn the_operator_query_precedes_the_operation_query_members() {
 }
 
 #[test]
-fn endpoint_selection_keeps_the_operator_target_and_uses_only_matching_interfaces() {
-    let card = json!({
-        "url":"https://public.example/rest", "preferredTransport":"HTTP+JSON",
-        "additionalInterfaces":[
-            {"url":"https://public.example/rpc", "transport":"JSONRPC"},
-            {"url":"https://private.example/pinned?key=K", "transport":"GRPC"},
-        ],
-    });
+fn endpoint_selection_keeps_the_operator_target_and_uses_declared_interfaces() {
+    let card = json!({"supportedInterfaces": [
+        {"url":"https://public.example/rest", "protocolBinding":"HTTP+JSON", "protocolVersion":"1.0"},
+        {"url":"https://private.example/pinned?key=K", "protocolBinding":"GRPC", "protocolVersion":"1.0"}
+    ]});
     let selected = select(Some(&card), "https://private.example/pinned?key=K");
     assert_eq!(selected.endpoint, "https://private.example/pinned?key=K");
     assert_eq!(selected.word, BINDING_GRPC);
@@ -405,8 +387,10 @@ fn endpoint_selection_keeps_the_operator_target_and_uses_only_matching_interface
     );
     assert_eq!(alias.word, BINDING_HTTP_JSON);
 
-    let card = json!({"url":"https://public.example/rest", "preferredTransport":"HTTP+JSON",
-        "additionalInterfaces":[{"url":"https://private.example/a%2Fb?x=1&y=2", "transport":"JSONRPC"}]});
+    let card = json!({"supportedInterfaces": [
+        {"url":"https://public.example/rest", "protocolBinding":"HTTP+JSON", "protocolVersion":"1.0"},
+        {"url":"https://private.example/a%2Fb?x=1&y=2", "protocolBinding":"JSONRPC", "protocolVersion":"1.0"}
+    ]});
     for target in [
         "https://private.example/a/b?x=1&y=2",
         "https://private.example/a%2Fb?y=2&x=1",
