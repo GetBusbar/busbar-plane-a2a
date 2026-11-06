@@ -314,7 +314,7 @@ static HOST_SLOTS: HostSlots = HostSlots {
 };
 
 /// The agent's card: unsigned (its registration is `unpinned`), one skill.
-const CARD: &[u8] = br#"{"protocolVersion":"0.3.0","name":"vendor","description":"a vendor agent","url":"https://vendor.example/agent","version":"1","capabilities":{},"defaultInputModes":["text/plain"],"defaultOutputModes":["text/plain"],"skills":[{"id":"quote","name":"quote","description":"quotes","tags":["quote"]}]}"#;
+const CARD: &[u8] = br#"{"protocolVersion":"0.3.0","name":"vendor","description":"a vendor agent","url":"https://vendor.example/agent","supportedInterfaces":[{"url":"https://vendor.example/agent","protocolBinding":"JSONRPC","protocolVersion":"0.3"}],"version":"1","capabilities":{},"defaultInputModes":["text/plain"],"defaultOutputModes":["text/plain"],"skills":[{"id":"quote","name":"quote","description":"quotes","tags":["quote"]}]}"#;
 
 /// The agent serves [`long_card`] in place of [`CARD`] while set.
 static LONG_CARD: AtomicBool = AtomicBool::new(false);

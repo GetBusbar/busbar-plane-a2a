@@ -2855,6 +2855,11 @@ fn card(port: u16, description: &str) -> serde_json::Value {
         "name": "planner",
         "description": "plans the work it is given",
         "url": format!("http://127.0.0.1:{port}/planner"),
+        "supportedInterfaces": [{
+            "url": format!("http://127.0.0.1:{port}/planner"),
+            "protocolBinding": "JSONRPC",
+            "protocolVersion": "1.0",
+        }],
         "version": "1.0.0",
         "capabilities": {},
         "defaultInputModes": ["text/plain"],

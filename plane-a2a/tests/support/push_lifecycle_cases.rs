@@ -505,6 +505,13 @@ fn registered(door: &Door) -> zeroize::Zeroizing<String> {
     );
     let applied = script(|s| s.conditional.applied);
     let publications = script(|s| s.conditional.requests.len());
+    let mapped_key = format!("{}/t1", std::str::from_utf8(ALICE).unwrap());
+    let mapped_row = store()
+        .iter()
+        .find(|(kind, key, _)| kind == "task" && key == &mapped_key)
+        .unwrap()
+        .2
+        .clone();
     let response=br#"{"jsonrpc":"2.0","id":1,"result":{"kind":"task","id":"backend-t1","contextId":"c1","status":{"state":"working"}}}"#;
     let far = piece(door, 501, Given::far_end(200, response), 65536);
     assert_eq!(far.outcome, Some(Outcome::Ready),
@@ -525,10 +532,26 @@ fn registered(door: &Door) -> zeroize::Zeroizing<String> {
         use busbar_contract::abi::sdk::plane::conditional::RecordMutation;
         let published = &s.conditional.requests[publications..];
         assert_eq!(published.len(), 5);
-        assert!(
-            published[0].candidate.mutations.is_empty(),
-            "backend identity is a guarded mapping, not a state write"
+        let mapping = &published[0].candidate;
+        assert_eq!(mapping.predicates.len(), 1);
+        let predicate = &mapping.predicates[0];
+        assert_eq!(door_facts::HELD_KINDS[predicate.kind as usize], "task");
+        assert_eq!(predicate.key, mapped_key.as_bytes());
+        assert_eq!(
+            predicate.expected,
+            busbar_contract::abi::sdk::store::conditional::Expected::Bytes(mapped_row.clone())
         );
+        assert_eq!(mapping.mutations.len(), 1);
+        assert!(
+            matches!(&mapping.mutations[0], RecordMutation::Put { kind, key, value }
+                if *kind == predicate.kind && key == &predicate.key && value == &mapped_row),
+            "backend identity rewrites the exact guarded row without advancing task state"
+        );
+        assert_eq!(mapping.chains.len(), 1);
+        assert!(matches!(
+            mapping.chains[0],
+            busbar_contract::abi::sdk::plane::conditional::ChainMutation::Check { .. }
+        ));
         for request in &published[1..4] {
             assert!(request.candidate.chains.is_empty());
             assert!(request
@@ -1865,6 +1888,13 @@ fn actual_short_callback_then_cancel_retains_original_receipt_until_driver_ack()
     registered(&door);
     let applied = script(|s| s.conditional.applied);
     let publications = script(|s| s.conditional.requests.len());
+    let mapped_key = format!("{}/t1", std::str::from_utf8(ALICE).unwrap());
+    let mapped_row = store()
+        .iter()
+        .find(|(kind, key, _)| kind == "task" && key == &mapped_key)
+        .unwrap()
+        .2
+        .clone();
     let events = script(|s| s.conditional.events.len());
     let short = get_task_answer_sized(&door, 1220, 0, true);
     assert_eq!(short.outcome, Some(Outcome::Failed));
@@ -1877,7 +1907,26 @@ fn actual_short_callback_then_cancel_retains_original_receipt_until_driver_ack()
         use busbar_contract::abi::sdk::plane::conditional::RecordMutation;
         let published = &s.conditional.requests[publications..];
         assert_eq!(published.len(), 2);
-        assert!(published[0].candidate.mutations.is_empty());
+        let mapping = &published[0].candidate;
+        assert_eq!(mapping.predicates.len(), 1);
+        let predicate = &mapping.predicates[0];
+        assert_eq!(door_facts::HELD_KINDS[predicate.kind as usize], "task");
+        assert_eq!(predicate.key, mapped_key.as_bytes());
+        assert_eq!(
+            predicate.expected,
+            busbar_contract::abi::sdk::store::conditional::Expected::Bytes(mapped_row.clone())
+        );
+        assert_eq!(mapping.mutations.len(), 1);
+        assert!(
+            matches!(&mapping.mutations[0], RecordMutation::Put { kind, key, value }
+                if *kind == predicate.kind && key == &predicate.key && value == &mapped_row),
+            "backend identity rewrites the exact guarded row without advancing task state"
+        );
+        assert_eq!(mapping.chains.len(), 1);
+        assert!(matches!(
+            mapping.chains[0],
+            busbar_contract::abi::sdk::plane::conditional::ChainMutation::Check { .. }
+        ));
         assert!(published[1].candidate.mutations.iter().any(|m| matches!(m, RecordMutation::Put { kind, value, .. }
             if door_facts::HELD_KINDS[*kind as usize] == "task" && serde_json::from_slice::<Value>(value).unwrap()["state"] == "completed")));
         assert_eq!(s.conditional.events.len(), events + 1);
