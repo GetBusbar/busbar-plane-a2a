@@ -486,7 +486,23 @@ impl Records for Via<'_> {
             .publication
             .clone()
             .ok_or_else(|| Halt::Failed("conditional publication unavailable".into()))?;
-        let mut effects = self.effects.clone();
+        // Quota bootstrap publishes its barrier and counters before the task transaction.
+        // Those administrative writes have no task to notify or backend mapping to install.
+        // Keep the caller's draft for the later task publication, including on replay.
+        let quota_only = !writes.is_empty()
+            && !predicates.is_empty()
+            && lives.is_empty()
+            && writes
+                .iter()
+                .all(|write| write.kind == crate::records::KIND_TASK_QUOTA)
+            && predicates
+                .iter()
+                .all(|predicate| predicate.kind == crate::records::KIND_TASK_QUOTA);
+        let mut effects = if quota_only {
+            crate::conditional_publication::Draft::default()
+        } else {
+            self.effects.clone()
+        };
         let mut predicates = predicates.to_vec();
         if effects.notify {
             let row = writes

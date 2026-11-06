@@ -42,7 +42,8 @@ fn unreadable_request_headers_refuse_instead_of_becoming_absent() {
     let invalid = b"\xffrequest-secret";
     for (unit, name, status) in [
         (801, b"A2A-Version".as_slice(), 400),
-        (802, b"Content-Type".as_slice(), 415),
+        // A2A v1.0 classifies unsupported/unreadable media as INVALID_ARGUMENT (400).
+        (802, b"Content-Type".as_slice(), 400),
         (803, b"Origin".as_slice(), 403),
     ] {
         assert_eq!(

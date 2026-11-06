@@ -193,9 +193,10 @@ fn an_unreadable_clock_releases_the_holder_and_removes_refused_waiters() {
         if fail_clock {
             FAIL_CLOCK.store(true, Ordering::SeqCst);
             let refused = door.piece(761, Given::attempt(b"vendor"), 4096);
-            assert_eq!(refused.outcome, Some(Outcome::Ready), "{refused:?}");
+            // A missing clock is retryable host failure, never a trust demotion.
+            assert_eq!(refused.outcome, Some(Outcome::Failed), "{refused:?}");
             assert_eq!(refused.flags & EMIT_TO_FAR_END, 0, "{refused:?}");
-            assert!(!refused.emitted.is_empty(), "{refused:?}");
+            assert!(refused.emitted.is_empty(), "{refused:?}");
             assert!(WOKEN
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
@@ -203,7 +204,18 @@ fn an_unreadable_clock_releases_the_holder_and_removes_refused_waiters() {
             FAIL_CLOCK.store(true, Ordering::SeqCst);
         }
         let holder = door.piece(760, Given::attempt(b"vendor"), 4096);
-        assert_eq!(holder.outcome, Some(Outcome::Ready), "{holder:?}");
+        assert_eq!(
+            holder.outcome,
+            Some(if fail_clock {
+                Outcome::Failed
+            } else {
+                Outcome::Ready
+            }),
+            "{holder:?}"
+        );
+        if fail_clock {
+            assert!(holder.emitted.is_empty(), "{holder:?}");
+        }
         assert_eq!(
             holder.flags & EMIT_TO_FAR_END != 0,
             !fail_clock,
@@ -232,6 +244,15 @@ fn an_unreadable_clock_releases_the_holder_and_removes_refused_waiters() {
             usize::from(fail_clock),
             "only an abandoned look is retried"
         );
+        if fail_clock {
+            // Both failed calls retain their admitted unit and can retry after clock recovery.
+            // The surviving waiter already landed the fresh trust look, so neither is demoted.
+            for unit in [760, 761] {
+                let retried = door.piece(unit, Given::attempt(b"vendor"), 4096);
+                assert_eq!(retried.outcome, Some(Outcome::Ready), "{retried:?}");
+                assert_ne!(retried.flags & EMIT_TO_FAR_END, 0, "{retried:?}");
+            }
+        }
     }
 }
 

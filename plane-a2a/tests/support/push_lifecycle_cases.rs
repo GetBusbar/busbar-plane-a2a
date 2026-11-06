@@ -462,8 +462,8 @@ fn open_scripted_instance() -> Door {
     Door::new(output.open.instance)
 }
 fn seed() {
-    // This controlled held-row prerequisite must differ from the actual working report:
-    // a same-state GET publishes no backend-identity metadata for the subsequent mirror.
+    // A legacy held row exercises cold quota bootstrap and an actual working transition;
+    // the separate guarded backend mapping must not substitute for that state publication.
     seed_task("t1", "input-required");
 }
 fn seed_task(task_id: &str, state: &str) {
@@ -504,6 +504,7 @@ fn registered(door: &Door) -> zeroize::Zeroizing<String> {
         Some(Outcome::Ready)
     );
     let applied = script(|s| s.conditional.applied);
+    let publications = script(|s| s.conditional.requests.len());
     let response=br#"{"jsonrpc":"2.0","id":1,"result":{"kind":"task","id":"backend-t1","contextId":"c1","status":{"state":"working"}}}"#;
     let far = piece(door, 501, Given::far_end(200, response), 65536);
     assert_eq!(far.outcome, Some(Outcome::Ready),
@@ -512,13 +513,50 @@ fn registered(door: &Door) -> zeroize::Zeroizing<String> {
         script(|s| s.conditional.observations.len()), script(|s| s.conditional.applied));
     assert_eq!(
         script(|s| s.conditional.applied),
-        applied + 1,
-        "the real working transition must publish the backend identity before mirroring"
+        // Backend mapping, quota barrier, principal count, ready quota gate, task transition.
+        applied + 5,
+        "the real working transition and cold quota bootstrap must publish before mirroring"
     );
     assert!(
         task_state()["state"] == "working",
         "the setup holds the reported working task"
     );
+    script(|s| {
+        use busbar_contract::abi::sdk::plane::conditional::RecordMutation;
+        let published = &s.conditional.requests[publications..];
+        assert_eq!(published.len(), 5);
+        assert!(
+            published[0].candidate.mutations.is_empty(),
+            "backend identity is a guarded mapping, not a state write"
+        );
+        for request in &published[1..4] {
+            assert!(request.candidate.chains.is_empty());
+            assert!(request
+                .candidate
+                .predicates
+                .iter()
+                .all(|p| door_facts::HELD_KINDS[p.kind as usize] == "task_quota"));
+            assert!(request.candidate.mutations.iter().all(|m| matches!(m, RecordMutation::Put { kind, .. } if door_facts::HELD_KINDS[*kind as usize] == "task_quota")));
+        }
+        assert!(published[4].candidate.mutations.iter().any(|m| matches!(m, RecordMutation::Put { kind, value, .. }
+            if door_facts::HELD_KINDS[*kind as usize] == "task" && serde_json::from_slice::<Value>(value).unwrap()["state"] == "working")));
+    });
+    for key in [
+        "active/v1".to_string(),
+        format!("1/{}", std::str::from_utf8(ALICE).unwrap()),
+    ] {
+        let rows = store();
+        let bytes = &rows
+            .iter()
+            .find(|(kind, id, _)| kind == "task_quota" && *id == key)
+            .unwrap()
+            .2;
+        assert_eq!(
+            serde_json::from_slice::<Value>(bytes).unwrap()["active"],
+            1,
+            "the bootstrap and task transition retain the exact durable active count"
+        );
+    }
     script(|s| {
         assert!(!s.capture_mirror && s.mirror_auth.is_none());
         s.mirror_stream = None;
@@ -1826,11 +1864,25 @@ fn actual_short_callback_then_cancel_retains_original_receipt_until_driver_ack()
     let (_reset, door) = open_scripted();
     registered(&door);
     let applied = script(|s| s.conditional.applied);
+    let publications = script(|s| s.conditional.requests.len());
+    let events = script(|s| s.conditional.events.len());
     let short = get_task_answer_sized(&door, 1220, 0, true);
     assert_eq!(short.outcome, Some(Outcome::Failed));
     assert!(short.emitted.is_empty());
     assert!(short.fields_needed > 0);
-    assert_eq!(script(|s| s.conditional.applied), applied + 1);
+    assert_eq!(script(|s| s.conditional.applied), applied + 2);
+    // A reported backend identity has its own guarded mapping publication before the
+    // terminal transition. SHORT and its later settlement must replay neither one.
+    script(|s| {
+        use busbar_contract::abi::sdk::plane::conditional::RecordMutation;
+        let published = &s.conditional.requests[publications..];
+        assert_eq!(published.len(), 2);
+        assert!(published[0].candidate.mutations.is_empty());
+        assert!(published[1].candidate.mutations.iter().any(|m| matches!(m, RecordMutation::Put { kind, value, .. }
+            if door_facts::HELD_KINDS[*kind as usize] == "task" && serde_json::from_slice::<Value>(value).unwrap()["state"] == "completed")));
+        assert_eq!(s.conditional.events.len(), events + 1);
+    });
+    assert_eq!(task_state()["state"], "completed");
     assert_eq!(script(|s| s.conditional.acknowledgements), 0);
     assert_eq!(door.cancel_unit(1220), Outcome::Ready);
     let receipt = script(|s| s.conditional.detach(ticket(1220)));
@@ -1843,8 +1895,9 @@ fn actual_short_callback_then_cancel_retains_original_receipt_until_driver_ack()
     assert!(consume_settlement(&ack));
     assert_eq!(
         script(|s| (s.conditional.applied, s.conditional.acknowledgements)),
-        (applied + 1, 1)
+        (applied + 2, 1)
     );
+    assert_eq!(script(|s| s.conditional.events.len()), events + 1);
 }
 
 fn get_task_answer_sized(door: &Door, unit: u64, cap: usize, short: bool) -> Answered {

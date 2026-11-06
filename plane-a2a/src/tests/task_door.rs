@@ -315,3 +315,101 @@ fn oversized_short_answer_is_refused_before_allocation_or_reissue() {
     assert_eq!(calls, 1);
     assert_eq!(via.scratch.len(), RECORD_BYTES);
 }
+
+#[test]
+#[allow(unsafe_code)]
+fn quota_bootstrap_does_not_consume_task_effects_or_relax_mixed_publications() {
+    use crate::conditional_publication::{Draft, Journal};
+    use crate::records::{KIND_PUSH_CONFIG, KIND_TASK, KIND_TASK_QUOTA};
+    use crate::tasks::{ChainLife, Predicate};
+    use busbar_contract::abi::sdk::plane::conditional as wire;
+
+    // Only a nonempty quota-only transaction with quota-only predicates and no chains is
+    // administrative. Mixed writes/predicates, chains, and empty writes still require a task.
+    for (write_kind, predicate_kind, chained, empty) in [
+        (KIND_TASK_QUOTA, KIND_TASK_QUOTA, false, false),
+        (KIND_PUSH_CONFIG, KIND_TASK_QUOTA, false, false),
+        (KIND_TASK, KIND_TASK_QUOTA, false, false),
+        (KIND_TASK_QUOTA, KIND_TASK, false, false),
+        (KIND_TASK_QUOTA, KIND_TASK_QUOTA, true, false),
+        (KIND_TASK_QUOTA, KIND_TASK_QUOTA, false, true),
+    ] {
+        let tables = unarmed_task_services();
+        // SAFETY: the complete immutable service table lives through this synchronous test.
+        let host = unsafe { Host::from_raw(&tables) };
+        // SAFETY: same readable service prefix; callbacks remain intentionally unarmed.
+        let services = unsafe { Services::from_raw(&tables) };
+        let grown = Keyed::new();
+        let journal = Journal::default();
+        journal
+            .enter(
+                TICKET,
+                &wire::encode_capability(wire::Capability {
+                    ticket: TICKET,
+                    epoch: 1,
+                }),
+            )
+            .unwrap();
+        let mut via = Via::new(&host, services, TICKET, 0, &grown).publishing(&journal);
+        via.effects(Draft {
+            notify: true,
+            backend: Some("backend-task".into()),
+            ..Default::default()
+        });
+        let predicates = [Predicate {
+            kind: predicate_kind,
+            key: "active/v1".into(),
+            expected: None,
+        }];
+        let writes = if empty {
+            Vec::new()
+        } else {
+            vec![
+                Write {
+                    kind: KIND_TASK_QUOTA,
+                    key: "active/v1".into(),
+                    value: b"{}".to_vec(),
+                },
+                // A task tombstone cannot satisfy the notification's required live row.
+                Write {
+                    kind: write_kind,
+                    key: "other".into(),
+                    value: Vec::new(),
+                },
+            ]
+        };
+        let chains = if chained {
+            vec![ChainLife {
+                kind: crate::records::KIND_TASK_EVENT,
+                scope: "task".into(),
+                expected: None,
+            }]
+        } else {
+            Vec::new()
+        };
+        let result = via.publish(&predicates, &chains, &writes);
+        if write_kind == KIND_TASK_QUOTA && predicate_kind == KIND_TASK_QUOTA && !chained && !empty
+        {
+            assert_eq!(
+                result,
+                Err(Halt::Pending),
+                "quota publication must reach the conditional host"
+            );
+            assert!(journal.has_commit());
+        } else {
+            assert_eq!(
+                result,
+                Err(Halt::Failed("notification task unavailable".into()))
+            );
+            assert!(
+                !journal.has_commit(),
+                "no malformed task transaction was retained"
+            );
+        }
+        assert!(
+            via.effects.notify,
+            "bootstrap must retain the subsequent task notification"
+        );
+        assert_eq!(via.effects.backend.as_deref(), Some("backend-task"));
+    }
+}
