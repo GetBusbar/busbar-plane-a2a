@@ -48,7 +48,9 @@ fn records_scratch_growth_and_pending_release_retire_each_initialized_owner() {
     });
     assert_eq!(read, Ok(()));
     let probe = Probe::start();
-    let pending: Result<(), Halt> = via.issue((SECRET.len() * 4, 0), |_, _, bytes, _| {
+    // RawBytes initially reserves 256 bytes; force an allocation beyond that room.
+    let grown_size = 4096;
+    let pending: Result<(), Halt> = via.issue((grown_size, 0), |_, _, bytes, _| {
         assert_eq!(
             &bytes[..SECRET.len()],
             SECRET,

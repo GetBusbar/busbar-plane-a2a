@@ -132,9 +132,13 @@ fn an_unreadable_http_json_reply_is_a_journaled_transient_backend_failure() {
                             .banner()
                             .to_string()
                     )
-                    && line.contains("vendor.example")),
+                    && line.contains("private-agent")
+                    && line.contains("[redacted]")),
             "the backend fault is journaled: {lines:?}"
         );
+        assert!(lines
+            .iter()
+            .all(|(_, line)| !line.contains("vendor.example") && !line.contains("PRIVATE")));
     }
 }
 

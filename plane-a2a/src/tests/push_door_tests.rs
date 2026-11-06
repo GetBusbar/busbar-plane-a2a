@@ -162,8 +162,13 @@ fn an_owed_outcome_is_filed_on_its_tasks_chain() {
     assert!(
         book.publications[before..]
             .iter()
-            .all(|writes| writes.len() == 2),
-        "each acknowledged mutation includes its row and event"
+            .all(|writes| writes.len() == 4
+                && writes
+                    .iter()
+                    .filter(|write| write.kind == crate::records::KIND_TASK_QUOTA)
+                    .count()
+                    == 2),
+        "each acknowledged mutation atomically includes its row, event and both quota records"
     );
 }
 

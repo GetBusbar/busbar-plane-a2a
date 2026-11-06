@@ -815,6 +815,7 @@ fn the_sweep_holds_the_cap_with_terminal_tasks_only() {
     let mut book = Book::default();
     let held = |task: String, state: &str, at: u64| {
         let mut row = row(&task, at);
+        row.principal = ALICE.into();
         row.state = state.to_string();
         HeldTask { row, next_seq: 2 }
     };
@@ -1373,6 +1374,7 @@ fn the_records_layer_declares_the_task_kind_as_terminal_only() {
             (KIND_PUSH_CONFIG, Retention::Age),
             (crate::records::KIND_CARD, Retention::Age),
             (crate::records::KIND_CARD_APPROVAL, Retention::Age),
+            (crate::records::KIND_TASK_QUOTA, Retention::Age),
         ]
     );
 

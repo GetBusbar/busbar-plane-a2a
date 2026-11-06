@@ -364,7 +364,7 @@ fn many_sse_events_keep_order_all_terminators_and_the_first_error_boundary() {
 }
 
 #[test]
-fn reading_copy_substitutes_only_nonfinite_numeric_tokens_and_preserves_the_original() {
+fn reading_borrows_exact_out_of_range_numeric_tokens_and_preserves_the_original() {
     let raw = format!(
         "{{\"text\":\"1e999 \\\" -2e999\",\"counts\":[{}],\"normal\":1.25}}",
         ["1e999", "-2e999", "3"].repeat(1024).join(",")
@@ -373,8 +373,14 @@ fn reading_copy_substitutes_only_nonfinite_numeric_tokens_and_preserves_the_orig
     let reading = crate::answer_bytes::readable(raw.as_bytes());
     let got: Value = serde_json::from_slice(&reading).unwrap();
     assert_eq!(got["text"], "1e999 \" -2e999");
-    let expected = [0, 0, 3].repeat(1024);
-    assert_eq!(got["counts"], json!(expected));
+    let expected: Value = serde_json::from_str(&format!(
+        "[{}]",
+        ["1e999", "-2e999", "3"].repeat(1024).join(",")
+    ))
+    .unwrap();
+    assert_eq!(got["counts"], expected);
+    assert!(matches!(reading, std::borrow::Cow::Borrowed(_)));
+    assert_eq!(reading.as_ptr(), raw.as_ptr());
     assert_eq!(got["normal"], 1.25);
     assert_eq!(raw, original);
     assert!(matches!(

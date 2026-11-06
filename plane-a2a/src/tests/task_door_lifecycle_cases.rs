@@ -351,6 +351,12 @@ fn listing_fixture(fail_second_config: bool, fail_task: bool) {
                 serde_json::to_vec(&cfg).unwrap(),
             );
         }
+        for (key, active) in [("active/v1", 2), ("1/a11ce", 2)] {
+            fixture.rows.insert(
+                (crate::records::KIND_TASK_QUOTA.into(), key.into()),
+                format!(r#"{{"version":1,"epoch":1,"active":{active}}}"#).into_bytes(),
+            );
+        }
         *s.borrow_mut() = fixture;
     });
 }

@@ -947,7 +947,8 @@ fn refused_config_replacement_and_deletion_wipe_their_exact_raw_record_copies() 
         .0,
         400
     );
-    assert_eq!(probe.retirements(), 2);
+    // Destination refusal occurs before reading the persisted config: only the candidate retires.
+    assert_eq!(probe.retirements(), 1);
     probe.checkpoint();
     assert_eq!(
         held_config(&mut desk, ALICE, "t1").unwrap().unwrap().id,

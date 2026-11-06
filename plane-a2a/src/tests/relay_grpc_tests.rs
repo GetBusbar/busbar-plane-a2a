@@ -331,7 +331,11 @@ fn a_grpc_error_status_is_the_backends_refusal_with_its_a2a_code() {
         json!({ "jsonrpc": "2.0", "id": 7, "method": "GetExtendedAgentCard", "params": {} });
     let (mut r, _, _) = dialled(&asked, None, false);
     let reply = whole(answer(&mut r, &[], Some(13)));
-    assert_eq!(reply, HopRefusal::BackendError.reply(&json!(7)));
+    assert_eq!(reply.status, 500);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&reply.body).unwrap(),
+        json!({"jsonrpc":"2.0","id":7,"error":{"code":-32603,"message":"this agent's backend refused the request"}})
+    );
 }
 
 /// A gRPC agent refusing busbar at the HTTP layer (`401`/`403`, no gRPC answer) refuses busbar

@@ -73,7 +73,11 @@ fn request_object_keys_are_wiped_as_well_as_values() {
 #[test]
 fn hook_projection_and_session_reads_wipe_their_temporary_request_trees() {
     use zeroize::Zeroize;
-    let bytes = serde_json::to_vec(&request()).unwrap();
+    // Params transfer to the SDK InvokeReq owner; this probe witnesses the temporary
+    // envelope tree, including extensions which do not transfer to that owner.
+    let mut envelope = request();
+    envelope["extensionCredential"] = serde_json::json!(SECRET);
+    let bytes = serde_json::to_vec(&envelope).unwrap();
     let probe = Probe::start();
     let mut projected = crate::plane_door::hook_view(&bytes)
         .map(|view| view.0)

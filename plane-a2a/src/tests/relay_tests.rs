@@ -783,9 +783,15 @@ fn a_card_naming_only_grpc_is_refused_by_name_before_the_hop() {
         json!({ "jsonrpc": "2.0", "id": 7, "error": { "code": -32006,
             "message": "a2a.hop.unframable: `SendMessage` could not be carried to this agent over its `GRPC` binding",
             "data": [{ "@type": "type.googleapis.com/google.rpc.ErrorInfo",
-                "domain": "a2a-protocol.org", "reason": "INVALID_AGENT_RESPONSE" }] } })
+                "domain": "a2a-protocol.org", "reason": "INVALID_AGENT_RESPONSE" },
+                {"@type":"type.googleapis.com/google.rpc.ResourceInfo",
+                 "resourceType":"a2a.busbar/task", "resourceName": task(false).task_id}] } })
     );
-    assert_eq!(r.take_settled(), Vec::new(), "the task stays as it is");
+    assert_eq!(
+        r.take_settled(),
+        vec![TaskSettled::Failed],
+        "the newly opened task records the pre-hop refusal"
+    );
     assert_eq!(r.on_piece(caller(SEND)), PieceAnswer::Nothing);
 }
 

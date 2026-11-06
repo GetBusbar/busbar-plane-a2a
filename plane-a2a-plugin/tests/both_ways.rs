@@ -114,7 +114,7 @@ mod both_ways {
         br#"{"jsonrpc":"2.0","id":4,"method":"tasks/resubscribe","params":{"id":"t-1"}}"#;
     /// A redacting hook's rewrite, in the hook stage's `{"messages", "tools"}` reply.
     const REWRITE: &[u8] = br#"{"messages":[{"role":"user","content":"{\"message\":{\"role\":\"user\",\"messageId\":\"m1\",\"parts\":[{\"text\":\"[redacted]\"}]}}"}],"tools":null}"#;
-    /// A rewrite with no usable params object: not applied.
+    /// A committed rewrite with no usable params object: refused.
     const UNUSABLE: &[u8] =
         br#"{"messages":[{"role":"user","content":"plain words"}],"tools":null}"#;
 
@@ -873,7 +873,11 @@ mod both_ways {
         });
         let rewrites: Vec<&String> = t
             .iter()
-            .filter(|l| l.starts_with("project ") && !l.ends_with("rewritten=-"))
+            .filter(|l| {
+                l.starts_with("project ")
+                    && l.contains(" rewritten=")
+                    && !l.ends_with("rewritten=-")
+            })
             .collect();
         assert_eq!(rewrites.len(), 2, "{t:#?}");
         let jsonrpc = rewrites[0];
@@ -911,8 +915,8 @@ mod both_ways {
             .expect("the unusable rewrite's line");
         assert_eq!(
             unusable,
-            line(&t, "project 2 "),
-            "an unusable rewrite is not applied: the request projects as it came"
+            "project 2 Refused",
+            "an unusable committed rewrite refuses the request instead of restoring its original params"
         );
     }
 

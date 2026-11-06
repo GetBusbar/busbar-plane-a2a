@@ -56,8 +56,8 @@ fn sweep_count_matches_retired_tasks_and_keeps_active_rows_and_chains() {
                 .iter()
                 .map(Vec::len)
                 .sum::<usize>(),
-            expected * 3,
-            "task, config and chain tombstones form one retirement"
+            expected * 5,
+            "task, config and chain tombstones plus both quota records form one retirement"
         );
         assert!(out.is_empty(), "retirement is already atomically committed");
         book.apply(&out);

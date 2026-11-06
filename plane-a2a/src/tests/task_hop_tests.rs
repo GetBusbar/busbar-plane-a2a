@@ -310,7 +310,12 @@ fn settled(desk: &mut Desk, task: &TaskHop, how: &TaskSettled) -> usize {
     .unwrap();
     desk.book.apply(&out);
     assert!(out.is_empty(), "acknowledged records are not emitted again");
-    desk.book.publications[before..].iter().map(Vec::len).sum()
+    // Count task row/event records; durable quota records travel in the same publication.
+    desk.book.publications[before..]
+        .iter()
+        .flatten()
+        .filter(|write| write.kind != crate::records::KIND_TASK_QUOTA)
+        .count()
 }
 
 #[test]

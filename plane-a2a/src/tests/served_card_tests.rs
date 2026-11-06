@@ -147,17 +147,18 @@ fn own_card_grpc_authority_keeps_an_explicit_nondefault_public_port() {
         ("http://gw.example:9100", "gw.example:9100"),
     ] {
         let card = self_card_document(public, Vec::new()).expect("a card");
-        for version in ["1.0", "0.3"] {
-            let interface = card["supportedInterfaces"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|entry| {
-                    entry["protocolBinding"] == "GRPC" && entry["protocolVersion"] == version
-                })
-                .expect("the published gRPC interface");
-            assert_eq!(interface["url"], authority);
-        }
+        let interfaces = card["supportedInterfaces"].as_array().unwrap();
+        let interface = interfaces
+            .iter()
+            .find(|entry| entry["protocolBinding"] == "GRPC" && entry["protocolVersion"] == "1.0")
+            .expect("the published gRPC interface");
+        assert_eq!(interface["url"], authority);
+        assert!(
+            !interfaces.iter().any(|entry| {
+                entry["protocolBinding"] == "GRPC" && entry["protocolVersion"] == "0.3"
+            }),
+            "the unserved gRPC 0.3 binding must not be advertised"
+        );
     }
 }
 
@@ -186,7 +187,6 @@ fn busbars_own_card_publishes_every_binding_at_every_version_newest_first() {
             row(&http, "HTTP+JSON", "1.0"),
             row(&http, "HTTP+JSON", "0.3"),
             row(&grpc, "GRPC", "1.0"),
-            row(&grpc, "GRPC", "0.3"),
         ]
     );
     assert_eq!(card["skills"], json!([]));

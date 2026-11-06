@@ -68,7 +68,14 @@ pub const CLIENT_IDENTITY_FROM: &str = "settings.*.client_identity";
 pub const PUSH_TRUST_FROM: &str = "owned.agent_push.ca";
 
 /// `records::HELD_KINDS`: the host-record kinds the door's tail states, in order.
-pub const HELD_KINDS: &[&str] = &["task", "task_event", "push_config", "card", "card_approval"];
+pub const HELD_KINDS: &[&str] = &[
+    "task",
+    "task_event",
+    "push_config",
+    "card",
+    "card_approval",
+    "task_quota",
+];
 
 /// `statement::ROUTES` as `(verb, target)`, in order: a route's index is the claim an arrival
 /// carries.

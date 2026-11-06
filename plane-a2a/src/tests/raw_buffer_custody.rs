@@ -50,13 +50,22 @@ fn cancelling_a_relay_releases_its_pending_grpc_bytes() {
 }
 
 #[test]
-fn reading_an_out_of_range_number_retires_the_owned_normalized_copy() {
+fn reading_an_out_of_range_number_borrows_the_exact_original_without_a_raw_copy() {
     let body = br#"{"jsonrpc":"2.0","id":7,"result":{"credential":"raw-a2a-custody-canary","large":1e400}}"#;
-    assert_wiped(|| {
+    let probe = Probe::start();
+    {
+        let reading = crate::answer_bytes::readable(body);
+        assert!(matches!(reading, std::borrow::Cow::Borrowed(_)));
+        assert_eq!(reading.as_ptr(), body.as_ptr());
         let span = read_answer(STATUS_OK, body, &serde_json::json!(7)).unwrap();
         assert_eq!(
             &body[span],
             br#"{"credential":"raw-a2a-custody-canary","large":1e400}"#
         );
-    });
+    }
+    assert_eq!(
+        probe.retirements(),
+        0,
+        "the reader creates no normalized raw owner"
+    );
 }

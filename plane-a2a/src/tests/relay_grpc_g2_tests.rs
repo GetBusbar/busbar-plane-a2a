@@ -18,7 +18,12 @@ fn grpc_transient_trailers_are_transient_and_auth_and_work_errors_keep_their_rea
     ] {
         let (mut relay, _, message) = dialled(&submission("SendMessage"), None, false);
         let reply = whole(answer(&mut relay, &[], Some(status)));
-        assert_eq!(reply.status, 502);
+        assert_eq!(reply.status, if status == 5 { 404 } else { 500 });
+        let doc: Value = serde_json::from_slice(&reply.body).unwrap();
+        assert_eq!(
+            doc["error"]["code"],
+            if status == 5 { -32001 } else { -32603 }
+        );
         assert_eq!(relay.take_reading(), Some(reading), "grpc-status {status}");
         assert_eq!(relay.take_reading(), None);
         assert_eq!(
@@ -79,12 +84,18 @@ fn unreadable_grpc_replies_blame_the_backend_and_retain_http_status_precedence()
                 && !text.contains("PRIVATE")
                 && !text.contains("backend.agent.test")
         );
+        let lines: Vec<_> = rx.try_iter().collect();
         assert!(
-            rx.try_iter()
-                .any(|(level, line)| level == tracing::Level::DEBUG
-                    && line.contains("backend.agent.test")),
-            "the actual backend failure is journaled"
+            lines
+                .iter()
+                .any(|(level, line)| *level == tracing::Level::DEBUG
+                    && line.contains("private-agent")
+                    && line.contains("[redacted]")),
+            "the fixed backend failure is journaled: {lines:?}"
         );
+        assert!(lines
+            .iter()
+            .all(|(_, line)| !line.contains("backend.agent.test") && !line.contains("PRIVATE")));
     }
 }
 
