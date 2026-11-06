@@ -16,7 +16,8 @@
 //!    is not refused here.
 //! 2. An `A2A-Version` this endpoint does not speak is `400` + `-32009`. Absent or empty is `0.3`;
 //!    negotiation is on `Major.Minor`.
-//! 3. The body must be JSON (`400` + `-32700`) and one JSON-RPC message (`400` + `-32600`, the
+//! 3. The local request body limit is checked without decoding; above it is `400` + `-32602`.
+//!    The body must be JSON (`400` + `-32700`) and one JSON-RPC message (`400` + `-32600`, the
 //!    contract's reader, echoing the id it could read).
 //! 4. A NOTIFICATION is acknowledged and never answered.
 //! 5. A request names a method; [`crate::ops::relay_class`] classes it, a method the vocabulary
@@ -32,6 +33,24 @@ use crate::ops::{self, MethodRow};
 
 /// The media type the JSON-RPC binding names.
 pub const JSON_MEDIA_TYPE: &str = "application/json";
+
+/// Maximum inbound A2A request body, in bytes, before any document or protobuf decoding.
+/// This is a local admission policy, not an A2A protocol limit. Keep the independent
+/// 512 KiB reply cap unchanged; bounded input does not guarantee bounded backend output.
+pub const MAX_REQUEST_BYTES: usize = 256 * 1024;
+
+/// Refuse input above the local body policy without reading its contents or its request id.
+/// All bindings use invalid-parameters semantics; no task or backend attempt has begun.
+#[must_use]
+pub fn request_body_refusal(body: &[u8]) -> Option<AgentRefusal> {
+    (body.len() > MAX_REQUEST_BYTES).then(|| {
+        AgentRefusal::unnamed(
+            STATUS_BAD_REQUEST,
+            CODE_INVALID_PARAMS,
+            "A2A request body exceeds the local 262144-byte admission limit",
+        )
+    })
+}
 
 /// The A2A protocol versions this endpoint speaks, oldest first.
 pub const SUPPORTED_VERSIONS: &[&str] = &["0.3", "1.0"];
@@ -224,8 +243,8 @@ pub fn reason_of(code: i64) -> Option<&'static str> {
 pub fn status_name_of(code: i64) -> Option<&'static str> {
     Some(match code {
         -32001 => "NOT_FOUND",
-        -32002 | -32007 | -32008 => "FAILED_PRECONDITION",
-        -32003 | -32004 | -32009 | -32601 => "UNIMPLEMENTED",
+        -32002 | -32003 | -32004 | -32007 | -32008 | -32009 => "FAILED_PRECONDITION",
+        -32601 => "UNIMPLEMENTED",
         -32005 | -32700 | -32600 | -32602 => "INVALID_ARGUMENT",
         -32006 | -32603 => "INTERNAL",
         _ => return None,
@@ -430,6 +449,9 @@ pub fn decide_and_read<'a>(
         Ok(v) => v,
         Err(refusal) => return (AgentDisposition::Refused(refusal), None),
     };
+    if let Some(refusal) = request_body_refusal(body) {
+        return (AgentDisposition::Refused(refusal), None);
+    }
     let Ok(value) = crate::request_json::from_slice::<crate::request_json::RequestJson>(body)
     else {
         let refusal = AgentRefusal::unnamed(STATUS_BAD_REQUEST, CODE_PARSE, NOT_JSON);

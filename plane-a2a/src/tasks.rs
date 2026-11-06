@@ -687,6 +687,41 @@ pub(crate) fn change_configured(
     )))
 }
 
+/// Guard a backend mapping against the exact live task and its original chain incarnation.
+/// This publishes no record, event, quota grant or state transition; the journal owns the mapping.
+pub(crate) fn guard_backend(rec: &mut dyn Records, at: &Stamp<'_>, task: &str) -> Result<(), Halt> {
+    if !is_caller(at.caller) {
+        return Err(Halt::Failed("no caller to hold the task under".into()));
+    }
+    let key = task_key(at.caller, task);
+    for _ in attempts() {
+        let chain = observe(rec, &key)?;
+        let raw = rec.get(KIND_TASK, &key)?;
+        let held = raw.as_deref().and_then(decode).filter(|held| {
+            !expired(&held.row, at.now)
+                && held.row.task_id == task
+                && held.row.principal == at.caller
+        });
+        if held.is_none() {
+            return Err(Halt::Failed(format!("no such task `{task}`")));
+        }
+        if rec.publish(
+            &[Predicate {
+                kind: KIND_TASK,
+                key: key.clone(),
+                expected: raw,
+            }],
+            &[chain],
+            &[],
+        )? {
+            return Ok(());
+        }
+    }
+    Err(Halt::Failed(format!(
+        "task `{task}` kept changing under backend publication"
+    )))
+}
+
 /// TRANSITION task `task` to `to`, with the event the move names.
 pub fn transition(
     rec: &mut dyn Records,

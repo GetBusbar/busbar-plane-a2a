@@ -331,7 +331,7 @@ fn the_rest_rendering_is_the_aip193_document() {
         doc,
         serde_json::json!({"error": {
             "code": 400,
-            "status": "UNIMPLEMENTED",
+            "status": "FAILED_PRECONDITION",
             "message": "v",
             "details": [{
                 "@type": "type.googleapis.com/google.rpc.ErrorInfo",
@@ -720,4 +720,28 @@ fn duplicate_task_identity_fields_are_refused_before_relay() {
     ] {
         assert!(matches!(decide_arrival(body, head(None, None)), AgentDisposition::Refused(_)));
     }
+}
+
+#[test]
+fn request_admission_bounds_before_json_decoding() {
+    let mut body = SEND.to_vec();
+    body.resize(MAX_REQUEST_BYTES, b' ');
+    assert!(matches!(
+        decide_arrival(&body, head(None, None)),
+        AgentDisposition::Request { .. }
+    ));
+    body.push(b' ');
+    let (disposition, decoded) = decide_and_read(&body, head(None, None));
+    let refusal = refused(disposition);
+    assert_eq!((refusal.status, refusal.code), (400, CODE_INVALID_PARAMS));
+    assert_eq!(refusal.id, None);
+    assert!(decoded.is_none());
+    // Invalid JSON would produce CODE_PARSE if the expensive reader had run first.
+    body.fill(b'!');
+    let (disposition, decoded) = decide_and_read(&body, head(None, None));
+    let refusal = refused(disposition);
+    assert_eq!(refusal.code, CODE_INVALID_PARAMS);
+    assert!(refusal.message.contains("262144-byte"));
+    assert!(decoded.is_none());
+    assert_eq!(crate::relay::MAX_REPLY_BYTES, 512 * 1024);
 }

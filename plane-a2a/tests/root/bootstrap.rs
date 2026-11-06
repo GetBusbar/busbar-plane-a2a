@@ -1,0 +1,193 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (C) 2026 Busbar Inc and contributors
+
+//! Provision a genuinely new durable namespace, migrate it through the actual plane, then
+//! reopen it without a bootstrap grant for the ordinary serving and reload assertions.
+
+use std::path::Path;
+use std::time::Duration;
+
+use busbar_kernel::host_record_bootstrap::{ColdRecordReceipt, StoreWitness};
+
+const SCHEMA: &str = "test.fixture.a2a-creation";
+const WITNESS_KEY: &[u8] = b"namespace";
+
+pub(super) fn create(directory: &Path, settings: &serde_json::Value) {
+    let database = directory.join("governance.sqlite");
+    assert_eq!(
+        settings["db_path"].as_str(),
+        database.to_str(),
+        "migration and serving must reopen the same actual durable Store"
+    );
+    for suffix in ["governance.sqlite-wal", "governance.sqlite-shm"] {
+        assert!(
+            !directory.join(suffix).exists(),
+            "no retained Store sidecars"
+        );
+    }
+    drop(
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&database)
+            .expect("exclusively create this fixture's database before its first Store open"),
+    );
+    let creation = serde_json::json!({
+        "database": database, "fixture": directory,
+        "creation": "exclusive create_new before first Store open",
+        "sender_quiesced": true, "backend_quiesced": true,
+    });
+    std::fs::write(
+        directory.join("namespace-creation.json"),
+        serde_json::to_vec(&creation).unwrap(),
+    )
+    .expect("retain actual namespace creation provenance");
+}
+
+pub(super) fn initialize(
+    instance: &str,
+    directory: &Path,
+    config: &busbar_kernel::config::RootCfg,
+    plugins: &busbar_kernel::config::PluginsCfg,
+    opened: &busbar_contract::store_calls::OpenedStore,
+    deployment: &serde_json::Value,
+) -> ColdRecordReceipt {
+    let anchor = serde_json::to_value(&config.store).expect("actual effective Store selection");
+    let source = crate::root::loader::sign::sha256_hex(&serde_json::to_vec(deployment).unwrap());
+    let run = |action: &str, input: &Path| {
+        let command = crate::root::principal_transition::command(
+            [
+                "--principal-transition".into(),
+                input.to_string_lossy().into_owned(),
+                "--transition-action".into(),
+                action.into(),
+            ]
+            .into_iter(),
+        )
+        .unwrap()
+        .unwrap();
+        let execution = crate::root::principal_transition::execute(
+            &command, config, plugins, opened, &anchor, &source, None,
+        )
+        .expect("the production principal lifecycle accepts this genuinely fresh namespace");
+        std::fs::write(
+            directory.join(format!("principal-{action}.json")),
+            serde_json::to_vec(&execution.report).unwrap(),
+        )
+        .unwrap();
+        execution.report
+    };
+    let before = run("inspect", Path::new("-"));
+    assert!(before["principal_receipt_head_sha256"].is_null());
+    assert_eq!(before["store_ephemeral"], false);
+    let calls = opened.calls.as_ref().expect("actual Store calls");
+    let creation = std::fs::read(directory.join("namespace-creation.json")).unwrap();
+    let creation_hash = crate::root::loader::sign::sha256_hex(&creation);
+    let mut random = [0u8; 32];
+    getrandom::fill(&mut random).expect("fresh public witness entropy");
+    let witness = busbar_contract::kinds::RecordBytes::new(random.to_vec()).unwrap();
+    futures::executor::block_on(calls.record_put(SCHEMA, WITNESS_KEY, &witness))
+        .expect("commit a real public witness through the actual durable Store");
+    let receipt = serde_json::json!({
+        "version": 1,
+        "store_config_sha256": before["store_config_sha256"],
+        "requirements": before["requirements"],
+        "witness": {"schema": SCHEMA, "key_hex": hex::encode(WITNESS_KEY),
+                    "value_hex": hex::encode(random)},
+        "ephemeral_instance": false, "exclusive_instance": false,
+        "creation_evidence_sha256": creation_hash,
+        "newly_created_namespace": true, "sender_quiesced": true, "backend_quiesced": true,
+        "actor": "isolated A2A fixture namespace provisioner",
+        "reason": "exclusive new database; no application senders started; actual public creation witness committed",
+    });
+    let receipt_path = directory.join("principal-fresh.json");
+    std::fs::write(&receipt_path, serde_json::to_vec(&receipt).unwrap()).unwrap();
+    run("initialize-fresh", &receipt_path);
+    let after = run("inspect", Path::new("-"));
+    assert!(after["principal_receipt_head_sha256"].is_string());
+    assert_eq!(after["requirements"], before["requirements"]);
+    let mut epoch = [0u8; 16];
+    getrandom::fill(&mut epoch).expect("fresh cold migration epoch");
+    ColdRecordReceipt {
+        version: 1,
+        epoch: hex::encode(epoch),
+        instance: instance.into(),
+        namespace_hex: hex::encode(busbar_kernel::host_records::record_key(instance, &[])),
+        store_config_sha256: busbar_kernel::host_record_bootstrap::store_fingerprint(&anchor),
+        store_witness: StoreWitness {
+            schema: SCHEMA.into(),
+            key_hex: hex::encode(WITNESS_KEY),
+            value_hex: hex::encode(random),
+        },
+        sender_quiesced: true,
+        backend_quiesced: true,
+        actor: "isolated A2A fixture namespace provisioner".into(),
+        reason: "exclusive new durable namespace, no prior sender or pending backend command"
+            .into(),
+    }
+}
+
+pub(super) fn migrate(instance: &'static str, directory: &Path) {
+    let directory = directory.to_owned();
+    std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("dedicated cold migration runtime");
+        runtime.block_on(async {
+            let mut agent = super::Agent::start(200, super::ANSWER).await;
+            let served = super::served_core_on(
+                instance,
+                &agent.entry("bootstrap", "1h"),
+                Default::default(),
+                None,
+                None,
+                None,
+                None,
+                super::Facing::Routes,
+                None,
+                false,
+                None,
+                &directory,
+                true,
+            );
+            super::approve(&served, "bootstrap").await;
+            let (status, body) = super::answered(
+                &served.router,
+                super::rpc(
+                    "bootstrap",
+                    "message/send",
+                    super::SEND,
+                    Some(&served.token),
+                ),
+            )
+            .await;
+            assert_eq!(
+                status,
+                axum::http::StatusCode::OK,
+                "real cold migration relay: {body}"
+            );
+            assert!(
+                body.contains("m-far"),
+                "actual peer terminal message: {body}"
+            );
+            assert!(agent.relayed(), "migration reached the actual peer");
+            served
+                .gov
+                .delete_key(&served.key.id)
+                .expect("retire the actual migration caller");
+            let kernel = served.kernel.clone();
+            assert!(
+                tokio::task::spawn_blocking(move || kernel.drain(Duration::from_secs(10)))
+                    .await
+                    .unwrap(),
+                "migration backend work settles before ordinary reopen"
+            );
+        });
+        // Includes the production flush task: no old host can write after ordinary reopen.
+        runtime.shutdown_timeout(Duration::from_secs(10));
+    })
+    .join()
+    .expect("cold migration finishes before ordinary serving begins");
+}

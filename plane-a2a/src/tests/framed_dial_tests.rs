@@ -228,7 +228,7 @@ fn a_status_names_the_a2a_code_its_reason_or_its_row_binds() {
     };
     assert_eq!(bare(Code::NotFound).a2a_code(), Some(-32001));
     assert_eq!(bare(Code::FailedPrecondition).a2a_code(), None);
-    assert_eq!(bare(Code::Unimplemented).a2a_code(), None);
+    assert_eq!(bare(Code::Unimplemented).a2a_code(), Some(-32601));
     assert_eq!(bare(Code::Unavailable).a2a_code(), None);
     let reasoned = Ended {
         code: Code::FailedPrecondition as u32,
@@ -291,4 +291,25 @@ fn grpc_message_length_ceiling_is_inclusive_and_enforced_before_waiting() {
     let mut oversized = vec![0];
     oversized.extend_from_slice(&u32::try_from(length + 1).unwrap().to_be_bytes());
     assert!(take_message(&oversized).is_err());
+}
+
+#[test]
+fn v101_precondition_errors_keep_their_identity_across_both_bindings() {
+    use base64::Engine as _;
+    for (code, reason) in [
+        (-32003, "PUSH_NOTIFICATION_NOT_SUPPORTED"),
+        (-32004, "UNSUPPORTED_OPERATION"),
+        (-32009, "VERSION_NOT_SUPPORTED"),
+    ] {
+        let refusal = crate::agent_arrival::AgentRefusal::new(400, Some(json!(7)), code, "refused");
+        assert_eq!(refusal.aip193()["error"]["status"], "FAILED_PRECONDITION");
+        let error = refusal.envelope()["error"].clone();
+        let status = status_for_error(&error, 400);
+        assert_eq!(status.code(), Code::FailedPrecondition);
+        let details = base64::engine::general_purpose::STANDARD_NO_PAD.encode(status.details());
+        let received = ended(&block(&[(DETAILS_FIELD, &details)]), Some(9)).unwrap();
+        assert_eq!(received.info.as_ref().unwrap().reason, reason);
+        assert_eq!(received.a2a_code(), Some(code));
+    }
+    assert_eq!(grpc_code(-32601), Some(Code::Unimplemented));
 }

@@ -1556,7 +1556,15 @@ slot!(
         };
         let target = input.target().as_str().unwrap_or_default();
         let body = input.body().bytes();
-        let (dialect, envelope, framed) = match statement::line_of(route) {
+        let line = statement::line_of(route);
+        // Admission is a length check before REST/protobuf composition, JSON decoding,
+        // task creation, or any backend dispatch. Card/discovery reads have no request body.
+        if line != Line::Open {
+            if let Some(refusal) = agent_arrival::request_body_refusal(body) {
+                return refused(&mut out, &refusal);
+            }
+        }
+        let (dialect, envelope, framed) = match line {
             Line::Document => (statement::DIALECT_DOCUMENT, None, None),
             Line::Target => {
                 // Judge the head before decoding a REST body, just as the document line does.
@@ -2127,9 +2135,27 @@ fn settle_task(
             }
             TaskSettled::Failed => None,
         };
+        if backend.is_some() {
+            via.effects(crate::conditional_publication::Draft {
+                backend,
+                ..Default::default()
+            });
+            let at = tasks::Stamp {
+                caller,
+                request_id: &task.task_id,
+                now,
+            };
+            match tasks::guard_backend(&mut via, &at, &task.task_id) {
+                Err(Halt::Pending) => return pend(hop, settles),
+                Err(Halt::Failed(_)) => {
+                    hop.settle = settles;
+                    return Err(Outcome::Failed);
+                }
+                Ok(()) => {}
+            }
+        }
         via.effects(crate::conditional_publication::Draft {
             notify: true,
-            backend,
             ..Default::default()
         });
         match task_hop::settle_on_answer(

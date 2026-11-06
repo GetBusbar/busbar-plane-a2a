@@ -49,6 +49,22 @@ Off by default: a document with no `agents:` section states no route.
   operator CA (PEM) trusted when making outbound callback deliveries. When absent, deliveries trust
   the platform public roots; omitting this section does not disable configured callbacks.
 
+## Request size policy
+
+A2A operation request bodies are limited to **256 KiB (262,144 bytes)**. Larger bodies
+are refused before JSON or protobuf decoding, task creation, and backend dispatch,
+with HTTP 400 / JSON-RPC `-32602` (gRPC `INVALID_ARGUMENT`) and an explicit limit message.
+The request id is unread and therefore null. The ceiling applies to the raw body on each
+binding and to the composed JSON request; an expanded REST/protobuf representation can
+also exceed it. Card and discovery reads are excluded. This local capacity policy is
+independent of the A2A specification, which defines no fixed message-size ceiling.
+
+The existing **512 KiB backend reply limit** and watchdog budgets are unchanged.
+The smaller request bound limits parsing work and leaves room for ordinary task history
+and response framing; it does not guarantee that arbitrary backend output will fit.
+Large content should be supplied by file URL instead of inline parts. Admission checks
+precede body decoding; an oversized malformed body is refused for size.
+
 ## Diagnostics
 
 The codes this plane raises (stated in `plane-a2a/declares.json`):

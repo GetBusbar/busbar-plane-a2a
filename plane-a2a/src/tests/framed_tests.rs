@@ -130,13 +130,13 @@ fn the_error_table_carries_the_specifications_grpc_column() {
     let rows = [
         (-32001, Code::NotFound),
         (-32002, Code::FailedPrecondition),
-        (-32003, Code::Unimplemented),
-        (-32004, Code::Unimplemented),
+        (-32003, Code::FailedPrecondition),
+        (-32004, Code::FailedPrecondition),
         (-32005, Code::InvalidArgument),
         (-32006, Code::Internal),
         (-32007, Code::FailedPrecondition),
         (-32008, Code::FailedPrecondition),
-        (-32009, Code::Unimplemented),
+        (-32009, Code::FailedPrecondition),
         (-32600, Code::InvalidArgument),
         (-32601, Code::Unimplemented),
         (-32602, Code::InvalidArgument),
@@ -194,7 +194,7 @@ fn a_kernel_limit_or_open_breaker_is_retryable_not_an_unimplemented_method() {
     for http in [400, 501] {
         assert_eq!(
             status_for_error(&unsupported, http).code(),
-            Code::Unimplemented
+            Code::FailedPrecondition
         );
     }
     let unknown_method = serde_json::json!({"code": -32601, "message": "no such method"});
@@ -209,14 +209,14 @@ fn a_kernel_limit_or_open_breaker_is_retryable_not_an_unimplemented_method() {
         .expect_err("unsupported operation");
     assert_eq!(
         error.code(),
-        Code::Unimplemented,
+        Code::FailedPrecondition,
         "the upstream stream's real protocol error"
     );
     let error = answer_message(Rpc::SendMessage, 500, envelope.to_string().as_bytes())
         .expect_err("an upstream unsupported-operation answer");
     assert_eq!(
         error.code(),
-        Code::Unimplemented,
+        Code::FailedPrecondition,
         "the upstream answer's real protocol error"
     );
 }

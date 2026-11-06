@@ -11,8 +11,8 @@ fn catch_all_aip193_refusals_use_the_actual_http_status_and_keep_the_error_ident
         (429, "RESOURCE_EXHAUSTED"),
         (503, "UNAVAILABLE"),
         (504, "DEADLINE_EXCEEDED"),
-        (400, "UNIMPLEMENTED"),
-        (501, "UNIMPLEMENTED"),
+        (400, "FAILED_PRECONDITION"),
+        (501, "FAILED_PRECONDITION"),
     ] {
         let refusal = AgentRefusal::new(status, Some(json!(7)), -32004, "the request was refused");
         let got = refusal.aip193();

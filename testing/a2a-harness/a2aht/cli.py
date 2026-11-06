@@ -42,6 +42,9 @@ def _target_args(p):
                    help="record a comma-separated acknowledgment of undriven "
                         "bindings (e.g. GRPC). Missing interface execution still "
                         "makes the required coverage row NOT_CONFIGURED.")
+    p.add_argument("--relay-peer-binding", choices=["HTTP+JSON", "JSONRPC"],
+                   default="HTTP+JSON",
+                   help="Actual binding served by the harness-owned relay peer")
     p.add_argument("--relay-drive",
                    help="command that configures the running target to relay to "
                         "{url}; {card_url} and {endpoint} are also substituted. "
@@ -73,6 +76,7 @@ def build_config(args):
     config = {
         "client_drive": getattr(args, "client_drive", None),
         "relay_drive": getattr(args, "relay_drive", None),
+        "relay_peer_binding": getattr(args, "relay_peer_binding", "HTTP+JSON"),
         "cwd": getattr(args, "cwd", None),
         "concurrency": getattr(args, "concurrency", 8),
         "allow_undriven_bindings": getattr(args, "allow_undriven_bindings", ""),
@@ -155,6 +159,7 @@ def cmd_run(args):
                               "client_drive_configured":
                                   bool(config["client_drive"]),
                               "relay_drive_configured": bool(config["relay_drive"]),
+                              "relay_peer_binding": config["relay_peer_binding"],
                               "selected_interface": target.selection_metadata(),
                               "interface_coverage": "one selected interface; see "
                                   "card.every_declared_binding_is_exercised for gaps",

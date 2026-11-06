@@ -122,8 +122,8 @@ def test_empty_body(ctx):
 
 @a2a_test(
     id="adv.wrong_types",
-    defect="A field with the wrong JSON type (parts as a string, role as a "
-           "number) is coerced or crashes rather than rejected, so garbage "
+    defect="A field with the wrong JSON type (parts as a string, role as an "
+           "object) is coerced or crashes rather than rejected, so garbage "
            "enters the task store and surfaces later as corrupt history.",
     clause="SPEC 3.3.2; PROTO Message field types",
     role=ROLE_SERVER, tier=PULL_REQUEST,
@@ -132,7 +132,7 @@ def test_wrong_types(ctx):
     cases = {
         "parts_is_string": {"message": {"messageId": "x", "role": "ROLE_USER",
                                         "parts": "not an array"}},
-        "role_is_number": {"message": {"messageId": "x", "role": 7,
+        "role_is_object": {"message": {"messageId": "x", "role": {},
                                        "parts": [{"text": "hi"}]}},
         "message_is_array": {"message": [1, 2, 3]},
         "part_is_null": {"message": {"messageId": "x", "role": "ROLE_USER",
@@ -153,6 +153,48 @@ def test_wrong_types(ctx):
                         "SPEC 3.3.2 requires validation of protocol field types.")
         statuses[name] = resp.status
     ctx.observe("wrong_type_statuses", statuses)
+
+
+@a2a_test(
+    id="adv.known_numeric_role",
+    defect="A known numeric ProtoJSON enum is rejected although enum parsers must accept integers.",
+    clause="SPEC 5.5 ProtoJSON; ProtoJSON enum representation",
+    role=ROLE_SERVER, tier=PULL_REQUEST,
+)
+def test_known_numeric_role(ctx):
+    message = user_message("known numeric role")
+    message["role"] = 1
+    call = ctx.target.call("SendMessage", {"message": message})
+    ctx.observe("numeric_role", 1)
+    ctx.observe("response_status", call.http.status)
+    ctx.observe("response_body", call.http.text)
+    _survived(ctx, call.http, "a request with known numeric ROLE_USER")
+    ctx.assert_must(call.error is None and 200 <= call.http.status < 300,
+                    "known numeric ROLE_USER was rejected: %r" % call.error,
+                    "SPEC 5.5 follows ProtoJSON, whose enum parsers accept names and integers.")
+
+
+@a2a_test(
+    id="adv.undefined_numeric_role_observation",
+    defect="An undefined numeric role may be preserved, rejected, or coerced; retain the exact wire evidence for semantic review.",
+    clause="SPEC 5.5 ProtoJSON; undefined enum semantic observation",
+    role=ROLE_SERVER, tier=PULL_REQUEST,
+)
+def test_undefined_numeric_role_observation(ctx):
+    # Preserve the original role=7 request separately. Its former wrong-type
+    # assertion is not valid for an integer enum representation.
+    body = {"message": {"messageId": "x", "role": 7,
+                        "parts": [{"text": "hi"}]}}
+    payload = body
+    if _binding(ctx) == "JSONRPC":
+        payload = {"jsonrpc": "2.0", "id": 1, "method": "SendMessage",
+                   "params": body}
+    encoded = json.dumps(payload)
+    resp = _post_raw(ctx, encoded)
+    ctx.observe("request_body", encoded)
+    ctx.observe("response_status", resp.status)
+    ctx.observe("response_body", resp.text)
+    ctx.note("No MUST-reject assertion is inferred from the undefined enum value; original raw FAIL is retained independently.")
 
 
 @a2a_test(

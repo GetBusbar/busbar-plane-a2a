@@ -23,6 +23,7 @@ use busbar_kernel::{
 mod root_facts;
 
 mod binding_lifetime;
+mod bootstrap;
 mod conditional_quota_negotiation;
 mod reported_observations;
 
@@ -191,6 +192,7 @@ fn card_fingerprint(card: &serde_json::Value) -> String {
 /// One a2a door served on a data router, as production composes it, and the admin router the
 /// door's stated admin routes mount on.
 struct Served {
+    kernel: Arc<busbar_kernel::host_services::KernelServices>,
     router: axum::Router,
     admin: axum::Router,
     gov: Arc<GovState>,
@@ -796,6 +798,44 @@ fn served_core(
     ticking: bool,
     push_ca: Option<String>,
 ) -> Served {
+    let directory = crate::root::test_plugins::scratch(&format!(
+        "{instance}-{}",
+        busbar_kernel::door::op_id().counter(),
+    ));
+    bootstrap::migrate(instance, &directory);
+    served_core_on(
+        instance,
+        section,
+        destinations,
+        allowed_pools,
+        root,
+        hooks,
+        requests,
+        facing,
+        priced,
+        ticking,
+        push_ca,
+        &directory,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn served_core_on(
+    instance: &'static str,
+    section: &str,
+    destinations: busbar_kernel::config::Destinations,
+    allowed_pools: Option<Vec<String>>,
+    root: Option<Vec<u8>>,
+    hooks: Option<AgentHooks>,
+    requests: Option<u64>,
+    facing: Facing,
+    priced: Option<&Priced>,
+    ticking: bool,
+    push_ca: Option<String>,
+    directory: &std::path::Path,
+    initialize: bool,
+) -> Served {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
         .with_max_level(tracing::Level::WARN)
@@ -836,10 +876,6 @@ fn served_core(
 
     // The Store and optional hook are freshly built external products. Their signed archives go
     // through normal registry admission; the retained archive digest also authorizes Store boot.
-    let directory = crate::root::test_plugins::scratch(&format!(
-        "{instance}-{}",
-        busbar_kernel::door::op_id().counter(),
-    ));
     // A signed dropped Store must have its own product identity, even when the surrounding
     // test binary uses its compiled-in memory Store for unrelated cases.
     let sqlite_image = std::env::var_os("BUSBAR_TEST_SQLITE_CDYLIB");
@@ -906,6 +942,9 @@ fn served_core(
     } else if settings.get("db_path").is_some() {
         settings["db_path"] = serde_json::json!(directory.join("governance.sqlite"));
     }
+    if initialize {
+        bootstrap::create(directory, &settings);
+    }
     let operator_file = directory.join("operator.token");
     std::fs::write(&operator_file, ADMIN_TOKEN).expect("the normal operator credential");
     let signing_file = directory.join("signing.key");
@@ -921,7 +960,8 @@ fn served_core(
         let section = sections
             .get_mut(surface("section"))
             .expect("a priced agent section");
-        section["fees"] = serde_yaml::to_value(serde_json::json!({"per_request": priced.fee}))
+        // Keep a numeric YAML scalar; JSON arbitrary-precision numbers serialize as a map.
+        section["fees"] = serde_yaml::to_value(BTreeMap::from([("per_request", priced.fee)]))
             .expect("the agent section's configured fee");
         if let Some(rate) = priced.bytes_rate {
             section["rate_card"] = serde_yaml::from_str(&format!(
@@ -1057,6 +1097,12 @@ fn served_core(
     }
     let mut opened = busbar_kernel::appbuild::bootstrap_config_store(&config, &plugins)
         .expect("normal bootstrap admits and opens the signed actual Store");
+    let expected_store_fingerprint = busbar_kernel::host_record_bootstrap::store_fingerprint(
+        &serde_json::to_value(&config.store).expect("actual effective Store selection"),
+    );
+    let bootstrap_receipt = initialize.then(|| {
+        bootstrap::initialize(instance, directory, &config, &plugins, &opened, &deployment)
+    });
     let refuse = Arc::new(std::sync::Mutex::new(None));
     opened.calls = Some(Arc::new(Refusing {
         inner: opened
@@ -1114,7 +1160,7 @@ fn served_core(
     let services = crate::root::serve::LateServices::new();
     let kernel = Arc::new(crate::root::serve::kernel_services(judge.clone()));
     services
-        .install_kernel(kernel.clone(), kernel)
+        .install_kernel(kernel.clone(), kernel.clone())
         .expect("install the actual KernelServices");
     crate::root::serve::attach(
         &services,
@@ -1123,6 +1169,11 @@ fn served_core(
         &app.demotion_record,
         &[],
     );
+    if let Some(receipt) = bootstrap_receipt {
+        kernel
+            .arm_record_bootstrap(receipt, &expected_store_fingerprint)
+            .expect("the actual host consumes the committed fresh-store witness");
+    }
     let dispatcher = Arc::new(crate::root::dispatch::build(1, &services));
     crate::root::connector::install_io(&dispatcher);
     let settings = busbar_contract::transport::TransportSettings::default();
@@ -1265,6 +1316,7 @@ fn served_core(
     let applied_planes = appliers.clone();
     handle.on_apply(Box::new(move |app| applied_planes.apply(app)));
     Served {
+        kernel,
         router,
         admin,
         gov,

@@ -1172,3 +1172,6 @@ fn authored_configuration_profile_uses_actual_raw_agents_and_push_parsers() {
         "existing lifecycle pool projection stays intact"
     );
 }
+
+#[path = "task_backend_publication.rs"]
+mod task_backend_publication;

@@ -4,7 +4,7 @@
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 
-use busbar_kernel::host_services::{Admitted, DestJudge, DestRefusal};
+use busbar_kernel::host_services::{Admitted, DestJudge, DestRefusal, Destination};
 
 /// Records the real destination guard's decisions without changing any of them.
 pub(super) struct Destinations {
@@ -52,6 +52,31 @@ impl Destinations {
 }
 
 impl DestJudge for Destinations {
+    fn judge_target_name(&self, target: Destination<'_>, refuse_private: bool) -> Result<(), u64> {
+        let answer = self.inner.judge_target_name(target, refuse_private);
+        self.record(target.authority, answer.is_ok());
+        answer
+    }
+
+    fn judge_target(
+        &self,
+        target: Destination<'_>,
+        refuse_private: bool,
+        reach: bool,
+        done: Box<dyn FnOnce(Admitted) + Send>,
+    ) -> Option<Admitted> {
+        let answer = self.inner.judge_target(
+            target,
+            refuse_private,
+            reach,
+            self.completion(target.authority, done),
+        );
+        if let Some(answer) = &answer {
+            self.record(target.authority, answer.is_ok());
+        }
+        answer
+    }
+
     fn judge_name(&self, dest: &str, class: u32, refuse_private: bool) -> Result<(), u64> {
         let answer = self.inner.judge_name(dest, class, refuse_private);
         self.record(dest, answer.is_ok());

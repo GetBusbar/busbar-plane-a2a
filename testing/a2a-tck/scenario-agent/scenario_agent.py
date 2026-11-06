@@ -50,6 +50,12 @@ and does not import against any published release; and `testing/a2a-tck/LICENSIN
 nothing from `a2a-tck` is copied into this repository. The contract is a document, and documents
 are for implementing.
 
+DECLARED SDK ADAPTER REPAIR. SDK 1.1.2 rejects a new message on a terminal task with
+InvalidParamsError. ScenarioRequestHandler checks the stored task before setup and reports the
+specified UnsupportedOperationError instead. This is an explicit local adapter correction, not
+a claim that the unmodified SDK has the correct mapping. Task storage, lifecycle, SSE and wire
+serialization still belong to the SDK.
+
 WHAT IT IS NOT ALLOWED TO REPAIR. If a backend's own serialisation is wrong, that is the
 backend's record and this agent does not launder it. The scenarios below say what to do, not how
 to spell it; the spelling comes from the SDK.
@@ -100,7 +106,7 @@ from a2a.types import (
     TaskState,
     TaskStatus,
 )
-from a2a.utils.errors import A2AError
+from a2a.utils.errors import A2AError, UnsupportedOperationError
 
 
 # The JSON-RPC endpoint sits at the root because that is where the rig's registration points and
@@ -325,6 +331,24 @@ class ScenarioExecutor(AgentExecutor):
         await TaskUpdater(event_queue, task_id, context_id).cancel()
 
 
+class ScenarioRequestHandler(DefaultRequestHandler):
+    """Declare the SDK 1.1.2 terminal-send error mapping repair locally."""
+
+    async def _setup_active_task(self, params, call_context):
+        if params.message.task_id:
+            task = await self.task_store.get(params.message.task_id, call_context)
+            if task and task.status.state in {
+                TaskState.TASK_STATE_COMPLETED,
+                TaskState.TASK_STATE_FAILED,
+                TaskState.TASK_STATE_CANCELED,
+                TaskState.TASK_STATE_REJECTED,
+            }:
+                raise UnsupportedOperationError(
+                    message="Terminal tasks cannot accept messages"
+                )
+        return await super()._setup_active_task(params, call_context)
+
+
 def build_card(public_url: str) -> AgentCard:
     """The card this agent publishes.
 
@@ -388,7 +412,7 @@ def main() -> None:
         httpx_client=httpx.AsyncClient(timeout=10.0),
         config_store=push_store,
     )
-    handler = DefaultRequestHandler(
+    handler = ScenarioRequestHandler(
         agent_executor=ScenarioExecutor(),
         task_store=InMemoryTaskStore(),
         agent_card=card,

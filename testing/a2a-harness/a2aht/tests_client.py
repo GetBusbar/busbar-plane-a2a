@@ -399,7 +399,7 @@ def test_client_malformed_response(ctx):
 )
 def test_seam_relay(ctx):
     from .relay import correlated_relay
-    with FakePeer() as peer:
+    with FakePeer(binding=ctx.config.get("relay_peer_binding", "HTTP+JSON")) as peer:
         upstream, downstream, request = correlated_relay(ctx, peer)
         ctx.observe("downstream_tasks_created", len(peer.tasks))
         ctx.assert_must(

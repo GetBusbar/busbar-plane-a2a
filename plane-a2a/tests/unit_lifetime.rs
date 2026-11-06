@@ -2175,3 +2175,6 @@ mod reported_fixture_cases;
 
 #[path = "support/card_admission_audit_cases.rs"]
 mod card_admission_audit_cases;
+
+#[path = "support/request_admission_cases.rs"]
+mod request_admission_cases;

@@ -1536,10 +1536,40 @@ impl HopRelay {
             .map(|bytes| bytes.as_slice())
             .unwrap_or(&self.far);
         let answer = answer.map(|result| &envelope[result]);
+        let code = answer
+            .as_ref()
+            .err()
+            .and_then(|refusal| match (self.binding, *refusal) {
+                (_, HopRefusal::BackendError) => backend_error_code(&self.far),
+                (Binding::HttpJson, HopRefusal::Status) => http_json_error_code(&self.far),
+                (Binding::JsonRpc, HopRefusal::Status)
+                    if status == 400
+                        && self.far.len() <= MAX_REPLY_BYTES
+                        && read_answer_document(&self.far, &self.id)
+                            == Err(HopRefusal::BackendError) =>
+                {
+                    backend_error_code(&self.far)
+                        .filter(|code| task_identity::status_of_code(*code) == Some(status))
+                }
+                _ => None,
+            });
         let Some(task) = &self.task else {
             return PieceAnswer::ToCaller(match answer {
                 Ok(result) => relayed_bytes(&self.id, result),
-                Err(refusal) => refusal.reply(&self.id),
+                Err(refusal) => match code.and_then(|code| {
+                    task_identity::status_of_code(code).map(|status| (code, status))
+                }) {
+                    Some((code, status)) => RelayReply::refused(
+                        &AgentRefusal::new(
+                            status,
+                            Some(self.id.clone()),
+                            code,
+                            "this agent's backend refused the request",
+                        ),
+                        None,
+                    ),
+                    None => refusal.reply(&self.id),
+                },
             });
         };
 
@@ -1581,21 +1611,7 @@ impl HopRelay {
                 });
                 relayed_bytes(&self.id, &spliced)
             }
-            Err(refusal) => {
-                let code = match (self.binding, refusal) {
-                    (_, HopRefusal::BackendError) => backend_error_code(&self.far),
-                    (Binding::HttpJson, HopRefusal::Status) => http_json_error_code(&self.far),
-                    (Binding::JsonRpc, HopRefusal::Status)
-                        if status == 400
-                            && self.far.len() <= MAX_REPLY_BYTES
-                            && read_answer_document(&self.far, &self.id)
-                                == Err(HopRefusal::BackendError) =>
-                    {
-                        backend_error_code(&self.far)
-                            .filter(|code| task_identity::status_of_code(*code) == Some(status))
-                    }
-                    _ => None,
-                };
+            Err(_) => {
                 let (reply, failed) = task_refusal(code, task, &self.id);
                 if failed {
                     self.settled.push(TaskSettled::Failed);

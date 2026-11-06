@@ -229,13 +229,9 @@ fn the_backends_own_error_is_refused_without_its_words() {
         200,
         br#"{"jsonrpc":"2.0","id":7,"error":{"code":-32001,"message":"internal host db.vendor"}}"#,
     );
-    assert_eq!(
-        reply.body,
-        refused(
-            "a2a.hop.backend_refused",
-            "this agent's backend refused the request"
-        )
-    );
+    assert_eq!(reply.status, 404);
+    assert_eq!(body(&reply)["error"]["code"], -32001);
+    assert_eq!(body(&reply)["error"]["data"][0]["reason"], "TASK_NOT_FOUND");
     assert!(!String::from_utf8_lossy(&reply.body).contains("db.vendor"));
 }
 
@@ -1632,4 +1628,29 @@ fn oversized_grpc_answer_is_not_copied_before_refusal() {
     };
     assert_eq!(reply.status, STATUS_BAD_GATEWAY);
     assert_eq!(relay.far.as_slice().as_ptr(), allocation);
+}
+
+#[test]
+fn a_taskless_extended_card_hop_preserves_a_valid_backend_unsupported_error() {
+    for status in [200, 400] {
+        let reply = answered(
+            &mut sent(),
+            status,
+            br#"{"jsonrpc":"2.0","id":7,"error":{"code":-32004,"message":"PRIVATE backend authority","data":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","domain":"a2a-protocol.org","reason":"UNSUPPORTED_OPERATION"}]}}"#,
+        );
+        assert_eq!(reply.status, 400);
+        let doc = body(&reply);
+        assert_eq!(doc["id"], 7);
+        assert_eq!(doc["error"]["code"], -32004);
+        assert_eq!(doc["error"]["data"][0]["reason"], "UNSUPPORTED_OPERATION");
+        assert!(!String::from_utf8_lossy(&reply.body).contains("PRIVATE"));
+    }
+    for wire in [
+        br#"{"jsonrpc":"2.0","id":8,"error":{"code":-32004,"message":"PRIVATE"}}"#.as_slice(),
+        br#"{"jsonrpc":"2.0","id":7,"error":{"code":-39999,"message":"PRIVATE"}}"#.as_slice(),
+    ] {
+        let reply = answered(&mut sent(), 200, wire);
+        assert_eq!(body(&reply)["error"]["code"], -32006);
+        assert!(!String::from_utf8_lossy(&reply.body).contains("PRIVATE"));
+    }
 }
