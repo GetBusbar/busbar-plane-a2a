@@ -22,6 +22,7 @@ enum Answer {
     List(Vec<(String, Vec<u8>)>),
     Life(Option<Vec<u8>>),
     Publish(Candidate, Option<bool>),
+    QuotaRetry,
 }
 
 /// A callback's replayed host handles and its explicitly driven conditional exchange. Keeping the
@@ -36,6 +37,8 @@ struct Call {
     committed: BTreeMap<usize, bool>,
     unsupported: bool,
     before_get: Option<ReadInterleaving>,
+    quota_retry: crate::conditional_publication::Journal,
+    quota_now_ns: Option<u64>,
 }
 
 impl Call {
@@ -48,6 +51,8 @@ impl Call {
             committed: BTreeMap::new(),
             unsupported: false,
             before_get: None,
+            quota_retry: crate::conditional_publication::Journal::default(),
+            quota_now_ns: None,
         }
     }
 
@@ -95,6 +100,20 @@ impl Call {
 }
 
 impl Records for Call {
+    fn retry_quota(&mut self) -> Result<bool, Halt> {
+        let index = self.index();
+        if index == self.answers.len() {
+            self.answers.push(Answer::QuotaRetry);
+        }
+        assert!(matches!(self.answers[index], Answer::QuotaRetry));
+        let seq = u32::try_from(index).unwrap();
+        self.quota_retry.retry_quota(
+            seq,
+            self.quota_now_ns
+                .unwrap_or(self.committed.len() as u64 * 1_000_000),
+        )
+    }
+
     fn quota_bootstrap_allowed(&mut self) -> Result<bool, Halt> {
         self.host.borrow_mut().quota_bootstrap_allowed()
     }

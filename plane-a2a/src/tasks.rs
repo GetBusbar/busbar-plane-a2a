@@ -72,8 +72,8 @@ pub enum Halt {
 /// The host records as the store reaches them. Every call is made in the same order on every entry
 /// of an op, so a re-run reads the answers the host stored for it (the replay rule).
 pub trait Records {
-    /// Host attestation that pre-quota writers are fenced and all their writes settled. Only
-    /// needed before first quota bootstrap; unsupported hosts refuse that migration.
+    /// Host attestation that writers are fenced and all their writes settled before fresh-store
+    /// quota initialization. It never authorizes reconstructing quota from existing task rows.
     fn quota_bootstrap_allowed(&mut self) -> Result<bool, Halt> {
         Ok(false)
     }
@@ -94,6 +94,13 @@ pub trait Records {
         Err(Halt::Failed(
             "conditional record publication unavailable".into(),
         ))
+    }
+
+    /// Permit another quota-only conflict attempt. Adapters with callback replay must retain
+    /// each decision and enforce their elapsed-time/cancellation budget. Other stores keep the
+    /// caller's bounded task retries.
+    fn retry_quota(&mut self) -> Result<bool, Halt> {
+        Ok(false)
     }
 
     /// Observe the chain incarnation before reading the task for a mutation. Replayed reads retain
@@ -175,6 +182,10 @@ fn chained(kind: &str) -> bool {
 }
 
 impl Records for Staged<'_> {
+    fn retry_quota(&mut self) -> Result<bool, Halt> {
+        self.rec.retry_quota()
+    }
+
     fn quota_bootstrap_allowed(&mut self) -> Result<bool, Halt> {
         self.rec.quota_bootstrap_allowed()
     }

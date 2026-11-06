@@ -3,18 +3,16 @@
 
 //! Durable active-task admission, in the same conditional transaction as each task change.
 //!
-//! A pre-quota store requires a cold upgrade: stop every old writer and settle its admitted
-//! transactions before starting this build, then provide the host's instance/store-bound cold
-//! bootstrap receipt. An unsupported or unattested host refuses bootstrap at runtime. Reloading
-//! a generation is not that barrier. During
-//! bootstrap every writer predicates the initializing gate; no task changes until the complete
-//! snapshot's counters are published. An interrupted bootstrap may be repeated by another caller.
-
-use std::collections::BTreeMap;
+//! Initializing a fresh store requires the host's instance/store-bound cold bootstrap receipt.
+//! Unsupported or unattested hosts refuse initialization. Reloading a generation is not that
+//! barrier. Existing task-owned records or principal quota metadata without a ready gate are
+//! inconsistent state, never input to a quota reconstruction. An interrupted empty-store
+//! initialization may resume under the same durable gate; ready current-format stores restart
+//! directly from their persisted quota state.
 
 use serde::{Deserialize, Serialize};
 
-use crate::records::{KIND_PUSH_CONFIG, KIND_TASK, KIND_TASK_QUOTA};
+use crate::records::{KIND_PUSH_CONFIG, KIND_TASK, KIND_TASK_EVENT, KIND_TASK_QUOTA};
 use crate::tasks::{ChainLife, Halt, HeldTask, Predicate, Records, Write};
 
 /// The fixed active-task bound, for both one instance and one principal.
@@ -24,7 +22,6 @@ pub(crate) const CAPACITY_REFUSAL: &str = "active task capacity reached";
 const GLOBAL: &str = "active/v1";
 const VERSION: u8 = 1;
 const EPOCH: u64 = 1;
-const BOOTSTRAP_BATCH: usize = 16;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -86,40 +83,34 @@ fn gate_predicate(bytes: &[u8]) -> Predicate {
     }
 }
 
-/// Reconstruct only while all task writers are fenced by the exact durable initializing bytes.
-/// Records::list must return every row or an error. The host's listing limits are errors, never
-/// permission to activate a partial count; larger legacy stores require an offline migration.
-fn bootstrap(rec: &mut dyn Records, gate: &Gate, bytes: &[u8]) -> Result<bool, Halt> {
-    let listed = crate::proto::custody::Guard::new(rec.list(KIND_TASK, "")?);
-    let mut counts = BTreeMap::<String, u64>::new();
-    let mut total = 0u64;
-    for (key, bytes) in listed.iter() {
-        let held = task(bytes, key)?;
-        if active(&held) {
-            total = total.checked_add(1).ok_or_else(failed)?;
-            let count = counts.entry(held.row.principal.clone()).or_default();
-            *count = count.checked_add(1).ok_or_else(failed)?;
+/// Initialization never reconstructs quota from task-owned state, even terminal rows. If a
+/// concurrent initializer has advanced the gate, retry instead of mistaking its valid rows for
+/// corruption. A listing failure is never evidence of emptiness.
+fn initialization_empty(rec: &mut dyn Records, expected: Option<&[u8]>) -> Result<bool, Halt> {
+    for kind in [
+        KIND_TASK_QUOTA,
+        KIND_TASK,
+        KIND_TASK_EVENT,
+        KIND_PUSH_CONFIG,
+    ] {
+        let listed = crate::proto::custody::Guard::new(rec.list(kind, "")?);
+        let populated = listed
+            .iter()
+            .any(|(key, _)| kind != KIND_TASK_QUOTA || expected.is_none() || key != GLOBAL);
+        if populated {
+            if rec.get(KIND_TASK_QUOTA, GLOBAL)?.as_deref() != expected {
+                return Ok(false);
+            }
+            return Err(failed());
         }
     }
-    let counts: Vec<_> = counts.into_iter().collect();
-    for batch in counts.chunks(BOOTSTRAP_BATCH) {
-        let writes = batch
-            .iter()
-            .map(|(principal, count)| {
-                Ok(Write {
-                    kind: KIND_TASK_QUOTA,
-                    key: principal_key(gate.epoch, principal),
-                    value: encode(&Count {
-                        version: VERSION,
-                        epoch: gate.epoch,
-                        active: *count,
-                    })?,
-                })
-            })
-            .collect::<Result<Vec<_>, Halt>>()?;
-        if !rec.publish(&[gate_predicate(bytes)], &[], &writes)? {
-            return Ok(false);
-        }
+    Ok(true)
+}
+
+/// Finish only an empty initialization, guarded by the exact durable initializing bytes.
+fn bootstrap(rec: &mut dyn Records, gate: &Gate, bytes: &[u8]) -> Result<bool, Halt> {
+    if !initialization_empty(rec, Some(bytes))? {
+        return Ok(false);
     }
     rec.publish(
         &[gate_predicate(bytes)],
@@ -128,7 +119,7 @@ fn bootstrap(rec: &mut dyn Records, gate: &Gate, bytes: &[u8]) -> Result<bool, H
             kind: KIND_TASK_QUOTA,
             key: GLOBAL.into(),
             value: encode(&Gate {
-                active: Some(total),
+                active: Some(0),
                 ..gate.clone()
             })?,
         }],
@@ -154,10 +145,8 @@ fn ready(rec: &mut dyn Records) -> Result<(Gate, Vec<u8>), Halt> {
             if !rec.quota_bootstrap_allowed()? {
                 return Err(failed());
             }
-            // Missing global metadata beside existing quota records is corruption, not a fresh
-            // store. Do not let missing metadata silently reset previously charged capacity.
-            if !rec.list(KIND_TASK_QUOTA, "")?.is_empty() {
-                return Err(failed());
+            if !initialization_empty(rec, None)? {
+                continue;
             }
             let gate = Gate {
                 version: VERSION,
@@ -241,7 +230,8 @@ pub(crate) fn publish(
             ))
         })
         .transpose()?;
-    for _ in crate::tasks::attempts() {
+    let mut mixed_reads = crate::tasks::attempts();
+    loop {
         let (gate, gate_bytes) = ready(rec)?;
         let total = gate.active.ok_or_else(failed)?;
         let mut guarded = predicates.to_vec();
@@ -265,6 +255,10 @@ pub(crate) fn publish(
                 // These independent reads may straddle another valid publication. Never call
                 // that corruption or release from a mixed snapshot. A persistent mismatch
                 // fails closed as a conflict, letting the caller replan its task as well.
+                let _ = mixed_reads.next();
+                if mixed_reads.is_empty() {
+                    return Ok(false);
+                }
                 continue;
             }
             let adjust = |value: u64| {
@@ -283,31 +277,50 @@ pub(crate) fn publish(
                 key: key.clone(),
                 expected: raw,
             });
-            mutations.push(Write {
-                kind: KIND_TASK_QUOTA,
-                key,
-                value: if next_count == 0 {
-                    Vec::new()
-                } else {
-                    encode(&Count {
-                        version: VERSION,
-                        epoch: gate.epoch,
-                        active: next_count,
-                    })?
-                },
-            });
-            mutations.push(Write {
-                kind: KIND_TASK_QUOTA,
-                key: GLOBAL.into(),
-                value: encode(&Gate {
-                    active: Some(next_total),
-                    ..gate
-                })?,
-            });
+            // An active-to-active or terminal-to-terminal update does not change either
+            // counter. Keep the validated predicates, but avoid writing identical quota rows.
+            if before != after {
+                mutations.push(Write {
+                    kind: KIND_TASK_QUOTA,
+                    key,
+                    value: if next_count == 0 {
+                        Vec::new()
+                    } else {
+                        encode(&Count {
+                            version: VERSION,
+                            epoch: gate.epoch,
+                            active: next_count,
+                        })?
+                    },
+                });
+                mutations.push(Write {
+                    kind: KIND_TASK_QUOTA,
+                    key: GLOBAL.into(),
+                    value: encode(&Gate {
+                        active: Some(next_total),
+                        ..gate
+                    })?,
+                });
+            }
         }
-        // A definitive conflict belongs to the task planner. Retrying this exact task
-        // predicate here would keep replaying stale row bytes instead of rereading the row.
-        return rec.publish(&guarded, chains, &mutations);
+        if rec.publish(&guarded, chains, &mutations)? {
+            return Ok(true);
+        }
+        // A shared quota conflict is not a change to this task. Recheck the entire original
+        // plan before spending another quota attempt; a task/config/life change still belongs
+        // to the task planner. Every retry retains all predicates in the atomic transaction.
+        for predicate in predicates {
+            if rec.get(predicate.kind, &predicate.key)? != predicate.expected {
+                return Ok(false);
+            }
+        }
+        for chain in chains {
+            if rec.observe_chain_life(chain.kind, &chain.scope)? != chain.expected {
+                return Ok(false);
+            }
+        }
+        if !rec.retry_quota()? {
+            return Ok(false);
+        }
     }
-    Ok(false)
 }

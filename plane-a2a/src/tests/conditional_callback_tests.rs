@@ -807,3 +807,80 @@ fn conditional_failures_log_the_source_site_without_record_contents() {
         .all(|(_, line)| line.contains("source_line=") && !line.contains("private-")));
     assert_ne!(lines[0].1, lines[1].1);
 }
+
+#[test]
+fn quota_retry_deadline_is_cached_per_handle_and_reset_only_after_finish() {
+    let j = Journal::default();
+    assert_eq!(j.retry_quota(1, 100), Ok(true));
+    assert_eq!(j.retry_quota(2, 1_000_000_099), Ok(true));
+    assert!(
+        matches!(j.retry_quota(3, 1_000_000_100), Err(Halt::Failed(message)) if message.contains("deadline"))
+    );
+    // Replaying an earlier permit must still reach its later committed publication.
+    assert_eq!(j.retry_quota(1, 9_000_000_000), Ok(true));
+    assert_eq!(j.retry_quota(2, 9_000_000_000), Ok(true));
+    // A retained refusal cannot be turned into a permit by a changed clock reading.
+    assert!(j.retry_quota(3, 101).is_err());
+    j.finished();
+    assert_eq!(j.retry_quota(4, 9_000_000_000), Ok(true));
+}
+
+#[test]
+fn quota_retry_cancellation_stops_both_old_and_new_permits() {
+    let j = Journal::default();
+    assert_eq!(j.retry_quota(1, 100), Ok(true));
+    j.cancelled();
+    assert!(j.retry_quota(1, 101).is_err());
+    assert!(j.retry_quota(2, 101).is_err());
+    assert!(j.committed_writes().is_empty());
+}
+
+#[test]
+fn quota_retry_replay_keeps_a_later_applied_publication_after_deadline() {
+    let j = Journal::default();
+    j.enter(TICKET, &input(&[])).unwrap();
+    assert_eq!(j.retry_quota(1, 100), Ok(true));
+    let life = observed(&j);
+    let request = publication(&j, &life);
+    let receipt = wire::encode_result(
+        &request,
+        &wire::ConditionalResult {
+            correlation: request.candidate.correlation,
+            decision: Ok(Decision::Applied),
+        },
+    )
+    .unwrap();
+    j.enter(TICKET, &input(&receipt)).unwrap();
+    assert_eq!(j.retry_quota(1, 2_000_000_000), Ok(true));
+    let writes = [
+        Write {
+            kind: KIND_TASK,
+            key: KEY.into(),
+            value: b"new task".to_vec(),
+        },
+        Write {
+            kind: KIND_TASK_EVENT,
+            key: KEY.into(),
+            value: b"event".to_vec(),
+        },
+    ];
+    assert!(j.applied_since(4, KIND_TASK_EVENT, KEY));
+    assert!(j.committed_writes().is_empty());
+    assert_eq!(
+        j.publish(
+            5,
+            &[Predicate {
+                kind: KIND_TASK,
+                key: KEY.into(),
+                expected: Some(b"raw task".to_vec()),
+            }],
+            &[life],
+            &writes
+        ),
+        Ok(true)
+    );
+    assert!(j.retry_quota(7, 2_000_000_000).is_err());
+    assert!(j.applied_since(4, KIND_TASK_EVENT, KEY));
+    assert!(j.committed_writes().is_empty());
+    assert_eq!(j.0.with(&(), |s| s.unwrap().steps.len()), 2);
+}

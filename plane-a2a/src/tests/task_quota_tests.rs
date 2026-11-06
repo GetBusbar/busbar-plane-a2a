@@ -4,6 +4,9 @@
 use super::*;
 use crate::records::KIND_TASK_QUOTA;
 
+#[path = "task_quota_initialization_tests.rs"]
+mod initialization_tests;
+
 const GLOBAL: &str = "active/v1";
 
 fn total(book: &Book) -> u64 {
@@ -22,7 +25,7 @@ fn principal_count(book: &Book, caller: &str) -> u64 {
         .unwrap_or(0)
 }
 
-fn legacy(count: u64) -> Book {
+fn without_quota(count: u64) -> Book {
     let mut book = Book::default();
     book.apply(&[Write {
         kind: KIND_TASK_QUOTA,
@@ -30,7 +33,7 @@ fn legacy(count: u64) -> Book {
         value: Vec::new(),
     }]);
     for index in 0..count {
-        let mut held = row(&format!("legacy-{index}"), 100);
+        let mut held = row(&format!("existing-{index}"), 100);
         held.principal = ALICE.into();
         book.hold(
             ALICE,
@@ -44,7 +47,7 @@ fn legacy(count: u64) -> Book {
 }
 
 fn initialized(count: u64) -> Book {
-    let mut book = legacy(count);
+    let mut book = without_quota(count);
     book.apply(&[
         Write {
             kind: KIND_TASK_QUOTA,
@@ -142,7 +145,7 @@ fn quota_last_task_terminal_between_reads_replans_instead_of_reporting_corruptio
         transition(
             book,
             &step(ALICE, 200),
-            "legacy-0",
+            "existing-0",
             TaskState::Completed,
             &mut Vec::new(),
         )
@@ -159,7 +162,7 @@ fn quota_last_task_terminal_between_reads_replans_instead_of_reporting_corruptio
         change(
             &mut call,
             &step(ALICE, 200),
-            "legacy-0",
+            "existing-0",
             &mut plan,
             &mut Vec::new()
         ),
@@ -226,7 +229,7 @@ fn quota_terminal_and_genesis_race_preserves_both_counts_in_either_order() {
             transition(
                 &mut terminal,
                 &step(ALICE, 200),
-                "legacy-0",
+                "existing-0",
                 TaskState::Completed,
                 &mut Vec::new()
             ),
@@ -255,7 +258,7 @@ fn quota_terminal_and_genesis_race_preserves_both_counts_in_either_order() {
             match transition(
                 &mut terminal,
                 &step(ALICE, 200),
-                "legacy-0",
+                "existing-0",
                 TaskState::Completed,
                 &mut Vec::new(),
             ) {
@@ -275,7 +278,7 @@ fn quota_terminal_and_genesis_race_preserves_both_counts_in_either_order() {
         );
         assert_eq!(principal_count(&host.borrow(), BOB), 1);
         assert_eq!(
-            get(&mut *host.borrow_mut(), ALICE, "legacy-0", 200)
+            get(&mut *host.borrow_mut(), ALICE, "existing-0", 200)
                 .unwrap()
                 .unwrap()
                 .row
@@ -287,7 +290,7 @@ fn quota_terminal_and_genesis_race_preserves_both_counts_in_either_order() {
 
 #[test]
 fn quota_bootstrap_restarts_and_stale_initializer_cannot_overwrite_ready_counts() {
-    let host = Rc::new(RefCell::new(legacy(2)));
+    let host = Rc::new(RefCell::new(without_quota(0)));
     let mut abandoned = Call::new(&host);
     assert_eq!(
         open_configured(
@@ -311,13 +314,13 @@ fn quota_bootstrap_restarts_and_stale_initializer_cannot_overwrite_ready_counts(
         ),
         Err(Halt::Pending)
     );
-    let stale = abandoned.offered().clone(); // principal reconstruction, still guarded by initializing
-    assert!(abandoned.commit(true));
+    // Lose the callback before activation; another caller resumes the durable empty gate.
+    let stale = abandoned.offered().clone();
     drop(abandoned);
     let mut restarted = Call::new(&host);
     assert!(finish_open(&mut restarted, BOB, "new").is_ok());
-    assert_eq!(total(&host.borrow()), 3);
-    assert_eq!(principal_count(&host.borrow(), ALICE), 2);
+    assert_eq!(total(&host.borrow()), 1);
+    assert_eq!(principal_count(&host.borrow(), ALICE), 0);
     assert_eq!(principal_count(&host.borrow(), BOB), 1);
     let before = host.borrow().clone();
     assert!(!host
@@ -325,31 +328,6 @@ fn quota_bootstrap_restarts_and_stale_initializer_cannot_overwrite_ready_counts(
         .publish(&stale.predicates, &stale.chains, &stale.writes)
         .unwrap());
     assert_eq!(*host.borrow(), before);
-}
-
-#[test]
-fn quota_legacy_over_limit_retains_active_tasks_and_allows_terminal_release() {
-    let mut book = legacy(crate::task_quota::MAX_ACTIVE + 1);
-    assert!(
-        matches!(open_configured(&mut book, &step(BOB, 200), row("new", 200), "planner", None), Err(Halt::Failed(message)) if message.contains("capacity"))
-    );
-    assert_eq!(total(&book), crate::task_quota::MAX_ACTIVE + 1);
-    assert_eq!(
-        book.list(KIND_TASK, "").unwrap().len() as u64,
-        crate::task_quota::MAX_ACTIVE + 1
-    );
-    assert!(transition(
-        &mut book,
-        &step(ALICE, 200),
-        "legacy-0",
-        TaskState::Completed,
-        &mut Vec::new()
-    )
-    .is_ok());
-    assert_eq!(total(&book), crate::task_quota::MAX_ACTIVE);
-    assert!(book
-        .value(KIND_TASK, &task_key(ALICE, "legacy-0"))
-        .is_some());
 }
 
 struct Unattested(Book);
@@ -377,7 +355,7 @@ impl Records for Unattested {
 #[test]
 fn quota_bootstrap_without_host_quiescence_proof_fails_closed() {
     for initializing in [false, true] {
-        let mut book = legacy(1);
+        let mut book = without_quota(0);
         if initializing {
             book.apply(&[Write {
                 kind: KIND_TASK_QUOTA,
@@ -403,7 +381,7 @@ fn quota_bootstrap_without_host_quiescence_proof_fails_closed() {
 
 #[test]
 fn quota_initializing_gate_also_blocks_task_owned_config_without_host_proof() {
-    let mut book = legacy(1);
+    let mut book = without_quota(1);
     book.apply(&[Write {
         kind: KIND_TASK_QUOTA,
         key: GLOBAL.into(),
@@ -414,7 +392,7 @@ fn quota_initializing_gate_also_blocks_task_owned_config_without_host_proof() {
     assert!(write_config(
         &mut records,
         &step(ALICE, 200),
-        "legacy-0",
+        "existing-0",
         None,
         b"private config".to_vec(),
     )
@@ -454,7 +432,7 @@ impl Records for IncompleteListing {
 
 #[test]
 fn quota_failed_bounded_listing_never_activates_partial_accounting() {
-    let mut records = IncompleteListing(legacy(1));
+    let mut records = IncompleteListing(without_quota(1));
     assert!(open_configured(
         &mut records,
         &step(BOB, 200),
@@ -463,9 +441,7 @@ fn quota_failed_bounded_listing_never_activates_partial_accounting() {
         None
     )
     .is_err());
-    let gate: serde_json::Value =
-        serde_json::from_slice(records.0.value(KIND_TASK_QUOTA, GLOBAL).unwrap()).unwrap();
-    assert!(gate["active"].is_null());
+    assert!(records.0.value(KIND_TASK_QUOTA, GLOBAL).is_none());
     assert!(records.0.value(KIND_TASK, &task_key(BOB, "new")).is_none());
     assert!(records
         .0
@@ -475,7 +451,7 @@ fn quota_failed_bounded_listing_never_activates_partial_accounting() {
 
 #[test]
 fn quota_initialized_store_needs_no_bootstrap_capability_after_restart() {
-    let mut records = Unattested(Book::default());
+    let mut records = without_quota(0);
     assert!(open_configured(
         &mut records,
         &step(ALICE, 200),
@@ -484,8 +460,8 @@ fn quota_initialized_store_needs_no_bootstrap_capability_after_restart() {
         None
     )
     .is_ok());
-    assert_eq!(total(&records.0), 1);
-    let mut restarted = Unattested(records.0.clone());
+    assert_eq!(total(&records), 1);
+    let mut restarted = Unattested(records);
     assert_eq!(restore(&mut restarted).unwrap().active, 1);
     assert!(transition(
         &mut restarted,
@@ -534,7 +510,7 @@ fn quota_corrupt_metadata_or_task_identity_never_resets_capacity() {
         .is_err());
         assert_eq!(book, before);
     }
-    let mut book = legacy(1);
+    let mut book = without_quota(1);
     let mut mismatch = row("mismatch", 100);
     mismatch.principal = BOB.into();
     book.hold(
@@ -546,7 +522,192 @@ fn quota_corrupt_metadata_or_task_identity_never_resets_capacity() {
     );
     assert!(open_configured(&mut book, &step(BOB, 200), row("new", 200), "planner", None).is_err());
     assert!(book.value(KIND_TASK, &task_key(BOB, "new")).is_none());
-    let gate: serde_json::Value =
-        serde_json::from_slice(book.value(KIND_TASK_QUOTA, GLOBAL).unwrap()).unwrap();
-    assert!(gate["active"].is_null());
+    assert!(book.value(KIND_TASK_QUOTA, GLOBAL).is_none());
+}
+
+/// Distinct task identities share the quota CAS. Every conflict below is definitive;
+/// no command is lost, repeated or refused by the healthy conditional store.
+#[test]
+fn quota_eight_concurrent_opens_finish_without_false_store_failure() {
+    let host = Rc::new(RefCell::new(initialized(0)));
+    let mut calls: Vec<_> = (0..8).map(|_| Call::new(&host)).collect();
+    let mut finished: Vec<Option<Result<TaskRow, Halt>>> = (0..8).map(|_| None).collect();
+    for _ in 0..16 {
+        for (index, call) in calls.iter_mut().enumerate() {
+            if finished[index].is_some() {
+                continue;
+            }
+            call.replay();
+            let result = open_configured(
+                call,
+                &step(ALICE, 200),
+                row(&format!("concurrent-{index}"), 200),
+                "planner",
+                None,
+            );
+            if result != Err(Halt::Pending) {
+                finished[index] = Some(result);
+            }
+        }
+        for call in &mut calls {
+            if call.pending.is_some() {
+                call.commit(true);
+            }
+        }
+        if finished.iter().all(Option::is_some) {
+            break;
+        }
+    }
+    let successful = finished
+        .iter()
+        .filter(|answer| matches!(answer, Some(Ok(_))))
+        .count();
+    assert_eq!(
+        successful, 8,
+        "healthy quota contention must not become a store failure: {finished:?}"
+    );
+    let book = host.borrow();
+    assert_eq!(total(&book), 8);
+    assert_eq!(principal_count(&book, ALICE), 8);
+    assert_eq!(
+        calls
+            .iter()
+            .flat_map(|call| call.committed.values())
+            .filter(|applied| **applied)
+            .count(),
+        8
+    );
+    for index in 0..8 {
+        let id = format!("concurrent-{index}");
+        assert!(book.value(KIND_TASK, &task_key(ALICE, &id)).is_some());
+        assert!(book
+            .value(KIND_TASK_EVENT, &event_key(ALICE, &id, 1))
+            .is_some());
+        assert!(book
+            .value(KIND_TASK_EVENT, &event_key(ALICE, &id, 2))
+            .is_some());
+        assert!(book
+            .value(KIND_TASK_EVENT, &event_key(ALICE, &id, 3))
+            .is_none());
+    }
+}
+
+#[test]
+fn quota_retry_never_resubmits_a_stale_task_plan() {
+    let host = Rc::new(RefCell::new(initialized(0)));
+    let mut first = Call::new(&host);
+    let mut second = Call::new(&host);
+    for call in [&mut first, &mut second] {
+        assert_eq!(
+            open_configured(call, &step(ALICE, 200), row("same", 200), "planner", None),
+            Err(Halt::Pending)
+        );
+    }
+    assert!(first.commit(true));
+    assert!(!second.commit(true));
+    assert!(finish_open(&mut first, ALICE, "same").is_ok());
+    assert!(matches!(
+        finish_open(&mut second, ALICE, "same"),
+        Err(Halt::Failed(_))
+    ));
+    assert_eq!(second.committed.len(), 1);
+    assert_eq!(total(&host.borrow()), 1);
+    assert_eq!(principal_count(&host.borrow(), ALICE), 1);
+    assert_eq!(
+        host.borrow_mut().list(KIND_TASK_EVENT, "").unwrap().len(),
+        2
+    );
+}
+
+#[test]
+fn quota_retry_active_to_active_changes_do_not_rewrite_counts() {
+    let mut book = initialized(1);
+    transition(
+        &mut book,
+        &step(ALICE, 200),
+        "existing-0",
+        TaskState::Working,
+        &mut Vec::new(),
+    )
+    .unwrap();
+    assert_eq!(total(&book), 1);
+    assert_eq!(principal_count(&book, ALICE), 1);
+    let writes = book.publications.last().unwrap();
+    assert!(writes.iter().any(|write| write.kind == KIND_TASK));
+    assert!(writes.iter().any(|write| write.kind == KIND_TASK_EVENT));
+    assert!(!writes.iter().any(|write| write.kind == KIND_TASK_QUOTA));
+}
+
+#[test]
+fn quota_retry_deadline_or_cancel_stops_without_partial_task_or_charge() {
+    for cancel in [false, true] {
+        let host = Rc::new(RefCell::new(initialized(0)));
+        let mut call = Call::new(&host);
+        call.quota_now_ns = Some(0);
+        assert_eq!(
+            open_configured(
+                &mut call,
+                &step(ALICE, 200),
+                row("waiting", 200),
+                "planner",
+                None
+            ),
+            Err(Halt::Pending)
+        );
+        open_configured(
+            &mut *host.borrow_mut(),
+            &step(BOB, 200),
+            row("competitor-1", 200),
+            "planner",
+            None,
+        )
+        .unwrap();
+        assert!(!call.commit(true));
+        call.replay();
+        assert_eq!(
+            open_configured(
+                &mut call,
+                &step(ALICE, 200),
+                row("waiting", 200),
+                "planner",
+                None
+            ),
+            Err(Halt::Pending)
+        );
+        open_configured(
+            &mut *host.borrow_mut(),
+            &step(BOB, 200),
+            row("competitor-2", 200),
+            "planner",
+            None,
+        )
+        .unwrap();
+        assert!(!call.commit(true));
+        if cancel {
+            call.quota_retry.cancelled();
+        }
+        call.quota_now_ns = Some(1_000_000_000);
+        call.replay();
+        assert!(matches!(
+            open_configured(
+                &mut call,
+                &step(ALICE, 200),
+                row("waiting", 200),
+                "planner",
+                None
+            ),
+            Err(Halt::Failed(_))
+        ));
+        assert!(call.pending.is_none());
+        assert_eq!(call.committed.len(), 2);
+        assert!(call.committed.values().all(|applied| !applied));
+        let book = host.borrow();
+        assert_eq!(total(&book), 2);
+        assert_eq!(principal_count(&book, ALICE), 0);
+        assert_eq!(principal_count(&book, BOB), 2);
+        assert!(book.value(KIND_TASK, &task_key(ALICE, "waiting")).is_none());
+        assert!(book
+            .value(KIND_TASK_EVENT, &event_key(ALICE, "waiting", 1))
+            .is_none());
+    }
 }

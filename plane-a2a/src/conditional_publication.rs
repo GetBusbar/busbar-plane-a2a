@@ -28,6 +28,8 @@ struct State {
     capability: Option<wire::Capability>,
     next: u64,
     steps: Vec<Step>,
+    quota_retry_started: Option<u64>,
+    quota_retries: std::collections::BTreeMap<u32, bool>,
     cancelled: bool,
     broken: bool,
     /// A definitive refusal permits only the caller's error, including every partial suffix.
@@ -226,6 +228,43 @@ impl State {
 }
 
 impl Journal {
+    /// Keep a retry decision stable across callback replay, even if a later transaction has
+    /// already committed when the callback next runs. Only a genuinely new retry checks time.
+    pub(crate) fn retry_quota(&self, seq: u32, now_ns: u64) -> Result<bool, Halt> {
+        const QUOTA_RETRY_NS: u64 = 1_000_000_000;
+        self.0.with_all(|all| {
+            let s = all.entry(()).or_default();
+            if s.cancelled || s.broken || s.response_only {
+                return Err(failed());
+            }
+            let permitted = if let Some(permitted) = s.quota_retries.get(&seq) {
+                *permitted
+            } else {
+                if s.steps.last().is_some_and(|step| seq <= step.seq)
+                    || s.quota_retries
+                        .last_key_value()
+                        .is_some_and(|(last, _)| seq <= *last)
+                {
+                    s.broken = true;
+                    return Err(failed());
+                }
+                let start = *s.quota_retry_started.get_or_insert(now_ns);
+                let permitted = now_ns
+                    .checked_sub(start)
+                    .is_some_and(|elapsed| elapsed < QUOTA_RETRY_NS);
+                s.quota_retries.insert(seq, permitted);
+                permitted
+            };
+            if permitted {
+                Ok(true)
+            } else {
+                Err(Halt::Failed(
+                    "task quota contention deadline elapsed".into(),
+                ))
+            }
+        })
+    }
+
     /// Re-enter the same callback epoch. Only its exact receipt can settle its outstanding step.
     pub(crate) fn enter(&self, ticket: Ticket, extensions: &[u8]) -> Result<(), Halt> {
         self.0.with_all(|all| {
@@ -311,6 +350,10 @@ impl Journal {
             if s.cancelled || s.broken {
                 return Err(failed());
             }
+            if s.quota_retries.contains_key(&seq) {
+                s.broken = true;
+                return Err(failed());
+            }
             let capability = s
                 .capability
                 .ok_or_else(|| failed_at("required value missing or sequence exhausted"))?;
@@ -381,6 +424,10 @@ impl Journal {
         self.0.with_all(|all| {
             let s = all.entry(()).or_default();
             if s.cancelled || s.broken {
+                return Err(failed());
+            }
+            if s.quota_retries.contains_key(&seq) {
+                s.broken = true;
                 return Err(failed());
             }
             let capability = s
@@ -574,6 +621,8 @@ impl Journal {
                 && !s.steps.iter().any(Step::pending)
             {
                 s.steps.clear();
+                s.quota_retries.clear();
+                s.quota_retry_started = None;
                 s.completed = true;
             }
         });

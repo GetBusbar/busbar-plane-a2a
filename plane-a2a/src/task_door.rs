@@ -461,6 +461,18 @@ fn decode_notification_config(bytes: Option<&[u8]>) -> Result<Option<local::Push
 }
 
 impl Records for Via<'_> {
+    fn retry_quota(&mut self) -> Result<bool, Halt> {
+        let journal = self
+            .publication
+            .clone()
+            .ok_or_else(|| Halt::Failed("conditional quota retry unavailable".into()))?;
+        let Poll::Ready(Ok(reading)) = self.conn.clock_now() else {
+            return Err(Halt::Failed("quota retry clock unavailable".into()));
+        };
+        let handle = self.next_handle();
+        journal.retry_quota(handle.seq, reading.mono_ns)
+    }
+
     fn quota_bootstrap_allowed(&mut self) -> Result<bool, Halt> {
         self.issue((0, 0), |services, handle, _, _| {
             Poll::Ready(services.entitled(handle, "record-quota-bootstrap:"))
