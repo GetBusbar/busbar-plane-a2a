@@ -175,11 +175,41 @@ fn canonical(v: &serde_json::Value) -> String {
     }
 }
 
-/// A card's JWS payload: the canonical card with its `signatures` removed.
+/// These fixture cards' JWS payload, independently of the plane's implementation.
+/// A2A v1.0 §8.4.1/§8.4.3 require proto-default removal before JCS. The only implicit
+/// default in these cards is SecurityRequirement.schemes.*.list: an empty repeated
+/// string field. Keep its containing map entry (a present message), required empty
+/// capabilities, and all other content; v0.3 has no such default-removal rule.
 fn signing_payload(card: &serde_json::Value) -> String {
     let mut stripped = card.clone();
     if let Some(obj) = stripped.as_object_mut() {
         obj.remove("signatures");
+    }
+    if card
+        .get("supportedInterfaces")
+        .is_some_and(serde_json::Value::is_array)
+    {
+        if let Some(requirements) = stripped
+            .get_mut("securityRequirements")
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            for requirement in requirements {
+                if let Some(schemes) = requirement
+                    .get_mut("schemes")
+                    .and_then(serde_json::Value::as_object_mut)
+                {
+                    for scopes in schemes.values_mut() {
+                        if scopes
+                            .get("list")
+                            .and_then(serde_json::Value::as_array)
+                            .is_some_and(Vec::is_empty)
+                        {
+                            scopes.as_object_mut().expect("StringList").remove("list");
+                        }
+                    }
+                }
+            }
+        }
     }
     canonical(&stripped)
 }
@@ -1914,13 +1944,32 @@ async fn malformed_rest_bodies_never_dispatch_or_charge_and_empty_cancel_still_d
         .header("authorization", format!("Bearer {}", s.token))
         .body(axum::body::Body::from("{broken"))
         .unwrap();
-    let (status, _) = answered(&s.router, request).await;
-    assert_eq!(
-        status,
-        StatusCode::UNSUPPORTED_MEDIA_TYPE,
-        "head refusal precedes body decoding"
+    let (status, answer) = answered(&s.router, request).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{answer}");
+    let document: serde_json::Value = serde_json::from_str(&answer).unwrap();
+    assert_eq!(document["error"]["status"], "INVALID_ARGUMENT");
+    assert!(
+        answer.contains("request declared `text/plain`"),
+        "head refusal precedes malformed-body decoding: {answer}"
     );
     assert!(!agent.relayed());
+    assert_eq!(admitted(&s), before_requests);
+    let billed_after = Billed::of(&s);
+    assert_eq!(
+        (
+            billed_after.requests,
+            billed_after.fees,
+            billed_after.bytes,
+            billed_after.spend
+        ),
+        (
+            billed_before.requests,
+            billed_before.fees,
+            billed_before.bytes,
+            billed_before.spend
+        ),
+        "a refused media type changes no ledger amount"
+    );
     let request = axum::http::Request::builder()
         .method("POST")
         .uri(&target)
@@ -3268,7 +3317,9 @@ async fn a_cert_spki_agent_is_observed_approved_served_and_refused_once_its_key_
     assert!(body.contains("m-far"), "the far agent's answer: {body}");
     assert!(agent.relayed(), "the pinned agent was dialled");
 
+    let card_fetches = agent.fetches();
     let served_now = tls.rekey();
+    assert_ne!(served_now, pin, "the far end now serves a different key");
     let (status, body) = answered(&s.router, send()).await;
     assert_ne!(status, StatusCode::OK, "another key is refused: {body}");
     assert!(
@@ -3279,11 +3330,17 @@ async fn a_cert_spki_agent_is_observed_approved_served_and_refused_once_its_key_
     assert_eq!(status, StatusCode::OK, "{preview}");
     assert_eq!(preview["state"], "error", "{preview}");
     assert_eq!(
+        agent.fetches(),
+        card_fetches,
+        "the changed SPKI is refused before any card request reaches the peer"
+    );
+    assert_eq!(
         preview["failure"],
         format!(
-            "`pin.mechanism: cert_spki`: the card endpoint served a certificate whose \
-             subject-public-key-info is `{served_now}`, and the operator pinned `{pin}`. The \
-             endpoint answered and it is not the endpoint the operator supplied a root for."
+            "agent card fetch of `https://127.0.0.1:{}/.well-known/agent.json` failed: \
+             client error (Connect): tls: the far end's key is not the one its trust anchors pin; \
+             refused before any request byte",
+            agent.port
         )
         .as_str(),
         "{preview}"
@@ -4520,10 +4577,13 @@ async fn a_fronted_agents_card_is_served_rewritten_through_busbar_behind_its_gra
     );
 
     assert_eq!(
-        card["security"],
-        serde_json::json!([{ "busbarA2aInbound": [] }])
+        card["securityRequirements"],
+        serde_json::json!([{ "schemes": { "busbarA2aInbound": { "list": [] } } }])
     );
-    assert_eq!(card["securitySchemes"]["busbarA2aInbound"]["type"], "http");
+    assert_eq!(
+        card["securitySchemes"]["busbarA2aInbound"]["httpAuthSecurityScheme"]["scheme"],
+        "Bearer"
+    );
     assert_eq!(
         card["capabilities"],
         serde_json::json!({}),
@@ -6676,11 +6736,13 @@ async fn a_grpc_callers_send_message_is_answered_ok_with_its_status_in_the_trail
 }
 
 /// A gRPC CALL REFUSED BEFORE ITS LINE WAS READ IS REFUSED ON THE gRPC LINE: a `SendMessage`
-/// naming an `a2a-version` this endpoint does not speak is `UNIMPLEMENTED`, trailers-only under
-/// the listener's `200`.
+/// naming an `a2a-version` this endpoint does not speak is `FAILED_PRECONDITION`, with typed
+/// `VERSION_NOT_SUPPORTED` details, trailers-only under the listener's `200`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_grpc_call_naming_a_version_this_endpoint_does_not_speak_is_unimplemented() {
+async fn a_grpc_call_naming_a_version_this_endpoint_does_not_speak_is_failed_precondition() {
+    use base64::Engine as _;
     use http_body_util::BodyExt as _;
+    use root_facts::Field::{Bytes, Varint};
     use tower::ServiceExt as _;
     let _one = PUBLISHING.lock().await;
     let instance = "serve-agent-door-grpc-version";
@@ -6707,7 +6769,9 @@ async fn a_grpc_call_naming_a_version_this_endpoint_does_not_speak_is_unimplemen
         .await
         .expect("the router answers");
     let (parts, body) = response.into_parts();
-    let bytes = body.collect().await.expect("the answer").to_bytes();
+    let collected = body.collect().await.expect("the answer");
+    let trailers = collected.trailers().cloned();
+    let bytes = collected.to_bytes();
     assert_eq!(
         parts.status,
         StatusCode::OK,
@@ -6719,11 +6783,34 @@ async fn a_grpc_call_naming_a_version_this_endpoint_does_not_speak_is_unimplemen
             .headers
             .get("grpc-status")
             .and_then(|v| v.to_str().ok()),
-        Some("12"),
+        Some("9"),
         "trailers-only, the version error's status: {:?}",
         parts.headers
     );
+    let details = parts.headers["grpc-status-details-bin"]
+        .to_str()
+        .expect("base64 status details");
+    let details = base64::engine::general_purpose::STANDARD_NO_PAD
+        .decode(details)
+        .expect("a protobuf Status");
+    let status = root_facts::fields(&details).expect("Status fields");
+    let [(1, Varint(9)), (2, Bytes(_)), (3, Bytes(info))] = status.as_slice() else {
+        panic!("FAILED_PRECONDITION with one typed detail: {status:?}");
+    };
+    let info = root_facts::fields(info).expect("Any fields");
+    let [(1, Bytes(kind)), (2, Bytes(value))] = info.as_slice() else {
+        panic!("one typed ErrorInfo: {info:?}");
+    };
+    assert_eq!(kind, b"type.googleapis.com/google.rpc.ErrorInfo");
+    assert_eq!(
+        root_facts::fields(value).expect("ErrorInfo fields"),
+        vec![
+            (1, Bytes(b"VERSION_NOT_SUPPORTED".to_vec())),
+            (2, Bytes(surface("error_info_domain").as_bytes().to_vec())),
+        ]
+    );
     assert!(bytes.is_empty(), "no message: {bytes:?}");
+    assert!(trailers.is_none(), "one header block: {trailers:?}");
     assert!(!agent.relayed(), "a refused call dials no agent");
 }
 
@@ -7916,6 +8003,15 @@ async fn the_signature_is_taken_over_the_document_that_is_actually_served() {
         card_signature_verifies(&tampered),
         Err("signature does not verify"),
         "the signature covers the document that is served"
+    );
+
+    let mut scoped = card.clone();
+    scoped["securityRequirements"][0]["schemes"]["busbarA2aInbound"]["list"] =
+        serde_json::json!(["admin"]);
+    assert_eq!(
+        card_signature_verifies(&scoped),
+        Err("signature does not verify"),
+        "only an empty implicit scope list is omitted; a changed requirement must not verify"
     );
 }
 
