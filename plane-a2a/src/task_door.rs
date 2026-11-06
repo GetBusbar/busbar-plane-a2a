@@ -1738,19 +1738,13 @@ fn window_core_inner(
             arena.span(r.details.as_deref().unwrap_or_default().as_bytes()),
         )
     });
-    let short = !(fields.fits() && records.fits() && arena.fits() && units.fits());
-    let (fw, fnd) = fields.settle(short);
-    let (rw, rnd) = records.settle(short);
-    let (aw, and) = arena.settle(short);
-    let (uw, und) = units.settle(short);
-    out.set(|o| &o.units_written, uw as u32);
-    out.set(|o| &o.units_needed, und as u32);
-    out.set(|o| &o.fields_written, fw as u32);
-    out.set(|o| &o.fields_needed, fnd as u32);
-    out.set(|o| &o.records_written, rw as u32);
-    out.set(|o| &o.records_needed, rnd as u32);
-    out.set(|o| &o.arena_written, aw as u64);
-    out.set(|o| &o.arena_needed, and as u64);
+    let short = busbar_contract::abi::sdk::plane::settle_piece(
+        out,
+        &fields,
+        &units,
+        &arena,
+        Some(&records),
+    );
     if short {
         return Outcome::Failed;
     }
