@@ -18,6 +18,9 @@ impl Records for Host {
         if kind == crate::records::KIND_TASK_QUOTA {
             return Ok(Some(br#"{"version":1,"epoch":1,"active":1}"#.to_vec()));
         }
+        if kind == KIND_PUSH_CONFIG {
+            return Ok(Some(SECRET.to_vec()));
+        }
         assert_eq!(kind, KIND_TASK);
         Ok(Some(
             serde_json::to_vec(&HeldTask {
@@ -72,10 +75,19 @@ fn config_publication_keeps_old_and_new_raw_credentials_wiping_across_every_outc
             )
         }));
         assert_eq!(result.is_err(), matches!(end, End::Unwind));
+        if let Ok(answer) = result {
+            match end {
+                End::Applied => assert_eq!(answer, Ok(true)),
+                End::Conflict => assert_eq!(answer, Ok(false)),
+                End::Pending => assert_eq!(answer, Err(Halt::Pending)),
+                End::Refused => assert_eq!(answer, Err(Halt::Failed("refused".into()))),
+                End::Unwind => unreachable!(),
+            }
+        }
         assert_eq!(
             probe.retirements(),
-            4,
-            "both input owners and every guarded transaction copy retire wiped"
+            if matches!(end, End::Conflict) { 5 } else { 4 },
+            "both input owners, guarded transaction copies and conflict reread retire wiped"
         );
         probe.checkpoint();
     }

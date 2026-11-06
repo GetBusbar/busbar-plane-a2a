@@ -310,7 +310,10 @@ pub(crate) fn publish(
         // plan before spending another quota attempt; a task/config/life change still belongs
         // to the task planner. Every retry retains all predicates in the atomic transaction.
         for predicate in predicates {
-            if rec.get(predicate.kind, &predicate.key)? != predicate.expected {
+            let current = rec
+                .get(predicate.kind, &predicate.key)?
+                .map(crate::relay::RawBytes::from);
+            if current.as_deref() != predicate.expected.as_deref() {
                 return Ok(false);
             }
         }

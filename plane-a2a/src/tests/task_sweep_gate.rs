@@ -46,18 +46,27 @@ fn sweep_count_matches_retired_tasks_and_keeps_active_rows_and_chains() {
             book.apply(&out);
         }
     }
+    let quota_before = book.list(crate::records::KIND_TASK_QUOTA, "").unwrap();
     for expected in [1, 1, 0] {
         let mut out = Vec::new();
         let before = book.publications.len();
         let count = retention_sweep(&mut book, 101 + TERMINAL_TTL_SECS, 1, &mut out).unwrap();
         assert_eq!(count, expected);
+        assert_eq!(book.publications.len(), before + expected);
+        for writes in &book.publications[before..] {
+            assert_eq!(writes.len(), 3);
+            assert!(writes.iter().all(|write| write.value.is_empty()));
+            assert_eq!(
+                writes.iter().map(|write| write.kind).collect::<Vec<_>>(),
+                [KIND_TASK_EVENT, KIND_TASK, KIND_PUSH_CONFIG],
+                "retiring an already terminal task atomically deletes its row, config and chain"
+            );
+            assert!(writes.iter().all(|write| write.key == writes[0].key));
+        }
         assert_eq!(
-            book.publications[before..]
-                .iter()
-                .map(Vec::len)
-                .sum::<usize>(),
-            expected * 5,
-            "task, config and chain tombstones plus both quota records form one retirement"
+            book.list(crate::records::KIND_TASK_QUOTA, "").unwrap(),
+            quota_before,
+            "already terminal tasks have released their active quota before retention"
         );
         assert!(out.is_empty(), "retirement is already atomically committed");
         book.apply(&out);

@@ -9,7 +9,7 @@ use busbar_contract::vocab::{EV_PUSH_DELIVERED, EV_PUSH_FAILED};
 use super::*;
 use crate::a2a::task::TaskState;
 use crate::push::DeliveryAuth;
-use crate::records::{KIND_PUSH_CONFIG, KIND_TASK_EVENT};
+use crate::records::{KIND_PUSH_CONFIG, KIND_TASK, KIND_TASK_EVENT};
 use crate::tasks::tests::{event_key, submitted, Book, ALICE, BOB};
 use crate::tasks::{get, task_key};
 use crate::TaskEventRow;
@@ -140,6 +140,7 @@ fn an_owed_outcome_is_filed_on_its_tasks_chain() {
         },
     ];
     let before = book.publications.len();
+    let quota_before = book.list(crate::records::KIND_TASK_QUOTA, "").unwrap();
     let mut out = Vec::new();
     file_owed(&mut book, ALICE, &owed, 300, &mut out).unwrap();
     book.apply(&out);
@@ -159,16 +160,21 @@ fn an_owed_outcome_is_filed_on_its_tasks_chain() {
         "guarded changes never escape as ordinary output"
     );
     assert_eq!(book.publications.len(), before + 2);
-    assert!(
-        book.publications[before..]
-            .iter()
-            .all(|writes| writes.len() == 4
-                && writes
-                    .iter()
-                    .filter(|write| write.kind == crate::records::KIND_TASK_QUOTA)
-                    .count()
-                    == 2),
-        "each acknowledged mutation atomically includes its row, event and both quota records"
+    for (writes, task) in book.publications[before..].iter().zip(["t1", "t2"]) {
+        let key = task_key(ALICE, task);
+        assert_eq!(
+            writes
+                .iter()
+                .map(|write| (write.kind, write.key.as_str()))
+                .collect::<Vec<_>>(),
+            [(KIND_TASK, key.as_str()), (KIND_TASK_EVENT, key.as_str())],
+            "each acknowledged outcome atomically changes only its task row and event"
+        );
+    }
+    assert_eq!(
+        book.list(crate::records::KIND_TASK_QUOTA, "").unwrap(),
+        quota_before,
+        "filing a delivery outcome does not change active task accounting"
     );
 }
 

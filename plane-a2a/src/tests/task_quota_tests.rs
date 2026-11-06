@@ -166,8 +166,30 @@ fn quota_last_task_terminal_between_reads_replans_instead_of_reporting_corruptio
             &mut plan,
             &mut Vec::new()
         ),
+        Err(Halt::Pending)
+    );
+    let completed = host.borrow().clone();
+    let guard = call.offered();
+    assert_eq!(guard.writes.len(), 1);
+    assert_eq!(guard.writes[0].kind, KIND_TASK);
+    assert_eq!(
+        Some(&guard.writes[0].value),
+        completed.value(KIND_TASK, &task_key(ALICE, "existing-0"))
+    );
+    assert!(call.commit(true));
+    call.replay();
+    assert_eq!(
+        change(
+            &mut call,
+            &step(ALICE, 200),
+            "existing-0",
+            &mut plan,
+            &mut Vec::new()
+        ),
         Ok(None)
     );
+    assert_eq!(host.borrow().rows, completed.rows);
+    assert_eq!(host.borrow().lives, completed.lives);
     assert_eq!(total(&host.borrow()), 0);
     assert_eq!(principal_count(&host.borrow(), ALICE), 0);
 }
