@@ -96,6 +96,17 @@ pub trait Records {
         ))
     }
 
+    /// Acknowledge exact read evidence without task, notification or mapping effects.
+    /// The host still requires a nonempty compare-and-write transaction.
+    fn publish_read_guard(
+        &mut self,
+        predicates: &[Predicate],
+        chains: &[ChainLife],
+        writes: &[Write],
+    ) -> Result<bool, Halt> {
+        self.publish(predicates, chains, writes)
+    }
+
     /// Permit another quota-only conflict attempt. Adapters with callback replay must retain
     /// each decision and enforce their elapsed-time/cancellation budget. Other stores keep the
     /// caller's bounded task retries.
@@ -235,6 +246,15 @@ impl Records for Staged<'_> {
         writes: &[Write],
     ) -> Result<bool, Halt> {
         self.rec.publish(predicates, chains, writes)
+    }
+
+    fn publish_read_guard(
+        &mut self,
+        predicates: &[Predicate],
+        chains: &[ChainLife],
+        writes: &[Write],
+    ) -> Result<bool, Halt> {
+        self.rec.publish_read_guard(predicates, chains, writes)
     }
 
     fn observe_chain_life(&mut self, kind: &str, scope: &str) -> Result<Option<Vec<u8>>, Halt> {
@@ -662,11 +682,16 @@ pub(crate) fn change_configured(
     plan: &mut Plan<'_>,
     config: Option<&[u8]>,
 ) -> Result<Option<TaskRow>, Halt> {
-    for _ in 0..TRIES {
+    let mut original_chain = None;
+    for attempt in 0..TRIES {
         if !is_caller(at.caller) {
             return Err(Halt::Failed(format!("no such task `{task}`")));
         }
-        let chain = observe(rec, &task_key(at.caller, task))?;
+        let key = task_key(at.caller, task);
+        let chain = observe(rec, &key)?;
+        if original_chain.is_none() {
+            original_chain = Some(chain.clone());
+        }
         let raw = rec.get(KIND_TASK, &task_key(at.caller, task))?;
         let Some(held) = raw
             .as_deref()
@@ -676,7 +701,40 @@ pub(crate) fn change_configured(
             return Err(Halt::Failed(format!("no such task `{task}`")));
         };
         let Some((row, kind)) = plan(&held.row).map_err(Halt::Failed)? else {
-            return Ok(None);
+            if attempt == 0 {
+                return Ok(None);
+            }
+            // A prior conditional conflict still owes publication authority. A fresh
+            // observation alone cannot authorize this no-op's reply at the host.
+            if held.row.task_id != task
+                || held.row.principal != at.caller
+                || original_chain.as_ref() != Some(&chain)
+            {
+                return Err(Halt::Failed(
+                    "task identity changed before read acknowledgement".into(),
+                ));
+            }
+            let Some(raw) = raw else {
+                return Err(Halt::Failed(
+                    "task disappeared before read acknowledgement".into(),
+                ));
+            };
+            if rec.publish_read_guard(
+                &[Predicate {
+                    kind: KIND_TASK,
+                    key: key.clone(),
+                    expected: Some(raw.clone()),
+                }],
+                &[chain],
+                &[Write {
+                    kind: KIND_TASK,
+                    key,
+                    value: raw,
+                }],
+            )? {
+                return Ok(None);
+            }
+            continue;
         };
         if row.task_id != task || row.principal != held.row.principal {
             return Err(Halt::Failed(

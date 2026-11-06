@@ -488,6 +488,26 @@ impl Records for Via<'_> {
         journal.observe(handle.seq, kind, scope)
     }
 
+    fn publish_read_guard(
+        &mut self,
+        predicates: &[tasks::Predicate],
+        lives: &[tasks::ChainLife],
+        writes: &[Write],
+    ) -> Result<bool, Halt> {
+        let journal = self
+            .publication
+            .clone()
+            .ok_or_else(|| Halt::Failed("conditional publication unavailable".into()))?;
+        let handle = self.next_handle();
+        journal.publish_with(
+            handle.seq,
+            predicates,
+            lives,
+            writes,
+            &crate::conditional_publication::Draft::default(),
+        )
+    }
+
     fn publish(
         &mut self,
         predicates: &[tasks::Predicate],

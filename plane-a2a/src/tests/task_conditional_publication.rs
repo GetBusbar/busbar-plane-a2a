@@ -709,3 +709,148 @@ fn fresh_open_and_resume_publish_the_inline_config_with_the_task_events() {
         b"new credential"
     );
 }
+
+fn completed_answer(rec: &mut dyn Records) -> Result<Option<TaskRow>, Halt> {
+    crate::task_hop::settle_on_answer(
+        rec,
+        &crate::relay::TaskHop {
+            task_id: "task".into(),
+            context_id: "ctx-1".into(),
+            addressed: true,
+            skill: None,
+            references: Vec::new(),
+        },
+        &crate::relay::TaskSettled::Event {
+            state: Some(TaskState::Completed),
+            artifact: false,
+            backend_id: None,
+        },
+        ALICE,
+        200,
+        &mut Vec::new(),
+        &crate::task_hop::Latches::default(),
+    )
+}
+
+#[test]
+fn concurrent_completed_noop_acknowledges_exact_row_without_repeating_effects() {
+    let host = active();
+    moved_to(
+        &mut host.borrow_mut(),
+        "task",
+        TaskState::InputRequired,
+        100,
+    );
+    let mut loser = Call::new(&host);
+    assert_eq!(completed_answer(&mut loser), Err(Halt::Pending));
+    assert!(completed_answer(&mut *host.borrow_mut()).unwrap().is_some());
+    let winner = host.borrow().clone();
+    assert!(
+        !loser.commit(true),
+        "the real competing terminal transition wins"
+    );
+    loser.replay();
+    assert_eq!(
+        completed_answer(&mut loser),
+        Err(Halt::Pending),
+        "a conflicted state publication needs an Applied read guard before a no-op reply"
+    );
+    let proof = loser.offered().clone();
+    let raw = winner.value(KIND_TASK, &task_key(ALICE, "task")).unwrap();
+    assert_eq!(proof.writes.len(), 1);
+    assert_eq!(proof.writes[0].kind, KIND_TASK);
+    assert_eq!(&proof.writes[0].value, raw);
+    assert_eq!(proof.predicates.len(), 1);
+    assert_eq!(proof.predicates[0].expected.as_ref(), Some(raw));
+    assert_eq!(proof.chains.len(), 1);
+    assert_eq!(proof.chains[0].kind, KIND_TASK_EVENT);
+    assert!(loser.commit(false), "lose the new read-guard receipt once");
+    loser.replay();
+    assert_eq!(completed_answer(&mut loser), Err(Halt::Pending));
+    assert_eq!(
+        loser.offered(),
+        &proof,
+        "lost receipt replays the exact guard"
+    );
+    assert!(loser.commit(true));
+    loser.replay();
+    assert_eq!(completed_answer(&mut loser), Ok(None));
+    let current = host.borrow();
+    assert_eq!(
+        current.rows, winner.rows,
+        "no state, quota, config or event duplication"
+    );
+    assert_eq!(current.lives, winner.lives);
+    assert_eq!(current.publications.len(), winner.publications.len() + 1);
+    assert_eq!(current.publications.last().unwrap(), &proof.writes);
+}
+
+#[test]
+fn conflicted_noop_read_guard_rejects_new_incarnation_and_foreign_identity() {
+    for wrong in ["life", "task", "principal"] {
+        let host = active();
+        moved_to(
+            &mut host.borrow_mut(),
+            "task",
+            TaskState::InputRequired,
+            100,
+        );
+        let mut loser = Call::new(&host);
+        let mut plan = |row: &TaskRow| {
+            if row.state == TaskState::Completed.as_str() {
+                Ok(None)
+            } else {
+                crate::a2a::task::plan_transition(TaskState::Completed, 200)(row).map(Some)
+            }
+        };
+        assert_eq!(
+            change(
+                &mut loser,
+                &step(ALICE, 200),
+                "task",
+                &mut plan,
+                &mut Vec::new()
+            ),
+            Err(Halt::Pending)
+        );
+        assert!(completed_answer(&mut *host.borrow_mut()).unwrap().is_some());
+        let key = task_key(ALICE, "task");
+        {
+            let mut book = host.borrow_mut();
+            if wrong == "life" {
+                book.lives.insert(
+                    (KIND_TASK_EVENT.into(), key.clone()),
+                    9_u64.to_be_bytes().to_vec(),
+                );
+            } else {
+                let mut held = get(&mut *book, ALICE, "task", 200).unwrap().unwrap();
+                if wrong == "task" {
+                    held.row.task_id = "another-task".into();
+                } else {
+                    held.row.principal = BOB.into();
+                }
+                book.rows
+                    .insert((KIND_TASK.into(), key), serde_json::to_vec(&held).unwrap());
+            }
+        }
+        assert!(!loser.commit(true));
+        loser.replay();
+        assert!(
+            matches!(
+                change(
+                    &mut loser,
+                    &step(ALICE, 200),
+                    "task",
+                    &mut plan,
+                    &mut Vec::new()
+                ),
+                Err(Halt::Failed(_))
+            ),
+            "{wrong}"
+        );
+        assert!(
+            loser.pending.is_none(),
+            "{wrong}: no ownership acknowledgement offered"
+        );
+    }
+}

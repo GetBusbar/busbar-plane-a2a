@@ -368,3 +368,110 @@ fn backend_mapping_conflict_and_lost_reply_preserve_raw_row_without_redial() {
         Behavior::ConflictAndLostReply,
     );
 }
+
+#[test]
+#[allow(unsafe_code)]
+fn staged_read_guard_uses_empty_effects_despite_notifying_via() {
+    use crate::tasks::Records;
+    let conns = ConnectorSlots {
+        size: std::mem::size_of::<ConnectorSlots>() as u32,
+        slots: busbar_contract::abi::host::conn::connector::SERVICES,
+        establish: Some(dial),
+        ..zeroed()
+    };
+    let slots = HostSlots {
+        size: std::mem::size_of::<HostSlots>() as u32,
+        slots: busbar_contract::abi::host::service::SERVICES,
+        records_get: Some(get),
+        ..zeroed()
+    };
+    let tables = HostTables {
+        size: std::mem::size_of::<HostTables>() as u32,
+        _reserved: 0,
+        ctx: HostCtx { handle: 1 },
+        wake: None,
+        conns: &conns,
+        services: &slots,
+        io: std::ptr::null(),
+    };
+    // SAFETY: complete tables and static fixture callbacks live for this test.
+    let plane = A2aDoor {
+        host: Some(unsafe { Host::from_raw(&tables) }),
+        services: unsafe { Services::from_raw(&tables) },
+        ..Default::default()
+    };
+    let ticket = Ticket {
+        slot: 31,
+        generation: 1,
+    };
+    let reach = Reach {
+        plane: &plane,
+        ticket,
+    };
+    let journal = crate::conditional_publication::Journal::default();
+    let capability = wire::encode_capability(wire::Capability { ticket, epoch: 1 });
+    journal.enter(ticket, &capability).unwrap();
+    let raw = serde_json::to_vec(&tasks::HeldTask {
+        row: crate::tasks::tests::row(LOCAL, 100),
+        next_seq: 3,
+    })
+    .unwrap();
+    let mut applied = 0;
+    for _ in 0..8 {
+        let mut via = reach.via(0).unwrap().publishing(&journal);
+        via.effects(crate::conditional_publication::Draft {
+            notify: true,
+            backend: Some(BACKEND.into()),
+            ..Default::default()
+        });
+        let mut staged = tasks::Staged::new(&mut via, &[]);
+        let key = task_key(CALLER, LOCAL);
+        let guarded = (|| {
+            let life = staged.observe_chain_life(crate::records::KIND_TASK_EVENT, &key)?;
+            staged.publish_read_guard(
+                &[tasks::Predicate {
+                    kind: crate::records::KIND_TASK,
+                    key: key.clone(),
+                    expected: Some(raw.clone()),
+                }],
+                &[tasks::ChainLife {
+                    kind: crate::records::KIND_TASK_EVENT,
+                    scope: key.clone(),
+                    expected: life,
+                }],
+                &[tasks::Write {
+                    kind: crate::records::KIND_TASK,
+                    key,
+                    value: raw.clone(),
+                }],
+            )
+        })();
+        if guarded == Ok(true) {
+            assert_eq!(applied, 1);
+            let effects = journal.applied_effects();
+            assert!(
+                effects.notify.is_empty()
+                    && effects.backends.is_empty()
+                    && effects.owed.is_empty()
+                    && effects.deletes.is_empty()
+            );
+            journal.effects_finished(effects.owner);
+            return;
+        }
+        assert_eq!(guarded, Err(tasks::Halt::Pending));
+        if let Some(draft) = crate::conditional_publication::fixture::pending_draft(&journal) {
+            assert_eq!(draft, crate::conditional_publication::Draft::default());
+        }
+        let receipt = crate::conditional_publication::fixture::receipt(&journal, |candidate| {
+            let request = store_request(candidate);
+            assert_eq!(request.mutations.len(), 1);
+            assert_eq!(candidate.candidate.mutations.len(), 1);
+            applied += 1;
+            Decision::Applied
+        });
+        let mut input = capability.clone();
+        input.extend(receipt);
+        journal.enter(ticket, &input).unwrap();
+    }
+    panic!("read guard did not settle within its fixed observation/publication callbacks");
+}

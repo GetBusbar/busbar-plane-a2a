@@ -45,3 +45,13 @@ pub(crate) fn receipt(
         .unwrap(),
     }
 }
+
+pub(crate) fn pending_draft(journal: &Journal) -> Option<Draft> {
+    journal.0.with(&(), |state| {
+        let step = state?.steps.iter().find(|step| step.pending())?;
+        match &step.action {
+            Action::Publish { after, .. } => Some(after.draft.clone()),
+            Action::Observe { .. } => None,
+        }
+    })
+}
