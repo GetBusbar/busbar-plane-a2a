@@ -1156,6 +1156,9 @@ fn served_core_on(
     )
     .expect("the production builder boots the actual Store-backed application");
     limits.stage_boot();
+    let app = Arc::new(app);
+    busbar_kernel::boot::hydrate_all(&app)
+        .expect("normal startup hydrates the actual durable admin audit stream");
     let book = crate::root::boot::book(&app, &module).expect("the normal durable node book opens");
     limits.keep().expect("the boot card activates");
     if let Some(rotate) = rotate {
@@ -1316,7 +1319,6 @@ fn served_core_on(
     if ticking {
         composed.spawn_ticks();
     }
-    let app = Arc::new(app);
     let appliers = composed.appliers();
     let doors = crate::root::serve::door_routes(composed, || CARD.pin(), &[], &[])
         .expect("the actual root mounts the declared claims");
@@ -4965,6 +4967,34 @@ async fn the_extended_card_is_metered_as_one_request_and_no_tokens() {
     let mut agent = Agent::start(200, ANSWER).await;
     let s = served(instance, &agent.entry("planner", "1h"), false, None);
     approve(&s, "planner").await;
+    let durable_admin = s
+        .gov
+        .store()
+        .list_plane_records(
+            busbar_kernel::store::plane_view::KIND_AUDIT,
+            &busbar_contract::records::PlaneSelector::Parent("admin".into()),
+        )
+        .expect("the actual Store reads its durable admin journal");
+    let durable_admin: BTreeMap<_, _> = durable_admin
+        .iter()
+        .map(|body| {
+            let row: busbar_kernel::audit::journal::NeutralBody =
+                busbar_kernel::store::plane_view::decode(body)
+                    .expect("a durable admin journal row");
+            (row.seq, row.hash)
+        })
+        .collect();
+    let approvals = busbar_kernel::audit::auditlog::AUDIT_LOG.list_filtered(
+        0,
+        1000,
+        Some("a2a_agent.approve"),
+        None,
+    );
+    assert!(
+        approvals.iter().any(|row| row.resource.contains("planner")
+            && durable_admin.get(&row.seq) == Some(&row.hash)),
+        "the planner approval is durable in this Store, rather than queued: {approvals:?}"
+    );
     assert_eq!(admitted(&s), 0, "nothing billed before the call");
     let (status, body) = answered(
         &s.router,
@@ -4977,6 +5007,12 @@ async fn the_extended_card_is_metered_as_one_request_and_no_tokens() {
         doc.get("result").is_some(),
         "the card verb must still return a card, not merely a bill: {body}"
     );
+    assert_eq!(doc["id"], 1, "the card answers this request");
+    let skills = doc["result"]["skills"]
+        .as_array()
+        .expect("the card's skills");
+    assert_eq!(skills.len(), 1, "the caller's actual catalogue: {body}");
+    assert_eq!(skills[0]["id"], "planner", "the caller's approved agent");
     let usage = s
         .gov
         .usage_for(&s.app.cost, &s.key.id, busbar_kernel::store::now())
@@ -4985,7 +5021,7 @@ async fn the_extended_card_is_metered_as_one_request_and_no_tokens() {
     assert_eq!(usage.requests, 1, "one call, one request accrual");
     assert_eq!(usage.tokens, 0, "a locally answered verb accrues no tokens");
 
-    let lanes: Vec<String> = s
+    let lane_counts: BTreeMap<_, _> = s
         .gov
         .bucket_model_tokens(
             &s.key.id,
@@ -4993,14 +5029,37 @@ async fn the_extended_card_is_metered_as_one_request_and_no_tokens() {
             busbar_kernel::store::now(),
         )
         .into_iter()
-        .map(|(lane, _)| lane)
         .collect();
-    let member = format!("{}:", surface("resource_kind"));
-    assert_eq!(lanes.len(), 1, "one lane: {lanes:?}");
-    assert!(
-        !lanes[0].contains(member.as_str()),
-        "the card is billed to the plane pool, on no member line: {lanes:?}"
+    assert_eq!(
+        lane_counts,
+        BTreeMap::from([
+            (
+                busbar_kernel::cost::plane_fee_lane(surface("plane_key")),
+                BTreeMap::new()
+            ),
+            (surface("section").to_string(), BTreeMap::new()),
+        ]),
+        "the plane fee and pool lanes carry no counts for a locally answered card"
     );
+    let member = format!("{}:", surface("resource_kind"));
+    assert!(
+        lane_counts.keys().all(|lane| !lane.contains(&member)),
+        "the card is on no member line: {lane_counts:?}"
+    );
+    let billed = Billed::of(&s);
+    assert_eq!(
+        (billed.requests, billed.fees, billed.bytes, billed.spend),
+        (1, 0, 0, 0),
+        "one local admission charges no upstream fee, bytes, or spend"
+    );
+    let audit = caller_counts(&s);
+    assert_eq!(
+        audit.len(),
+        1,
+        "one admitted card seals one caller record: {audit:?}"
+    );
+    assert!(audit[0].classes.is_empty(), "no upstream usage: {audit:?}");
+    assert_eq!(audit[0].fee_count, 0, "no upstream fee: {audit:?}");
     assert!(
         !agent.relayed(),
         "the extended card is busbar's, never relayed"
