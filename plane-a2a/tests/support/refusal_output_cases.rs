@@ -52,6 +52,7 @@ fn prepared() -> (Reset, Door) {
 fn refused_json_and_every_partial_suffix_emit_the_exact_error_without_effects() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
     let (_reset, door) = prepared();
+    let records_before = store().clone();
     script(|s| s.publish_failed = true);
     let outputs = config_windows(&door, 2801, CREATE, false, 8);
     assert!(
@@ -70,6 +71,11 @@ fn refused_json_and_every_partial_suffix_emit_the_exact_error_without_effects() 
             "code":-32603,"message":"the push notification config could not be recorded"
         }})
     );
+    assert_eq!(
+        *store(),
+        records_before,
+        "refused config publication changes no durable task, config or quota rows"
+    );
     for out in outputs {
         assert_eq!((out.records_written, out.units_written), (Some(0), Some(0)));
         assert_eq!(out.lane.as_deref(), Some(""));
@@ -87,6 +93,7 @@ fn refused_json_and_every_partial_suffix_emit_the_exact_error_without_effects() 
 fn refused_grpc_error_remains_http_200_with_final_status_and_no_effects() {
     let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
     let (_reset, door) = prepared();
+    let records_before = store().clone();
     script(|s| s.publish_failed = true);
     // a2a.proto TaskPushNotificationConfig: id=2, task_id=3 and url=4, all strings.
     let url = b"https://receiver.example/cb";
@@ -110,6 +117,11 @@ fn refused_grpc_error_remains_http_200_with_final_status_and_no_effects() {
     assert!(out.emitted.is_empty());
     assert_eq!((out.records_written, out.units_written), (Some(0), Some(0)));
     assert_eq!(out.lane.as_deref(), Some(""));
+    assert_eq!(
+        *store(),
+        records_before,
+        "refused gRPC config publication changes no durable rows"
+    );
 }
 
 #[test]

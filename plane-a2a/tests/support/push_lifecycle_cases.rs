@@ -462,18 +462,34 @@ fn open_scripted_instance() -> Door {
     Door::new(output.open.instance)
 }
 fn seed() {
-    // A legacy held row exercises cold quota bootstrap and an actual working transition;
+    // A current ready-store snapshot exercises an actual working transition;
     // the separate guarded backend mapping must not substitute for that state publication.
     seed_task("t1", "input-required");
 }
 fn seed_task(task_id: &str, state: &str) {
     let caller = std::str::from_utf8(ALICE).unwrap();
     let row = json!({"task_id":task_id,"context_id":"c1","principal":caller,"direction":"inbound","state":state,"agent_id":"vendor","artifact_cursor":0,"push_callback":"","created_at":1_800_000_000u64,"updated_at":1_800_000_000u64,"next_seq":1});
-    store().push((
+    assert!(matches!(state, "input-required" | "working"));
+    let mut rows = store();
+    assert!(!rows
+        .iter()
+        .any(|(kind, key, _)| kind == "task" && key == &format!("{caller}/{task_id}")));
+    rows.push((
         "task".into(),
         format!("{caller}/{task_id}"),
         serde_json::to_vec(&row).unwrap(),
     ));
+    // These fixtures start with existing current-format active tasks, not an empty store.
+    // Hold their matching ready counters so no unsupported populated bootstrap is required.
+    let active = rows.iter().filter(|(kind, _, _)| kind == "task").count();
+    rows.retain(|(kind, _, _)| kind != "task_quota");
+    for key in ["active/v1".to_string(), format!("1/{caller}")] {
+        rows.push((
+            "task_quota".into(),
+            key,
+            serde_json::to_vec(&json!({"version":1,"epoch":1,"active":active})).unwrap(),
+        ));
+    }
 }
 fn registered(door: &Door) -> zeroize::Zeroizing<String> {
     assert_eq!(door.connect("vendor").1, 200);
@@ -505,6 +521,11 @@ fn registered(door: &Door) -> zeroize::Zeroizing<String> {
     );
     let applied = script(|s| s.conditional.applied);
     let publications = script(|s| s.conditional.requests.len());
+    let quota_before: Vec<_> = store()
+        .iter()
+        .filter(|(kind, _, _)| kind == "task_quota")
+        .cloned()
+        .collect();
     let mapped_key = format!("{}/t1", std::str::from_utf8(ALICE).unwrap());
     let mapped_row = store()
         .iter()
@@ -520,9 +541,8 @@ fn registered(door: &Door) -> zeroize::Zeroizing<String> {
         script(|s| s.conditional.observations.len()), script(|s| s.conditional.applied));
     assert_eq!(
         script(|s| s.conditional.applied),
-        // Backend mapping, quota barrier, principal count, ready quota gate, task transition.
-        applied + 5,
-        "the real working transition and cold quota bootstrap must publish before mirroring"
+        applied + 2,
+        "the exact backend mapping and real working transition must publish before mirroring"
     );
     assert!(
         task_state()["state"] == "working",
@@ -531,7 +551,7 @@ fn registered(door: &Door) -> zeroize::Zeroizing<String> {
     script(|s| {
         use busbar_contract::abi::sdk::plane::conditional::RecordMutation;
         let published = &s.conditional.requests[publications..];
-        assert_eq!(published.len(), 5);
+        assert_eq!(published.len(), 2);
         let mapping = &published[0].candidate;
         assert_eq!(mapping.predicates.len(), 1);
         let predicate = &mapping.predicates[0];
@@ -552,18 +572,15 @@ fn registered(door: &Door) -> zeroize::Zeroizing<String> {
             mapping.chains[0],
             busbar_contract::abi::sdk::plane::conditional::ChainMutation::Check { .. }
         ));
-        for request in &published[1..4] {
-            assert!(request.candidate.chains.is_empty());
-            assert!(request
-                .candidate
-                .predicates
-                .iter()
-                .all(|p| door_facts::HELD_KINDS[p.kind as usize] == "task_quota"));
-            assert!(request.candidate.mutations.iter().all(|m| matches!(m, RecordMutation::Put { kind, .. } if door_facts::HELD_KINDS[*kind as usize] == "task_quota")));
-        }
-        assert!(published[4].candidate.mutations.iter().any(|m| matches!(m, RecordMutation::Put { kind, value, .. }
+        assert!(published.iter().all(|request| request.candidate.mutations.iter().all(|mutation|
+            !matches!(mutation, RecordMutation::Put { kind, .. } | RecordMutation::Delete { kind, .. }
+                if door_facts::HELD_KINDS[*kind as usize] == "task_quota"))),
+            "an active-to-active transition must not rewrite ready counters");
+        assert!(published[1].candidate.mutations.iter().any(|m| matches!(m, RecordMutation::Put { kind, value, .. }
             if door_facts::HELD_KINDS[*kind as usize] == "task" && serde_json::from_slice::<Value>(value).unwrap()["state"] == "working")));
     });
+    assert_eq!(store().iter().filter(|(kind, _, _)| kind == "task_quota").cloned().collect::<Vec<_>>(), quota_before,
+        "the backend mapping and active-to-active working transition retain exact ready quota bytes");
     for key in [
         "active/v1".to_string(),
         format!("1/{}", std::str::from_utf8(ALICE).unwrap()),
@@ -577,7 +594,7 @@ fn registered(door: &Door) -> zeroize::Zeroizing<String> {
         assert_eq!(
             serde_json::from_slice::<Value>(bytes).unwrap()["active"],
             1,
-            "the bootstrap and task transition retain the exact durable active count"
+            "the current ready snapshot and task transition retain the exact durable active count"
         );
     }
     script(|s| {
