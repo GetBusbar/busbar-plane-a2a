@@ -559,7 +559,7 @@ fn registered(door: &Door) -> zeroize::Zeroizing<String> {
         assert_eq!(predicate.key, mapped_key.as_bytes());
         assert_eq!(
             predicate.expected,
-            busbar_contract::abi::sdk::store::conditional::Expected::Bytes(mapped_row.clone())
+            busbar_contract::host_records::conditional::Expected::Bytes(mapped_row.clone())
         );
         assert_eq!(mapping.mutations.len(), 1);
         assert!(
@@ -1872,7 +1872,7 @@ fn detached_settlement_rejects_other_instance_changed_identity_and_reused_ticket
             &request,
             &wire::ConditionalResult {
                 correlation: request.candidate.correlation,
-                decision: Ok(busbar_contract::abi::sdk::store::conditional::Decision::Applied),
+                decision: Ok(busbar_contract::host_records::conditional::Decision::Applied),
             },
         )
         .unwrap();
@@ -1931,7 +1931,7 @@ fn actual_short_callback_then_cancel_retains_original_receipt_until_driver_ack()
         assert_eq!(predicate.key, mapped_key.as_bytes());
         assert_eq!(
             predicate.expected,
-            busbar_contract::abi::sdk::store::conditional::Expected::Bytes(mapped_row.clone())
+            busbar_contract::host_records::conditional::Expected::Bytes(mapped_row.clone())
         );
         assert_eq!(mapping.mutations.len(), 1);
         assert!(

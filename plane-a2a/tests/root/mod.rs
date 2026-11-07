@@ -282,33 +282,32 @@ impl Served {
                 config.plane_pools.insert(surface("section"), pools.clone());
             }
         }
-        let (next, rotate, limits) = busbar_kernel::build_app_from_config(
-            config,
-            self.plugins.clone(),
-            None,
-            Default::default(),
-            Default::default(),
-            (None, None),
-            Some(&prior),
-            &self.rules,
-        )
-        .expect("the normal root builds the applied generation");
-        limits.keep().expect("the applied card activates");
+        let (next, rotate, limits) =
+            futures::executor::block_on(crate::root::real_store::build_app(
+                config,
+                self.plugins.clone(),
+                None,
+                Default::default(),
+                Default::default(),
+                (None, None),
+                Some(&prior),
+                &self.rules,
+            ))
+            .expect("the normal root builds the applied generation");
+        futures::executor::block_on(limits.keep()).expect("the applied card activates");
         if let Some(rotate) = rotate {
-            rotate();
+            futures::executor::block_on(rotate);
         }
         Arc::new(next)
     }
 }
 
-/// THE CELL'S STORE, REFUSING ON CUE (predev's `RefuseOneTaskRow`, `local_tests.rs:1300-1356`):
-/// the door-opened store's calls, each delegated, except a record put whose key holds the bytes
-/// the cell named, which it refuses as a full disk would.
+/// Inject storage failure at the native primitive boundary, preserving the host's
+/// complete atomic candidate and receipt ownership.
 struct Refusing {
-    inner: Arc<dyn busbar_contract::store_calls::StoreCalls>,
+    inner: Arc<dyn busbar_contract::persistence::PersistenceBackend>,
     named: Arc<std::sync::Mutex<Option<Vec<u8>>>>,
 }
-
 impl Refusing {
     fn refuses(&self, key: &[u8]) -> bool {
         self.named
@@ -318,140 +317,44 @@ impl Refusing {
             .is_some_and(|n| n.is_empty() || key.windows(n.len()).any(|w| w == n))
     }
 }
-
-impl busbar_contract::store_calls::StoreCalls for Refusing {
-    fn supports_usage_correction(&self) -> bool {
-        self.inner.supports_usage_correction()
+impl busbar_contract::persistence::PersistenceBackend for Refusing {
+    fn info(&self) -> busbar_contract::persistence::BackendInfo {
+        self.inner.info()
     }
-    fn apply_usage_correction<'a>(
-        &'a self,
-        request: &'a busbar_contract::records::correction::Request,
-    ) -> busbar_contract::store_calls::StoreCall<'a, busbar_contract::records::correction::Decision>
+    fn read(
+        &self,
+        request: Arc<busbar_contract::persistence::Read>,
+    ) -> busbar_contract::persistence::Call<'_, busbar_contract::persistence::ReadResult> {
+        self.inner.read(request)
+    }
+    fn scan(
+        &self,
+        request: Arc<busbar_contract::persistence::Scan>,
+    ) -> busbar_contract::persistence::Call<'_, busbar_contract::persistence::Page> {
+        self.inner.scan(request)
+    }
+    fn clock(
+        &self,
+        dataset: busbar_contract::persistence::DatasetId,
+    ) -> busbar_contract::persistence::Call<'_, busbar_contract::persistence::ClockObservation>
     {
-        self.inner.apply_usage_correction(request)
+        self.inner.clock(dataset)
     }
-    fn supports_record_transaction(&self) -> bool {
-        self.inner.supports_record_transaction()
-    }
-    fn record_transaction<'a>(
-        &'a self,
-        request: &'a busbar_contract::abi::sdk::store::conditional::Request,
-    ) -> busbar_contract::store_calls::StoreCall<
-        'a,
-        busbar_contract::abi::sdk::store::conditional::Decision,
-    > {
-        if request
-            .mutations
-            .iter()
-            .any(|mutation| self.refuses(mutation.address().1))
-        {
-            return Box::pin(async {
-                Err(busbar_contract::store_calls::StoreFailure::Refused(
-                    "disk is full".to_string(),
-                ))
-            });
+    fn commit(
+        &self,
+        candidate: busbar_contract::persistence::PreparedCandidate,
+    ) -> busbar_contract::persistence::Call<'_, busbar_contract::persistence::Decision> {
+        use busbar_contract::persistence::{Failure, Mutation};
+        if candidate.candidate().mutations.iter().any(|mutation| {
+            let key = match mutation {
+                Mutation::Put { address, .. } | Mutation::Delete(address) => &address.key,
+                Mutation::DeleteRange { prefix, .. } => prefix,
+            };
+            self.refuses(key)
+        }) {
+            return Box::pin(async { Err(Failure::Refused) });
         }
-        self.inner.record_transaction(request)
-    }
-    fn add_usage_batch<'a>(
-        &'a self,
-        op: busbar_contract::abi::store::OpId,
-        cells: &'a [(&'a str, u64, busbar_contract::records::UsageDelta)],
-    ) -> busbar_contract::store_calls::StoreCall<'a, ()> {
-        self.inner.add_usage_batch(op, cells)
-    }
-    fn add_metering_batch<'a>(
-        &'a self,
-        op: busbar_contract::abi::store::OpId,
-        deltas: &'a [busbar_contract::records::MeteringDelta],
-    ) -> busbar_contract::store_calls::StoreCall<'a, ()> {
-        self.inner.add_metering_batch(op, deltas)
-    }
-    fn record_put<'a>(
-        &'a self,
-        schema: &'a str,
-        key: &'a [u8],
-        value: &'a busbar_contract::kinds::RecordBytes,
-    ) -> busbar_contract::store_calls::StoreCall<'a, ()> {
-        if self.refuses(key) {
-            return Box::pin(async {
-                Err(busbar_contract::store_calls::StoreFailure::Refused(
-                    "disk is full".to_string(),
-                ))
-            });
-        }
-        self.inner.record_put(schema, key, value)
-    }
-    fn record_get<'a>(
-        &'a self,
-        schema: &'a str,
-        key: &'a [u8],
-    ) -> busbar_contract::store_calls::StoreCall<'a, Option<busbar_contract::kinds::RecordBytes>>
-    {
-        self.inner.record_get(schema, key)
-    }
-    fn record_scan<'a>(
-        &'a self,
-        schema: &'a str,
-        prefix: &'a [u8],
-        limit: u32,
-    ) -> busbar_contract::store_calls::StoreCall<
-        'a,
-        Vec<(Vec<u8>, busbar_contract::kinds::RecordBytes)>,
-    > {
-        self.inner.record_scan(schema, prefix, limit)
-    }
-    fn upsert_plane_record<'a>(
-        &'a self,
-        record: busbar_contract::records::PlaneRecordRef<'a>,
-    ) -> busbar_contract::store_calls::StoreCall<'a, ()> {
-        self.inner.upsert_plane_record(record)
-    }
-    fn get_plane_record<'a>(
-        &'a self,
-        kind: &'a str,
-        id: &'a str,
-    ) -> busbar_contract::store_calls::StoreCall<'a, Option<Vec<u8>>> {
-        self.inner.get_plane_record(kind, id)
-    }
-    fn append_plane_record<'a>(
-        &'a self,
-        op: busbar_contract::abi::store::OpId,
-        record: busbar_contract::records::PlaneRecordRef<'a>,
-    ) -> busbar_contract::store_calls::StoreCall<'a, ()> {
-        self.inner.append_plane_record(op, record)
-    }
-    fn list_plane_records<'a>(
-        &'a self,
-        kind: &'a str,
-        selector: &'a busbar_contract::records::PlaneSelector<'a>,
-    ) -> busbar_contract::store_calls::StoreCall<'a, Vec<Vec<u8>>> {
-        self.inner.list_plane_records(kind, selector)
-    }
-    fn delete_plane_record<'a>(
-        &'a self,
-        kind: &'a str,
-        id: &'a str,
-    ) -> busbar_contract::store_calls::StoreCall<'a, ()> {
-        self.inner.delete_plane_record(kind, id)
-    }
-    fn redeem_plane_token<'a>(
-        &'a self,
-        kind: &'a str,
-        token: &'a str,
-        expires_at: u64,
-        now: u64,
-    ) -> busbar_contract::store_calls::StoreCall<'a, bool> {
-        self.inner.redeem_plane_token(kind, token, expires_at, now)
-    }
-    fn plane_token_live<'a>(
-        &'a self,
-        kind: &'a str,
-        token: &'a str,
-        expires_at: u64,
-        now: u64,
-    ) -> busbar_contract::store_calls::StoreCall<'a, bool> {
-        self.inner.plane_token_live(kind, token, expires_at, now)
+        self.inner.commit(candidate)
     }
 }
 
@@ -1125,44 +1028,45 @@ fn served_core_on(
     for step in crate::ROOT_UNITS.iter().filter_map(|unit| unit.on_config) {
         step(&config.limits);
     }
-    let mut opened = busbar_kernel::appbuild::bootstrap_config_store(&config, &plugins)
-        .expect("normal bootstrap admits and opens the signed actual Store");
+    let opened = futures::executor::block_on(busbar_kernel::appbuild::bootstrap_config_store(
+        &config, &plugins,
+    ))
+    .expect("normal bootstrap admits and opens the signed actual Store");
     let expected_store_fingerprint = busbar_kernel::host_record_bootstrap::store_fingerprint(
         &serde_json::to_value(&config.store).expect("actual effective Store selection"),
     );
-    let bootstrap_receipt = initialize.then(|| {
-        bootstrap::initialize(instance, directory, &config, &plugins, &opened, &deployment)
-    });
     let refuse = Arc::new(std::sync::Mutex::new(None));
-    opened.calls = Some(Arc::new(Refusing {
-        inner: opened
-            .calls
-            .take()
-            .expect("the actual Store has record slots"),
-        named: refuse.clone(),
-    }));
+    let core =
+        futures::executor::block_on(crate::root::real_store::core_over(Arc::new(Refusing {
+            inner: opened,
+            named: refuse.clone(),
+        })));
+    let bootstrap_receipt = initialize
+        .then(|| bootstrap::initialize(instance, directory, &config, &plugins, &core, &deployment));
     let rules: Arc<dyn busbar_kernel::appbuild::RootRules> = rules;
-    let (app, rotate, limits) = busbar_kernel::appbuild::build_app_from_config_with_store(
-        config,
-        plugins.clone(),
-        None,
-        Default::default(),
-        Default::default(),
-        (None, None),
-        None,
-        &rules,
-        Some(opened),
-        true,
-    )
-    .expect("the production builder boots the actual Store-backed application");
+    let (app, rotate, limits) =
+        futures::executor::block_on(busbar_kernel::appbuild::build_app_from_config_with_store(
+            config,
+            plugins.clone(),
+            None,
+            Default::default(),
+            Default::default(),
+            (None, None),
+            None,
+            &rules,
+            Some(core),
+            true,
+        ))
+        .expect("the production builder boots the actual Store-backed application");
     limits.stage_boot();
     let app = Arc::new(app);
-    busbar_kernel::boot::hydrate_all(&app)
+    futures::executor::block_on(busbar_kernel::boot::hydrate_all(&app))
         .expect("normal startup hydrates the actual durable admin audit stream");
-    let book = crate::root::boot::book(&app, &module).expect("the normal durable node book opens");
-    limits.keep().expect("the boot card activates");
+    let book = futures::executor::block_on(crate::root::boot::book(&app, &module))
+        .expect("the normal durable node book opens");
+    futures::executor::block_on(limits.keep()).expect("the boot card activates");
     if let Some(rotate) = rotate {
-        rotate();
+        futures::executor::block_on(rotate);
     }
     let ctx = crate::root::linked::BookCtx {
         book: &book,
@@ -1176,19 +1080,18 @@ fn served_core_on(
         .as_ref()
         .expect("normal Store-backed governance")
         .clone();
-    let (key, token) = gov
-        .mint_signed(
-            NewKeySpec {
-                name: "delegator".into(),
-                allowed_pools,
-                group: groups.keys().next().cloned(),
-                ..Default::default()
-            },
-            4_000_000_000,
-            busbar_kernel::store::now(),
-        )
-        .expect("mint the normal signed caller token");
-    gov.hydrate_budgets(&app.cost, 0).expect("hydrate");
+    let (key, token) = futures::executor::block_on(gov.mint_signed_async(
+        NewKeySpec {
+            name: "delegator".into(),
+            allowed_pools,
+            group: groups.keys().next().cloned(),
+            ..Default::default()
+        },
+        4_000_000_000,
+        busbar_kernel::store::now(),
+    ))
+    .expect("mint the normal signed caller token");
+    futures::executor::block_on(gov.hydrate_budgets_async(&app.cost, 0)).expect("hydrate");
 
     let services = crate::root::serve::LateServices::new();
     let kernel = Arc::new(crate::root::serve::kernel_services(judge.clone()));
@@ -1203,9 +1106,15 @@ fn served_core_on(
         &[],
     );
     if let Some(receipt) = bootstrap_receipt {
-        kernel
-            .arm_record_bootstrap(receipt, &expected_store_fingerprint)
-            .expect("the actual host consumes the committed fresh-store witness");
+        futures::executor::block_on(kernel.arm_record_bootstrap(
+            receipt,
+            &expected_store_fingerprint,
+            |schema, key, _| {
+                busbar_kernel::persistence::scoped::migration_address(false, instance, schema, key)
+                    .map_err(|_| "invalid fixture witness owner")
+            },
+        ))
+        .expect("the actual host consumes the committed fresh-store witness");
     }
     let dispatcher = Arc::new(crate::root::dispatch::build(1, &services));
     crate::root::connector::install_io(&dispatcher);
@@ -1297,7 +1206,7 @@ fn served_core_on(
         gov: gov.clone(),
         journal: None,
     };
-    let mut composed = crate::root::serve::compose_planes(
+    let mut composed = futures::executor::block_on(crate::root::serve::compose_planes(
         &[(instance.to_string(), plane)],
         &dispatcher,
         &services,
@@ -1310,7 +1219,7 @@ fn served_core_on(
         }),
         Some(&hooks),
         &app.serve_tables,
-    )
+    ))
     .expect("the actual root composes the agent door");
     composed.post = Some(post.clone());
     composed.framers = Some(crate::root::serve::StreamFramers(Arc::new(move |claim| {
@@ -1340,13 +1249,19 @@ fn served_core_on(
         admin,
         1 << 20,
         &handle,
+        gov.core_store_handle()
+            .expect("admitted native admin persistence"),
         &book,
         None,
         &services,
         crate::root::adapters::BreakerPolicy::new(),
-    );
+    )
+    .expect("the normal native admin routes mount");
     let applied_planes = appliers.clone();
-    handle.on_apply(Box::new(move |app| applied_planes.apply(app)));
+    handle.on_apply_async(Box::new(move |app| {
+        let applied_planes = applied_planes.clone();
+        Box::pin(async move { applied_planes.apply(&app).await })
+    }));
     Served {
         kernel,
         router,
@@ -1436,11 +1351,13 @@ async fn an_agent_unit_served_through_its_door_charges_the_presenting_key() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "served through the door: {body}");
-    let usage = s
-        .gov
-        .usage_for(&s.app.cost, &s.key.id, busbar_kernel::store::now())
-        .expect("a read")
-        .expect("the key exists");
+    let usage = futures::executor::block_on(s.gov.usage_for_async(
+        &s.app.cost,
+        &s.key.id,
+        busbar_kernel::store::now(),
+    ))
+    .expect("a read")
+    .expect("the key exists");
     assert_eq!(
         usage.requests, 1,
         "one admitted request, on the presenting key"
@@ -1635,11 +1552,14 @@ fn agents(port: u16, scout: bool) -> String {
 
 /// The presenting key's admitted requests on the governance ledger.
 fn admitted(s: &Served) -> u64 {
-    s.gov
-        .usage_for(&s.app.cost, &s.key.id, busbar_kernel::store::now())
-        .expect("a read")
-        .expect("the key exists")
-        .requests
+    futures::executor::block_on(s.gov.usage_for_async(
+        &s.app.cost,
+        &s.key.id,
+        busbar_kernel::store::now(),
+    ))
+    .expect("a read")
+    .expect("the key exists")
+    .requests
 }
 
 /// The `message/send` the relayed cells send.
@@ -2164,7 +2084,7 @@ async fn an_agent_unit_from_a_key_that_is_no_longer_live_never_dials() {
     .await;
     assert_eq!(status, StatusCode::OK, "the live key is served: {body}");
     assert!(agent.relayed(), "the live key's unit dialled");
-    let _ = s.gov.delete_key(&s.key.id);
+    let _ = futures::executor::block_on(s.gov.delete_key(&s.key.id));
     let (status, body) = answered(
         &s.router,
         rpc("planner", "message/send", SEND, Some(&s.token)),
@@ -2516,14 +2436,15 @@ struct Billed {
 impl Billed {
     fn of(s: &Served) -> Self {
         let now = busbar_kernel::store::now();
-        let usage = s
-            .gov
-            .usage_for(&s.app.cost, &s.key.id, now)
+        let usage = futures::executor::block_on(s.gov.usage_for_async(&s.app.cost, &s.key.id, now))
             .expect("a read")
             .expect("the key exists");
-        let lanes =
-            s.gov
-                .bucket_model_tokens(&s.key.id, busbar_kernel::governance::WINDOW_TOTAL, now);
+        let lanes = futures::executor::block_on(s.gov.bucket_model_tokens_async(
+            &s.key.id,
+            busbar_kernel::governance::WINDOW_TOTAL,
+            now,
+        ))
+        .expect("read native metering lanes");
         let sum = |class: &str| -> u64 {
             busbar_contract::Count::total(
                 lanes
@@ -3833,7 +3754,7 @@ async fn a_config_apply_keeps_the_operators_approval() {
     assert_eq!(status, StatusCode::OK, "approved, served: {body}");
     assert!(agent.relayed());
 
-    let apply = |section: &str| {
+    let apply = async |section: &str| {
         let next = s.applied(
             serde_yaml::from_str(section).expect("the applied section"),
             false,
@@ -3842,13 +3763,14 @@ async fn a_config_apply_keeps_the_operators_approval() {
             !Arc::ptr_eq(&s.app, &next),
             "a distinct serving App is applied"
         );
-        s.handle.swap(next);
+        s.handle.swap(next).await;
     };
     apply(&format!(
         "{}\n{}",
         agent.entry("planner", "1h"),
         agent.entry("scout", "1h")
-    ));
+    ))
+    .await;
     let (status, body) = answered(&s.router, send()).await;
     assert_eq!(
         status,
@@ -3862,7 +3784,7 @@ async fn a_config_apply_keeps_the_operators_approval() {
     );
 
     let mut replacement = Agent::start(200, ANSWER).await;
-    apply(&replacement.entry("planner", "1h"));
+    apply(&replacement.entry("planner", "1h")).await;
     let (status, body) = answered(&s.router, send()).await;
     assert_eq!(
         status,
@@ -3914,7 +3836,7 @@ async fn a_config_apply_keeps_the_operators_approval() {
         replacement.port,
         key_info(&rotated),
     );
-    apply(&invalid);
+    apply(&invalid).await;
     let (status, body) = answered(&s.router, send()).await;
     assert_eq!(
         status,
@@ -3932,7 +3854,7 @@ async fn a_config_apply_keeps_the_operators_approval() {
         replacement.port,
         key_info(&rotated),
     );
-    apply(&section);
+    apply(&section).await;
     let (status, body) = answered(&s.router, send()).await;
     assert_eq!(
         status,
@@ -4967,19 +4889,31 @@ async fn the_extended_card_is_metered_as_one_request_and_no_tokens() {
     let mut agent = Agent::start(200, ANSWER).await;
     let s = served(instance, &agent.entry("planner", "1h"), false, None);
     approve(&s, "planner").await;
-    let durable_admin = s
-        .gov
-        .store()
-        .list_plane_records(
+    let history = busbar_kernel::host_records_async::AsyncHistory::authorized(
+        s.gov
+            .core_store_handle()
+            .expect("admitted native persistence"),
+        busbar_kernel::audit::auditlog::PERSISTENCE_OWNER,
+        [busbar_kernel::host_records_async::HistoryCollection {
+            kind: busbar_kernel::store::plane_view::KIND_AUDIT,
+            mode: busbar_kernel::host_records_async::HistoryMode::Append,
+            retention: busbar_contract::records::Retention::Age,
+            parent: None,
+        }],
+    )
+    .expect("the host's declared audit collection");
+    let durable_admin = history
+        .list(
             busbar_kernel::store::plane_view::KIND_AUDIT,
             &busbar_contract::records::PlaneSelector::Parent("admin".into()),
         )
+        .await
         .expect("the actual Store reads its durable admin journal");
     let durable_admin: BTreeMap<_, _> = durable_admin
         .iter()
-        .map(|body| {
+        .map(|record| {
             let row: busbar_kernel::audit::journal::NeutralBody =
-                busbar_kernel::store::plane_view::decode(body)
+                busbar_kernel::store::plane_view::decode(&record.body)
                     .expect("a durable admin journal row");
             (row.seq, row.hash)
         })
@@ -5013,21 +4947,25 @@ async fn the_extended_card_is_metered_as_one_request_and_no_tokens() {
         .expect("the card's skills");
     assert_eq!(skills.len(), 1, "the caller's actual catalogue: {body}");
     assert_eq!(skills[0]["id"], "planner", "the caller's approved agent");
-    let usage = s
-        .gov
-        .usage_for(&s.app.cost, &s.key.id, busbar_kernel::store::now())
-        .expect("a read")
-        .expect("the key exists");
+    let usage = futures::executor::block_on(s.gov.usage_for_async(
+        &s.app.cost,
+        &s.key.id,
+        busbar_kernel::store::now(),
+    ))
+    .expect("a read")
+    .expect("the key exists");
     assert_eq!(usage.requests, 1, "one call, one request accrual");
     assert_eq!(usage.tokens, 0, "a locally answered verb accrues no tokens");
 
     let lane_counts: BTreeMap<_, _> = s
         .gov
-        .bucket_model_tokens(
+        .bucket_model_tokens_async(
             &s.key.id,
             busbar_kernel::governance::WINDOW_TOTAL,
             busbar_kernel::store::now(),
         )
+        .await
+        .expect("read native metering lanes")
         .into_iter()
         .collect();
     assert_eq!(
@@ -5214,27 +5152,35 @@ fn agent_scope(agent: &str) -> ScopeRef {
 /// Another caller on `s`'s book: a key minted beside the cell's own, its grant then written as
 /// exactly `scopes` (`None` = every scope); its row and its token.
 fn another_caller(s: &Served, name: &str, scopes: Option<Vec<ScopeRef>>) -> (VirtualKey, String) {
-    let (key, token) = s
-        .gov
-        .mint_signed(
-            NewKeySpec {
-                name: name.to_string(),
-                allowed_pools: None,
-                ..Default::default()
-            },
-            4_000_000_000,
-            1_700_000_000,
-        )
-        .expect("mint");
-    let mut row = s
-        .gov
-        .store()
-        .get_key(&key.id)
-        .expect("a read")
-        .expect("the key's row");
+    let (key, token) = futures::executor::block_on(s.gov.mint_signed_async(
+        NewKeySpec {
+            name: name.to_string(),
+            allowed_pools: None,
+            ..Default::default()
+        },
+        4_000_000_000,
+        1_700_000_000,
+    ))
+    .expect("mint");
+    let mut row = futures::executor::block_on(
+        s.gov
+            .core_store()
+            .expect("native identity owner")
+            .identity()
+            .get_key(&key.id),
+    )
+    .expect("a read")
+    .expect("the key's row");
     row.allowed_scopes = scopes;
-    s.gov.store().put_key(&row).expect("the grant is written");
-    s.gov.refresh().expect("the book reloads");
+    futures::executor::block_on(
+        s.gov
+            .core_store()
+            .expect("native identity owner")
+            .identity()
+            .put_key(&row),
+    )
+    .expect("the grant is written");
+    futures::executor::block_on(s.gov.refresh_async()).expect("the book reloads");
     (
         row,
         caller_resource_token(token.expose(&busbar_kernel::seal::lend())),
@@ -5668,12 +5614,15 @@ async fn a_key_that_is_no_longer_live_sees_no_agent_at_all() {
     for what in ["deleted", "disabled", "expired"] {
         let (key, token) = another_caller(&s, what, None);
         match what {
-            "deleted" => s.gov.delete_key(&key.id).expect("deleted"),
+            "deleted" => futures::executor::block_on(s.gov.delete_key(&key.id)).expect("deleted"),
             "disabled" => {
-                s.gov
-                    .update_key(&key.id, Some(false), None)
-                    .expect("a write")
-                    .expect("the key");
+                futures::executor::block_on(s.gov.update_key_outcome_async(
+                    &key.id,
+                    Some(false),
+                    None,
+                ))
+                .expect("a write")
+                .expect("the key");
             }
             _ => {
                 let mut row = key.clone();
@@ -5681,8 +5630,15 @@ async fn a_key_that_is_no_longer_live_sees_no_agent_at_all() {
                 // fixture's historical epoch, so a later expiry is valid and already past.
                 row.expires_at = Some(row.created_at.saturating_add(1));
                 assert!(row.expires_at.unwrap() < busbar_kernel::store::now());
-                s.gov.store().put_key(&row).expect("expired");
-                s.gov.refresh().expect("the book reloads");
+                futures::executor::block_on(
+                    s.gov
+                        .core_store()
+                        .expect("native identity owner")
+                        .identity()
+                        .put_key(&row),
+                )
+                .expect("expired");
+                futures::executor::block_on(s.gov.refresh_async()).expect("the book reloads");
             }
         }
         let catalogue_read = StatusCode::UNAUTHORIZED;
@@ -5700,8 +5656,7 @@ async fn a_key_that_is_no_longer_live_sees_no_agent_at_all() {
         assert_eq!(status, StatusCode::UNAUTHORIZED, "{what}: {body}");
         if what == "expired" {
             let (control, control_token) = another_caller(&s, "expired-refusal-control", None);
-            s.gov
-                .delete_key(&control.id)
+            futures::executor::block_on(s.gov.delete_key(&control.id))
                 .expect("the control key is deleted");
             let (bad_status, bad_body) = answered(
                 &s.router,
@@ -7359,7 +7314,7 @@ async fn an_apply_carrying_a_malformed_agent_push_ca_is_refused_and_deliveries_k
     let cfg = busbar_kernel::config::resolve(&deploy, &Default::default()).expect("resolves");
     let rules = Arc::new(crate::root::door_steps::Rules::default());
     rules.hold_owned_anchors(&[root_facts::PUSH_TRUST_FROM]);
-    let built = busbar_kernel::build_app_from_config(
+    let built = futures::executor::block_on(busbar_kernel::build_app_from_config(
         cfg,
         busbar_kernel::config::PluginsCfg::default(),
         None,
@@ -7368,7 +7323,7 @@ async fn an_apply_carrying_a_malformed_agent_push_ca_is_refused_and_deliveries_k
         (None, None),
         None,
         &(rules as Arc<dyn busbar_kernel::appbuild::RootRules>),
-    );
+    ));
     let refusal = match built {
         Ok(_) => panic!("an apply carrying a malformed agent_push.ca was built"),
         Err(e) => e,
@@ -8826,15 +8781,25 @@ async fn a_hop_pinned_to_a_member_the_caller_may_not_reach_keeps_no_fee() {
     );
     let task_id = task_id_of(&b2);
 
-    let mut row = s
-        .gov
-        .store()
-        .get_key(&s.key.id)
-        .expect("a read")
-        .expect("the key's row");
+    let mut row = futures::executor::block_on(
+        s.gov
+            .core_store()
+            .expect("native identity owner")
+            .identity()
+            .get_key(&s.key.id),
+    )
+    .expect("a read")
+    .expect("the key's row");
     row.allowed_scopes = Some(vec![agent_scope("planner-a")]);
-    s.gov.store().put_key(&row).expect("the grant is written");
-    s.gov.refresh().expect("the book reloads");
+    futures::executor::block_on(
+        s.gov
+            .core_store()
+            .expect("native identity owner")
+            .identity()
+            .put_key(&row),
+    )
+    .expect("the grant is written");
+    futures::executor::block_on(s.gov.refresh_async()).expect("the book reloads");
 
     let mut log = Vec::new();
     hear(&mut agent, &mut log);
@@ -8895,11 +8860,13 @@ async fn a_pooled_member_outside_the_callers_grant_is_refused_before_anything_is
     .await;
     assert_not_granted(status, &body, "planner-a");
     assert!(!agent.relayed(), "nothing was dialled");
-    let usage = s
-        .gov
-        .usage_for(&s.app.cost, &key.id, busbar_kernel::store::now())
-        .expect("a read")
-        .expect("the key exists");
+    let usage = futures::executor::block_on(s.gov.usage_for_async(
+        &s.app.cost,
+        &key.id,
+        busbar_kernel::store::now(),
+    ))
+    .expect("a read")
+    .expect("the key exists");
     assert_eq!(usage.requests, 0, "nothing charged");
 }
 
@@ -8943,15 +8910,25 @@ async fn an_interrupted_task_on_any_member_resumes_at_the_member_holding_it() {
     hear(&mut agent, &mut log);
     assert_eq!((hits(&log, "planner-a"), hits(&log, "planner-b")), (0, 1));
 
-    let mut row = s
-        .gov
-        .store()
-        .get_key(&key.id)
-        .expect("a read")
-        .expect("the key's row");
+    let mut row = futures::executor::block_on(
+        s.gov
+            .core_store()
+            .expect("native identity owner")
+            .identity()
+            .get_key(&key.id),
+    )
+    .expect("a read")
+    .expect("the key's row");
     row.allowed_scopes = Some(vec![agent_scope("planner-a"), agent_scope("planner-b")]);
-    s.gov.store().put_key(&row).expect("the grant is written");
-    s.gov.refresh().expect("the book reloads");
+    futures::executor::block_on(
+        s.gov
+            .core_store()
+            .expect("native identity owner")
+            .identity()
+            .put_key(&row),
+    )
+    .expect("the grant is written");
+    futures::executor::block_on(s.gov.refresh_async()).expect("the book reloads");
 
     let (status, body) = answered(
         &s.router,
@@ -9140,15 +9117,25 @@ async fn an_unaddressed_local_verb_is_answered_at_the_tripped_agent_its_grant_re
         }
     }
     let task_id = placed.expect("the twin serves once the primary's cell is open");
-    let mut row = s
-        .gov
-        .store()
-        .get_key(&key.id)
-        .expect("a read")
-        .expect("the key's row");
+    let mut row = futures::executor::block_on(
+        s.gov
+            .core_store()
+            .expect("native identity owner")
+            .identity()
+            .get_key(&key.id),
+    )
+    .expect("a read")
+    .expect("the key's row");
     row.allowed_scopes = Some(vec![agent_scope("planner-a")]);
-    s.gov.store().put_key(&row).expect("the grant is written");
-    s.gov.refresh().expect("the book reloads");
+    futures::executor::block_on(
+        s.gov
+            .core_store()
+            .expect("native identity owner")
+            .identity()
+            .put_key(&row),
+    )
+    .expect("the grant is written");
+    futures::executor::block_on(s.gov.refresh_async()).expect("the book reloads");
     let mut log = Vec::new();
     hear(&mut agent, &mut log);
     let before = chain(&s).last().map_or(0, |e| e.seq);
@@ -9291,7 +9278,7 @@ async fn a_config_apply_keeps_the_pool_walking() {
     }
 
     let next = s.applied(written, true);
-    s.handle.swap(next);
+    s.handle.swap(next).await;
     let mut log = Vec::new();
     let mut heard = || {
         hear(&mut agent, &mut log);
@@ -9341,15 +9328,25 @@ async fn a_pinned_refusal_answers_the_pinned_members_own_wait() {
     .await;
     assert_eq!(status, StatusCode::OK, "placed on the twin: {body}");
     let task_id = task_id_of(&body);
-    let mut row = s
-        .gov
-        .store()
-        .get_key(&key.id)
-        .expect("a read")
-        .expect("the key's row");
+    let mut row = futures::executor::block_on(
+        s.gov
+            .core_store()
+            .expect("native identity owner")
+            .identity()
+            .get_key(&key.id),
+    )
+    .expect("a read")
+    .expect("the key's row");
     row.allowed_scopes = Some(vec![agent_scope("planner-a"), agent_scope("planner-b")]);
-    s.gov.store().put_key(&row).expect("the grant is written");
-    s.gov.refresh().expect("the book reloads");
+    futures::executor::block_on(
+        s.gov
+            .core_store()
+            .expect("native identity owner")
+            .identity()
+            .put_key(&row),
+    )
+    .expect("the grant is written");
+    futures::executor::block_on(s.gov.refresh_async()).expect("the book reloads");
 
     twin_status.store(503, Ordering::SeqCst);
     let get = format!(r#"{{"id":"{task_id}"}}"#);

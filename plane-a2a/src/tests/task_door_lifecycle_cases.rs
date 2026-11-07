@@ -255,7 +255,7 @@ fn listing_step(plane: &A2aDoor) -> Outcome {
     if result == Err(Halt::Pending) {
         let receipt = crate::conditional_publication::fixture::receipt(&journal, |request| {
             use busbar_contract::abi::sdk::plane::conditional::RecordMutation;
-            use busbar_contract::abi::sdk::store::conditional::{Decision, Expected};
+            use busbar_contract::host_records::conditional::{Decision, Expected};
             LISTING.with(|state| {
                 let mut state = state.borrow_mut();
                 for predicate in &request.candidate.predicates {

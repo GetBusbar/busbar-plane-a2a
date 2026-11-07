@@ -4,7 +4,7 @@
 //! Plane-owned copies of conditional record bytes keep custody independently of the host.
 
 use busbar_contract::abi::sdk::plane::conditional as wire;
-use busbar_contract::abi::sdk::store::conditional::Expected;
+use busbar_contract::host_records::conditional::Expected;
 
 use crate::proto::custody::Wipe;
 

@@ -6,7 +6,7 @@
 
 use super::*;
 use busbar_contract::abi::sdk::plane::conditional as wire;
-use busbar_contract::abi::sdk::store::conditional::{Decision, Expected};
+use busbar_contract::host_records::conditional::{Decision, Expected};
 use std::collections::HashMap;
 
 type Owner = (u32, u32);

@@ -49,7 +49,7 @@ pub(super) fn initialize(
     directory: &Path,
     config: &busbar_kernel::config::RootCfg,
     plugins: &busbar_kernel::config::PluginsCfg,
-    opened: &busbar_contract::store_calls::OpenedStore,
+    core: &std::sync::Arc<busbar_kernel::persistence::facade::CoreStore>,
     deployment: &serde_json::Value,
 ) -> ColdRecordReceipt {
     let anchor = serde_json::to_value(&config.store).expect("actual effective Store selection");
@@ -66,9 +66,9 @@ pub(super) fn initialize(
         )
         .unwrap()
         .unwrap();
-        let execution = crate::root::principal_transition::execute(
-            &command, config, plugins, opened, &anchor, &source, None,
-        )
+        let execution = futures::executor::block_on(crate::root::principal_transition::execute(
+            &command, config, plugins, core, &anchor, &source, None,
+        ))
         .expect("the production principal lifecycle accepts this genuinely fresh namespace");
         std::fs::write(
             directory.join(format!("principal-{action}.json")),
@@ -80,16 +80,25 @@ pub(super) fn initialize(
     let before = run("inspect", Path::new("-"));
     assert!(before["principal_receipt_head_sha256"].is_null());
     assert_eq!(before["store_ephemeral"], false);
-    let calls = opened.calls.as_ref().expect("actual Store calls");
+    let rows = busbar_kernel::persistence::scoped::ScopedStore::authorized(
+        core.clone(),
+        instance,
+        [SCHEMA.into()],
+    )
+    .expect("the fixture authorizes its own public witness schema");
     let creation = std::fs::read(directory.join("namespace-creation.json")).unwrap();
     let creation_hash = crate::root::loader::sign::sha256_hex(&creation);
     let mut random = [0u8; 32];
     getrandom::fill(&mut random).expect("fresh public witness entropy");
-    let witness = busbar_contract::kinds::RecordBytes::new(random.to_vec()).unwrap();
-    futures::executor::block_on(calls.record_put(SCHEMA, WITNESS_KEY, &witness))
-        .expect("commit a real public witness through the actual durable Store");
+    let witness = busbar_contract::Secret::new(random.to_vec());
+    assert_eq!(
+        futures::executor::block_on(rows.put(SCHEMA, WITNESS_KEY, witness))
+            .expect("commit a real public witness through the actual durable Store"),
+        busbar_kernel::persistence::scoped::Outcome::Applied,
+    );
     let receipt = serde_json::json!({
-        "version": 1,
+        "version": 2,
+        "witness_binding": {"instance": instance, "private": false, "source_scope": "unscoped"},
         "store_config_sha256": before["store_config_sha256"],
         "requirements": before["requirements"],
         "witness": {"schema": SCHEMA, "key_hex": hex::encode(WITNESS_KEY),
@@ -176,6 +185,7 @@ pub(super) fn migrate(instance: &'static str, directory: &Path) {
             served
                 .gov
                 .delete_key(&served.key.id)
+                .await
                 .expect("retire the actual migration caller");
             let kernel = served.kernel.clone();
             assert!(

@@ -22,12 +22,12 @@ fn current_egress(s: &Served) -> (u64, Arc<Egress>) {
     )
 }
 
-fn apply_agent(s: &Served, agent: &Agent, previous: u64) -> Arc<Egress> {
+async fn apply_agent(s: &Served, agent: &Agent, previous: u64) -> Arc<Egress> {
     let next = s.applied(
         serde_yaml::from_str(&agent.entry("planner", "1h")).expect("the real agent section"),
         false,
     );
-    s.handle.swap(next);
+    s.handle.swap(next).await;
     let (generation, egress) = current_egress(s);
     assert_eq!(
         generation,
@@ -122,7 +122,7 @@ async fn a_retained_egress_keeps_its_connection_authority_across_two_later_refre
 
     // OPEN's generation is rooted by the loader. Capture a noninitial generation,
     // so releasing this Egress must actually revoke its connection authority.
-    let retained = apply_agent(&s, &first, initial_generation);
+    let retained = apply_agent(&s, &first, initial_generation).await;
     let (first_generation, _) = current_egress(&s);
     let old_owner = retained.caller;
     assert_ne!(old_owner, initial_owner);
@@ -131,7 +131,7 @@ async fn a_retained_egress_keeps_its_connection_authority_across_two_later_refre
         .await
         .unwrap();
 
-    let middle = apply_agent(&s, &second, first_generation);
+    let middle = apply_agent(&s, &second, first_generation).await;
     let (second_generation, _) = current_egress(&s);
     assert_ne!(middle.caller, old_owner);
     let (middle_need, middle_target) = route(&middle);
@@ -145,7 +145,7 @@ async fn a_retained_egress_keeps_its_connection_authority_across_two_later_refre
     );
     drop(middle);
 
-    let current = apply_agent(&s, &third, second_generation);
+    let current = apply_agent(&s, &third, second_generation).await;
     assert_ne!(current.caller, old_owner);
     let (new_need, new_target) = route(&current);
     fetch(&*current.conns, current.caller, new_need, &new_target)

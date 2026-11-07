@@ -5,10 +5,10 @@ use super::*;
 use busbar_contract::abi::sdk::plane::conditional::{
     ConditionalCandidate, RecordMutation, RecordPredicate,
 };
-use busbar_contract::abi::sdk::store::conditional::{Decision, Expected, Request};
+use busbar_contract::host_records::conditional::{Decision, Expected, Request};
+use busbar_contract::host_records::RecordFailure;
 use busbar_contract::ids::RecordSchemaId;
 use busbar_contract::kinds::{RecordBytes, StoreError};
-use busbar_contract::store_calls::StoreFailure;
 use busbar_kernel::host_records::{record_key, RecordRows};
 use busbar_kernel::host_services::{InstanceFacts, KernelServices, Offload};
 
@@ -27,7 +27,7 @@ impl RecordRows for Observed {
     fn supports_record_transaction(&self) -> bool {
         true
     }
-    fn record_transaction(&self, request: &Request) -> Result<Decision, StoreFailure> {
+    fn record_transaction(&self, request: &Request) -> Result<Decision, RecordFailure> {
         request
             .encode_held()
             .expect("actual host request passes wire validation");
@@ -98,6 +98,7 @@ async fn actual_a2a_door_negotiates_quota_through_host_conditional_publication()
             ..Default::default()
         },
     )
+    .await
     .expect("admit exactly the negotiated declaration");
     let key = b"active/v1".to_vec();
     let value = br#"{"version":1,"epoch":1,"active":null}"#.to_vec();
@@ -141,12 +142,10 @@ async fn actual_a2a_door_negotiates_quota_through_host_conditional_publication()
     assert_eq!(observed[0].predicates[0].expected, Expected::Absent);
     assert_eq!(
         observed[0].mutations,
-        vec![
-            busbar_contract::abi::sdk::store::conditional::Mutation::Put {
-                schema: "task_quota".into(),
-                key: record_key("quota-negotiation", &key),
-                value,
-            }
-        ]
+        vec![busbar_contract::host_records::conditional::Mutation::Put {
+            schema: "task_quota".into(),
+            key: record_key("quota-negotiation", &key),
+            value,
+        }]
     );
 }

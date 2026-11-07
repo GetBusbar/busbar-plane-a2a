@@ -3749,6 +3749,13 @@ enum LookParked {
         hop: CardHop,
         exchange: Option<ParkedExchange>,
     },
+    /// The verified card is retained while the original trust decision awaits custody.
+    Deciding {
+        registration: crate::a2a::config::AgentDefCfg,
+        generation: u64,
+        looked: CardLook,
+        issued: u32,
+    },
     /// `trust.sight` is in flight.
     Sighted {
         registration: crate::a2a::config::AgentDefCfg,
@@ -3762,15 +3769,17 @@ enum LookParked {
 impl LookParked {
     fn generation(&self) -> u64 {
         match self {
-            Self::Fetching { generation, .. } | Self::Sighted { generation, .. } => *generation,
+            Self::Fetching { generation, .. }
+            | Self::Sighted { generation, .. }
+            | Self::Deciding { generation, .. } => *generation,
         }
     }
 
     fn registration(&self) -> &crate::a2a::config::AgentDefCfg {
         match self {
-            Self::Fetching { registration, .. } | Self::Sighted { registration, .. } => {
-                registration
-            }
+            Self::Fetching { registration, .. }
+            | Self::Sighted { registration, .. }
+            | Self::Deciding { registration, .. } => registration,
         }
     }
 }
@@ -4209,6 +4218,7 @@ fn look(
 ) -> Result<(CardLook, u32), Box<LookParked>> {
     use crate::card_trust::Sighting;
     let resumed = match parked {
+        Some(LookParked::Deciding { looked, issued, .. }) => return Ok((looked, issued)),
         Some(LookParked::Sighted {
             looked,
             issued,
@@ -4673,8 +4683,8 @@ slot!(
             ticket: instance.ticket(),
             base: 0,
         };
-        let looked = match look(&at, &name, &def, parked) {
-            Ok((looked, _)) => looked,
+        let (looked,issued) = match look(&at, &name, &def, parked) {
+            Ok(looked) => looked,
             Err(parked) => {
                 instance.park(*parked);
                 return Outcome::Pending;
@@ -4689,8 +4699,13 @@ slot!(
             if registered(&name).as_ref() != Some(&def) {
                 return verb_refused(&input, &mut out, STATUS_NOT_FOUND, "", None, AUDIT_REJECTED);
             }
-            if let Err(refusal) = approve_key(plane, &at, &name, claimed.trim()) {
-                return verb_refused(&input, &mut out, 400, &refusal, None, AUDIT_REJECTED);
+            match approve_key(plane, &at, &name, claimed.trim()) {
+                Poll::Pending => {
+                    instance.park(LookParked::Deciding {registration:def.clone(),generation,looked,issued});
+                    return Outcome::Pending;
+                }
+                Poll::Ready(Err(refusal))=>return verb_refused(&input, &mut out, 400, &refusal, None, AUDIT_REJECTED),
+                Poll::Ready(Ok(()))=>{},
             }
         }
         let state_now = verdict(plane, &name);
@@ -4806,12 +4821,22 @@ fn kept_standing(
 /// APPROVE `agent`'s trust key on the KERNEL'S trust book at the fingerprint the operator named and
 /// this look just sighted (`trust.decide`, the ONE decide path `POST /admin/trust/approve` takes
 /// for `<instance>/<agent>`).
-fn approve_key(plane: &A2aDoor, at: &LookAt<'_>, agent: &str, seen: &str) -> Result<(), String> {
+fn approve_key(
+    plane: &A2aDoor,
+    at: &LookAt<'_>,
+    agent: &str,
+    seen: &str,
+) -> Poll<Result<(), String>> {
     use busbar_contract::abi::host::service as svc;
-    let services = plane
-        .services
-        .ok_or_else(|| "the instance was handed no host services".to_string())?;
-    match services.trust_decide(at.handle(TRUST_DECIDE_SEQ), agent, None, Some(seen), true) {
+    let Some(services) = plane.services else {
+        return Poll::Ready(Err("the instance was handed no host services".to_string()));
+    };
+    let Poll::Ready(answer) =
+        services.trust_decide(at.handle(TRUST_DECIDE_SEQ), agent, None, Some(seen), true)
+    else {
+        return Poll::Pending;
+    };
+    Poll::Ready(match answer {
         Ok(svc::UNDECIDED_UNPINNED) => Err(
             "the agent's card could not be authenticated, so there is nothing to approve".to_string(),
         ),
@@ -4827,7 +4852,7 @@ fn approve_key(plane: &A2aDoor, at: &LookAt<'_>, agent: &str, seen: &str) -> Res
         Ok(svc::UNDECIDED_UNKNOWN) => Err(format!("the trust book declares no agent `{agent}`")),
         Ok(_) => Ok(()),
         Err(e) => Err(format!("the trust book did not decide: {e:?}")),
-    }
+    })
 }
 
 /// The completion handle the approve's decision rides: past every handle its look issued.
