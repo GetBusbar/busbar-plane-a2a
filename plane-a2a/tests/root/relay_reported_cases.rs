@@ -9,6 +9,10 @@ async fn a_cut_after_a_working_event_reports_an_error_and_fails_the_task() {
     let _one = PUBLISHING.lock().await;
     const WORKING: &str = "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"kind\":\"task\",\"id\":\"B1\",\"contextId\":\"BC\",\"status\":{\"state\":\"working\"}}}\n\n";
     for cut in [false, true] {
+        let scenario = if cut { "relay-cut" } else { "relay-complete" };
+        if !bootstrap::scenario(scenario, None).await {
+            continue;
+        }
         let event = if cut { WORKING } else { STREAMED };
         let agent = Agent::start_with(
             200,
@@ -81,5 +85,6 @@ async fn a_cut_after_a_working_event_reports_an_error_and_fails_the_task() {
             state.contains(if cut { "failed" } else { "completed" }),
             "{row}"
         );
+        bootstrap::scenario_finished(scenario);
     }
 }

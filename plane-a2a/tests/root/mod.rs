@@ -1662,8 +1662,56 @@ async fn a_relayed_agent_unit_is_audited_on_the_chain_and_posts_one_line_once() 
     let mut agent = Agent::start(200, ANSWER).await;
     let s = served(instance, &agent.entry("auditor", "1h"), false, None);
     approve(&s, "auditor").await;
+    // Administrative history and this serving node's unit chain are distinct.
+    // Prove both real operator actions durable before measuring the relay.
+    let history = busbar_kernel::host_records_async::AsyncHistory::authorized(
+        s.gov
+            .core_store_handle()
+            .expect("admitted native persistence"),
+        busbar_kernel::audit::auditlog::PERSISTENCE_OWNER,
+        [busbar_kernel::host_records_async::HistoryCollection {
+            kind: busbar_kernel::store::plane_view::KIND_AUDIT,
+            mode: busbar_kernel::host_records_async::HistoryMode::Append,
+            retention: busbar_contract::records::Retention::Age,
+            parent: None,
+        }],
+    )
+    .expect("the host's declared admin audit collection");
+    let durable_admin = history
+        .list(
+            busbar_kernel::store::plane_view::KIND_AUDIT,
+            &busbar_contract::records::PlaneSelector::Parent("admin".into()),
+        )
+        .await
+        .expect("read the actual durable admin journal before the relay");
+    let durable_admin: BTreeMap<_, _> = durable_admin
+        .iter()
+        .map(|record| {
+            let row: busbar_kernel::audit::journal::NeutralBody =
+                busbar_kernel::store::plane_view::decode(&record.body)
+                    .expect("a durable admin journal row");
+            (row.seq, row.hash)
+        })
+        .collect();
+    let mut operator_sequences = Vec::new();
+    for action in ["a2a_agent.connect", "a2a_agent.approve"] {
+        let rows =
+            busbar_kernel::audit::auditlog::AUDIT_LOG.list_filtered(0, 1000, Some(action), None);
+        let row = rows
+            .iter()
+            .find(|row| {
+                row.resource.contains("auditor") && durable_admin.get(&row.seq) == Some(&row.hash)
+            })
+            .unwrap_or_else(|| panic!("the actual {action} must already be durable: {rows:?}"));
+        operator_sequences.push(row.seq);
+    }
+    assert!(
+        operator_sequences[0] < operator_sequences[1],
+        "connect precedes approval on their actual admin chain"
+    );
     let destination = crate::root::door_steps::plane_lane(surface("plane_key"), "auditor");
-    let before = chain(&s).last().map_or(0, |e| e.seq);
+    let prior_tip = chain(&s).last().cloned();
+    let before = prior_tip.as_ref().map_or(0, |e| e.seq);
     let (status, body) = answered(
         &s.router,
         rpc("auditor", "message/send", SEND, Some(&s.token)),
@@ -1694,14 +1742,29 @@ async fn a_relayed_agent_unit_is_audited_on_the_chain_and_posts_one_line_once() 
         "the complete answer was delivered: {row:?}"
     );
     assert!(!row.hash.is_empty(), "the row is sealed: {row:?}");
-    let prev = all
-        .iter()
-        .find(|entry| entry.seq + 1 == row.seq)
-        .expect("the connect/approve audit precedes the relayed unit");
-    assert_eq!(
-        row.prev_hash, prev.hash,
-        "the row is chained to the one before it"
-    );
+    if let Some(prev) = prior_tip {
+        assert_eq!(row.seq, prev.seq + 1, "one next unit on this node's chain");
+        assert_eq!(
+            row.prev_hash, prev.hash,
+            "the row is chained to the actual pre-relay node tip"
+        );
+        busbar_kernel_audit::AuditChain::verify_window(&all)
+            .expect("the actual node audit window verifies");
+    } else {
+        assert_eq!(row.seq, 1, "the first unit is this serving node's genesis");
+        busbar_kernel_audit::AuditChain::verify_chain(&all)
+            .expect("the actual node audit chain verifies from genesis");
+    }
+    let keys = crate::root::durability::keyset_of(&s.book.lock().expect("unpoisoned").record);
+    let key = keys
+        .get(
+            row.key_id
+                .as_deref()
+                .expect("the node's sealed signing key"),
+        )
+        .expect("the actual node verifying key");
+    busbar_kernel_audit::AuditChain::verify_signature(row, key)
+        .expect("the actual unit record signature verifies");
     let ours = caller_counts(&s);
     assert_eq!(ours.len(), 1, "one record for the unit: {ours:?}");
     assert_eq!(s.post.open_units(), 0, "the unit's facts closed at its end");
@@ -7299,19 +7362,26 @@ async fn a_malformed_agent_push_ca_refuses_the_boot() {
         Agent::start_answering(200, Arc::new(|r: &str| far_answer(r, "working", "working"))).await;
     let section = agent.entry("planner", "1h");
     let runtime = tokio::runtime::Handle::current();
-    let composed = std::thread::spawn(move || {
-        let _in = runtime.enter();
-        let _ = served_push_trusting(
-            instance,
-            &section,
-            vec!["127.0.0.1".to_string()],
-            Some(
-                "-----BEGIN CERTIFICATE-----\nnot a certificate\n-----END CERTIFICATE-----\n"
-                    .to_string(),
-            ),
-        );
-    })
-    .join();
+    let test = std::thread::current()
+        .name()
+        .expect("the malformed-CA fixture is driven by its exact test")
+        .to_owned();
+    let composed = std::thread::Builder::new()
+        .name(test)
+        .spawn(move || {
+            let _in = runtime.enter();
+            let _ = served_push_trusting(
+                instance,
+                &section,
+                vec!["127.0.0.1".to_string()],
+                Some(
+                    "-----BEGIN CERTIFICATE-----\nnot a certificate\n-----END CERTIFICATE-----\n"
+                        .to_string(),
+                ),
+            );
+        })
+        .expect("start the named boot-refusal thread")
+        .join();
     let refusal = match composed {
         Ok(()) => panic!("a malformed agent_push.ca composed"),
         Err(payload) => payload
