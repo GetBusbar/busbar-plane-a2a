@@ -250,3 +250,111 @@ fn migrate_here(instance: &'static str, directory: &Path) {
     .join()
     .expect("cold migration finishes before ordinary serving begins");
 }
+
+const SCENARIO: &str = "BUSBAR_A2A_PROCESS_SCENARIO";
+const RESPONSES: &str = "BUSBAR_A2A_PUBLIC_RESPONSES";
+const SCENARIO_WITNESS: &str = "A2A process scenario finished";
+
+/// Each independent application gets its own process and its one price owner.
+/// The parent still requires every exact case's real test and completion witness.
+pub(super) async fn scenario(name: &str, responses: Option<&Path>) -> bool {
+    if let Ok(selected) = std::env::var(SCENARIO) {
+        return selected == name;
+    }
+    let test = std::thread::current()
+        .name()
+        .expect("the scenario is driven by a named test")
+        .to_owned();
+    let mut command =
+        tokio::process::Command::new(std::env::current_exe().expect("the actual test binary"));
+    command
+        .args(["--exact", &test, "--nocapture", "--test-threads=1"])
+        .env(SCENARIO, name)
+        .kill_on_drop(true);
+    if let Some(directory) = responses {
+        command.env(RESPONSES, directory);
+    }
+    let output = command
+        .output()
+        .await
+        .expect("start the exact application scenario");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success()
+            && stdout.contains("test result: ok. 1 passed; 0 failed;")
+            && stdout.contains(&format!("{SCENARIO_WITNESS}: {test}: {name}")),
+        "the independent application scenario did not complete exactly one test: {stdout}\n{stderr}",
+    );
+    false
+}
+
+pub(super) fn scenario_finished(name: &str) {
+    assert_eq!(std::env::var(SCENARIO).as_deref(), Ok(name));
+    let test = std::thread::current().name().unwrap().to_owned();
+    println!("{SCENARIO_WITNESS}: {test}: {name}");
+}
+
+/// Only public status/body responses cross between the two isolated applications.
+/// The parent owns this directory and removes it after both children have exited.
+pub(super) struct ResponseWitness {
+    directory: std::path::PathBuf,
+    owned: bool,
+}
+
+impl ResponseWitness {
+    pub(super) fn new() -> Self {
+        match std::env::var_os(RESPONSES) {
+            Some(directory) => Self {
+                directory: directory.into(),
+                owned: false,
+            },
+            None => Self {
+                directory: crate::root::test_plugins::scratch("a2a-public-response-witness"),
+                owned: true,
+            },
+        }
+    }
+
+    pub(super) fn directory(&self) -> &Path {
+        &self.directory
+    }
+
+    pub(super) fn write(&self, responses: &[(axum::http::StatusCode, String)]) {
+        let public: Vec<_> = responses
+            .iter()
+            .map(|(status, body)| (status.as_u16(), body))
+            .collect();
+        std::fs::write(
+            self.directory.join("baseline.json"),
+            serde_json::to_vec(&public).expect("serialize the public response witness"),
+        )
+        .expect("retain the actual first process's public responses");
+    }
+
+    pub(super) fn read(&self) -> Vec<(axum::http::StatusCode, String)> {
+        let public: Vec<(u16, String)> = serde_json::from_slice(
+            &std::fs::read(self.directory.join("baseline.json"))
+                .expect("read the completed first process's response witness"),
+        )
+        .expect("read exact public status/body pairs");
+        public
+            .into_iter()
+            .map(|(status, body)| {
+                (
+                    axum::http::StatusCode::from_u16(status).expect("the original HTTP status"),
+                    body,
+                )
+            })
+            .collect()
+    }
+}
+
+impl Drop for ResponseWitness {
+    fn drop(&mut self) {
+        if self.owned {
+            std::fs::remove_dir_all(&self.directory)
+                .expect("remove the completed process response witness");
+        }
+    }
+}

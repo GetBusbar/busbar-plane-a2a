@@ -1579,42 +1579,50 @@ async fn an_agent_unit_dials_only_the_address_the_guard_admits() {
     let mut agent = Agent::start(200, ANSWER).await;
     let section = agent.entry("planner", "1h");
 
-    let blocked = "serve-agent-door-guarded";
-    let s = served(blocked, &section, true, None);
-    let (status, preview) = admin(&s, "/agents/planner/connect", "").await;
-    assert_eq!(status, StatusCode::OK, "{preview}");
-    assert_eq!(
-        preview["state"], "error",
-        "the guard refused the card fetch: {preview}"
-    );
-    assert_eq!(agent.fetches(), 0, "the agent never heard the card fetch");
-    let (status, body) = answered(
-        &s.router,
-        rpc("planner", "message/send", SEND, Some(&s.token)),
-    )
-    .await;
-    assert_ne!(
-        status,
-        StatusCode::OK,
-        "a refused address is never served: {body}"
-    );
-    assert!(!agent.relayed(), "the far agent was never dialled");
+    if bootstrap::scenario("guard-blocked", None).await {
+        let blocked = "serve-agent-door-guarded";
+        let s = served(blocked, &section, true, None);
+        let (status, preview) = admin(&s, "/agents/planner/connect", "").await;
+        assert_eq!(status, StatusCode::OK, "{preview}");
+        assert_eq!(
+            preview["state"], "error",
+            "the guard refused the card fetch: {preview}"
+        );
+        assert_eq!(agent.fetches(), 0, "the agent never heard the card fetch");
+        let (status, body) = answered(
+            &s.router,
+            rpc("planner", "message/send", SEND, Some(&s.token)),
+        )
+        .await;
+        assert_ne!(
+            status,
+            StatusCode::OK,
+            "a refused address is never served: {body}"
+        );
+        assert!(!agent.relayed(), "the far agent was never dialled");
 
-    let open = "serve-agent-door-open";
-    let s = served(open, &section, false, None);
-    approve(&s, "planner").await;
-    let (status, body) = answered(
-        &s.router,
-        rpc("planner", "message/send", SEND, Some(&s.token)),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "relayed through the door: {body}");
-    assert!(
-        body.contains("m-far"),
-        "the far agent's answer, relayed: {body}"
-    );
-    let head = agent.heard.recv().await.expect("the far agent was dialled");
-    assert!(head.starts_with("POST /planner "), "{head}");
+        bootstrap::scenario_finished("guard-blocked");
+        return;
+    }
+
+    if bootstrap::scenario("guard-open", None).await {
+        let open = "serve-agent-door-open";
+        let s = served(open, &section, false, None);
+        approve(&s, "planner").await;
+        let (status, body) = answered(
+            &s.router,
+            rpc("planner", "message/send", SEND, Some(&s.token)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "relayed through the door: {body}");
+        assert!(
+            body.contains("m-far"),
+            "the far agent's answer, relayed: {body}"
+        );
+        let head = agent.heard.recv().await.expect("the far agent was dialled");
+        assert!(head.starts_with("POST /planner "), "{head}");
+        bootstrap::scenario_finished("guard-open");
+    }
 }
 
 /// The root cell `governance-budget × a2a-client`: a relayed unit addressed to one agent is
@@ -3686,42 +3694,50 @@ async fn a_request_the_card_does_not_fit_is_judged_after_the_trust_gate() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_unit_to_an_agent_that_is_not_serving_is_refused_after_its_grant_and_charges_nothing() {
     let _one = PUBLISHING.lock().await;
-    let instance = "serve-agent-door-gate";
     let mut agent = Agent::start(200, ANSWER).await;
-    let s = served(instance, &agent.entry("planner", "1h"), false, None);
-    for (method, params) in [("message/send", SEND), ("tasks/list", "{}")] {
-        let (status, body) =
-            answered(&s.router, rpc("planner", method, params, Some(&s.token))).await;
-        assert_eq!(status, StatusCode::FORBIDDEN, "{method}: {body}");
-        let doc: serde_json::Value = serde_json::from_str(&body).expect("an envelope");
-        assert_eq!(doc["error"]["code"], -32004, "{body}");
-        assert_eq!(
-            doc["error"]["message"], "fronted agent `planner` is not serving (Pending)",
-            "{body}"
-        );
-    }
-    assert!(!agent.relayed(), "never dialled");
-    assert_eq!(admitted(&s), 0, "a refused unit is charged nothing");
-    drop(s);
+    if bootstrap::scenario("pending-agent", None).await {
+        let instance = "serve-agent-door-gate";
+        let s = served(instance, &agent.entry("planner", "1h"), false, None);
+        for (method, params) in [("message/send", SEND), ("tasks/list", "{}")] {
+            let (status, body) =
+                answered(&s.router, rpc("planner", method, params, Some(&s.token))).await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{method}: {body}");
+            let doc: serde_json::Value = serde_json::from_str(&body).expect("an envelope");
+            assert_eq!(doc["error"]["code"], -32004, "{body}");
+            assert_eq!(
+                doc["error"]["message"], "fronted agent `planner` is not serving (Pending)",
+                "{body}"
+            );
+        }
+        assert!(!agent.relayed(), "never dialled");
+        assert_eq!(admitted(&s), 0, "a refused unit is charged nothing");
+        drop(s);
 
-    let ungranted = "serve-agent-door-gate-ungranted";
-    let s = served(
-        ungranted,
-        &agent.entry("planner", "1h"),
-        false,
-        Some(Vec::new()),
-    );
-    let (status, body) = answered(
-        &s.router,
-        rpc("planner", "message/send", SEND, Some(&s.token)),
-    )
-    .await;
-    assert_not_granted(status, &body, "planner");
-    assert!(
-        !body.contains("is not serving"),
-        "the grant is judged first: {body}"
-    );
-    assert_eq!(admitted(&s), 0, "nothing charged");
+        bootstrap::scenario_finished("pending-agent");
+        return;
+    }
+
+    if bootstrap::scenario("ungranted-agent", None).await {
+        let ungranted = "serve-agent-door-gate-ungranted";
+        let s = served(
+            ungranted,
+            &agent.entry("planner", "1h"),
+            false,
+            Some(Vec::new()),
+        );
+        let (status, body) = answered(
+            &s.router,
+            rpc("planner", "message/send", SEND, Some(&s.token)),
+        )
+        .await;
+        assert_not_granted(status, &body, "planner");
+        assert!(
+            !body.contains("is not serving"),
+            "the grant is judged first: {body}"
+        );
+        assert_eq!(admitted(&s), 0, "nothing charged");
+        bootstrap::scenario_finished("ungranted-agent");
+    }
 }
 
 /// An unaddressed unit routes to the one granted agent that is serving.
@@ -5240,35 +5256,43 @@ async fn a_deployment_writing_no_agents_section_mounts_no_agent_route_at_all() {
             .collect()
     };
 
-    let configured = "serve-agent-door-configured";
-    let s = served_facing(configured, &section, Facing::Routes);
-    let mounted = agent_routes(&s.routes);
-    assert!(
-        mounted.contains(&metadata)
-            && mounted.iter().any(|p| p == card)
-            && mounted
-                .iter()
-                .any(|p| p.starts_with(&format!("{}/agents", mount()))),
-        "the control: a written section mounts the door's routes: {:?}",
-        s.routes
-    );
+    if bootstrap::scenario("configured-routes", None).await {
+        let configured = "serve-agent-door-configured";
+        let s = served_facing(configured, &section, Facing::Routes);
+        let mounted = agent_routes(&s.routes);
+        assert!(
+            mounted.contains(&metadata)
+                && mounted.iter().any(|p| p == card)
+                && mounted
+                    .iter()
+                    .any(|p| p.starts_with(&format!("{}/agents", mount()))),
+            "the control: a written section mounts the door's routes: {:?}",
+            s.routes
+        );
 
-    let absent = "serve-agent-door-unconfigured";
-    let s = served_facing(absent, &section, Facing::Unconfigured);
-    assert!(
-        agent_routes(&s.routes).is_empty(),
-        "a deployment with no `agents:` mounted an agent route: {:?}",
-        s.routes
-    );
-    let (status, body) = answered(
-        &s.router,
-        rpc("planner", "message/send", SEND, Some(&s.token)),
-    )
-    .await;
-    assert_ne!(status, StatusCode::OK, "nothing serves it: {body}");
-    let (status, body) = answered(&s.router, get(card, None)).await;
-    assert_ne!(status, StatusCode::OK, "no card is served: {body}");
-    assert!(!agent.relayed(), "no agent was dialled");
+        bootstrap::scenario_finished("configured-routes");
+        return;
+    }
+
+    if bootstrap::scenario("unconfigured-routes", None).await {
+        let absent = "serve-agent-door-unconfigured";
+        let s = served_facing(absent, &section, Facing::Unconfigured);
+        assert!(
+            agent_routes(&s.routes).is_empty(),
+            "a deployment with no `agents:` mounted an agent route: {:?}",
+            s.routes
+        );
+        let (status, body) = answered(
+            &s.router,
+            rpc("planner", "message/send", SEND, Some(&s.token)),
+        )
+        .await;
+        assert_ne!(status, StatusCode::OK, "nothing serves it: {body}");
+        let (status, body) = answered(&s.router, get(card, None)).await;
+        assert_ne!(status, StatusCode::OK, "no card is served: {body}");
+        assert!(!agent.relayed(), "no agent was dialled");
+        bootstrap::scenario_finished("unconfigured-routes");
+    }
 }
 
 /// Ported from busbar-a2a plane_tests.rs::a_section_carrying_only_the_reserved_keys_is_still_no_plane.
@@ -5295,35 +5319,46 @@ async fn a_section_carrying_only_the_reserved_keys_is_still_no_plane() {
         answers
     }
 
-    let absent = "serve-agent-door-no-section";
-    let unconfigured = served_facing(absent, &agent.entry("planner", "1h"), Facing::Unconfigured);
-    let baseline = asked(&unconfigured, &metadata, card).await;
+    let witness = bootstrap::ResponseWitness::new();
+    if bootstrap::scenario("unconfigured-baseline", Some(witness.directory())).await {
+        let absent = "serve-agent-door-no-section";
+        let unconfigured =
+            served_facing(absent, &agent.entry("planner", "1h"), Facing::Unconfigured);
+        let baseline = asked(&unconfigured, &metadata, card).await;
+        witness.write(&baseline);
 
-    let reserved = "serve-agent-door-reserved-keys-only";
-    let s = served_facing(
-        reserved,
-        "hooks: []\nupstream_credentials: own",
-        Facing::Routes,
-    );
-    let mounted: Vec<&String> = s
-        .routes
-        .iter()
-        .filter(|p| p.starts_with(mount()) || **p == metadata || p.as_str() == card)
-        .collect();
-    assert!(
-        mounted.is_empty(),
-        "a section carrying only the reserved keys mounted an agent route: {:?}",
-        s.routes
-    );
-    let answers = asked(&s, &metadata, card).await;
-    for (answer, expected) in answers.iter().zip(&baseline) {
-        assert_ne!(answer.0, StatusCode::OK, "nothing serves it: {answer:?}");
-        assert_eq!(
-            answer, expected,
-            "it answers as a deployment with no `agents:` section does"
-        );
+        bootstrap::scenario_finished("unconfigured-baseline");
+        return;
     }
-    assert!(!agent.relayed(), "no agent was dialled");
+    let baseline = witness.read();
+    if bootstrap::scenario("reserved-only", Some(witness.directory())).await {
+        let reserved = "serve-agent-door-reserved-keys-only";
+        let s = served_facing(
+            reserved,
+            "hooks: []\nupstream_credentials: own",
+            Facing::Routes,
+        );
+        let mounted: Vec<&String> = s
+            .routes
+            .iter()
+            .filter(|p| p.starts_with(mount()) || **p == metadata || p.as_str() == card)
+            .collect();
+        assert!(
+            mounted.is_empty(),
+            "a section carrying only the reserved keys mounted an agent route: {:?}",
+            s.routes
+        );
+        let answers = asked(&s, &metadata, card).await;
+        for (answer, expected) in answers.iter().zip(&baseline) {
+            assert_ne!(answer.0, StatusCode::OK, "nothing serves it: {answer:?}");
+            assert_eq!(
+                answer, expected,
+                "it answers as a deployment with no `agents:` section does"
+            );
+        }
+        assert!(!agent.relayed(), "no agent was dialled");
+        bootstrap::scenario_finished("reserved-only");
+    }
 }
 
 /// Ported from busbar-a2a ingress_tests.rs::an_anonymous_caller_is_refused_and_told_where_to_get_a_token.
