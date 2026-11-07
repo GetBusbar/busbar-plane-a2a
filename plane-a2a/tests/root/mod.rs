@@ -731,6 +731,7 @@ fn served_core(
     ticking: bool,
     push_ca: Option<String>,
 ) -> Served {
+    bootstrap::child();
     let directory = crate::root::test_plugins::scratch(&format!(
         "{instance}-{}",
         busbar_kernel::door::op_id().counter(),

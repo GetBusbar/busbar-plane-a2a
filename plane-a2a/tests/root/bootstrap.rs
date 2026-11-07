@@ -136,7 +136,56 @@ pub(super) fn initialize(
     }
 }
 
+const CHILD: &str = "BUSBAR_A2A_COLD_BOOTSTRAP";
+const WITNESS: &str = "A2A cold bootstrap finished";
+
+/// The fixture child reaches this hook before constructing any application in
+/// its process. Its actual namespace is then reopened by the parent process.
+pub(super) fn child() {
+    let Some(request) = std::env::var_os(CHILD) else {
+        return;
+    };
+    let request: serde_json::Value = serde_json::from_str(&request.to_string_lossy())
+        .expect("the parent supplied the cold fixture identity");
+    let instance: &'static str = Box::leak(
+        request["instance"]
+            .as_str()
+            .expect("cold fixture instance")
+            .to_owned()
+            .into_boxed_str(),
+    );
+    let directory = Path::new(
+        request["directory"]
+            .as_str()
+            .expect("cold fixture directory"),
+    );
+    migrate_here(instance, directory);
+    println!("{WITNESS}: {instance}");
+    std::io::Write::flush(&mut std::io::stdout()).expect("flush the actual cold fixture witness");
+    std::process::exit(0);
+}
+
 pub(super) fn migrate(instance: &'static str, directory: &Path) {
+    let test = std::thread::current()
+        .name()
+        .expect("the fixture is driven by a named test")
+        .to_owned();
+    let request = serde_json::json!({"instance": instance, "directory": directory});
+    let output =
+        std::process::Command::new(std::env::current_exe().expect("the actual test binary"))
+            .args(["--exact", &test, "--nocapture", "--test-threads=1"])
+            .env(CHILD, request.to_string())
+            .output()
+            .expect("start the genuine cold bootstrap process");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success() && stdout.contains(&format!("{WITNESS}: {instance}")),
+        "cold bootstrap process did not complete its real peer and native drain assertions: {stdout}\n{stderr}",
+    );
+}
+
+fn migrate_here(instance: &'static str, directory: &Path) {
     let directory = directory.to_owned();
     std::thread::spawn(move || {
         let runtime = tokio::runtime::Builder::new_multi_thread()
