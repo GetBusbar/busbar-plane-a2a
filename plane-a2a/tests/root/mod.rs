@@ -1060,6 +1060,11 @@ fn served_core_on(
         .expect("the production builder boots the actual Store-backed application");
     limits.stage_boot();
     let app = Arc::new(app);
+    // A cold fixture and its serving reopen share this process. Drain the prior
+    // native audit originals before assigning this attachment's test owner.
+    futures::executor::block_on(busbar_kernel::audit::auditlog::register_test_audit_stream(
+        &app,
+    ));
     futures::executor::block_on(busbar_kernel::boot::hydrate_all(&app))
         .expect("normal startup hydrates the actual durable admin audit stream");
     let book = futures::executor::block_on(crate::root::boot::book(&app, &module))
