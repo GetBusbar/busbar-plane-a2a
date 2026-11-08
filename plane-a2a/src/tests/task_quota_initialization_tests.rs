@@ -213,3 +213,29 @@ fn quota_fresh_initialization_replays_lost_barrier_and_activation_receipts() {
         2
     );
 }
+
+#[test]
+fn ready_restart_preserves_nonzero_counts_without_bootstrap_authority() {
+    let book = initialized(7);
+    let before = book.clone();
+    let mut restarted = Unattested(book);
+    crate::task_quota::initialize(&mut restarted).expect("the persisted ready gate needs no grant");
+    assert_eq!(restarted.0, before, "READY never resets admitted capacity");
+}
+
+#[test]
+fn ready_refuses_missing_authority_and_failed_initialization_listing() {
+    let original = without_quota(0);
+    let mut unattested = Unattested(original.clone());
+    assert!(matches!(
+        crate::task_quota::initialize(&mut unattested),
+        Err(Halt::Failed(_))
+    ));
+    assert_eq!(unattested.0, original);
+    let mut unreadable = IncompleteListing(original.clone());
+    assert!(matches!(
+        crate::task_quota::initialize(&mut unreadable),
+        Err(Halt::Failed(_))
+    ));
+    assert_eq!(unreadable.0, original);
+}

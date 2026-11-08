@@ -8,8 +8,8 @@ use busbar_contract::abi::host::service::{HostSlots, ItemSpan, RecordsGetIn, Ser
 use busbar_contract::abi::mechanism::call::{RawOutcome, Span};
 use busbar_contract::abi::mechanism::ticket::{HostCtx, HostTables};
 use busbar_contract::abi::sdk::plane::conditional as wire;
-use busbar_contract::host_records::conditional::{self as store, Decision, Expected};
 use busbar_contract::abi::sdk::test_support::zeroed;
+use busbar_contract::host_records::conditional::{self as store, Decision, Expected};
 use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
 

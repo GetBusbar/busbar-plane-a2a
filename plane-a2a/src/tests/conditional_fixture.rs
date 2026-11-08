@@ -55,3 +55,13 @@ pub(crate) fn pending_draft(journal: &Journal) -> Option<Draft> {
         }
     })
 }
+
+/// The exact submitted publication retained across cancellation, without replacing or settling it.
+pub(crate) fn retained_request(journal: &Journal) -> Option<wire::Request> {
+    journal.0.with(&(), |state| {
+        state?.steps.iter().find_map(|step| match &step.action {
+            Action::Publish { request, .. } if step.submitted => Some(request.clone()),
+            _ => None,
+        })
+    })
+}

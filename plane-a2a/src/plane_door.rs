@@ -586,6 +586,22 @@ pub(crate) fn drive_mirror(
     Poll::Ready(())
 }
 
+#[derive(Default)]
+struct ReadyPublication(crate::conditional_publication::Journal);
+
+impl Drop for ReadyPublication {
+    fn drop(&mut self) {
+        self.0.owner_dropped();
+    }
+}
+
+#[derive(Clone, Default)]
+struct ReadyQuota {
+    publication: Arc<ReadyPublication>,
+    /// The warm-card calls start after the quota initialization's replayed handles.
+    issued: Option<u32>,
+}
+
 type CardWarmSnapshot = (u64, Option<Arc<AgentsCfg>>);
 
 /// One instance: the public base URL `open` was given, the host tables, every live generation's
@@ -612,6 +628,7 @@ pub struct A2aDoor {
     /// The held cards were warmed from the `card` and `card_approval` host records after `open`,
     /// both listings landed ([`warm_cards`]).
     cards_warmed: Keyed<(), bool>,
+    ready_quota: Keyed<(u32, u32), ReadyQuota>,
     /// A warm's listing was refused and said so ([`warm_unlisted`]) since a warm last landed.
     warm_unlisted: Keyed<(), bool>,
     /// The registration snapshot captured before a warm issues its first listing.
@@ -669,6 +686,7 @@ impl Default for A2aDoor {
             cards: Default::default(),
             card_cache: Default::default(),
             cards_warmed: Default::default(),
+            ready_quota: Default::default(),
             warm_unlisted: Default::default(),
             warming: Default::default(),
             warm_refused: Default::default(),
@@ -1259,25 +1277,65 @@ macro_rules! slot {
 }
 
 slot!(
-    /// `ready` (after `open`, before any unit arrives; boot awaits it): the held CARDS are warmed
-    /// from the `card` host records ([`warm_cards`]), on the op's real ticket, so the agents the
-    /// operator approved before are served from the first unit, their arrival admitted against the
-    /// card they fit. PENDING while the listing is in flight; a listing the host refuses leaves the
-    /// cards unwarmed, for the first tick to warm, and the instance serves.
-    ReadyOp, ReadyIn, OutHead, |instance, _, _| {
+    /// Initialize/validate the instance's durable quota before warming cards or serving units.
+    /// Every pending observation and publication stays on READY's real ticket and replay journal.
+    ReadyOp, ReadyIn, OutHead, |instance, input, mut out| {
         let Some(plane) = instance.get() else {
             return Outcome::Ready;
         };
+        let ticket = instance.ticket();
+        let key = (ticket.slot, ticket.generation);
+        let ready = plane.ready_quota.with_all(|states| states.entry(key).or_default().clone());
+        let journal = &ready.publication.0;
+        if journal.enter(ticket, input.head().extensions().bytes()).is_err() {
+            crate::push_door::apply_publication(plane, journal);
+            return Outcome::Failed;
+        }
+        if let Some(outcome) = journal.pending(&plane.publication_leases, &mut out) {
+            return outcome;
+        }
+        let issued = match ready.issued {
+            Some(issued) => issued,
+            None => {
+                let Some(host) = plane.host.as_ref() else { return Outcome::Failed; };
+                let mut via = Via::new(host, plane.services, ticket, 0, &plane.grown)
+                    .publishing(journal);
+                let initialized = crate::task_quota::initialize(&mut via);
+                if let Some(outcome) = journal.pending(&plane.publication_leases, &mut out) {
+                    return outcome;
+                }
+                match initialized {
+                    Err(Halt::Pending) => return Outcome::Pending,
+                    Err(Halt::Failed(why)) => {
+                        tracing::warn!(reason = %why, "A2A READY quota initialization refused");
+                        crate::push_door::apply_publication(plane, journal);
+                        return Outcome::Failed;
+                    }
+                    Ok(()) => {
+                        crate::push_door::apply_publication(plane, journal);
+                        journal.finished();
+                        let issued = via.issued();
+                        plane.ready_quota.with_all(|states| {
+                            if let Some(state) = states.get_mut(&key) { state.issued = Some(issued); }
+                        });
+                        issued
+                    }
+                }
+            }
+        };
         if plane.cards_warmed.get(&()).unwrap_or(false) {
-            let ticket = instance.ticket();
-            plane.warming.remove(&(ticket.slot, ticket.generation));
+            plane.warming.remove(&key);
+            journal.finished();
+            plane.ready_quota.remove(&key);
             return Outcome::Ready;
         }
-        match warm_cards(plane, instance.ticket(), 0).0 {
+        match warm_cards(plane, ticket, issued).0 {
             Poll::Ready(landed) => {
                 if landed {
                     plane.cards_warmed.insert((), true);
                 }
+                journal.finished();
+                plane.ready_quota.remove(&key);
                 Outcome::Ready
             }
             Poll::Pending => Outcome::Pending,
@@ -1503,6 +1561,13 @@ impl PlaneLife for A2aDoor {
         let mut answered = false;
         if let Some(plane) = instance.get() {
             let cancelled = input.cancel().ticket();
+            if let Some(ready) = plane
+                .ready_quota
+                .remove(&(cancelled.slot, cancelled.generation))
+            {
+                ready.publication.0.cancelled();
+                ready.publication.0.owner_dropped();
+            }
             plane
                 .warming
                 .remove(&(cancelled.slot, cancelled.generation));
@@ -5236,3 +5301,7 @@ mod request_ownership_cases;
 #[cfg(test)]
 #[path = "tests/plane_door_support.rs"]
 mod plane_door_support;
+
+#[cfg(test)]
+#[path = "tests/ready_quota.rs"]
+mod ready_quota_tests;

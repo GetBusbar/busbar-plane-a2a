@@ -180,6 +180,12 @@ fn ready(rec: &mut dyn Records) -> Result<(Gate, Vec<u8>), Halt> {
     Err(failed())
 }
 
+/// Initialize or validate the durable gate during the instance's ticketed READY crossing.
+/// This uses the same exact observations and conditional transactions as task admission.
+pub(crate) fn initialize(rec: &mut dyn Records) -> Result<(), Halt> {
+    ready(rec).map(|_| ())
+}
+
 /// Publish a task/config change with its durable admission or release. Replay retains every
 /// metadata read and exact transaction through the existing Records implementation.
 pub(crate) fn publish(
