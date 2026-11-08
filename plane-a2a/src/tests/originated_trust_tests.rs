@@ -7,6 +7,10 @@
 //! kernel's trust book does not serve (quarantined, its card changed, never approved) is sent
 //! nothing.
 
+type Host = KindHost<busbar_contract::plugin::markers::PlaneKind>;
+
+type Services = KindServices<busbar_contract::plugin::markers::PlaneKind>;
+
 use std::cell::Cell;
 use std::ffi::c_void;
 use std::mem::size_of;
@@ -15,9 +19,9 @@ use busbar_contract::abi::host::conn::connector::{self, ConnectorSlots, Establis
 use busbar_contract::abi::host::service::{self as svc, ServiceHead, ServiceOut};
 use busbar_contract::abi::mechanism::call::{Outcome, RawOutcome};
 use busbar_contract::abi::mechanism::ticket::{HostCtx, HostTables, Ticket};
-use busbar_contract::abi::sdk::conn::Host;
+use busbar_contract::abi::sdk::conn::Host as KindHost;
 use busbar_contract::abi::sdk::test_support::zeroed;
-use busbar_contract::abi::sdk::Services;
+use busbar_contract::abi::sdk::Services as KindServices;
 
 use super::*;
 
@@ -321,10 +325,10 @@ fn door_over(trust_serves: Option<svc::ServiceFn>) -> A2aDoor {
     // SAFETY: both complete, initialized nested tables remain live during this snapshot.
     // Their non-NULL slots are static functions validating NONE context and their exact input
     // prefix. They retain no raw pointers; the SDK copies slots, and all other slots are NULL.
-    let host = unsafe { Host::from_raw(&tables) };
+    let host = unsafe { Host::test_from_raw(&tables) };
     // SAFETY: the complete services table is still live, with the same validated static
     // callbacks. This constructor copies it; no table pointer or loan escapes this call.
-    let services = unsafe { Services::from_raw(&tables) };
+    let services = unsafe { Services::test_from_raw(&tables) };
     A2aDoor {
         host: Some(host),
         services,

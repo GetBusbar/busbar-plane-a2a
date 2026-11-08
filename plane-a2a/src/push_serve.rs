@@ -84,7 +84,7 @@ struct Prepared {
 const UNAVAILABLE: &str = "the push report could not be checked or recorded; retry this request";
 
 fn cached_refusal(
-    instance: &Instance<'_, A2aDoor>,
+    instance: &Instance<'_, A2aDoor, busbar_contract::plugin::markers::PlaneKind>,
     input: &Lent<'_, ServeIn>,
     out: &mut Out<'_, ServeOut>,
     mut state: Admitted,
@@ -114,7 +114,7 @@ fn cached_refusal(
 }
 
 fn unavailable(
-    instance: &Instance<'_, A2aDoor>,
+    instance: &Instance<'_, A2aDoor, busbar_contract::plugin::markers::PlaneKind>,
     input: &Lent<'_, ServeIn>,
     out: &mut Out<'_, ServeOut>,
     state: Admitted,
@@ -161,7 +161,7 @@ fn signature(
 
 fn finish_prepared(
     plane: &A2aDoor,
-    instance: &Instance<'_, A2aDoor>,
+    instance: &Instance<'_, A2aDoor, busbar_contract::plugin::markers::PlaneKind>,
     input: &Lent<'_, ServeIn>,
     out: &mut Out<'_, ServeOut>,
     mut state: Admitted,
@@ -190,7 +190,7 @@ pub(crate) fn push_move(held: TaskState, document: &Value) -> Option<TaskState> 
 /// `serve` of the push route.
 pub(crate) fn serve(
     plane: &A2aDoor,
-    instance: &Instance<'_, A2aDoor>,
+    instance: &Instance<'_, A2aDoor, busbar_contract::plugin::markers::PlaneKind>,
     input: Lent<'_, ServeIn>,
     mut out: Out<'_, ServeOut>,
 ) -> Outcome {
@@ -375,7 +375,7 @@ pub(crate) fn serve(
 
 fn finish_unchanged(
     plane: &A2aDoor,
-    instance: &Instance<'_, A2aDoor>,
+    instance: &Instance<'_, A2aDoor, busbar_contract::plugin::markers::PlaneKind>,
     input: &Lent<'_, ServeIn>,
     out: &mut Out<'_, ServeOut>,
     state: Admitted,

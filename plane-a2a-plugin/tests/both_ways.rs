@@ -570,7 +570,10 @@ mod both_ways {
 
     #[test]
     fn the_linked_and_the_dropped_in_door_answer_every_op_the_same() {
-        let d = Dispatcher::new(DispatchConfig::default());
+        let d = Dispatcher::new(
+            DispatchConfig::default(),
+            busbar_contract::services::test_caller_binding(),
+        );
         let linked = script(&linked(&d));
         assert_eq!(script(&dropped(&d)), linked, "the dropped-in door");
     }
@@ -653,7 +656,10 @@ mod both_ways {
     /// own words, linked and dropped in alike, and publishes nothing.
     #[test]
     fn an_apply_carrying_a_malformed_agent_push_section_is_refused_at_refresh() {
-        let d = Dispatcher::new(DispatchConfig::default());
+        let d = Dispatcher::new(
+            DispatchConfig::default(),
+            busbar_contract::services::test_caller_binding(),
+        );
         for (how, p) in [("linked", linked(&d)), ("dropped in", dropped(&d))] {
             let mut o: Frame<PlaneOpenIn, PlaneOpenOut> = Frame::new(z(), z());
             (o.input.open.head, o.out.open.head) = (in_head(), out_head());
@@ -691,7 +697,10 @@ mod both_ways {
     /// The linked transcript says what the plane's own functions say the door answers.
     #[test]
     fn the_door_answers_what_the_plane_says() {
-        let d = Dispatcher::new(DispatchConfig::default());
+        let d = Dispatcher::new(
+            DispatchConfig::default(),
+            busbar_contract::services::test_caller_binding(),
+        );
         let t = script(&linked(&d));
         assert_eq!(
             t[0],
@@ -815,7 +824,10 @@ mod both_ways {
     /// `project` on the gRPC line: the view of the JSON-RPC request the call's message composed.
     #[test]
     fn project_on_the_grpc_line_views_the_composed_request() {
-        let d = Dispatcher::new(DispatchConfig::default());
+        let d = Dispatcher::new(
+            DispatchConfig::default(),
+            busbar_contract::services::test_caller_binding(),
+        );
         let t = script(&linked(&d));
         let projected = line(&t, "project 8 ");
         let body = body_of(projected);
@@ -832,7 +844,10 @@ mod both_ways {
     /// message's `contextId` as the session, and one `user` turn of the params as the prompt view.
     #[test]
     fn project_writes_the_hook_view_of_the_request() {
-        let d = Dispatcher::new(DispatchConfig::default());
+        let d = Dispatcher::new(
+            DispatchConfig::default(),
+            busbar_contract::services::test_caller_binding(),
+        );
         let t = script(&linked(&d));
         let send: Value = serde_json::from_slice(SEND).expect("json");
         let jsonrpc = line(&t, "project 2 ");
@@ -866,7 +881,10 @@ mod both_ways {
     /// A request-stage rewrite replaces the parameters before projecting the rewritten request.
     #[test]
     fn a_rewrite_replaces_the_params_and_the_rewritten_request_is_projected() {
-        let d = Dispatcher::new(DispatchConfig::default());
+        let d = Dispatcher::new(
+            DispatchConfig::default(),
+            busbar_contract::services::test_caller_binding(),
+        );
         let t = script(&linked(&d));
         let redacted = json!({
             "message": { "role": "user", "messageId": "m1", "parts": [{ "text": "[redacted]" }] }
@@ -984,15 +1002,14 @@ mod both_ways {
         let services = KernelServices::new()
             .with_records(Arc::new(CardRecords))
             .with_pool(Arc::new(CardReadOnCaller));
-        services
-            .admit(
-                "both-ways",
-                InstanceFacts {
-                    record_kinds: vec![RecordSchemaId::new("card")],
-                    ..Default::default()
-                },
-            )
-            .expect("the host-log case admits only its declared read namespace");
+        futures::executor::block_on(services.admit(
+            "both-ways",
+            InstanceFacts {
+                record_kinds: vec![RecordSchemaId::new("card")],
+                ..Default::default()
+            },
+        ))
+        .expect("the host-log case admits only its declared read namespace");
         services
     }
 
@@ -1034,10 +1051,16 @@ mod both_ways {
     #[test]
     fn a_stray_card_part_line_reaches_the_host_log_dropped_in_as_linked() {
         let stray = |l: &String| l.contains("part records that no whole record names were found");
-        let unserved =
-            Dispatcher::with_services(DispatchConfig::default(), Arc::new(KernelServices::new()));
-        let held =
-            Dispatcher::with_services(DispatchConfig::default(), Arc::new(card_record_services()));
+        let unserved = Dispatcher::with_services(
+            DispatchConfig::default(),
+            Arc::new(KernelServices::new()),
+            busbar_contract::services::test_caller_binding(),
+        );
+        let held = Dispatcher::with_services(
+            DispatchConfig::default(),
+            Arc::new(card_record_services()),
+            busbar_contract::services::test_caller_binding(),
+        );
         for dropped_in in [false, true] {
             let quiet = ready_lines(&unserved, dropped_in);
             assert!(

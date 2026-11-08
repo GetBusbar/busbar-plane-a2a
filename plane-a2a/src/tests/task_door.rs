@@ -4,6 +4,8 @@
 //! The door's half of the task verbs: the restore claim, the records reach and the record kind
 //! indices.
 
+type Host = KindHost<busbar_contract::plugin::markers::PlaneKind>;
+
 use super::*;
 
 /// The instance's very first local verb runs its restore, and no local verb after it does, whatever
@@ -35,7 +37,7 @@ fn a_write_names_its_kind_by_the_tails_index() {
 }
 
 use busbar_contract::abi::mechanism::ticket::{HostCtx, HostTables};
-use busbar_contract::abi::sdk::conn::Host;
+use busbar_contract::abi::sdk::conn::Host as KindHost;
 
 // Present but unarmed matches the original fixture: Via::issue requires Services before it
 // invokes the assertion-specific closure. No callback supplies an invented success result.
@@ -90,9 +92,9 @@ fn a_short_records_answer_is_re_called_once_on_its_handle_at_the_named_size() {
     let tables = unarmed_task_services();
     // SAFETY: this complete immutable table advertises the full static service prefix.
     // Every callback is None; no context or callback points at borrowed state.
-    let host = unsafe { Host::from_raw(&tables) };
+    let host = unsafe { Host::test_from_raw(&tables) };
     // SAFETY: same readable static service prefix, with every callback None.
-    let services = unsafe { Services::from_raw(&tables) };
+    let services = unsafe { Services::test_from_raw(&tables) };
     let grown = Keyed::new();
     let mut via = Via::new(&host, services, TICKET, 0, &grown);
     let mut log = Vec::new();
@@ -112,9 +114,9 @@ fn a_piece_run_again_issues_a_short_handle_at_the_size_already_named() {
     let tables = unarmed_task_services();
     // SAFETY: this complete immutable table advertises the full static service prefix.
     // Every callback is None; no context or callback points at borrowed state.
-    let host = unsafe { Host::from_raw(&tables) };
+    let host = unsafe { Host::test_from_raw(&tables) };
     // SAFETY: same readable static service prefix, with every callback None.
-    let services = unsafe { Services::from_raw(&tables) };
+    let services = unsafe { Services::test_from_raw(&tables) };
     let grown = Keyed::new();
     let mut log = Vec::new();
 
@@ -149,9 +151,9 @@ fn a_second_short_answer_on_one_handle_is_a_broken_host() {
     let tables = unarmed_task_services();
     // SAFETY: this complete immutable table advertises the full static service prefix.
     // Every callback is None; no context or callback points at borrowed state.
-    let host = unsafe { Host::from_raw(&tables) };
+    let host = unsafe { Host::test_from_raw(&tables) };
     // SAFETY: same readable static service prefix, with every callback None.
-    let services = unsafe { Services::from_raw(&tables) };
+    let services = unsafe { Services::test_from_raw(&tables) };
     let grown = Keyed::new();
     let mut via = Via::new(&host, services, TICKET, 0, &grown);
     let got: Result<(), Halt> = via.issue((RECORD_BYTES, 1), |_, _, _, _| {
@@ -173,7 +175,7 @@ fn a_door_opened_with_no_services_reads_no_record() {
     };
     // SAFETY: the complete immutable table explicitly advertises no services or connectors.
     // No context or callback points at borrowed state.
-    let host = unsafe { Host::from_raw(&tables) };
+    let host = unsafe { Host::test_from_raw(&tables) };
     let grown = Keyed::new();
     let mut via = Via::new(&host, None, TICKET, 0, &grown);
     assert!(matches!(via.get("task", "k"), Err(Halt::Failed(w)) if w == "Unserved"));
@@ -188,9 +190,9 @@ fn the_sizes_book_is_bounded() {
     let tables = unarmed_task_services();
     // SAFETY: this complete immutable table advertises the full static service prefix.
     // Every callback is None; no context or callback points at borrowed state.
-    let host = unsafe { Host::from_raw(&tables) };
+    let host = unsafe { Host::test_from_raw(&tables) };
     // SAFETY: same readable static service prefix, with every callback None.
-    let services = unsafe { Services::from_raw(&tables) };
+    let services = unsafe { Services::test_from_raw(&tables) };
     let grown = Keyed::new();
     let via = Via::new(&host, services, TICKET, 0, &grown);
     for seq in 0..GROWN_MAX as u32 {
@@ -294,9 +296,9 @@ fn malformed_notification_config_is_not_treated_as_absent() {
 fn oversized_short_answer_is_refused_before_allocation_or_reissue() {
     let tables = unarmed_task_services();
     // SAFETY: the immutable complete table and its static callbacks outlive both wrappers.
-    let host = unsafe { Host::from_raw(&tables) };
+    let host = unsafe { Host::test_from_raw(&tables) };
     // SAFETY: the same immutable complete table remains live through the operation.
-    let services = unsafe { Services::from_raw(&tables) };
+    let services = unsafe { Services::test_from_raw(&tables) };
     let grown = Keyed::new();
     let mut via = Via::new(&host, services, TICKET, 0, &grown);
     let mut calls = 0;
@@ -336,9 +338,9 @@ fn quota_bootstrap_does_not_consume_task_effects_or_relax_mixed_publications() {
     ] {
         let tables = unarmed_task_services();
         // SAFETY: the complete immutable service table lives through this synchronous test.
-        let host = unsafe { Host::from_raw(&tables) };
+        let host = unsafe { Host::test_from_raw(&tables) };
         // SAFETY: same readable service prefix; callbacks remain intentionally unarmed.
-        let services = unsafe { Services::from_raw(&tables) };
+        let services = unsafe { Services::test_from_raw(&tables) };
         let grown = Keyed::new();
         let journal = Journal::default();
         journal

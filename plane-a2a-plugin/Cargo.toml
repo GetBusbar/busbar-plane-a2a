@@ -25,11 +25,12 @@ busbar-contract = { workspace = true }
 
 [dev-dependencies]
 # Ordinary admission, privacy, and both-image tests use the production loader.
-busbar-plugin-loader = { workspace = true }
+busbar-plugin-loader = { workspace = true , features = ["test-support"] }
 # The ordinary host-log test uses production host services and a fixed read-only row adapter.
 busbar-kernel = { workspace = true }
 # The both-ways op-by-op script (`tests/both_ways.rs`, moved here with the crate from busbar's
 # crates/busbar-plane-a2a) reads the door's answers as JSON.
 serde_json = { workspace = true }
 # ABI fixtures use the contract's existing low-level input and seal primitives.
-busbar-contract = { workspace = true, features = ["test-support"] }
+busbar-contract = { workspace = true, features = ["test-seal", "test-support"] }
+futures = { workspace = true }

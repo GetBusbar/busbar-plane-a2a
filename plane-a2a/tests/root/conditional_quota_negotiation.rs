@@ -86,7 +86,7 @@ async fn actual_a2a_door_negotiates_quota_through_host_conditional_publication()
         .expect("actual declared quota kind") as u32;
     let caller = plane.service_caller().expect("actual loader caller");
     host.admit(
-        &caller.instance,
+        caller.namespace(),
         InstanceFacts {
             record_kinds: declaration
                 .record_kinds

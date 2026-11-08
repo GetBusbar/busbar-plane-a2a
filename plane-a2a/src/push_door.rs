@@ -21,15 +21,19 @@
 //!   answer and nothing else, so a `tick` writes none and an attempt's outcome reaches its chain
 //!   on its caller's next relayed answer.
 
+type StaticHost = KindStaticHost<busbar_contract::plugin::markers::PlaneKind>;
+
+type StaticServices = KindStaticServices<busbar_contract::plugin::markers::PlaneKind>;
+
 use std::task::Poll;
 
 use busbar_contract::abi::host::service::DEST_ALLOWED;
 use busbar_contract::abi::mechanism::call::Outcome;
 use busbar_contract::abi::mechanism::ticket::{CompletionHandle, Ticket};
-use busbar_contract::abi::sdk::conn::StaticHost;
+use busbar_contract::abi::sdk::conn::Host as KindStaticHost;
 use busbar_contract::abi::sdk::exchange::{exchange, Exchange};
 use busbar_contract::abi::sdk::publish::Keyed;
-use busbar_contract::abi::sdk::{Instance, ServiceError, StaticServices};
+use busbar_contract::abi::sdk::{Instance, ServiceError, Services as KindStaticServices};
 
 use crate::a2a::task::Task;
 use crate::local::{self, PushConfig};
@@ -395,7 +399,7 @@ pub(crate) fn next_tick_ns(deliveries: &Deliveries, attempting: &Attempting) -> 
 /// only through `drive`); while an attempt is held the tick starts no other.
 pub(crate) fn tick_deliveries(
     plane: &A2aDoor,
-    instance: &Instance<'_, A2aDoor>,
+    instance: &Instance<'_, A2aDoor, busbar_contract::plugin::markers::PlaneKind>,
     now_ns: u64,
 ) -> Outcome {
     let Some((_, mut calls)) = calls_of(plane, instance) else {
@@ -407,7 +411,10 @@ pub(crate) fn tick_deliveries(
 
 /// ARM the wake of the instance's driver ticket, the one a `tick` runs on, once: a queued
 /// delivery wakes it ([`Deliveries::wake`]).
-pub(crate) fn arm(plane: &A2aDoor, instance: &Instance<'_, A2aDoor>) {
+pub(crate) fn arm(
+    plane: &A2aDoor,
+    instance: &Instance<'_, A2aDoor, busbar_contract::plugin::markers::PlaneKind>,
+) {
     let ticket = instance.ticket();
     if let (Some(host), false) = (plane.host, ticket.is_none()) {
         plane.deliveries.arm(|| Box::new(move || host.wake(ticket)));
@@ -416,7 +423,10 @@ pub(crate) fn arm(plane: &A2aDoor, instance: &Instance<'_, A2aDoor>) {
 
 /// `drive`: the attempt a `tick` left PENDING goes on, the wake on the driver ticket being its
 /// service's; with no attempt in flight there is nothing to do.
-pub(crate) fn drive(plane: &A2aDoor, instance: &Instance<'_, A2aDoor>) -> Outcome {
+pub(crate) fn drive(
+    plane: &A2aDoor,
+    instance: &Instance<'_, A2aDoor, busbar_contract::plugin::markers::PlaneKind>,
+) -> Outcome {
     match calls_of(plane, instance) {
         Some((_, mut calls)) => drive_over(&mut calls, &plane.deliveries, &plane.attempting),
         None => Outcome::Ready,
@@ -427,7 +437,7 @@ pub(crate) fn drive(plane: &A2aDoor, instance: &Instance<'_, A2aDoor>) -> Outcom
 /// needs to attempt a delivery.
 fn calls_of<'p>(
     plane: &'p A2aDoor,
-    instance: &Instance<'_, A2aDoor>,
+    instance: &Instance<'_, A2aDoor, busbar_contract::plugin::markers::PlaneKind>,
 ) -> Option<(Ticket, Calls<'p>)> {
     let (host, services) = (plane.host.as_ref()?, plane.services?);
     let ticket = instance.ticket();

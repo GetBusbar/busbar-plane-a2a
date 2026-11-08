@@ -166,9 +166,9 @@ fn run(state: crate::a2a::task::TaskState, event: bool, behavior: Behavior) {
         io: std::ptr::null(),
     };
     // SAFETY: complete readable table and service prefix; snapshots retain only static callbacks.
-    let host = unsafe { Host::from_raw(&tables) };
+    let host = unsafe { Host::test_from_raw(&tables) };
     // SAFETY: the same complete readable service prefix and static callback.
-    let services = unsafe { Services::from_raw(&tables) };
+    let services = unsafe { Services::test_from_raw(&tables) };
     let plane = A2aDoor {
         host: Some(host),
         services,
@@ -396,8 +396,8 @@ fn staged_read_guard_uses_empty_effects_despite_notifying_via() {
     };
     // SAFETY: complete tables and static fixture callbacks live for this test.
     let plane = A2aDoor {
-        host: Some(unsafe { Host::from_raw(&tables) }),
-        services: unsafe { Services::from_raw(&tables) },
+        host: Some(unsafe { Host::test_from_raw(&tables) }),
+        services: unsafe { Services::test_from_raw(&tables) },
         ..Default::default()
     };
     let ticket = Ticket {

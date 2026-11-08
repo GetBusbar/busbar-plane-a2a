@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
+type Host = KindHost<busbar_contract::plugin::markers::PlaneKind>;
+
 use super::*;
 use crate::tests::raw_custody_probe::{Probe, SECRET};
 use busbar_contract::abi::host::service::{HostSlots, SERVICES};
 use busbar_contract::abi::mechanism::ticket::{HostCtx, HostTables};
-use busbar_contract::abi::sdk::conn::Host;
+use busbar_contract::abi::sdk::conn::Host as KindHost;
 use busbar_contract::abi::sdk::test_support::zeroed;
 
 /// `Via::issue` requires services, but these tests answer through its closure alone.
@@ -27,9 +29,9 @@ fn unused_scratch_services() -> Services {
     };
     // SAFETY: both complete, aligned tables remain initialized and unchanged throughout this
     // call. The sealed zeroed HostSlots has only None callbacks; every other nested pointer is
-    // NULL. Services::from_raw copies the table before these locals expire, so no borrowed pointer or
+    // NULL. Services::test_from_raw copies the table before these locals expire, so no borrowed pointer or
     // callback survives the call. The test closures perform the read, Pending and unwind directly.
-    unsafe { Services::from_raw(&tables) }
+    unsafe { Services::test_from_raw(&tables) }
         .expect("the complete service table is present, with every slot unsupported")
 }
 

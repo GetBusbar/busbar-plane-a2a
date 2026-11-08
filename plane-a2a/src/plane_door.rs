@@ -4,6 +4,14 @@
 //! THE PLANE'S DOOR, SERVED: the slots the kernel calls over the plane ABI, on the SDK's safe
 //! surface.
 
+type StaticHost = KindStaticHost<busbar_contract::plugin::markers::PlaneKind>;
+
+type Host = KindHost<busbar_contract::plugin::markers::PlaneKind>;
+
+type StaticServices = KindStaticServices<busbar_contract::plugin::markers::PlaneKind>;
+
+type Services = KindServices<busbar_contract::plugin::markers::PlaneKind>;
+
 use busbar_contract::abi::mechanism::call::{OutHead, Outcome};
 use busbar_contract::abi::mechanism::door::Statement;
 use busbar_contract::abi::mechanism::lifecycle::{GenIn, ReadyIn, RefreshIn, TickIn, TickOut};
@@ -15,14 +23,16 @@ use busbar_contract::abi::plane::{
     PRINCIPAL_REQUIRED, RECORD_PUT, REFUSAL_ARRIVE, REFUSAL_KERNEL, ROUTE_DIRECT, ROUTE_POOL,
     ROUTE_SCOPE, ROUTE_SCOPE_LOCAL, UNITS_REPORTED, VERDICT_RETRY,
 };
-use busbar_contract::abi::sdk::conn::{Host, StaticHost};
+use busbar_contract::abi::sdk::conn::{Host as KindHost, Host as KindStaticHost};
 
 use busbar_contract::abi::sdk::door::statement;
 use busbar_contract::abi::sdk::life::Refusal;
 use busbar_contract::abi::sdk::plane::{cancel_disposition, Ending, UnitCancel};
 use busbar_contract::abi::sdk::plane_life::{self, PlaneLife, Published};
 use busbar_contract::abi::sdk::publish::{class_index, Generations, Keyed};
-use busbar_contract::abi::sdk::{Instance, Lent, Out, Safe, SafeSlot, Services, StaticServices};
+use busbar_contract::abi::sdk::{
+    Instance, Lent, Out, Safe, SafeSlot, Services as KindServices, Services as KindStaticServices,
+};
 use busbar_contract::abi::transport::{
     FAULT_CALLER, FAULT_HARD, FAULT_HEALTHY, FAULT_NONE, FAULT_TRANSIENT,
 };
@@ -1267,10 +1277,11 @@ macro_rules! slot {
         $(#[$doc])*
         pub struct $name;
         impl SafeSlot for $name {
+    type Kind = busbar_contract::plugin::markers::PlaneKind;
             type In = $in;
             type Out = $out;
             type State = A2aDoor;
-            fn call($inst: Instance<'_, A2aDoor>, $input: Lent<'_, $in>, $o: Out<'_, $out>)
+            fn call($inst: Instance<'_, A2aDoor, busbar_contract::plugin::markers::PlaneKind>, $input: Lent<'_, $in>, $o: Out<'_, $out>)
                 -> Outcome $body
         }
     };
@@ -1362,14 +1373,22 @@ impl PlaneLife for A2aDoor {
 
     /// `open`: the instance over the section and the public base URL, and the first generation's
     /// snapshot.
-    fn open(input: &Lent<'_, PlaneOpenIn>) -> Result<plane_life::Opened<Self>, Refusal> {
+    fn open(
+        input: &Lent<'_, PlaneOpenIn>,
+        host: Option<
+            busbar_contract::abi::sdk::lent::KindHostLoan<
+                '_,
+                busbar_contract::plugin::markers::PlaneKind,
+            >,
+        >,
+    ) -> Result<plane_life::Opened<Self>, Refusal> {
         let cfg = agents_section(input.open().settings().bytes())?;
 
         statement::read_push_section(input.owned().bytes()).map_err(Refusal::refused)?;
         let plane = A2aDoor {
             public_url: input.public_url().stated(),
-            host: input.open().host().map(Host::of),
-            services: input.open().host().and_then(Services::of),
+            host: host.map(Host::of),
+            services: host.and_then(Services::of),
             ..A2aDoor::default()
         };
         let names: Vec<&str> = cfg.agents.keys().map(String::as_str).collect();
@@ -1451,7 +1470,7 @@ impl PlaneLife for A2aDoor {
     /// `tick`: one due push notification attempted ([`crate::push_door::tick_deliveries`]), and the
     /// next tick wanted when the earliest waiting one is due (`0`: none waits).
     fn tick(
-        instance: Instance<'_, Self>,
+        instance: Instance<'_, Self, busbar_contract::plugin::markers::PlaneKind>,
         input: Lent<'_, TickIn>,
         mut out: Out<'_, TickOut>,
     ) -> Outcome {
@@ -1517,7 +1536,7 @@ impl PlaneLife for A2aDoor {
     /// `drive`: no session has unsolicited output; a push delivery the last `tick` left PENDING
     /// goes on ([`crate::push_door::drive`]).
     fn drive(
-        instance: Instance<'_, Self>,
+        instance: Instance<'_, Self, busbar_contract::plugin::markers::PlaneKind>,
         input: Lent<'_, PlaneDriveIn>,
         mut out: Out<'_, PlaneDriveOut>,
     ) -> Outcome {
@@ -1554,7 +1573,7 @@ impl PlaneLife for A2aDoor {
     /// cancelled unit held is abandoned, and every unit waiting on it is woken at once to look for
     /// itself (cancellation is a wake).
     fn cancel(
-        instance: Instance<'_, Self>,
+        instance: Instance<'_, Self, busbar_contract::plugin::markers::PlaneKind>,
         input: Lent<'_, PlaneCancelIn>,
         mut out: Out<'_, PlaneCancelOut>,
     ) -> Outcome {
@@ -2356,7 +2375,7 @@ fn transport_refusal(unit: &mut AgentUnit) -> Option<relay::RelayReply> {
 
 /// What `f` reads off unit `unit`, when the instance and the unit are both there.
 fn of_unit<T>(
-    instance: &Instance<'_, A2aDoor>,
+    instance: &Instance<'_, A2aDoor, busbar_contract::plugin::markers::PlaneKind>,
     unit: u64,
     f: impl FnOnce(&mut AgentUnit) -> Option<T>,
 ) -> Option<T> {

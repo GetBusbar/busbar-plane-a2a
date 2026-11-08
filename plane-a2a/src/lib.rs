@@ -57,11 +57,7 @@ mod tasks;
 mod wkt;
 
 /// The door: this plugin's one public item.
-pub use plane_door::door;
-
-/// The SDK macro's proof of this same door, for external conformance fixtures.
-#[doc(hidden)]
-pub use plane_door::MACRO_DOOR;
+pub use plane_door::{door, MACRO_DOOR};
 
 /// This plane's embedded declarations, shared by linked and dynamic metadata.
 pub const DECLARES: &str = include_str!("../declares.json");

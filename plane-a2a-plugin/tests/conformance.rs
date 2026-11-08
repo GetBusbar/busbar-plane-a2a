@@ -50,7 +50,10 @@ mod actual_admission {
             .expect("actual image renders")
             .expect("actual image exports its door");
         assert_eq!(stated, row.statement);
-        let d = Dispatcher::new(DispatchConfig::default());
+        let d = Dispatcher::new(
+            DispatchConfig::default(),
+            busbar_contract::services::test_caller_binding(),
+        );
         let linked = load_linked::<Plane>(&row, bind(&d)).expect("actual linked plane loads");
         let dropped =
             load_dropped::<Plane>(&image(), &stated, bind(&d)).expect("actual dropped plane loads");
@@ -77,7 +80,6 @@ mod actual_admission {
             use busbar_contract::abi::mechanism::call::{AbiStr, Blob, Outcome, BLOB_JSON};
             use busbar_contract::abi::plane::{PlaneOpenIn, PlaneOpenOut};
             use busbar_plugin_loader::dispatch::{in_head, out_head, Frame};
-            use std::sync::atomic::Ordering;
             let settings = serde_json::to_vec(
                 &serde_json::from_str::<serde_json::Value>(include_str!("conformance.json"))
                     .unwrap()["settings"],
@@ -94,8 +96,8 @@ mod actual_admission {
                 unsafe { Blob::from_raw_parts(settings.as_ptr(), settings.len(), BLOB_JSON, 0) };
             frame.input.public_url = AbiStr::of("https://gw.example");
             let count = || {
-                let resumed = product.inner.resumes.load(Ordering::SeqCst);
-                product.inner.crossings.load(Ordering::SeqCst) - resumed
+                let resumed = product.test_invocations().1;
+                product.test_invocations().0 - resumed
             };
             let before = count();
             let (answer, snapshot) = product.open(&mut frame);
@@ -127,7 +129,6 @@ mod actual_admission {
         use busbar_contract::abi::mechanism::lifecycle::slot;
         use busbar_contract::abi::plane::{PlaneOpenIn, PlaneOpenOut};
         use busbar_plugin_loader::dispatch::{in_head, out_head, Frame};
-        use std::sync::atomic::Ordering;
 
         let row = LinkedRow::of_macro(busbar_plane_a2a::MACRO_DOOR).unwrap();
         let library = image();
@@ -152,7 +153,10 @@ mod actual_admission {
         .unwrap();
         for dropped in [false, true] {
             let origin = if dropped { "dropped" } else { "linked" };
-            let d = Dispatcher::new(DispatchConfig::default());
+            let d = Dispatcher::new(
+                DispatchConfig::default(),
+                busbar_contract::services::test_caller_binding(),
+            );
             let product = if dropped {
                 load_dropped::<Plane>(&library, &row.statement, bind(&d))
             } else {
@@ -164,10 +168,7 @@ mod actual_admission {
                 product.has_ready(),
                 "{origin}: actual READY callback exists"
             );
-            let first_crossings = || {
-                product.inner.crossings.load(Ordering::SeqCst)
-                    - product.inner.resumes.load(Ordering::SeqCst)
-            };
+            let first_crossings = || product.test_invocations().0 - product.test_invocations().1;
             // SAFETY: these C frames contain integer/pointer fields with valid zero defaults;
             // their typed heads are initialized before crossing the actual ABI.
             let mut open: Frame<PlaneOpenIn, PlaneOpenOut> =
@@ -236,7 +237,10 @@ mod actual_admission {
                 .name,
             read.name
         );
-        let d = Dispatcher::new(DispatchConfig::default());
+        let d = Dispatcher::new(
+            DispatchConfig::default(),
+            busbar_contract::services::test_caller_binding(),
+        );
         let dishonest = LinkedRow {
             statement: stated.clone(),
             ..row
@@ -256,7 +260,10 @@ mod actual_admission {
         use busbar_plugin_loader::dispatch::kinds;
         let row = LinkedRow::of_macro(busbar_plane_a2a::MACRO_DOOR).unwrap();
         let path = image();
-        let d = Dispatcher::new(DispatchConfig::default());
+        let d = Dispatcher::new(
+            DispatchConfig::default(),
+            busbar_contract::services::test_caller_binding(),
+        );
         assert_eq!(
             load_linked::<kinds::auth::Auth>(&row, bind(&d)).err(),
             Some(LoadError::ManifestKind {
@@ -314,14 +321,14 @@ mod actual_admission {
             })
         );
         assert_eq!(
-            load_linked::<kinds::store::Store>(&row, bind(&d)).err(),
+            load_linked::<kinds::store_v4::StoreV4>(&row, bind(&d)).err(),
             Some(LoadError::ManifestKind {
                 stated: KindCode::Plane,
                 want: KindCode::Store
             })
         );
         assert_eq!(
-            load_dropped::<kinds::store::Store>(&path, &row.statement, bind(&d)).err(),
+            load_dropped::<kinds::store_v4::StoreV4>(&path, &row.statement, bind(&d)).err(),
             Some(LoadError::ManifestKind {
                 stated: KindCode::Plane,
                 want: KindCode::Store
@@ -384,7 +391,10 @@ mod actual_admission {
         }
         let row = LinkedRow::of_macro(busbar_plane_a2a::MACRO_DOOR).unwrap();
         let path = image();
-        let d = Dispatcher::new(DispatchConfig::default());
+        let d = Dispatcher::new(
+            DispatchConfig::default(),
+            busbar_contract::services::test_caller_binding(),
+        );
         // SAFETY: the real published SDK door and its full operation table are static.
         let real = unsafe { Door::read_parts(busbar_plane_a2a::door()) };
         assert_eq!(real.kind_abi, KindCode::Plane.abi_version());
@@ -592,7 +602,10 @@ mod actual_admission {
         let path = image();
         for dropped in [false, true] {
             let sink = Arc::new(A2aRefusalEnvelopes::default());
-            let d = Dispatcher::new(DispatchConfig::default());
+            let d = Dispatcher::new(
+                DispatchConfig::default(),
+                busbar_contract::services::test_caller_binding(),
+            );
             let bound = Bind {
                 sink: sink.clone(),
                 ..bind(&d)
@@ -604,8 +617,8 @@ mod actual_admission {
             }
             .unwrap();
             let first = || {
-                let resumes = product.inner.resumes.load(Ordering::SeqCst);
-                product.inner.crossings.load(Ordering::SeqCst) - resumes
+                let resumes = product.test_invocations().1;
+                product.test_invocations().0 - resumes
             };
             let mut emitted = Vec::new();
             let mut reason = vec![0_u8; expected.len() + 64];

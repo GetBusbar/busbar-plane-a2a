@@ -54,7 +54,10 @@ impl ConfigEvents {
 
 fn product() -> (Dispatcher, Plugin<Plane>, Arc<ConfigEvents>) {
     static NEXT_INSTANCE: AtomicU64 = AtomicU64::new(1);
-    let dispatcher = Dispatcher::new(DispatchConfig::default());
+    let dispatcher = Dispatcher::new(
+        DispatchConfig::default(),
+        busbar_contract::services::test_caller_binding(),
+    );
     let sink = Arc::new(ConfigEvents::default());
     let row = LinkedRow::of_macro(busbar_plane_a2a::MACRO_DOOR).unwrap();
     let plugin = load_linked::<Plane>(

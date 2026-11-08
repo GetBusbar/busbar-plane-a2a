@@ -15,9 +15,9 @@ fn ticket(slot: u32) -> Ticket {
 fn a_full_sizes_book_never_forgets_a_pending_tickets_short_answer() {
     let unserved = unarmed_task_services();
     // SAFETY: complete immutable table advertises the full static unarmed service prefix.
-    let host = unsafe { Host::from_raw(&unserved) };
+    let host = unsafe { Host::test_from_raw(&unserved) };
     // SAFETY: same readable static service prefix; callbacks are None and borrow no state.
-    let services = unsafe { Services::from_raw(&unserved) };
+    let services = unsafe { Services::test_from_raw(&unserved) };
     let grown = Keyed::new();
     let first = ticket(1);
     let mut via = Via::new(&host, services, first, 0, &grown);
@@ -376,9 +376,9 @@ fn drive_listing() -> Vec<(tracing::Level, String)> {
     };
     // SAFETY: the complete table and advertised immutable slot prefix are readable here. SDK
     // snapshots copy the slots; static callbacks use only the current thread's LISTING state.
-    let host = unsafe { Host::from_raw(&tables) };
+    let host = unsafe { Host::test_from_raw(&tables) };
     // SAFETY: same advertised readable prefix and static domain callbacks as above.
-    let services = unsafe { Services::from_raw(&tables) }.unwrap();
+    let services = unsafe { Services::test_from_raw(&tables) }.unwrap();
     let plane = A2aDoor::listing_lifecycle_fixture(host, services);
     let doc = serde_json::json!({"jsonrpc":"2.0","id":"busbar-originated","result":{"tasks":[
         {"id":"backend-t1","status":{"state":"TASK_STATE_COMPLETED"}},
@@ -474,9 +474,9 @@ fn a_real_mirror_setup_read_failure_is_reported_without_exposing_request_materia
 fn a_full_book_refuses_an_untracked_handle_before_any_host_issue_even_on_reentry() {
     let unserved = unarmed_task_services();
     // SAFETY: complete immutable table advertises the full static unarmed service prefix.
-    let host = unsafe { Host::from_raw(&unserved) };
+    let host = unsafe { Host::test_from_raw(&unserved) };
     // SAFETY: same readable static service prefix; callbacks are None and borrow no state.
-    let services = unsafe { Services::from_raw(&unserved) };
+    let services = unsafe { Services::test_from_raw(&unserved) };
     let grown = Keyed::new();
     let held = Via::new(&host, services, ticket(2), 0, &grown);
     for seq in 0..GROWN_MAX as u32 {
@@ -509,9 +509,9 @@ fn a_full_book_refuses_an_untracked_handle_before_any_host_issue_even_on_reentry
 fn completed_records_calls_release_reservations_instead_of_consuming_the_growth_bound() {
     let unserved = unarmed_task_services();
     // SAFETY: complete immutable table advertises the full static unarmed service prefix.
-    let host = unsafe { Host::from_raw(&unserved) };
+    let host = unsafe { Host::test_from_raw(&unserved) };
     // SAFETY: same readable static service prefix; callbacks are None and borrow no state.
-    let services = unsafe { Services::from_raw(&unserved) };
+    let services = unsafe { Services::test_from_raw(&unserved) };
     let grown = Keyed::new();
     let mut via = Via::new(&host, services, ticket(1), 0, &grown);
     for _ in 0..GROWN_MAX * 2 {
@@ -529,9 +529,9 @@ fn completed_records_calls_release_reservations_instead_of_consuming_the_growth_
 fn an_already_pending_handle_can_grow_at_capacity_without_forgetting_another_ticket() {
     let unserved = unarmed_task_services();
     // SAFETY: complete immutable table advertises the full static unarmed service prefix.
-    let host = unsafe { Host::from_raw(&unserved) };
+    let host = unsafe { Host::test_from_raw(&unserved) };
     // SAFETY: same readable static service prefix; callbacks are None and borrow no state.
-    let services = unsafe { Services::from_raw(&unserved) };
+    let services = unsafe { Services::test_from_raw(&unserved) };
     let grown = Keyed::new();
     let mut first = Via::new(&host, services, ticket(1), 0, &grown);
     let pending: Result<(), Halt> = first.issue((1, 0), |_, _, _, _| Poll::Pending);

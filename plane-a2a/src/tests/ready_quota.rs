@@ -160,20 +160,30 @@ extern "C" fn entitled(_: HostCtx, input: *const c_void, out: *mut ServiceOut) -
 }
 struct Open;
 impl SafeSlot for Open {
+    type Kind = busbar_contract::plugin::markers::PlaneKind;
     type In = OpenIn;
     type Out = OpenOut;
     type State = A2aDoor;
-    fn call(instance: Instance<'_, A2aDoor>, _: Lent<'_, OpenIn>, _: Out<'_, OpenOut>) -> Outcome {
+    fn call(
+        instance: Instance<'_, A2aDoor, busbar_contract::plugin::markers::PlaneKind>,
+        _: Lent<'_, OpenIn>,
+        _: Out<'_, OpenOut>,
+    ) -> Outcome {
         instance.open(OPENING.with(|plane| plane.borrow_mut().take().unwrap()));
         Outcome::Ready
     }
 }
 struct Inspect;
 impl SafeSlot for Inspect {
+    type Kind = busbar_contract::plugin::markers::PlaneKind;
     type In = InHead;
     type Out = OutHead;
     type State = A2aDoor;
-    fn call(instance: Instance<'_, A2aDoor>, _: Lent<'_, InHead>, _: Out<'_, OutHead>) -> Outcome {
+    fn call(
+        instance: Instance<'_, A2aDoor, busbar_contract::plugin::markers::PlaneKind>,
+        _: Lent<'_, InHead>,
+        _: Out<'_, OutHead>,
+    ) -> Outcome {
         let ready = instance
             .get()
             .unwrap()
@@ -250,8 +260,8 @@ fn real_ready_waits_for_quota_receipts_and_replays_card_handles_then_cancels_exa
         });
         // SAFETY: readable complete tables; snapshots retain only static callbacks.
         let plane = A2aDoor {
-            host: Some(unsafe { Host::from_raw(&tables) }),
-            services: unsafe { Services::from_raw(&tables) },
+            host: Some(unsafe { Host::test_from_raw(&tables) }),
+            services: unsafe { Services::test_from_raw(&tables) },
             ..Default::default()
         };
         let cfg = AgentsCfg::default();

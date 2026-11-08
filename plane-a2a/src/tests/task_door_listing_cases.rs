@@ -2,13 +2,17 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! Test-only seeding of the existing private backend cache; no product helper/API.
+type StaticHost = KindStaticHost<busbar_contract::plugin::markers::PlaneKind>;
+
+type StaticServices = KindStaticServices<busbar_contract::plugin::markers::PlaneKind>;
+
 use super::*;
 use busbar_contract::abi::host::conn::connector::ConnectorSlots;
 use busbar_contract::abi::host::service::{HostSlots, ServiceOut};
 use busbar_contract::abi::mechanism::call::RawOutcome;
 use busbar_contract::abi::mechanism::ticket::{HostCtx, HostTables};
 use busbar_contract::abi::sdk::test_support::zeroed;
-use busbar_contract::abi::sdk::{conn::StaticHost, StaticServices};
+use busbar_contract::abi::sdk::{conn::Host as KindStaticHost, Services as KindStaticServices};
 use std::cell::Cell;
 use std::ffi::c_void;
 
@@ -124,9 +128,9 @@ fn a_real_failed_mirror_dial_is_visible_without_changing_best_effort_completion(
     };
     // SAFETY: complete table and both advertised slot prefixes are readable during snapshots.
     // Callbacks are static and use only the current thread's DIALS value, never a raw context.
-    let host = unsafe { Host::from_raw(&tables) };
+    let host = unsafe { Host::test_from_raw(&tables) };
     // SAFETY: same readable service prefix and static callbacks as above.
-    let services = unsafe { Services::from_raw(&tables) };
+    let services = unsafe { Services::test_from_raw(&tables) };
     let plane = A2aDoor {
         host: Some(host),
         services,

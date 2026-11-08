@@ -5,6 +5,14 @@
 //! judge, reached through [`Via`], and `on_piece` for a unit whose verb the plane answers itself
 //! ([`crate::local`]).
 
+type StaticHost = KindStaticHost<busbar_contract::plugin::markers::PlaneKind>;
+
+type Connector<'a> = KindConnector<'a, busbar_contract::plugin::markers::PlaneKind>;
+
+type StaticServices = KindStaticServices<busbar_contract::plugin::markers::PlaneKind>;
+
+type Services = KindServices<busbar_contract::plugin::markers::PlaneKind>;
+
 use std::task::Poll;
 
 use busbar_contract::abi::host::conn::connector::EGRESS_OPEN_WEB;
@@ -16,9 +24,10 @@ use busbar_contract::abi::plane::{
     OnPieceIn, OnPieceOut, OutField, RecordWrite, UnitCount, EMIT_DONE, FROM_CALLER, RECORD_PUT,
     UNITS_REPORTED,
 };
-use busbar_contract::abi::sdk::conn::{Connector, StaticHost};
+use busbar_contract::abi::sdk::conn::{Connector as KindConnector, Host as KindStaticHost};
 use busbar_contract::abi::sdk::{
-    Instance, Keyed, Lent, Out, ServiceError, Services, StaticServices,
+    Instance, Keyed, Lent, Out, ServiceError, Services as KindServices,
+    Services as KindStaticServices,
 };
 use serde_json::Value;
 
@@ -856,7 +865,7 @@ fn verb_of(disposition: &AgentDisposition) -> Option<LocalVerb> {
 /// `on_piece` for a unit whose verb the plane answers itself; `None` for any other unit.
 pub fn on_piece(
     plane: &A2aDoor,
-    instance: &Instance<'_, A2aDoor>,
+    instance: &Instance<'_, A2aDoor, busbar_contract::plugin::markers::PlaneKind>,
     input: Lent<'_, OnPieceIn>,
     mut out: Out<'_, OnPieceOut>,
 ) -> Option<Outcome> {
@@ -885,7 +894,7 @@ pub fn on_piece(
 
 fn local_piece(
     plane: &A2aDoor,
-    instance: &Instance<'_, A2aDoor>,
+    instance: &Instance<'_, A2aDoor, busbar_contract::plugin::markers::PlaneKind>,
     input: Lent<'_, OnPieceIn>,
     out: &mut Out<'_, OnPieceOut>,
     journal: &crate::conditional_publication::Journal,
@@ -1927,7 +1936,7 @@ fn card_error(code: &str, message: &str) -> Vec<u8> {
 /// whole, the card signed with busbar's key through the host's `sign`.
 pub fn card_piece(
     plane: &A2aDoor,
-    instance: &Instance<'_, A2aDoor>,
+    instance: &Instance<'_, A2aDoor, busbar_contract::plugin::markers::PlaneKind>,
     input: Lent<'_, OnPieceIn>,
     mut out: Out<'_, OnPieceOut>,
     ask: crate::agent_arrival::CardAsk,

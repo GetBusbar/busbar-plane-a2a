@@ -8151,7 +8151,7 @@ fn render_metrics(s: &Served) -> String {
     let statement = rendering_of_library(&path)
         .expect("the actual exporter statement reads")
         .expect("the actual exporter states itself");
-    let dispatcher = Arc::new(Dispatcher::new(DispatchConfig::default()));
+    let dispatcher = Arc::new(Dispatcher::new(DispatchConfig::default(), busbar_contract::services::test_caller_binding()));
     let plugin = load_dropped::<Export>(
         &path,
         &statement,
