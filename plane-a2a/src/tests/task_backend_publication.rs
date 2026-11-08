@@ -43,7 +43,7 @@ extern "C" fn dial(_: HostCtx, _: *const c_void, out: *mut ServiceOut) -> RawOut
 fn store_request(candidate: &wire::Request) -> store::Request {
     let mut request = store::Request {
         version: store::VERSION,
-        op_id: busbar_contract::abi::store::OpId::from_parts(1, candidate.candidate.correlation),
+        op_id: busbar_contract::records::OpId::from_parts(1, candidate.candidate.correlation),
         predicates: candidate
             .candidate
             .predicates

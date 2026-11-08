@@ -202,7 +202,15 @@ fn ready(
     input.head.ticket = TICKET;
     input.head.op = slot::READY;
     input.head.flags = if resume { FLAG_RESUME } else { 0 };
-    input.head.extensions = busbar_contract::abi::mechanism::call::Blob::of(&extensions);
+    // SAFETY: this host-owned immutable extension loan lives through the synchronous READY entry.
+    input.head.extensions = unsafe {
+        busbar_contract::abi::mechanism::call::Blob::from_raw_parts(
+            extensions.as_ptr(),
+            extensions.len(),
+            busbar_contract::abi::mechanism::call::BLOB_OCTETS,
+            0,
+        )
+    };
     input.host = tables;
     let mut out: OutHead = blank_out();
     // SAFETY: instance is the live SDK allocation; every READY input range lives through entry.
