@@ -80,6 +80,55 @@ func TestAliasScope(t *testing.T) {
 		t.Fatal(w.Code)
 	}
 }
+
+func TestNumericMessageRole(t *testing.T) {
+	for _, binding := range []string{"jsonrpc", "http_json"} {
+		t.Run(binding, func(t *testing.T) {
+			params := message("numeric-role", nil)
+			params["message"].(map[string]any)["role"] = 1
+			var payload any = params
+			path := "/message:send"
+			if binding == "jsonrpc" {
+				payload = map[string]any{"jsonrpc": "2.0", "id": 1, "method": "SendMessage", "params": params}
+				path = "/"
+			}
+			body, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r := httptest.NewRequest("POST", path, bytes.NewReader(body))
+			r.Header.Set("Content-Type", "application/json")
+			r.Header.Set("A2A-Version", "1.0")
+			w := httptest.NewRecorder()
+			fixtureHandler(9701, binding).ServeHTTP(w, r)
+			var result map[string]any
+			if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+				t.Fatal(err)
+			}
+			if w.Code != 200 || result["error"] != nil {
+				t.Fatal(w.Code, result)
+			}
+		})
+	}
+}
+
+func TestNumericRoleScope(t *testing.T) {
+	for _, role := range []string{"1", "2", "999", `"ROLE_USER"`} {
+		var seen map[string]any
+		h := parameterAliases(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if err := json.NewDecoder(r.Body).Decode(&seen); err != nil {
+				t.Fatal(err)
+			}
+		}))
+		payload := `{"message":{"role":` + role + `,"metadata":{"role":1},"parts":[{"data":{"role":2}}]},"metadata":{"role":1}}`
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("POST", "/message:send", strings.NewReader(payload)))
+		m := seen["message"].(map[string]any)
+		expected := map[string]any{"1": "ROLE_USER", "2": "ROLE_AGENT", "999": float64(999), `"ROLE_USER"`: "ROLE_USER"}[role]
+		if m["role"] != expected || m["metadata"].(map[string]any)["role"] != float64(1) || m["parts"].([]any)[0].(map[string]any)["data"].(map[string]any)["role"] != float64(2) || seen["metadata"].(map[string]any)["role"] != float64(1) {
+			t.Fatal(seen)
+		}
+	}
+}
 func TestOversizeGetsHTTPResponse(t *testing.T) {
 	server := httptest.NewServer(fixtureHandler(9701, "jsonrpc"))
 	defer server.Close()

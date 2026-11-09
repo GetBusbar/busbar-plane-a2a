@@ -235,7 +235,7 @@ func fixtureHandler(port int, transport string) http.Handler {
 	mux.Handle(a2asrv.WellKnownAgentCardPath, cachedCard(card))
 	var h http.Handler = a2asrv.NewJSONRPCHandler(handler)
 	if transport == "http_json" {
-		h = restSubscriptionGuard(a2asrv.NewRESTHandler(handler), policy{store: store})
+		h = parameterAliases(restSubscriptionGuard(a2asrv.NewRESTHandler(handler), policy{store: store}))
 	}
 	if transport == "jsonrpc" {
 		h = parameterAliases(contentTypeGuard(subscriptionGuard(h, policy{store: store})))

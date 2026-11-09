@@ -117,9 +117,9 @@ func cachedCard(card *a2a.AgentCard) http.Handler {
 	})
 }
 
-// Accept protobuf JSON snake_case field spellings in addition to the SDK's
-// lowerCamelCase tags. Only protocol parameter names are normalized; user data,
-// metadata and arbitrary data-part keys are never traversed.
+// Accept ProtoJSON numeric message roles on both bindings and snake_case
+// JSON-RPC parameter spellings alongside the SDK's lowerCamelCase tags.
+// Metadata and arbitrary data-part keys are never traversed.
 func parameterAliases(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -148,12 +148,38 @@ func parameterAliases(next http.Handler) http.Handler {
 			return
 		}
 		var params map[string]json.RawMessage
-		if json.Unmarshal(envelope["params"], &params) != nil {
+		_, rpc := envelope["params"]
+		if rpc {
+			err = json.Unmarshal(envelope["params"], &params)
+		} else {
+			params = envelope
+		}
+		if err != nil {
 			next.ServeHTTP(w, r)
 			return
 		}
 		aliases := map[string]string{"history_length": "historyLength", "context_id": "contextId", "task_id": "taskId", "page_size": "pageSize", "page_token": "pageToken", "status_timestamp_after": "statusTimestampAfter", "include_artifacts": "includeArtifacts"}
+		if !rpc {
+			aliases = nil
+		}
 		changed := false
+		// ProtoJSON accepts defined enum numbers as well as their names. The
+		// SDK's string role decoder needs the equivalent name at ingress.
+		// Inspect only Message.role, never metadata or data-part payloads.
+		var message map[string]json.RawMessage
+		if json.Unmarshal(params["message"], &message) == nil {
+			role := string(bytes.TrimSpace(message["role"]))
+			name := map[string]string{"1": "ROLE_USER", "2": "ROLE_AGENT"}[role]
+			if name != "" {
+				message["role"], _ = json.Marshal(name)
+				params["message"], err = json.Marshal(message)
+				if err != nil {
+					http.Error(w, "Cannot encode message", 500)
+					return
+				}
+				changed = true
+			}
+		}
 		for old, key := range aliases {
 			if value, ok := params[old]; ok {
 				if canonical, exists := params[key]; exists && !bytes.Equal(canonical, value) {
@@ -166,10 +192,12 @@ func parameterAliases(next http.Handler) http.Handler {
 			}
 		}
 		if changed {
-			envelope["params"], err = json.Marshal(params)
-			if err != nil {
-				http.Error(w, "Cannot encode parameters", 500)
-				return
+			if rpc {
+				envelope["params"], err = json.Marshal(params)
+				if err != nil {
+					http.Error(w, "Cannot encode parameters", 500)
+					return
+				}
 			}
 			body, err = json.Marshal(envelope)
 			if err != nil {
