@@ -296,18 +296,37 @@ fn grpc_message_length_ceiling_is_inclusive_and_enforced_before_waiting() {
 #[test]
 fn v101_precondition_errors_keep_their_identity_across_both_bindings() {
     use base64::Engine as _;
-    for (code, reason) in [
-        (-32003, "PUSH_NOTIFICATION_NOT_SUPPORTED"),
-        (-32004, "UNSUPPORTED_OPERATION"),
-        (-32009, "VERSION_NOT_SUPPORTED"),
+    for (code, reason, grpc_status, status_name) in [
+        (
+            -32003,
+            "PUSH_NOTIFICATION_NOT_SUPPORTED",
+            Code::FailedPrecondition,
+            "FAILED_PRECONDITION",
+        ),
+        (
+            -32004,
+            "UNSUPPORTED_OPERATION",
+            Code::FailedPrecondition,
+            "FAILED_PRECONDITION",
+        ),
+        (
+            -32009,
+            "VERSION_NOT_SUPPORTED",
+            Code::Unimplemented,
+            "UNIMPLEMENTED",
+        ),
     ] {
         let refusal = crate::agent_arrival::AgentRefusal::new(400, Some(json!(7)), code, "refused");
-        assert_eq!(refusal.aip193()["error"]["status"], "FAILED_PRECONDITION");
+        assert_eq!(refusal.aip193()["error"]["status"], status_name);
         let error = refusal.envelope()["error"].clone();
         let status = status_for_error(&error, 400);
-        assert_eq!(status.code(), Code::FailedPrecondition);
+        assert_eq!(status.code(), grpc_status);
         let details = base64::engine::general_purpose::STANDARD_NO_PAD.encode(status.details());
-        let received = ended(&block(&[(DETAILS_FIELD, &details)]), Some(9)).unwrap();
+        let received = ended(
+            &block(&[(DETAILS_FIELD, &details)]),
+            Some(grpc_status as u32),
+        )
+        .unwrap();
         assert_eq!(received.info.as_ref().unwrap().reason, reason);
         assert_eq!(received.a2a_code(), Some(code));
     }

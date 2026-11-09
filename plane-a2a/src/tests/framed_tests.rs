@@ -136,7 +136,7 @@ fn the_error_table_carries_the_specifications_grpc_column() {
         (-32006, Code::Internal),
         (-32007, Code::FailedPrecondition),
         (-32008, Code::FailedPrecondition),
-        (-32009, Code::FailedPrecondition),
+        (-32009, Code::Unimplemented),
         (-32600, Code::InvalidArgument),
         (-32601, Code::Unimplemented),
         (-32602, Code::InvalidArgument),

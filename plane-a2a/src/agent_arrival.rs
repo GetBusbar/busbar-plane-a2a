@@ -11,7 +11,7 @@
 //!
 //! 0. An `Origin` that is neither loopback nor listed is `403` + `-32004`, judged first, by the
 //!    contract's one rule ([`busbar_contract::jsonrpc::origin_admitted`]); this plane lists none.
-//! 1. A declared `Content-Type` that is not a JSON media type is `400` + `-32005`, judged BEFORE the
+//! 1. A declared `Content-Type` that is not a JSON media type is `415` + `-32005`, judged BEFORE the
 //!    body is parsed, so a header fault is never answered as a body fault. No `Content-Type` at all
 //!    is not refused here.
 //! 2. An `A2A-Version` this endpoint does not speak is `400` + `-32009`. Absent or empty is `0.3`;
@@ -98,11 +98,11 @@ pub const CODE_METHOD_NOT_FOUND: i64 = -32601;
 /// `-32603`: busbar failed.
 pub const CODE_INTERNAL: i64 = -32603;
 
-/// The status of malformed requests, including unsupported media types under A2A v1.0.
+/// The status of malformed requests.
 pub const STATUS_BAD_REQUEST: u32 = 400;
 
 /// The status of a media type this endpoint does not read.
-pub const STATUS_UNSUPPORTED_MEDIA_TYPE: u32 = STATUS_BAD_REQUEST;
+pub const STATUS_UNSUPPORTED_MEDIA_TYPE: u32 = 415;
 
 /// The status of an `Origin` this plane does not admit.
 pub const STATUS_FORBIDDEN: u32 = 403;
@@ -243,8 +243,8 @@ pub fn reason_of(code: i64) -> Option<&'static str> {
 pub fn status_name_of(code: i64) -> Option<&'static str> {
     Some(match code {
         -32001 => "NOT_FOUND",
-        -32002 | -32003 | -32004 | -32007 | -32008 | -32009 => "FAILED_PRECONDITION",
-        -32601 => "UNIMPLEMENTED",
+        -32002 | -32003 | -32004 | -32007 | -32008 => "FAILED_PRECONDITION",
+        -32009 | -32601 => "UNIMPLEMENTED",
         -32005 | -32700 | -32600 | -32602 => "INVALID_ARGUMENT",
         -32006 | -32603 => "INTERNAL",
         _ => return None,

@@ -654,9 +654,9 @@ pub fn grpc_code(code: i64) -> Option<Code> {
     Some(match code {
         -32001 => Code::NotFound,
 
-        -32002 | -32003 | -32004 | -32007 | -32008 | -32009 => Code::FailedPrecondition,
+        -32002 | -32003 | -32004 | -32007 | -32008 => Code::FailedPrecondition,
 
-        -32601 => Code::Unimplemented,
+        -32009 | -32601 => Code::Unimplemented,
         -32005 | -32600 | -32602 | -32700 => Code::InvalidArgument,
         -32006 | -32603 => Code::Internal,
         _ => return None,

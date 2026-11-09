@@ -78,7 +78,7 @@ leg() {        # leg <name> <command...>: run it, log it, record it
     say "    ok: $name"
   else
     say "    RED: $name (exit $rc); tail of $log:"
-    tail -25 "$log" >&2
+    tail -200 "$log" >&2
     FAILED+=("$name (exit $rc)")
   fi
   return 0

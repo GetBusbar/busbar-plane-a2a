@@ -125,7 +125,7 @@ fn the_media_type_is_judged_before_the_body_and_the_version() {
         b"not json",
         head(Some("text/plain"), Some("9.9")),
     ));
-    assert_eq!(r.status, 400);
+    assert_eq!(r.status, 415);
     assert_eq!(r.code, CODE_CONTENT_TYPE_NOT_SUPPORTED);
     assert_eq!(r.id, None);
     assert_eq!(
@@ -331,7 +331,7 @@ fn the_rest_rendering_is_the_aip193_document() {
         doc,
         serde_json::json!({"error": {
             "code": 400,
-            "status": "FAILED_PRECONDITION",
+            "status": "UNIMPLEMENTED",
             "message": "v",
             "details": [{
                 "@type": "type.googleapis.com/google.rpc.ErrorInfo",
@@ -699,7 +699,7 @@ fn near_miss_versions_and_media_types_are_refused_before_dispatch() {
         let answer = refused(decide_arrival(SEND, head(Some(content_type), None)));
         assert_eq!(
             (answer.status, answer.code),
-            (400, CODE_CONTENT_TYPE_NOT_SUPPORTED)
+            (415, CODE_CONTENT_TYPE_NOT_SUPPORTED)
         );
     }
 }

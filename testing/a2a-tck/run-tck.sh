@@ -192,7 +192,9 @@ run_tck () {
     cp "$TCK_DIR/reports/compatibility.json" "$OUT/$name.json" 2>/dev/null \
       || { echo "could not copy the suite's report to $OUT/$name.json -- refusing to run" >&2; exit 2; }
   fi
-  sed -n '/A2A TCK Compatibility Report/,/FAILED REQUIREMENTS/p' "$OUT/$name.txt" || true
+  # Keep the requirement IDs and assertion details below FAILED REQUIREMENTS;
+  # ending at that heading discards the only actionable failure evidence.
+  sed -n '/A2A TCK Compatibility Report/,$p' "$OUT/$name.txt" || true
   require_report "$OUT/$name.json" || return 2
   return "$rc"
 }

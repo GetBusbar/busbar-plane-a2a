@@ -1983,10 +1983,6 @@ pub fn card_piece(
         key_id: None,
     };
     let public_url = plane.public_url.clone().unwrap_or_default();
-    let own_head = [
-        (crate::relay::H_CACHE_CONTROL, OWN_CARD_CACHE_CONTROL),
-        (crate::relay::H_CONTENT_TYPE, OWN_CARD_MEDIA_TYPE),
-    ];
     let (status, body, own) = match ask {
         crate::agent_arrival::CardAsk::Own => {
             match plane
@@ -2093,6 +2089,21 @@ pub fn card_piece(
     let body = crate::relay::RawBytes::from(body);
     let seq = signer.seq;
     let done = if own {
+        let now = plane.host.as_ref().and_then(|host| {
+            match host.connector(instance.ticket()).clock_now() {
+                Poll::Ready(Ok(reading)) => Some(reading.wall_ns / 1_000_000_000),
+                _ => None,
+            }
+        });
+        let (etag, modified) = plane.card_cache.validators(generation, &body, now);
+        let mut own_head = vec![
+            (crate::relay::H_CACHE_CONTROL, OWN_CARD_CACHE_CONTROL),
+            (crate::relay::H_CONTENT_TYPE, OWN_CARD_MEDIA_TYPE),
+            ("etag", etag.as_str()),
+        ];
+        if let Some(modified) = modified.as_deref() {
+            own_head.push(("last-modified", modified));
+        }
         window_with(
             plane,
             unit,
