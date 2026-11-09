@@ -5,6 +5,9 @@
 
 // Relay and lifecycle assertions run through the actual root and Store. Generic connection,
 // layout, and failed-READY assertions are retained at their ordinary owning boundaries.
+#[path = "support/ready_store.rs"]
+mod ready_store;
+
 mod actual_admission {
     use busbar_contract::abi::mechanism::KindCode;
     use busbar_plugin_loader::dispatch::kinds::plane::Plane;
@@ -50,8 +53,9 @@ mod actual_admission {
             .expect("actual image renders")
             .expect("actual image exports its door");
         assert_eq!(stated, row.statement);
-        let d = Dispatcher::new(
+        let d = Dispatcher::with_services(
             DispatchConfig::default(),
+            Arc::new(crate::ready_store::services("actual-a2a-admission", false)),
             busbar_contract::services::test_caller_binding(),
         );
         let linked = load_linked::<Plane>(&row, bind(&d)).expect("actual linked plane loads");
@@ -153,8 +157,9 @@ mod actual_admission {
         .unwrap();
         for dropped in [false, true] {
             let origin = if dropped { "dropped" } else { "linked" };
-            let d = Dispatcher::new(
+            let d = Dispatcher::with_services(
                 DispatchConfig::default(),
+                Arc::new(crate::ready_store::services("actual-a2a-admission", false)),
                 busbar_contract::services::test_caller_binding(),
             );
             let product = if dropped {

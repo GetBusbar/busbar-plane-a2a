@@ -18,6 +18,9 @@ fn loaded_door() -> busbar_plugin_loader::dispatch::LoadedDoor {
 #[allow(dead_code)]
 mod door_facts;
 
+#[path = "support/ready_store.rs"]
+mod ready_store;
+
 mod both_ways {
     use std::mem::zeroed;
     use std::sync::Arc;
@@ -32,10 +35,6 @@ mod both_ways {
         RefusalIn, RefusalOut, REFUSAL_ARRIVE, REFUSAL_GATE, REFUSAL_KERNEL,
     };
     use busbar_contract::abi::sdk::door::abi_str;
-    use busbar_contract::ids::RecordSchemaId;
-    use busbar_contract::kinds::{RecordBytes, StoreError};
-    use busbar_kernel::host_records::{record_key, RecordRows};
-    use busbar_kernel::host_services::{InstanceFacts, KernelServices, Offload};
     use busbar_plugin_loader::dispatch::kinds::plane::{OwnedSnapshot, Plane};
     use busbar_plugin_loader::dispatch::{
         in_head, load_dropped, load_linked, out_head, Bind, DispatchConfig, Dispatcher, Frame,
@@ -954,65 +953,6 @@ mod both_ways {
         fn dropped(&self, _: busbar_plugin_loader::dispatch::Dropped) {}
     }
 
-    /// Only the fixed read-only card row belongs to this host-log test.
-    struct CardRecords;
-
-    impl RecordRows for CardRecords {
-        fn record_put(
-            &self,
-            _: RecordSchemaId,
-            _: &[u8],
-            _: &RecordBytes,
-        ) -> Result<(), StoreError> {
-            Err(StoreError::Unavailable)
-        }
-        fn record_get(
-            &self,
-            _: RecordSchemaId,
-            _: &[u8],
-        ) -> Result<Option<RecordBytes>, StoreError> {
-            Ok(None)
-        }
-        fn record_scan(
-            &self,
-            schema: RecordSchemaId,
-            prefix: &[u8],
-            limit: u32,
-        ) -> Result<Vec<(Vec<u8>, RecordBytes)>, StoreError> {
-            let key = record_key("both-ways", b"vendor/0123456789abcdef/0");
-            if schema.as_str() == "card" && key.starts_with(prefix) && limit != 0 {
-                Ok(vec![(key, RecordBytes::new(b"{}".to_vec()).unwrap())])
-            } else {
-                Ok(Vec::new())
-            }
-        }
-        fn claim(&self, _: &str, _: &str, _: u64, _: u64) -> Result<bool, StoreError> {
-            Err(StoreError::Unavailable)
-        }
-    }
-
-    struct CardReadOnCaller;
-    impl Offload for CardReadOnCaller {
-        fn run(&self, job: Box<dyn FnOnce() + Send>) {
-            job();
-        }
-    }
-
-    fn card_record_services() -> KernelServices {
-        let services = KernelServices::new()
-            .with_records(Arc::new(CardRecords))
-            .with_pool(Arc::new(CardReadOnCaller));
-        futures::executor::block_on(services.admit(
-            "both-ways",
-            InstanceFacts {
-                record_kinds: vec![RecordSchemaId::new("card")],
-                ..Default::default()
-            },
-        ))
-        .expect("the host-log case admits only its declared read namespace");
-        services
-    }
-
     /// `open` over [`GOOD`] on `d`, then `ready` (the held cards warmed from the host's `card`
     /// records), into a fresh host log: the log's lines.
     fn ready_lines(d: &Dispatcher, dropped_in: bool) -> Vec<String> {
@@ -1051,18 +991,18 @@ mod both_ways {
     #[test]
     fn a_stray_card_part_line_reaches_the_host_log_dropped_in_as_linked() {
         let stray = |l: &String| l.contains("part records that no whole record names were found");
-        let unserved = Dispatcher::with_services(
+        let empty = Dispatcher::with_services(
             DispatchConfig::default(),
-            Arc::new(KernelServices::new()),
+            Arc::new(crate::ready_store::services("both-ways", false)),
             busbar_contract::services::test_caller_binding(),
         );
         let held = Dispatcher::with_services(
             DispatchConfig::default(),
-            Arc::new(card_record_services()),
+            Arc::new(crate::ready_store::services("both-ways", true)),
             busbar_contract::services::test_caller_binding(),
         );
         for dropped_in in [false, true] {
-            let quiet = ready_lines(&unserved, dropped_in);
+            let quiet = ready_lines(&empty, dropped_in);
             assert!(
                 !quiet.iter().any(stray),
                 "dropped-in {dropped_in}: RED ARM: no stray part, no line: {quiet:?}"
