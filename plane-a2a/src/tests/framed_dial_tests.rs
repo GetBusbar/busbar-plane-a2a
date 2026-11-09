@@ -228,7 +228,9 @@ fn a_status_names_the_a2a_code_its_reason_or_its_row_binds() {
     };
     assert_eq!(bare(Code::NotFound).a2a_code(), Some(-32001));
     assert_eq!(bare(Code::FailedPrecondition).a2a_code(), None);
-    assert_eq!(bare(Code::Unimplemented).a2a_code(), Some(-32601));
+    assert_eq!(grpc_code(-32601), Some(Code::Unimplemented));
+    assert_eq!(grpc_code(-32009), Some(Code::Unimplemented));
+    assert_eq!(bare(Code::Unimplemented).a2a_code(), None);
     assert_eq!(bare(Code::Unavailable).a2a_code(), None);
     let reasoned = Ended {
         code: Code::FailedPrecondition as u32,
@@ -252,6 +254,18 @@ fn grpc_error_reasons_are_scoped_to_the_a2a_domain_and_other_domains_keep_status
         ),
         ("other.example", Code::Internal, "TASK_NOT_FOUND", None),
         ("", Code::FailedPrecondition, "TASK_NOT_CANCELABLE", None),
+        (
+            crate::ERROR_INFO_DOMAIN,
+            Code::Unimplemented,
+            "VERSION_NOT_SUPPORTED",
+            Some(-32009),
+        ),
+        (
+            "other.example",
+            Code::Unimplemented,
+            "VERSION_NOT_SUPPORTED",
+            None,
+        ),
         (
             "other.example",
             Code::NotFound,

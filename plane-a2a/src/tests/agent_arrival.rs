@@ -462,7 +462,7 @@ fn the_grpc_rendering_is_the_envelope_at_the_neutral_status() {
         render(Dialect::Framed, &own, true),
         render(Dialect::JsonRpc, &own, true)
     );
-    assert_eq!(render(Dialect::Framed, &own, true).status, 400);
+    assert_eq!(render(Dialect::Framed, &own, true).status, 415);
     let kernel = kernel_refusal(429, "this key's budget is spent");
     let out = render(Dialect::Framed, &kernel, false);
     assert_eq!(out.status, 0);
