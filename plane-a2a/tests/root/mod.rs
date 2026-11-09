@@ -1944,9 +1944,14 @@ async fn malformed_rest_bodies_never_dispatch_or_charge_and_empty_cancel_still_d
         .body(axum::body::Body::from("{broken"))
         .unwrap();
     let (status, answer) = answered(&s.router, request).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{answer}");
+    assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE, "{answer}");
     let document: serde_json::Value = serde_json::from_str(&answer).unwrap();
     assert_eq!(document["error"]["status"], "INVALID_ARGUMENT");
+    assert_eq!(document["error"]["code"], 415);
+    assert_eq!(
+        document["error"]["details"][0]["reason"],
+        "CONTENT_TYPE_NOT_SUPPORTED"
+    );
     assert!(
         answer.contains("request declared `text/plain`"),
         "head refusal precedes malformed-body decoding: {answer}"
@@ -6854,10 +6859,10 @@ async fn a_grpc_callers_send_message_is_answered_ok_with_its_status_in_the_trail
 }
 
 /// A gRPC CALL REFUSED BEFORE ITS LINE WAS READ IS REFUSED ON THE gRPC LINE: a `SendMessage`
-/// naming an `a2a-version` this endpoint does not speak is `FAILED_PRECONDITION`, with typed
+/// naming an `a2a-version` this endpoint does not speak is `UNIMPLEMENTED`, with typed
 /// `VERSION_NOT_SUPPORTED` details, trailers-only under the listener's `200`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_grpc_call_naming_a_version_this_endpoint_does_not_speak_is_failed_precondition() {
+async fn a_grpc_call_naming_a_version_this_endpoint_does_not_speak_is_unimplemented() {
     use base64::Engine as _;
     use http_body_util::BodyExt as _;
     use root_facts::Field::{Bytes, Varint};
@@ -6901,7 +6906,7 @@ async fn a_grpc_call_naming_a_version_this_endpoint_does_not_speak_is_failed_pre
             .headers
             .get("grpc-status")
             .and_then(|v| v.to_str().ok()),
-        Some("9"),
+        Some("12"),
         "trailers-only, the version error's status: {:?}",
         parts.headers
     );
@@ -6912,8 +6917,8 @@ async fn a_grpc_call_naming_a_version_this_endpoint_does_not_speak_is_failed_pre
         .decode(details)
         .expect("a protobuf Status");
     let status = root_facts::fields(&details).expect("Status fields");
-    let [(1, Varint(9)), (2, Bytes(_)), (3, Bytes(info))] = status.as_slice() else {
-        panic!("FAILED_PRECONDITION with one typed detail: {status:?}");
+    let [(1, Varint(12)), (2, Bytes(_)), (3, Bytes(info))] = status.as_slice() else {
+        panic!("UNIMPLEMENTED with one typed detail: {status:?}");
     };
     let info = root_facts::fields(info).expect("Any fields");
     let [(1, Bytes(kind)), (2, Bytes(value))] = info.as_slice() else {
@@ -8151,7 +8156,10 @@ fn render_metrics(s: &Served) -> String {
     let statement = rendering_of_library(&path)
         .expect("the actual exporter statement reads")
         .expect("the actual exporter states itself");
-    let dispatcher = Arc::new(Dispatcher::new(DispatchConfig::default(), busbar_contract::services::test_caller_binding()));
+    let dispatcher = Arc::new(Dispatcher::new(
+        DispatchConfig::default(),
+        busbar_contract::services::test_caller_binding(),
+    ));
     let plugin = load_dropped::<Export>(
         &path,
         &statement,
