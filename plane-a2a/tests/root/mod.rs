@@ -1033,8 +1033,10 @@ fn served_core_on(
         &config, &plugins,
     ))
     .expect("normal bootstrap admits and opens the signed actual Store");
+    let seal = busbar_kernel::seal::acquire();
     let expected_store_fingerprint = busbar_kernel::host_record_bootstrap::store_fingerprint(
-        &serde_json::to_value(&config.store).expect("actual effective Store selection"),
+        &serde_json::to_value(config.store.as_ref().map(|store| store.authoring(&seal)))
+            .expect("actual effective Store selection"),
     );
     let refuse = Arc::new(std::sync::Mutex::new(None));
     let core =
@@ -1162,7 +1164,7 @@ fn served_core_on(
                 max_inflight_cap: 64,
                 sink: Arc::new(FixtureDiagnostics),
                 dispatcher: dispatcher.adopter(),
-                conns: ConnTable::Host(connector.clone()),
+                conns: ConnTable::Host(crate::root::connector::admit(connector.clone())),
             },
         )
         .expect("the actual linked A2A product binds"),
@@ -1186,7 +1188,7 @@ fn served_core_on(
             dispatcher.clone(),
             crate::LINKED.auths,
             None,
-            ConnTable::Host(connector.clone()),
+            ConnTable::Host(crate::root::connector::admit(connector.clone())),
             busbar_kernel::diagnostics::Catalogue::NEUTRAL,
         )),
         conns: riding.clone(),
@@ -6427,14 +6429,23 @@ mod upstream_credential {
             .to_string_lossy()
             .into_owned();
         let _ = std::fs::remove_file(&path);
-        let (instance, credential, secret) = (
-            "serve-agent-cred-source-file",
-            format!("{{secret: {{file: '{path}'}}, placement: bearer, lease_ttl_ms: 60000}}"),
-            serde_json::from_value::<busbar_contract::secret_ref::SecretRef>(
-                serde_json::json!({ "file": path.clone() }),
+        #[cfg(distribution_root)]
+        crate::dist_root_install::install();
+        let sources =
+            busbar_contract::secret::SecretAxis::sugars(crate::root::linked::secret_rows());
+        let secret = sources
+            .reference_for_role(
+                busbar_contract::abi::mechanism::door::SUGAR_ROLE_PATH,
+                &path,
             )
-            .expect("a sugar reference"),
-        );
+            .expect("the actual linked source declares the path role");
+        let instance = "serve-agent-cred-source-file";
+        let credential = serde_json::json!({
+            "secret": secret.authoring(&busbar_kernel::seal::acquire()),
+            "placement": "bearer",
+            "lease_ttl_ms": 60000,
+        })
+        .to_string();
         {
             std::fs::write(&path, "agent-own-token").expect("write the secret");
             let agent = Recorded::start(WORKING).await;
@@ -6453,20 +6464,8 @@ mod upstream_credential {
             let _ = std::fs::remove_file(&path);
             refreshed().await;
             let needles = || {
-                let mut words = vec![
-                    "environment variable".to_string(),
-                    "is unset".to_string(),
-                    "no such file".to_string(),
-                    format!("secret {}", busbar_contract::secret_ref::SECRET_MODULE_FILE),
-                    secret.describe(),
-                ];
-                words.extend(
-                    secret
-                        .settings
-                        .values()
-                        .filter_map(serde_json::Value::as_str)
-                        .map(str::to_string),
-                );
+                let mut words = crate::root::serve::secret_source_tests::source_needles();
+                words.extend([path.clone(), secret.describe()]);
                 words
             };
             let refusal = busbar_kernel::config::secret::resolve_linked_string_at_config(
@@ -8168,7 +8167,7 @@ fn render_metrics(s: &Served) -> String {
             max_inflight_cap: 64,
             sink: Arc::new(NoSink),
             dispatcher: dispatcher.adopter(),
-            conns: ConnTable::Host(s.riding.inner.clone()),
+            conns: ConnTable::Host(crate::root::connector::admit(s.riding.inner.clone())),
         },
     )
     .expect("the actual exporter binds");

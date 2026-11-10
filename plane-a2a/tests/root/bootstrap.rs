@@ -52,7 +52,9 @@ pub(super) fn initialize(
     core: &std::sync::Arc<busbar_kernel::persistence::facade::CoreStore>,
     deployment: &serde_json::Value,
 ) -> ColdRecordReceipt {
-    let anchor = serde_json::to_value(&config.store).expect("actual effective Store selection");
+    let seal = busbar_kernel::seal::acquire();
+    let anchor = serde_json::to_value(config.store.as_ref().map(|store| store.authoring(&seal)))
+        .expect("actual effective Store selection");
     let source = crate::root::loader::sign::sha256_hex(&serde_json::to_vec(deployment).unwrap());
     let run = |action: &str, input: &Path| {
         let command = crate::root::principal_transition::command(
