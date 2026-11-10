@@ -33,7 +33,8 @@ pub const H_ACCEPT: &str = "accept";
 /// the size of.
 pub const MAX_REPLY_BYTES: usize = 512 * 1024;
 
-/// The status every refused hop answers with.
+/// The status a refused hop answers with when the agent answered but its response is invalid;
+/// a not-serving agent uses [`STATUS_NOT_SERVING`] instead.
 pub const STATUS_BAD_GATEWAY: u32 = 502;
 
 /// The status a hop to an agent that is not currently serving is refused with.

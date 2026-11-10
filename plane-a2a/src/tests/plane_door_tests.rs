@@ -247,9 +247,8 @@ fn a_streamed_hop_states_a_stream_and_the_tail_predevs_600_second_ceiling() {
     let hop = hop_of(&unlisted, false, &mut Some(envelope("vendor/stream"))).expect("relayed");
     assert!(hop.streams(), "an unlisted method named as a stream");
     for method in ["message/send", "tasks/get", "tasks/cancel"] {
-        if let Some(hop) = hop_of(&request(method), false, &mut Some(envelope(method))) {
-            assert!(!hop.streams(), "{method}: one reply");
-        }
+        let hop = hop_of(&request(method), false, &mut Some(envelope(method))).expect("relayed");
+        assert!(!hop.streams(), "{method}: one reply");
     }
 }
 

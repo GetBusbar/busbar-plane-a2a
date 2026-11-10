@@ -231,7 +231,9 @@ pub fn scheme_refusal(url: &str, allow_private: bool) -> Option<String> {
 /// How many redirects one card fetch follows.
 pub const MAX_REDIRECTS: u8 = 3;
 
-/// The next hop of a card fetch that answered `status` at `url`: `None`
+/// The next hop of a card fetch that answered `status` at `url`: `Ok(None)` when no redirect
+/// is needed (non-3xx status), `Ok(Some(next))` with the resolved redirect target, or `Err`
+/// when the redirect limit is exceeded or the `Location` header is missing or unusable.
 pub fn next_hop(
     url: &str,
     status: u16,
