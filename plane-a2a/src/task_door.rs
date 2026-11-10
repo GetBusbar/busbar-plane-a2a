@@ -738,7 +738,7 @@ fn restored(plane: &A2aDoor, unit: u64, ticket: Ticket) {
     });
 }
 
-fn forget_sizes(grown: &Grown, ticket: Ticket) {
+pub(crate) fn forget_sizes(grown: &Grown, ticket: Ticket) {
     if ticket != Ticket::NONE {
         grown.with_all(|sizes| {
             sizes.retain(|(slot, generation, _), _| {

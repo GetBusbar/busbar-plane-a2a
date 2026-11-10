@@ -3453,8 +3453,12 @@ slot!(
         // A FINISHED HOP'S UNIT IS OVER, never dropped here: a `refusal` of the answer it wrote
         // (the store refused its record writes, a response hook vetoed it) still reads it.
         if done {
+            let ticket = plane.units.with(&unit, |u| u.map(|u| u.ticket));
             plane.on_unit(unit, AgentUnit::end);
             plane.unit_ended();
+            if let Some(ticket) = ticket {
+                crate::task_door::forget_sizes(&plane.grown, ticket);
+            }
         }
         outcome
     }

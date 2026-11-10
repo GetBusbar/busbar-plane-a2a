@@ -1159,7 +1159,7 @@ impl HopRelay {
             self.status = Some(status);
         }
         self.received = self.received.saturating_add(bytes.len() as u64);
-        let in_events = self.events.is_some()
+        let in_events = self.events.as_ref().is_some_and(|e| !e.document)
             && self.status.is_some_and(|status| {
                 (200..300).contains(&status) || (self.binding == Binding::Grpc && status == 0)
             });

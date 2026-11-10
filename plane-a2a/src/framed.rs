@@ -552,7 +552,7 @@ pub fn refusal(envelope: &[u8], status: u32) -> FramedReply {
     let error = envelope.as_mut().and_then(|value| value.get_mut("error"));
     match error {
         Some(error) => {
-            if matches!(status, 429 | 503)
+            if matches!(status, 401 | 403 | 404 | 413 | 429 | 503)
                 && error.get("code").and_then(Value::as_i64)
                     == Some(crate::agent_arrival::CODE_UNSUPPORTED_OPERATION)
             {
