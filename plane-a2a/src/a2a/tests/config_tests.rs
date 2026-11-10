@@ -9,9 +9,10 @@ use busbar_contract::config::UpstreamCreds;
 use busbar_contract::secret_ref::SecretRef;
 use serde_json::json;
 
-/// The reference config's sugar `{ word: value }` reads as, through the contract's own reading, so the expectation is whatever shape the pinned contract gives it (busbar step 2c reads sugar context-free).
-fn sugar(word: &str, value: &str) -> SecretRef {
-    serde_json::from_value(serde_json::json!({ word: value })).expect("a sugar reference")
+/// Plane grammar consumes canonical references after source admission has expanded shorthand.
+fn reference(module: &str, setting: &str, value: &str) -> SecretRef {
+    serde_json::from_value(json!({"module": module, "settings": {setting: value}}))
+        .expect("a canonical source reference")
 }
 
 /// One registration as the section reads it: unpinned, over `url`.
@@ -251,9 +252,9 @@ fn passthrough_is_refused_at_the_section_level_as_well_as_per_entry() {
     .expect("`own` is the supported mode on both");
 }
 
-/// An entry round-trips to a document and back unchanged, which is what the overlay's per-entry PATCH merge needs: patching one field must not rewrite the rest of the entry.
+/// The consumer reads public fields and opaque secret references without projecting the entry back into a document.
 #[test]
-fn an_entry_round_trips_through_its_document_form() {
+fn an_entry_reads_public_fields_and_opaque_secret_references() {
     let d = AgentDefCfg {
         url: "https://a2a.vendor/planner".to_string(),
         pin: AgentPinCfg {
@@ -266,25 +267,54 @@ fn an_entry_round_trips_through_its_document_form() {
         allow_private: true,
         upstream_credentials: Some(UpstreamCreds::Own),
         upstream_credential: Some(crate::a2a::creds::OutboundCredential {
-            secret: sugar("env", "VENDOR_TOKEN"),
+            secret: reference("fixture-env-source", "name", "VENDOR_TOKEN"),
             placement: crate::a2a::creds::CredentialPlacement::Header("x-api-key".to_string()),
             lease_ttl_ms: 60_000,
         }),
         egress_scopes: vec!["orchestrator".to_string()],
 
         client_identity: Some(ClientIdentityCfg {
-            cert: sugar("env", "BUSBAR_CLIENT_CERT"),
-            key: sugar("env", "BUSBAR_CLIENT_KEY"),
+            cert: reference("fixture-env-source", "name", "BUSBAR_CLIENT_CERT"),
+            key: reference("fixture-env-source", "name", "BUSBAR_CLIENT_KEY"),
         }),
         hooks: vec!["dispatch-order".to_string()],
     };
-    let doc = serde_json::to_value(&d).expect("an entry must project to a document");
-    let back: AgentDefCfg =
-        serde_json::from_value(doc).expect("and must parse back from that document");
-    assert_eq!(back, d);
+    let read: AgentDefCfg = serde_json::from_value(json!({
+        "url": "https://a2a.vendor/planner",
+        "pin": {
+            "mechanism": "cert_spki",
+            "key": "sha256/KEYPIN==",
+            "fingerprint": "sha256/CARD=="
+        },
+        "reverify_ttl": "15m",
+        "recovery_backoff": "1h",
+        "allow_private": true,
+        "upstream_credentials": "own",
+        "upstream_credential": {
+            "secret": {"module": "fixture-env-source", "settings": {"name": "VENDOR_TOKEN"}},
+            "placement": {"header": "x-api-key"},
+            "lease_ttl_ms": 60_000
+        },
+        "egress_scopes": ["orchestrator"],
+        "client_identity": {
+            "cert": {"module": "fixture-env-source", "settings": {"name": "BUSBAR_CLIENT_CERT"}},
+            "key": {"module": "fixture-env-source", "settings": {"name": "BUSBAR_CLIENT_KEY"}}
+        },
+        "hooks": ["dispatch-order"]
+    }))
+    .expect("the consumer reads the complete registration");
+    assert_eq!(read, d);
+    assert_eq!(
+        serde_json::to_value(&read.pin).expect("public pin metadata serializes"),
+        json!({
+            "mechanism": "cert_spki",
+            "key": "sha256/KEYPIN==",
+            "fingerprint": "sha256/CARD=="
+        })
+    );
 }
 
-/// The registration an operator writes for a peer behind mutual TLS, parsed field for field: the client certificate is named by REFERENCE (`file:` sugar), never by key material.
+/// The registration an operator writes for a peer behind mutual TLS, parsed field for field: the client certificate is named by a canonical source reference, never by key material.
 #[test]
 fn a_mutual_tls_registration_names_its_client_certificate_by_reference() {
     let cfg = parse(&json!({
@@ -292,8 +322,8 @@ fn a_mutual_tls_registration_names_its_client_certificate_by_reference() {
             "url": "https://a2a.vendor/planner",
             "pin": {"mechanism": "mtls", "key": "sha256/KEYPIN=="},
             "client_identity": {
-                "cert": {"file": "/run/secrets/busbar-client.crt"},
-                "key": {"file": "/run/secrets/busbar-client.key"}
+                "cert": {"module": "fixture-file-source", "settings": {"path": "/run/secrets/busbar-client.crt"}},
+                "key": {"module": "fixture-file-source", "settings": {"path": "/run/secrets/busbar-client.key"}}
             }
         }
     }))
@@ -304,8 +334,8 @@ fn a_mutual_tls_registration_names_its_client_certificate_by_reference() {
         .client_identity
         .as_ref()
         .expect("the client identity is carried through");
-    assert_eq!(identity.cert.module, "file");
-    assert_eq!(identity.key.module, "file");
+    assert_eq!(identity.cert.source_module(), Some("fixture-file-source"));
+    assert_eq!(identity.key.source_module(), Some("fixture-file-source"));
 
     assert!(!format!("{identity:?}").contains("BEGIN"));
 }
@@ -335,8 +365,8 @@ fn a_client_identity_on_a_plaintext_endpoint_is_refused() {
             "url": "http://a2a.vendor/planner",
             "pin": {"mechanism": "cert_spki", "key": "sha256/KEYPIN=="},
             "client_identity": {
-                "cert": {"file": "/run/secrets/c.crt"},
-                "key": {"file": "/run/secrets/c.key"}
+                "cert": {"module": "fixture-file-source", "settings": {"path": "/run/secrets/c.crt"}},
+                "key": {"module": "fixture-file-source", "settings": {"path": "/run/secrets/c.key"}}
             }
         }
     }))
@@ -355,8 +385,8 @@ fn a_client_identity_is_legal_alongside_a_signed_card() {
             "url": "https://a2a.vendor/planner",
             "pin": {"mechanism": "jws_issuer_key", "key": "MCowBQYDK2VwAyEA"},
             "client_identity": {
-                "cert": {"file": "/run/secrets/c.crt"},
-                "key": {"file": "/run/secrets/c.key"}
+                "cert": {"module": "fixture-file-source", "settings": {"path": "/run/secrets/c.crt"}},
+                "key": {"module": "fixture-file-source", "settings": {"path": "/run/secrets/c.key"}}
             }
         }
     }))
@@ -380,7 +410,7 @@ fn a_zero_lease_ttl_is_refused_at_parse() {
         "planner": {
             "url": "https://x/",
             "pin": {"mechanism": "unpinned"},
-            "upstream_credential": {"secret": {"env": "VENDOR_TOKEN"}, "lease_ttl_ms": 0}
+            "upstream_credential": {"secret": {"module": "fixture-env-source", "settings": {"name": "VENDOR_TOKEN"}}, "lease_ttl_ms": 0}
         }
     }))
     .unwrap_err();
@@ -390,14 +420,17 @@ fn a_zero_lease_ttl_is_refused_at_parse() {
         "planner": {
             "url": "https://x/",
             "pin": {"mechanism": "unpinned"},
-            "upstream_credential": {"secret": {"env": "VENDOR_TOKEN"}, "lease_ttl_ms": 60000}
+            "upstream_credential": {"secret": {"module": "fixture-env-source", "settings": {"name": "VENDOR_TOKEN"}}, "lease_ttl_ms": 60000}
         }
     }))
     .expect("a positive TTL is legal");
     let def = &cfg.agents["planner"];
     let cred = def.upstream_credential.as_ref().expect("the handle");
     assert_eq!(cred.lease_ttl_ms, 60_000);
-    assert_eq!(cred.secret, sugar("env", "VENDOR_TOKEN"));
+    assert_eq!(
+        cred.secret,
+        reference("fixture-env-source", "name", "VENDOR_TOKEN")
+    );
     assert!(def.egress_scopes.is_empty());
 }
 
@@ -424,9 +457,13 @@ fn a_nonempty_inert_egress_policy_is_refused_by_the_shared_validator() {
         error.contains("egress_scopes") && error.contains("not enforced"),
         "{error}"
     );
-    assert!(parse(&json!({"planner": definition}))
-        .unwrap_err()
-        .contains("not enforced"));
+    assert!(parse(&json!({"planner": {
+        "url": definition.url,
+        "pin": definition.pin,
+        "egress_scopes": definition.egress_scopes
+    }}))
+    .unwrap_err()
+    .contains("not enforced"));
 }
 
 #[test]
@@ -530,4 +567,19 @@ fn pin_tokens_match_the_configuration_wire_tokens() {
     ] {
         assert_eq!(serde_json::to_value(mechanism).unwrap(), mechanism.token());
     }
+}
+
+// This is a compile-time assertion: adding Serialize gives each type two possible
+// marker implementations, so inference fails instead of permitting a secret dump.
+#[test]
+fn secret_bearing_consumer_configs_cannot_serialize() {
+    trait AmbiguousIfSerialize<Marker> {
+        fn check() {}
+    }
+    impl<T: ?Sized> AmbiguousIfSerialize<()> for T {}
+    struct Serializable;
+    impl<T: ?Sized + serde::Serialize> AmbiguousIfSerialize<Serializable> for T {}
+    let _ = <ClientIdentityCfg as AmbiguousIfSerialize<_>>::check;
+    let _ = <AgentDefCfg as AmbiguousIfSerialize<_>>::check;
+    let _ = <crate::a2a::creds::OutboundCredential as AmbiguousIfSerialize<_>>::check;
 }

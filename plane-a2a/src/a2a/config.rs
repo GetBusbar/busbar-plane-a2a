@@ -70,7 +70,9 @@ impl PinMechanism {
 /// rather than inventing a path field also means this material resolves through the ONE resolver
 /// (`env`/`file` built in, any `kind: secret` plugin beyond that), so a deployment that keeps its
 /// keys in Vault keeps this one there too without busbar learning a second way to fetch a key.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+///
+/// Consumer configuration retains opaque secret custody and cannot be serialized.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClientIdentityCfg {
     /// PEM certificate chain busbar presents, leaf first. Public material, still a reference:
@@ -105,7 +107,9 @@ pub struct AgentPinCfg {
 /// deliberately absent from this struct. The split is not tidiness: intent is what an operator
 /// wrote and may edit, accumulation is what happened and may not be, and a field that lives in the
 /// wrong one is a field an admin write can silently rewrite history through.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+///
+/// Consumer configuration retains opaque secret custody and cannot be serialized.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentDefCfg {
     /// The real remote A2A endpoint. Never client-visible: callers reach it through busbar.
