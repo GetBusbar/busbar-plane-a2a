@@ -610,23 +610,15 @@ impl std::str::FromStr for Timestamp {
             return Err(ParseError::Invalid);
         }
         let sec = digit(bytes, 17)? * 10 + digit(bytes, 18)?;
-        let (sec, extra) = if sec == 60 {
-            (59, NANOS_PER_SEC)
-        } else {
-            (sec, 0)
-        };
+        let leap: i64 = if sec == 60 { 1 } else { 0 };
+        let sec = if sec == 60 { 59 } else { sec };
         let (rest, nano) = if bytes.get(19) == Some(&b'.') {
             let (rest, n) = fraction(&s[20..])?;
-            (rest, extra + n)
+            (rest, n)
         } else {
-            (&s[19..], extra)
+            (&s[19..], 0_u32)
         };
-        if hour >= 24
-            || min >= 60
-            || sec >= 60
-            || nano >= 2 * NANOS_PER_SEC
-            || (nano >= NANOS_PER_SEC && sec != 59)
-        {
+        if hour >= 24 || min >= 60 || sec >= 60 || nano >= NANOS_PER_SEC {
             return Err(ParseError::OutOfRange);
         }
         let (rest, east) = offset(rest)?;
@@ -636,7 +628,7 @@ impl std::str::FromStr for Timestamp {
         if east <= -86_400 || east >= 86_400 {
             return Err(ParseError::OutOfRange);
         }
-        let local = days * SECS_PER_DAY + i64::from(hour * 3600 + min * 60 + sec);
+        let local = days * SECS_PER_DAY + i64::from(hour * 3600 + min * 60 + sec) + leap;
         let timestamp = Timestamp {
             seconds: local - i64::from(east),
             nanos: i32::try_from(nano).map_err(|_| ParseError::OutOfRange)?,

@@ -3496,9 +3496,6 @@ fn serving_of(plane: &A2aDoor, unit: u64, reachable: &str) -> String {
                 .is_some_and(|_def| admit_shape(plane, id, Some(id), generation, &envelope).is_ok())
         })
         .collect();
-    if serving.len() == 1 {
-        return reachable.to_string();
-    }
     serving.join(ROUTE_SCOPE_SEPARATOR)
 }
 
