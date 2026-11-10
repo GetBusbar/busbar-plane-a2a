@@ -42,7 +42,7 @@ def _post_raw(ctx, raw_body, path=None, headers=None):
         {"Content-Type": spec.MEDIA_TYPE_A2A_JSON})
     hdrs.update(headers or {})
     return transport.request("POST", url, body=raw_body, headers=hdrs,
-                             insecure=ctx.target.insecure)
+                             ca_file=ctx.target.ca_file)
 
 
 def _survived(ctx, resp, what):
@@ -344,7 +344,7 @@ def test_truncated_body(ctx):
             url, "POST", body, declared_length=len(body) + 500,
             send_bytes=len(body) // 2,
             headers=ctx.target.request_headers({"Content-Type": spec.MEDIA_TYPE_A2A_JSON}),
-            timeout=10.0, insecure=ctx.target.insecure)
+            timeout=10.0, ca_file=ctx.target.ca_file)
         ctx.observe("truncated_body_reply",
                     (reply or b"")[:80].decode("ascii", "replace"))
     except Exception as exc:
@@ -380,7 +380,7 @@ def test_connect_and_stall(ctx):
     if _binding(ctx) == "JSONRPC":
         payload = {"jsonrpc": "2.0", "id": 1, "method": "SendMessage", "params": payload}
     closed_after = transport.raw_connect_and_stall(
-        url, budget, insecure=ctx.target.insecure,
+        url, budget, ca_file=ctx.target.ca_file,
         headers=ctx.target.request_headers({"Content-Type": spec.MEDIA_TYPE_A2A_JSON}),
         body_bytes=json.dumps(payload).encode("utf-8"),
         while_stalled=lambda: healthy.append(
@@ -540,7 +540,7 @@ def test_jsonrpc_envelope(ctx):
             "params": send_params("envelope check")}
     resp = transport.request("POST", url, body=good,
                              headers=ctx.target.request_headers(),
-                             insecure=ctx.target.insecure)
+                             ca_file=ctx.target.ca_file)
     payload = resp.json_or_none() or {}
     ctx.assert_must(
         payload.get("jsonrpc") == "2.0",
@@ -564,7 +564,7 @@ def test_jsonrpc_envelope(ctx):
     # `core.absent_version_header_defaults_to_0_3`. The credential still goes.
     resp2 = transport.request("POST", url, body=missing_version,
                               headers=ctx.target.request_headers(version=None),
-                              insecure=ctx.target.insecure)
+                              ca_file=ctx.target.ca_file)
     _survived(ctx, resp2, "a request with no jsonrpc member")
     ctx.observe("missing_jsonrpc_member_status", resp2.status)
 
@@ -572,7 +572,7 @@ def test_jsonrpc_envelope(ctx):
                "method": "ThisMethodDoesNotExist", "params": {}}
     resp3 = transport.request("POST", url, body=unknown,
                               headers=ctx.target.request_headers(),
-                              insecure=ctx.target.insecure)
+                              ca_file=ctx.target.ca_file)
     body3 = resp3.json_or_none() or {}
     code = (body3.get("error") or {}).get("code")
     ctx.assert_must(
@@ -603,7 +603,7 @@ def test_method_case(ctx):
             body={"jsonrpc": "2.0", "id": 1, "method": name,
                   "params": send_params("case probe")},
             headers=ctx.target.request_headers(),
-            insecure=ctx.target.insecure)
+            ca_file=ctx.target.ca_file)
         body = resp.json_or_none() or {}
         seen[name] = "ok" if "result" in body else (body.get("error") or {}).get("code")
     ctx.observe("method_name_acceptance", seen,

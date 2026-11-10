@@ -438,7 +438,19 @@ fn the_callers_credential_has_no_path_to_a_delegate() {
         if let (Some(entry), Some(extra)) = (entry.as_object_mut(), extra.as_object()) {
             entry.extend(extra.clone());
         }
-        serde_json::from_value(entry).expect("the shape is legal; the VALUE is what is judged")
+        let mut sources = busbar_contract::secret_ref::Sugars::default();
+        sources
+            .declare(
+                "fixture-env-source",
+                &[(
+                    busbar_contract::abi::mechanism::door::REWRITE_SUGAR,
+                    "env".into(),
+                    "name".into(),
+                )],
+            )
+            .unwrap();
+        busbar_contract::secret_ref::context::deserialize(entry, &sources)
+            .expect("the shape is legal with an admitted source; the VALUE is what is judged")
     };
     let validate = |extra| crate::a2a::config::validate_agent("planner", &def(extra));
     let err = validate(serde_json::json!({ "upstream_credentials": "passthrough" }))
@@ -477,7 +489,7 @@ fn a_named_header_placement_reads_through_the_section() {
             "url": "https://a2a.vendor/planner",
             "pin": { "mechanism": "unpinned" },
             "upstream_credential": {
-                "secret": { "env": "PLANNER_KEY" }, "placement": placement, "lease_ttl_ms": 1000
+                "secret": { "module": "fixture-env-source", "settings": { "name": "PLANNER_KEY" } }, "placement": placement, "lease_ttl_ms": 1000
             },
         } });
         crate::statement::read_agents_section(&serde_json::to_vec(&section).unwrap()).map(|cfg| {

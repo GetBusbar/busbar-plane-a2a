@@ -58,24 +58,24 @@ def _unique_object(pairs):
     return result
 
 
-def _upstream_worker(result_path, url, body, headers, timeout, insecure):
+def _upstream_worker(result_path, url, body, headers, timeout, ca_file):
     """Only this disposable process can block on the upstream socket."""
     response = transport.request(
-        "POST", url, body=body, headers=headers, timeout=timeout, insecure=insecure
+        "POST", url, body=body, headers=headers, timeout=timeout, ca_file=ca_file
     )
     Path(result_path).write_text(
         json.dumps({"status": response.status, "text": response.text})
     )
 
 
-def _bounded_upstream(url, body, headers, timeout, insecure):
+def _bounded_upstream(url, body, headers, timeout, ca_file):
     # A private result file avoids a pipe's partial-message recv blocking after
     # poll(), or a full pipe deadlocking a worker joined before it is drained.
     with tempfile.TemporaryDirectory(prefix="a2aht-relay-") as directory:
         result_path = str(Path(directory) / "response.json")
         process = multiprocessing.get_context("spawn").Process(
             target=_upstream_worker,
-            args=(result_path, url, body, headers, timeout, insecure),
+            args=(result_path, url, body, headers, timeout, ca_file),
             daemon=True,
         )
         started = time.monotonic()
@@ -172,7 +172,7 @@ def correlated_relay(ctx, peer, timeout=20.0):
     else:
         raise NotConfigured("correlated relay supports HTTP+JSON and JSONRPC only")
     status, response_text, elapsed = _bounded_upstream(
-        url, body, ctx.target.request_headers(), timeout, ctx.target.insecure
+        url, body, ctx.target.request_headers(), timeout, ctx.target.ca_file
     )
     _require(
         200 <= status < 300,

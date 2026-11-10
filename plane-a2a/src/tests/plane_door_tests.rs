@@ -987,8 +987,25 @@ fn settings_schema_matches_lifecycle_grammar() {
             true,
         ),
         (
-            r#"{"a":{"url":"https://agent.example/a2a","pin":{"mechanism":"mtls"},"client_identity":{"cert":{"env":"CERT"},"key":{"file":"/run/key"}},"upstream_credential":{"secret":{"env":"TOKEN"},"lease_ttl_ms":5000}}}"#,
+            r#"{"a":{"url":"https://agent.example/a2a","pin":{"mechanism":"mtls"},"client_identity":{"cert":{"module":"fixture-env-source","settings":{"name":"CERT"}},"key":{"module":"fixture-file-source","settings":{"path":"/run/key"}}},"upstream_credential":{"secret":{"module":"fixture-env-source","settings":{"name":"TOKEN"}},"lease_ttl_ms":5000}}}"#,
             true,
+        ),
+        (
+            r#"{"a":{"url":"https://agent.example/a2a","pin":{"mechanism":"unpinned"},"upstream_credential":{"secret":"none","lease_ttl_ms":5000}}}"#,
+            true,
+        ),
+        (
+            r#"{"a":{"url":"https://agent.example/a2a","pin":{"mechanism":"unpinned"},"upstream_credential":{"secret":{"template":{"text":"token-${TOKEN}","source":{"module":"fixture-env-source","setting":"name"}}},"lease_ttl_ms":5000}}}"#,
+            true,
+        ),
+        // A lifecycle call receives canonical references; source shorthand needs admission first.
+        (
+            r#"{"a":{"url":"https://agent.example/a2a","pin":{"mechanism":"unpinned"},"upstream_credential":{"secret":{"env":"TOKEN"},"lease_ttl_ms":5000}}}"#,
+            false,
+        ),
+        (
+            r#"{"a":{"url":"https://agent.example/a2a","pin":{"mechanism":"unpinned"},"upstream_credential":{"secret":{"file":"/run/key"},"lease_ttl_ms":5000}}}"#,
+            false,
         ),
         (
             r#"{"hooks":["audit"],"upstream_credentials":"own","pools":{"p":{"members":["a",{"name":"b"}]}}}"#,
@@ -1011,7 +1028,7 @@ fn settings_schema_matches_lifecycle_grammar() {
             false,
         ),
         (
-            r#"{"a":{"url":"https://agent.example/a2a","pin":{"mechanism":"unpinned"},"upstream_credential":{"secret":{"env":"TOKEN"},"lease_ttl_ms":0}}}"#,
+            r#"{"a":{"url":"https://agent.example/a2a","pin":{"mechanism":"unpinned"},"upstream_credential":{"secret":{"module":"fixture-env-source","settings":{"name":"TOKEN"}},"lease_ttl_ms":0}}}"#,
             false,
         ),
         (
@@ -1062,7 +1079,7 @@ fn settings_schema_integer_tokens_match_native_parser() {
     assert_eq!(schema["x-busbar-settings-profile"], "integer-token-v1");
     for (pointer, template, integer, kind) in [(
         r#"/$defs/agent/properties/upstream_credential/anyOf/0/properties/lease_ttl_ms"#,
-        r#"{"a":{"url":"https://agent.example/a2a","pin":{"mechanism":"unpinned"},"upstream_credential":{"secret":{"env":"API_KEY"},"lease_ttl_ms":TOKEN}}}"#,
+        r#"{"a":{"url":"https://agent.example/a2a","pin":{"mechanism":"unpinned"},"upstream_credential":{"secret":{"module":"fixture-env-source","settings":{"name":"API_KEY"}},"lease_ttl_ms":TOKEN}}}"#,
         "1",
         "unsigned",
     )] {
@@ -1132,7 +1149,7 @@ fn authored_configuration_profile_uses_actual_raw_agents_and_push_parsers() {
             true,
         ),
         (
-            r#"{"agents":{"a":{"url":"https://agent.example/a2a","pin":{"mechanism":"unpinned"},"upstream_credential":{"secret":{"env":"TOKEN"},"lease_ttl_ms":1}}}}"#,
+            r#"{"agents":{"a":{"url":"https://agent.example/a2a","pin":{"mechanism":"unpinned"},"upstream_credential":{"secret":{"module":"fixture-env-source","settings":{"name":"TOKEN"}},"lease_ttl_ms":1}}}}"#,
             true,
         ),
         (

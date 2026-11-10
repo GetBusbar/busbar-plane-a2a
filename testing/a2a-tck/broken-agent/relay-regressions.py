@@ -86,7 +86,7 @@ class RelayRegressions(unittest.TestCase):
         from a2aht.model import Context, Violation
         from a2aht.tests_adversarial import test_jsonrpc_envelope
         with FakePeer(Behaviour(wrong_jsonrpc_id=True), binding="JSONRPC") as peer:
-            target = SimpleNamespace(insecure=False,
+            target = SimpleNamespace(ca_file=None,
                                      pick_interface=lambda: {"url": peer.base_url,
                                                              "protocolBinding": "JSONRPC"},
                                      request_headers=lambda *args, **kwargs: {})

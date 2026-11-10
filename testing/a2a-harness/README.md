@@ -25,6 +25,11 @@ signature as unverifiable rather than as verified.
 
     python -m a2aht run --endpoint http://127.0.0.1:8080
 
+TLS verifies both certificates and hostnames. For a fixture signed by a private
+CA, provide its PEM CA bundle; the same trust applies to HTTP, SSE and raw probes:
+
+    python -m a2aht run --endpoint https://localhost:8443 --ca-file fixture-ca.pem
+
 Or have the harness start and stop the agent itself:
 
     python -m a2aht run --launch "my-agent serve --port 8080" --port 8080

@@ -300,7 +300,7 @@ def test_card_caching(ctx):
             "GET", resp.card_url,
             headers=ctx.target.request_headers(
                 {"If-None-Match": resp.headers["etag"]}),
-            insecure=ctx.target.insecure)
+            ca_file=ctx.target.ca_file)
         ctx.observe("conditional_get_status", again.status,
                     "SPEC 8.6.2 expects clients to use If-None-Match; a "
                     "server that ignores it merely wastes bandwidth.")

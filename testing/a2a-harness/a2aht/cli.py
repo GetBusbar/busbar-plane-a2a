@@ -34,8 +34,8 @@ def _target_args(p):
     p.add_argument("--auth-file", type=argparse.FileType("r"),
                    help="read an auth header from a private file or inherited descriptor")
     p.add_argument("--jwks", help="operator-provided JWKS JSON file for card signature verification")
-    p.add_argument("--insecure-tls", action="store_true",
-                   help="do not verify TLS certificates")
+    p.add_argument("--ca-file",
+                   help="PEM CA bundle to trust for fixture TLS; hostname verification remains enabled")
     p.add_argument("--label", default=None,
                    help="name for this target in reports")
     p.add_argument("--allow-undriven-bindings", default="",
@@ -67,7 +67,7 @@ def build_target(args):
     return Target(
         endpoint=args.endpoint, launch=args.launch, port=args.port,
         host=args.host, card_url=args.card_url, auth_header=auth,
-        insecure=args.insecure_tls, cwd=args.cwd,
+        ca_file=args.ca_file, cwd=args.cwd,
         label=args.label or args.endpoint or args.launch or "target",
     )
 

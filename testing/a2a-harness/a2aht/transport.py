@@ -51,15 +51,20 @@ class HttpResponse:
         return self.headers.get("content-type", "").split(";")[0].strip()
 
 
-def _opener():
+def _tls_context(ca_file=None):
     ctx = ssl.create_default_context()
-    # Test targets are routinely on self-signed certs in CI. Verification is
-    # controlled by the caller through A2AHT_INSECURE_TLS; default is secure.
-    return urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx))
+    if ca_file is not None:
+        ctx.load_verify_locations(cafile=ca_file)
+    return ctx
+
+
+def _opener(ca_file=None):
+    return urllib.request.build_opener(
+        urllib.request.HTTPSHandler(context=_tls_context(ca_file)))
 
 
 def request(method, url, body=None, headers=None, timeout=DEFAULT_TIMEOUT,
-            insecure=False):
+            ca_file=None):
     hdrs = dict(headers or {})
     data = body
     if isinstance(data, (dict, list)):
@@ -72,11 +77,7 @@ def request(method, url, body=None, headers=None, timeout=DEFAULT_TIMEOUT,
     for k, v in hdrs.items():
         req.add_header(k, v)
 
-    if insecure:
-        ctx = ssl._create_unverified_context()
-        opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx))
-    else:
-        opener = _opener()
+    opener = _opener(ca_file)
 
     started = time.time()
     try:
@@ -101,7 +102,7 @@ def request(method, url, body=None, headers=None, timeout=DEFAULT_TIMEOUT,
 
 
 def sse_events(url, body=None, headers=None, method="POST",
-               max_events=200, timeout=DEFAULT_TIMEOUT, insecure=False,
+               max_events=200, timeout=DEFAULT_TIMEOUT, ca_file=None,
                stop_after=None, abort_after_events=None):
     """Read a Server-Sent Events stream and yield decoded `data:` payloads.
 
@@ -120,11 +121,7 @@ def sse_events(url, body=None, headers=None, method="POST",
     for k, v in hdrs.items():
         req.add_header(k, v)
 
-    if insecure:
-        ctx = ssl._create_unverified_context()
-        opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx))
-    else:
-        opener = _opener()
+    opener = _opener(ca_file)
 
     events = []
     status = None
@@ -231,14 +228,18 @@ def _sse_data(frame):
 # HTTP client refuses to emit.
 # ---------------------------------------------------------------------------
 
-def _connect(url, timeout=DEFAULT_TIMEOUT, insecure=False):
+def _connect(url, timeout=DEFAULT_TIMEOUT, ca_file=None):
     parts = urllib.parse.urlsplit(url)
     host = parts.hostname
     port = parts.port or (443 if parts.scheme == "https" else 80)
+    ctx = _tls_context(ca_file) if parts.scheme == "https" else None
     sock = socket.create_connection((host, port), timeout=timeout)
-    if parts.scheme == "https":
-        ctx = ssl._create_unverified_context() if insecure else ssl.create_default_context()
-        sock = ctx.wrap_socket(sock, server_hostname=host)
+    if ctx is not None:
+        try:
+            sock = ctx.wrap_socket(sock, server_hostname=host)
+        except Exception:
+            sock.close()
+            raise
     path = parts.path or "/"
     if parts.query:
         path += "?" + parts.query
@@ -246,7 +247,7 @@ def _connect(url, timeout=DEFAULT_TIMEOUT, insecure=False):
 
 
 def raw_send(url, method, body_bytes, headers=None, declared_length=None,
-             send_bytes=None, timeout=DEFAULT_TIMEOUT, insecure=False,
+             send_bytes=None, timeout=DEFAULT_TIMEOUT, ca_file=None,
              read_reply=True):
     """Send a hand-built request.
 
@@ -254,7 +255,7 @@ def raw_send(url, method, body_bytes, headers=None, declared_length=None,
     send fewer bytes than you declared. Together they produce a truncated
     request body, which is the classic way to wedge a naive parser.
     """
-    sock, host, path = _connect(url, timeout, insecure)
+    sock, host, path = _connect(url, timeout, ca_file)
     payload = body_bytes or b""
     length = declared_length if declared_length is not None else len(payload)
     to_send = payload if send_bytes is None else payload[:send_bytes]
@@ -283,7 +284,7 @@ def raw_send(url, method, body_bytes, headers=None, declared_length=None,
             pass
 
 
-def raw_connect_and_stall(url, seconds, timeout=DEFAULT_TIMEOUT, insecure=False,
+def raw_connect_and_stall(url, seconds, timeout=DEFAULT_TIMEOUT, ca_file=None,
                           while_stalled=None, headers=None, body_bytes=b"{"):
     """Open a connection, send a partial request, then go silent.
 
@@ -291,7 +292,7 @@ def raw_connect_and_stall(url, seconds, timeout=DEFAULT_TIMEOUT, insecure=False,
     was still holding the connection when we gave up. This measures whether
     the target has any idle timeout at all.
     """
-    sock, host, path = _connect(url, timeout, insecure)
+    sock, host, path = _connect(url, timeout, ca_file)
     try:
         lines = ["POST %s HTTP/1.1" % path, "Host: %s" % host,
                  "Content-Length: %d" % (len(body_bytes) + 500)]

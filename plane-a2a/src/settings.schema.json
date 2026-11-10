@@ -330,28 +330,42 @@
         {
           "type": "object",
           "properties": {
-            "env": {
-              "type": "string",
-              "pattern": "\\S"
+            "template": {
+              "type": "object",
+              "properties": {
+                "text": {
+                  "type": "string"
+                },
+                "source": {
+                  "type": "object",
+                  "properties": {
+                    "module": {
+                      "type": "string",
+                      "pattern": "\\S"
+                    },
+                    "setting": {
+                      "type": "string",
+                      "pattern": "\\S"
+                    }
+                  },
+                  "required": [
+                    "module",
+                    "setting"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "text",
+                "source"
+              ],
+              "additionalProperties": false
             }
           },
-          "additionalProperties": false,
           "required": [
-            "env"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "file": {
-              "type": "string",
-              "pattern": "\\S"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "file"
-          ]
+            "template"
+          ],
+          "additionalProperties": false
         }
       ]
     },

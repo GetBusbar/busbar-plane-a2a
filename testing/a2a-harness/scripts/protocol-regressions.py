@@ -518,7 +518,7 @@ Path(os.environ["HEADER_CAPTURE"]).write_text(json.dumps({
             events.append("healthy")
             return SimpleNamespace(error=None, http=None)
         ctx = Context()
-        ctx.target = SimpleNamespace(insecure=False, call=healthy,
+        ctx.target = SimpleNamespace(ca_file=None, call=healthy,
             request_headers=lambda extra: dict(extra, **{
                 "authorization": "Bearer fixture", "A2A-Version": "1.0"}))
         with patch.object(transport, "_connect", return_value=(Socket(), "localhost", "/")), \
@@ -529,7 +529,7 @@ Path(os.environ["HEADER_CAPTURE"]).write_text(json.dumps({
 
     def test_truncated_probe_preserves_auth_version_and_binding_envelope(self):
         ctx = Context()
-        ctx.target = SimpleNamespace(insecure=False,
+        ctx.target = SimpleNamespace(ca_file=None,
             call=lambda *a: SimpleNamespace(error=None, http=None),
             request_headers=lambda extra: dict(extra, **{
                 "authorization": "Bearer fixture", "A2A-Version": "1.0"}))
@@ -712,6 +712,92 @@ class HarnessAuditRegressions(unittest.TestCase):
             with self.assertRaises(OSError):
                 cli.main(["run", "--endpoint", "http://fixture.invalid"])
         self.assertEqual(stopped, [True])
+
+
+class TlsTransportRegressions(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import ssl
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        cls.directory = tempfile.TemporaryDirectory(prefix="a2aht-tls-")
+        cls.addClassCleanup(cls.directory.cleanup)
+        cls.ca_file = str(Path(cls.directory.name) / "fixture-ca.pem")
+        key = str(Path(cls.directory.name) / "fixture-key.pem")
+        subprocess.run([
+            "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+            "-days", "1", "-subj", "/CN=localhost", "-keyout", key,
+            "-out", cls.ca_file, "-addext", "subjectAltName=DNS:localhost",
+            "-addext", "basicConstraints=critical,CA:TRUE",
+            "-addext", "keyUsage=critical,digitalSignature,keyCertSign",
+        ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = b'{"ok":true}'
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_POST(self):
+                body = b'data: {"ok":true}\n\n'
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *_):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        cls.addClassCleanup(server.server_close)
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(cls.ca_file, key)
+        server.socket = context.wrap_socket(server.socket, server_side=True)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        cls.addClassCleanup(thread.join, 5)
+        cls.addClassCleanup(server.shutdown)
+        cls.url = "https://localhost:%s/" % server.server_port
+        cls.wrong_host = "https://127.0.0.1:%s/" % server.server_port
+
+    def test_trusted_fixture_ca_drives_http_sse_and_raw(self):
+        reply = transport.request("GET", self.url, ca_file=self.ca_file)
+        self.assertEqual(reply.status, 200)
+        self.assertEqual(reply.json(), {"ok": True})
+        stream = transport.sse_events(self.url, ca_file=self.ca_file)
+        self.assertEqual(stream.events, [{"ok": True}])
+        self.assertTrue(stream.closed_cleanly)
+        self.assertIsNone(stream.error)
+        raw = transport.raw_send(self.url, "GET", b"", ca_file=self.ca_file)
+        self.assertIn(b"200 OK", raw)
+        self.assertTrue(raw.endswith(b'{"ok":true}'))
+
+    def test_untrusted_and_wrong_host_fail_all_tls_paths(self):
+        import ssl
+        for url, ca_file in [(self.url, None), (self.wrong_host, self.ca_file)]:
+            with self.subTest(url=url, ca_file=ca_file):
+                reply = transport.request("GET", url, ca_file=ca_file)
+                self.assertEqual(reply.status, 599)
+                self.assertIn("CERTIFICATE_VERIFY_FAILED", reply.text)
+                stream = transport.sse_events(url, ca_file=ca_file)
+                self.assertFalse(stream.closed_cleanly)
+                self.assertEqual(stream.events, [])
+                self.assertIn("CERTIFICATE_VERIFY_FAILED", stream.error)
+                with self.assertRaises(ssl.SSLCertVerificationError):
+                    transport.raw_send(url, "GET", b"", ca_file=ca_file)
+
+    def test_cli_passes_ca_bundle_to_target(self):
+        import argparse
+        parser = argparse.ArgumentParser()
+        cli._target_args(parser)
+        target = cli.build_target(parser.parse_args([
+            "--endpoint", self.url, "--ca-file", self.ca_file]))
+        self.assertEqual(target.ca_file, self.ca_file)
 
 
 if __name__ == "__main__":

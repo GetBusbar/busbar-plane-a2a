@@ -34,7 +34,7 @@ class TargetError(Exception):
 
 class Target:
     def __init__(self, endpoint=None, launch=None, port=None, host="127.0.0.1",
-                 card_url=None, auth_header=None, insecure=False,
+                 card_url=None, auth_header=None, ca_file=None,
                  launch_ready_seconds=45.0, label="target", cwd=None,
                  env=None):
         self.label = label
@@ -44,7 +44,7 @@ class Target:
         self.host = host
         self.card_url_override = card_url
         self.auth_header = auth_header
-        self.insecure = insecure
+        self.ca_file = ca_file
         self.launch_ready_seconds = launch_ready_seconds
         self.cwd = cwd
         self.env = env
@@ -185,7 +185,7 @@ class Target:
         last = None
         for url in self.card_candidates():
             resp = transport.request("GET", url, headers=self._headers(headers),
-                                     insecure=self.insecure)
+                                     ca_file=self.ca_file)
             last = resp
             if resp.status == 200 and resp.json_or_none() is not None:
                 resp.card_url = url
@@ -309,7 +309,7 @@ class Target:
         resp = transport.request(
             "POST", iface["url"], body=body,
             headers=self._headers(headers, version),
-            insecure=self.insecure)
+            ca_file=self.ca_file)
         return Call.from_jsonrpc(resp, method, body)
 
     def _call_rest(self, iface, method, params, headers, version):
@@ -345,7 +345,7 @@ class Target:
         if body is not None:
             hdrs.setdefault("Content-Type", spec.MEDIA_TYPE_A2A_JSON)
         resp = transport.request(verb, url, body=body, headers=hdrs,
-                                 insecure=self.insecure)
+                                 ca_file=self.ca_file)
         return Call.from_rest(resp, method, body)
 
     def stream(self, method, params=None, iface=None, headers=None,
@@ -365,7 +365,7 @@ class Target:
             if inner_stop:
                 kw["stop_after"] = lambda ev: inner_stop(_unwrap_rpc(ev))
             res = transport.sse_events(iface["url"], body=body, headers=hdrs,
-                                       insecure=self.insecure, **kw)
+                                       ca_file=self.ca_file, **kw)
             res.envelopes = list(res.events)
             res.envelope_problems = _envelope_problems(res.envelopes, rid)
             res.events = [_unwrap_rpc(ev) for ev in res.events]
@@ -375,7 +375,7 @@ class Target:
                 url = iface["url"].rstrip("/") + "/message:stream"
                 return transport.sse_events(url, body=params or {},
                                             headers=hdrs,
-                                            insecure=self.insecure, **kw)
+                                            ca_file=self.ca_file, **kw)
             if method == "SubscribeToTask":
                 # Both readings of the verb. See AMBIGUITIES.
                 url = (iface["url"].rstrip("/") + "/tasks/"
@@ -383,11 +383,11 @@ class Target:
                        + ":subscribe")
                 res = transport.sse_events(url, body=None, headers=hdrs,
                                            method="GET",
-                                           insecure=self.insecure, **kw)
+                                           ca_file=self.ca_file, **kw)
                 if res.status in (404, 405, 501):
                     res2 = transport.sse_events(url, body={}, headers=hdrs,
                                                 method="POST",
-                                                insecure=self.insecure, **kw)
+                                                ca_file=self.ca_file, **kw)
                     res2.verb_used = "POST"
                     return res2
                 res.verb_used = "GET"
