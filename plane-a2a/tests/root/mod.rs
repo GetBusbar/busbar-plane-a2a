@@ -9540,3 +9540,8 @@ mod reported_fixture_tests;
 mod reported_push_params_tests;
 
 mod relay_reported_cases;
+
+/// The owner's minimal valid section for composition-root coverage fixtures.
+pub(crate) fn minimal_valid_config() -> (&'static str, serde_json::Value) {
+    ("agents", serde_json::json!({"hooks": []}))
+}
