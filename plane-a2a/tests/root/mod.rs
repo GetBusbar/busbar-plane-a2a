@@ -22,6 +22,8 @@ use busbar_kernel::{
 #[allow(dead_code)]
 mod root_facts;
 
+#[path = "serve_a2a_parity.rs"]
+mod a2a_actual_parity;
 mod binding_lifetime;
 mod bootstrap;
 mod conditional_quota_negotiation;
