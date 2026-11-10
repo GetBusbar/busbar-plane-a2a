@@ -311,6 +311,8 @@ static HOST_SLOTS: HostSlots = HostSlots {
     unit_refuse: None,
     ticket_mint: None,
     ticket_take: None,
+    outbound_authorize: None,
+    hook_child: None,
 };
 
 /// The agent's card: unsigned (its registration is `unpinned`), one skill.

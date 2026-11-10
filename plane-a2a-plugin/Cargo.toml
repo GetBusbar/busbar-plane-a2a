@@ -34,3 +34,6 @@ serde_json = { workspace = true }
 # ABI fixtures use the contract's existing low-level input and seal primitives.
 busbar-contract = { workspace = true, features = ["test-seal", "test-support"] }
 futures = { workspace = true }
+
+[package.metadata.busbar.test-artifacts]
+cdylib = ["BUSBAR_TEST_A2A_CDYLIB"]
