@@ -937,7 +937,7 @@ leg_tck() {
   say "== A2A OFFICIAL TCK · SUBJECT leg (busbar) =="
   # The TCK takes `--sut-host` and nothing else, so its credential lives in the shim.
   arm_subject shim
-  local out="${A2A_SUBJECT_TCK_LOG:-.a2a-conformance/tck-subject.txt}"
+  local out="${A2A_SUBJECT_TCK_LOG:-${A2A_SUBJECT_WORKDIR:-.a2a-conformance}/tck-subject.txt}"
   mkdir -p "$(dirname "$out")"
 
   # ONE OUTPUT DIRECTORY PER LEG, and it is derived here rather than left to the caller.
