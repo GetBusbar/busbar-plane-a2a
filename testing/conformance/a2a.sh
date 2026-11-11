@@ -373,7 +373,10 @@ build_subject() {
   [ -x "$SUBJECT_BIN" ] || return 1
 }
 
-subject_tck()     { A2A_SUBJECT_BUSBAR_BIN="$SUBJECT_BIN" A2A_SUBJECT_WORKDIR="$W/subject-tck" testing/a2a-subject/boot.sh --tck; }
+subject_tck() {
+  A2A_SUBJECT_BUSBAR_BIN="$SUBJECT_BIN" A2A_SUBJECT_WORKDIR="$W/subject-tck" \
+    A2A_SUBJECT_TCK_LOG="$LOGS/subject-tck-output.log" testing/a2a-subject/boot.sh --tck
+}
 subject_battery() { A2A_SUBJECT_BUSBAR_BIN="$SUBJECT_BIN" A2A_SUBJECT_WORKDIR="$W/subject-battery" testing/a2a-subject/boot.sh --battery; }
 
 # ------------------------------------------------------------------------------------------------
