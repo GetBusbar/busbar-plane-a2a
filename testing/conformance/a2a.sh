@@ -158,6 +158,10 @@ venv_from() {
 }
 
 provision() {
+  if [ -n "${BUSBAR_CONFORMANCE_INPUTS:-}" ]; then
+    source "$ROOT/testing/conformance/offline.sh" || return 1
+    return
+  fi
   source "$ROOT/testing/conformance/tools.sh" node || return 1
   ensure_python || return 1
   ensure_go || return 1
@@ -165,9 +169,10 @@ provision() {
   # that the suite's imports work.
   venv_from "$A2A_TCK_WORK/venv" "$ROOT/testing/conformance/requirements-tck.txt" || return 1
   # The scenario agent (a2a-sdk at the pin install-control.sh states).
-  local pyver
+  local pyver reqhash
   pyver="$(sed -n '/^CONTROL_PY_VERSION="/{s/^CONTROL_PY_VERSION="\([^"]*\)".*/\1/p;q;}' testing/a2a-harness/scripts/install-control.sh)"
-  venv_from "$A2A_SCENARIO_AGENT_WORK/venv-$pyver" "$ROOT/testing/conformance/requirements-py.txt" || return 1
+  reqhash="$(shasum -a 256 "$ROOT/testing/conformance/requirements-py.txt" | awk '{print $1}')"
+  venv_from "$A2A_SCENARIO_AGENT_WORK/venv-$pyver-$reqhash" "$ROOT/testing/conformance/requirements-py.txt" || return 1
   # The battery's python control: a venv plus the sample agent at the pinned commit.
   mkdir -p "$A2AHT_CONTROL_SRC"
   venv_from "$A2AHT_CONTROL_SRC/venv" "$ROOT/testing/conformance/requirements-py.txt" || return 1
@@ -373,6 +378,9 @@ subject_tck()     { A2A_SUBJECT_BUSBAR_BIN="$SUBJECT_BIN" A2A_SUBJECT_WORKDIR="$
 subject_battery() { A2A_SUBJECT_BUSBAR_BIN="$SUBJECT_BIN" A2A_SUBJECT_WORKDIR="$W/subject-battery" testing/a2a-subject/boot.sh --battery; }
 
 # ------------------------------------------------------------------------------------------------
+# Trusted tool staging and targeted smoke checks source the functions without running the suite.
+[ "${A2A_CONFORMANCE_LIBRARY_ONLY:-}" != 1 ] || return 0
+
 say "tck pin $TCK_REF; busbar pin ${BUSBAR_PIN:-?}; checkout $BUSBAR_CHECKOUT"
 provision > "$LOGS/provision.log" 2>&1 || { tail -30 "$LOGS/provision.log" >&2; die "the pinned tools (go $GO_VERSION, hash-pinned python venvs, a2a-go) could not be provisioned"; }
 
