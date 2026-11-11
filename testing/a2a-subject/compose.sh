@@ -5,7 +5,7 @@
 #
 # Copy the canonical host checkout without rewriting distribution metadata or scanning Rust.
 # The pinned host's dist/default metadata owns the linked door and declaration expressions.
-# The caller supplies the plane dependency override to Cargo when building the staged manifest.
+# The staged Cargo config shares the plane override with nested metadata commands.
 set -euo pipefail
 checkout="${1:?busbar checkout}"; plane="${2:?plane crate dir}"; stage="${3:?stage dir}"
 plane="$(cd "$plane" && pwd)"
@@ -22,4 +22,22 @@ SAFE_STAGE
 umask 077
 rm -rf "$stage"; mkdir -p "$stage"
 tar -C "$checkout" --exclude=./target --exclude=./.git -cf - . | tar -C "$stage" -xf -
+python3 -I - "$stage" "$plane" <<'CARGO_PATCH'
+import json
+from pathlib import Path
+import sys
+import tomllib
+
+stage, plane = sys.argv[1:]
+config = Path(stage) / ".cargo/config.toml"
+text = config.read_text() if config.exists() else ""
+url = "https://github.com/GetBusbar/busbar-plane-a2a"
+package = "busbar-plane-a2a"
+existing = tomllib.loads(text).get("patch", {}).get(url, {}).get(package)
+if existing is not None and existing != {"path": plane}:
+    sys.exit("staged host already configures a different A2A source override")
+if existing is None:
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text(text + f'\n[patch.{json.dumps(url)}.{package}]\npath = {json.dumps(plane)}\n')
+CARGO_PATCH
 printf '%s\n' "$stage/dist/default/Cargo.toml"

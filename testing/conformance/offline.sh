@@ -12,6 +12,9 @@ mkdir -p "$A2AHT_CONTROL_BIN" "$A2AHT_CONTROL_SRC" "$A2A_TCK_WORK" "$A2A_SCENARI
 cp "$_a2a_bundle/bin/a2a" "$A2AHT_CONTROL_BIN/a2a" || return 1
 # The official TCK writes its reports within its checkout; only its work copy is writable.
 cp -R "$_a2a_bundle/a2a-tck" "$A2A_TCK_WORK/" || return 1
+# The regular-file transport omits empty directories. Git requires refs even for a
+# detached shallow checkout; without it discovery can incorrectly select the parent repo.
+mkdir -p "$A2A_TCK_WORK/a2a-tck/.git/refs" || return 1
 ln -s "$_a2a_bundle/venv-tck" "$A2A_TCK_WORK/venv" || return 1
 ln -s "$_a2a_bundle/venv-python" "$A2AHT_CONTROL_SRC/venv" || return 1
 _a2a_reqhash="$(shasum -a 256 "$ROOT/testing/conformance/requirements-py.txt" | awk '{print $1}')"

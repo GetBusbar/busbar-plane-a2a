@@ -54,7 +54,8 @@ A2A_PY_SAMPLES_SHA=3e6fa6a41d64f0581202df214a0515a0b0194832
 CACHE="${MODERNCI_CACHE_DIR:-$HOME/.cache}/conformance-tools"
 W="$CONFORMANCE_OUT/work"
 LOGS="$CONFORMANCE_OUT/logs"
-mkdir -p "$W" "$LOGS" "$CACHE"
+export A2A_BATTERY_REPORTS="$CONFORMANCE_OUT/battery-reports"
+mkdir -p "$W" "$LOGS" "$CACHE" "$A2A_BATTERY_REPORTS"
 
 # One place every shared tool of the repo's own scripts looks. TZ is NOT cosmetic (run-tck.sh).
 export TZ="${A2A_TCK_TZ:-America/New_York}"
@@ -200,12 +201,12 @@ tck_control() { testing/a2a-tck/run-tck.sh "$1"; }
 battery_go() {   # battery_go <rest|jsonrpc>; direct unwaived server verdict
   local binding="$1" transport=http_json
   [ "$binding" = jsonrpc ] && transport=jsonrpc
-  ( cd testing/a2a-harness && mkdir -p reports \
-    && rm -f "reports/control-$binding.json" \
+  ( cd testing/a2a-harness \
+    && rm -f "$A2A_BATTERY_REPORTS/control-$binding.json" \
     && python3 -m a2aht run \
          --launch "$ROOT/testing/a2a-reference/go/serve.sh 9099 $transport" --port 9099 \
          --label "reference-fixture:a2a-go/$binding/server" --tier pre-release --role server \
-         --json "reports/control-$binding.json" )
+         --json "$A2A_BATTERY_REPORTS/control-$binding.json" )
 }
 
 battery_go_client() {
@@ -214,7 +215,7 @@ battery_go_client() {
 }
 
 battery_python() {
-  ( cd testing/a2a-harness && mkdir -p reports
+  ( cd testing/a2a-harness || exit 1
     "$ROOT/testing/a2a-reference/python/serve.sh" 41241 \
       > "$LOGS/a2a-python-agent.log" 2>&1 &
     local pid=$!
@@ -222,11 +223,11 @@ battery_python() {
     fixture_exit_on_signal
     fixture_track_pid "$pid"
     if ! fixture_await_card "$pid" 41241 60 1; then echo "the Python reference fixture never owned its card listener"; cat "$LOGS/a2a-python-agent.log"; exit 1; fi
-    rm -f reports/control-python.json
+    rm -f "$A2A_BATTERY_REPORTS/control-python.json"
     local run_rc=0
     python3 -m a2aht run --endpoint http://127.0.0.1:41241 \
       --label "reference-fixture:a2a-python/server" --tier pre-release --role server \
-      --json reports/control-python.json || run_rc=$?
+      --json "$A2A_BATTERY_REPORTS/control-python.json" || run_rc=$?
     fixture_stop "$pid" || exit 1
     pid=""
     exit "$run_rc" )
@@ -243,7 +244,7 @@ await_card() {  # await_card <port> <what> <pid>
 }
 
 negative_battery() {
-  ( cd testing/a2a-harness && mkdir -p reports
+  ( cd testing/a2a-harness || exit 1
     python3 -m a2aht fake-peer --port 9402 --broken > "$LOGS/broken-peer.log" 2>&1 & local broken=$!
     trap 'cleanup_rc=0; fixture_stop "$broken" || cleanup_rc=1; fixture_stop "${honest:-}" || cleanup_rc=1; [ "$cleanup_rc" -eq 0 ] || exit 1' EXIT
     fixture_exit_on_signal
@@ -253,15 +254,15 @@ negative_battery() {
     await_card 9402 broken "$broken" || exit 1
     await_card 9403 honest "$honest" || exit 1
     local brc=0 hrc=0
-    rm -f reports/negative-control.json reports/honest-control.json
+    rm -f "$A2A_BATTERY_REPORTS/negative-control.json" "$A2A_BATTERY_REPORTS/honest-control.json"
     python3 -m a2aht run --endpoint http://127.0.0.1:9402 --label negative-control --tier pull-request \
-      --role server --json reports/negative-control.json > "$LOGS/negative-run.txt" 2>&1 || brc=$?
+      --role server --json "$A2A_BATTERY_REPORTS/negative-control.json" > "$LOGS/negative-run.txt" 2>&1 || brc=$?
     python3 -m a2aht run --endpoint http://127.0.0.1:9403 --label honest-control --tier pull-request \
-      --role server --json reports/honest-control.json > "$LOGS/honest-run.txt" 2>&1 || hrc=$?
+      --role server --json "$A2A_BATTERY_REPORTS/honest-control.json" > "$LOGS/honest-run.txt" 2>&1 || hrc=$?
     echo "battery vs broken peer: exit $brc; vs honest peer: exit $hrc"
     [ "$brc" = 1 ] || { echo "the battery did not grade the broken peer red (exit $brc; want 1)"; exit 1; }
     [ "$hrc" != 3 ] || { echo "the battery never reached the honest peer"; exit 1; }
-    python3 -I - <<'PY'
+    python3 -I - "$A2A_BATTERY_REPORTS/negative-control.json" "$A2A_BATTERY_REPORTS/honest-control.json" <<'PY'
 import json, sys
 PAIRS = {
     "card.required_fields": "the REQUIRED `version` is absent",
@@ -271,8 +272,8 @@ PAIRS = {
 }
 def outcomes(path):
     return {r["id"]: r["outcome"] for r in json.load(open(path))["results"]}
-broken = outcomes("reports/negative-control.json")
-honest = outcomes("reports/honest-control.json")
+broken = outcomes(sys.argv[1])
+honest = outcomes(sys.argv[2])
 bad = 0
 for tid, why in sorted(PAIRS.items()):
     b, h = broken.get(tid, "ABSENT"), honest.get(tid, "ABSENT")
@@ -367,9 +368,7 @@ build_subject() {
   # expressions; this plane replaces the git dependency via Cargo's explicit path patch.
   local stage="$W/subject-src" manifest
   manifest="$(bash testing/a2a-subject/compose.sh "$BUSBAR_CHECKOUT" "$ROOT/plane-a2a" "$stage")" || return 1
-  cargo build --manifest-path "$manifest" --bin busbar \
-      --config "patch.\"https://github.com/GetBusbar/busbar-plane-a2a\".busbar-plane-a2a.path=\"$ROOT/plane-a2a\"" \
-    || return 1
+  ( cd "$stage" && cargo build --manifest-path "$manifest" --bin busbar ) || return 1
   SUBJECT_BIN="${CARGO_TARGET_DIR:-$(dirname "$manifest")/target}/debug/busbar"
   [ -x "$SUBJECT_BIN" ] || return 1
 }

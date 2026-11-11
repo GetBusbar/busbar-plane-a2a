@@ -871,7 +871,9 @@ leg_battery() {
   # the battery can make a request with NO credential at all — which is the only way to observe
   # SPEC 3.3.2, one of the server-role MUSTs it asserts.
   arm_subject instrument
-  mkdir -p testing/a2a-harness/reports
+  local report_dir="${A2A_BATTERY_REPORTS:-$PWD/testing/a2a-harness/reports}"
+  mkdir -p "$report_dir"
+  report_dir="$(cd "$report_dir" && pwd)"
   # `--card-url` NAMES THE FRONTED AGENT'S ENDPOINT, and it is not a convenience. busbar mounts the
   # card at `/a2a/agents/{id}` and serves NOTHING at the well-known path on this commit, so without
   # it the battery's preflight stops at "no agent card at any of […]" and exits 3 having run no
@@ -908,7 +910,7 @@ leg_battery() {
       --label "subject:busbar" \
       --tier pull-request \
       --role server \
-      --json reports/subject.json ) || rc=$?
+      --json "$report_dir/subject.json" ) || rc=$?
   say ""
   say "   battery exit $rc"
   # DELIBERATELY NOT BASELINE-COMPARED, for the reason `run-tck.sh` gives for the same decision: a
