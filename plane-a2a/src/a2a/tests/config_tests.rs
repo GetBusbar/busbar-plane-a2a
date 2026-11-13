@@ -36,6 +36,12 @@ fn def(url: &str, pin: PinMechanism) -> AgentDefCfg {
 }
 
 /// Parse a section document the way the door does.
+/// A synthetic issuer-key pin built at runtime: base64 of an obviously fake label, never key material.
+fn synthetic_key() -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode("test-only-issuer-pin")
+}
+
 fn parse(section: &serde_json::Value) -> Result<AgentsCfg, String> {
     read_agents_section(section.to_string().as_bytes())
 }
@@ -63,13 +69,14 @@ fn serialized_pin_tokens_round_trip() {
 /// The shape the design specifies parses, field for field.
 #[test]
 fn the_designed_entry_parses_as_written() {
+    let key = synthetic_key();
     let cfg = parse(&json!({
         "hooks": ["agent-sanitizer"],
         "planner": {
             "url": "https://a2a.vendor/planner",
             "pin": {
                 "mechanism": "jws_issuer_key",
-                "key": "MCowBQYDK2VwAyEA",
+                "key": &key,
                 "fingerprint": "sha256/CARD=="
             },
             "reverify_ttl": "6h",
@@ -83,7 +90,7 @@ fn the_designed_entry_parses_as_written() {
     let planner = cfg.agents.get("planner").expect("planner is registered");
     assert_eq!(planner.url, "https://a2a.vendor/planner");
     assert_eq!(planner.pin.mechanism, PinMechanism::JwsIssuerKey);
-    assert_eq!(planner.pin.key.as_deref(), Some("MCowBQYDK2VwAyEA"));
+    assert_eq!(planner.pin.key.as_deref(), Some(key.as_str()));
     assert_eq!(planner.pin.fingerprint.as_deref(), Some("sha256/CARD=="));
     assert_eq!(planner.reverify_ttl.as_deref(), Some("6h"));
     assert_eq!(planner.upstream_credentials, Some(UpstreamCreds::Own));
@@ -385,10 +392,11 @@ fn a_client_identity_on_a_plaintext_endpoint_is_refused() {
 /// A client certificate is legal under the OTHER mechanisms: only `mtls` REQUIRES it.
 #[test]
 fn a_client_identity_is_legal_alongside_a_signed_card() {
+    let key = synthetic_key();
     parse(&json!({
         "planner": {
             "url": "https://a2a.vendor/planner",
-            "pin": {"mechanism": "jws_issuer_key", "key": "MCowBQYDK2VwAyEA"},
+            "pin": {"mechanism": "jws_issuer_key", "key": key},
             "client_identity": {
                 "cert": {"module": "fixture-file-source", "settings": {"path": "/run/secrets/c.crt"}},
                 "key": {"module": "fixture-file-source", "settings": {"path": "/run/secrets/c.key"}}

@@ -65,9 +65,28 @@ const CARD_PATHS = new Set(["/.well-known/agent-card.json", "/.well-known/agent.
 // route, then asks the real subject to fetch/verify and approve the newly signed peer card.
 // No challenge or operation body is interpreted here; the card is signed as fetched.
 const ROUTE_FILE = process.env.A2A_VENDOR_ROUTE_FILE || "";
+
+// THIS PROCESS IS A REVERSE PROXY TO ONE FIXED ORIGIN, NEVER A FORWARD PROXY. An absolute-form
+// request line (`GET http://169.254.169.254/... HTTP/1.1`) or a scheme-relative target (`//host/`)
+// would replace the base in `new URL(target, base)` and send the request anywhere. Only an
+// origin-form target is accepted, and the resolved URL must still have the base's origin (WHATWG
+// parsing also turns `/\host` into a host change, which the origin check refuses).
+class RefusedTarget extends Error {}
+function within(reqPath, base) {
+  if (typeof reqPath !== "string" || !reqPath.startsWith("/") || reqPath.startsWith("//")) {
+    throw new RefusedTarget("request target must be origin-form");
+  }
+  const fixed = new URL(base);
+  const url = new URL(reqPath, fixed);
+  if (url.origin !== fixed.origin) {
+    throw new RefusedTarget("request target must stay on the fixed backend origin");
+  }
+  return url;
+}
+
 function target(reqPath) {
   if (!ROUTE_FILE || !fs.existsSync(ROUTE_FILE)) {
-    return new URL(reqPath, `http://127.0.0.1:${backendPort}`);
+    return within(reqPath, `http://127.0.0.1:${backendPort}`);
   }
   const route = JSON.parse(fs.readFileSync(ROUTE_FILE, "utf8"));
   const downstream = new URL(route.downstream);
@@ -80,8 +99,8 @@ function target(reqPath) {
   if (downstream.origin !== card.origin || downstream.pathname !== "/" || downstream.search || downstream.hash) {
     throw new Error("relay fixture card must belong to its downstream origin");
   }
-  return CARD_PATHS.has(new URL(reqPath, "http://x").pathname)
-    ? card : new URL(reqPath, downstream);
+  const requested = within(reqPath, downstream.origin);
+  return CARD_PATHS.has(requested.pathname) ? card : requested;
 }
 
 
@@ -131,7 +150,7 @@ http
       const body = Buffer.concat(chunks);
       let destination;
       try { destination = target(req.url); }
-      catch (error) { res.writeHead(502).end(String(error)); return; }
+      catch (error) { res.writeHead(error instanceof RefusedTarget ? 400 : 502).end(String(error)); return; }
       const up = http.request(
         {
           host: destination.hostname,

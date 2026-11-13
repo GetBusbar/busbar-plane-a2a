@@ -26,8 +26,14 @@ fn card(description: &str) -> Value {
     })
 }
 
+/// A synthetic pin key built at runtime: base64 of an obviously fake label, never key material.
+fn synthetic_key(tag: &str) -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(format!("test-only-{tag}-pin"))
+}
+
 fn signed_root() -> AgentPinCfg {
-    pin(PinMechanism::JwsIssuerKey, Some("MCowBQYDK2VwAyEA"))
+    pin(PinMechanism::JwsIssuerKey, Some(&synthetic_key("issuer")))
 }
 
 fn seen(card: &Value) -> Sighting {
@@ -263,7 +269,7 @@ fn the_records_trust_answers_are_the_machines_answers_and_not_a_second_opinion()
         Sighting::Seen(CardObservation {
             pin: CardPin::Rooted {
                 mechanism: PinMechanism::JwsIssuerKey,
-                key: "MCowBQYDK2VwAyEAKEY".to_string(),
+                key: synthetic_key("card-issuer"),
                 fingerprint: "sha256/CARD".to_string(),
             },
             skills: skills
@@ -691,7 +697,8 @@ fn hop(peer_key_pin: Option<&str>, client_identity_offered: bool) -> Handshake {
 #[test]
 fn a_transport_pin_is_observed_approvable_and_enforced_as_the_engine_judged_it() {
     let c = card("plans");
-    let key = "R2V0IHRoZSBrZXkgcmlnaHQ=";
+    let (key, other) = (synthetic_key("transport"), synthetic_key("other-peer"));
+    let (key, other) = (key.as_str(), other.as_str());
     let spki = pin(PinMechanism::CertKeyPin, Some(&format!(" {key} ")));
     let seen = verify_card(&spki, &c, &hop(Some(key), false), || unreachable!()).unwrap();
     assert_eq!(
@@ -715,10 +722,10 @@ fn a_transport_pin_is_observed_approvable_and_enforced_as_the_engine_judged_it()
          succeeded is not a transport binding that was checked."
     );
     assert_eq!(
-        verify_card(&spki, &c, &hop(Some("b3RoZXI="), false), || Ok(())).unwrap_err(),
+        verify_card(&spki, &c, &hop(Some(other), false), || Ok(())).unwrap_err(),
         format!(
             "`pin.mechanism: cert_spki`: the card endpoint served a certificate whose \
-             subject-public-key-info is `b3RoZXI=`, and the operator pinned `{key}`. The endpoint \
+             subject-public-key-info is `{other}`, and the operator pinned `{key}`. The endpoint \
              answered and it is not the endpoint the operator supplied a root for."
         )
     );
@@ -737,7 +744,7 @@ fn a_transport_pin_is_observed_approvable_and_enforced_as_the_engine_judged_it()
         .starts_with("`pin.mechanism: mtls` requires busbar to present a client certificate"));
 
     assert!(
-        verify_card(&mutual, &c, &hop(Some("b3RoZXI="), false), || Ok(()))
+        verify_card(&mutual, &c, &hop(Some(other), false), || Ok(()))
             .unwrap_err()
             .starts_with("`pin.mechanism: mtls`: the card endpoint served a certificate")
     );
@@ -748,12 +755,13 @@ fn a_transport_pin_is_observed_approvable_and_enforced_as_the_engine_judged_it()
 /// any other fetch failure, and any other mechanism, keeps the fetch's own words.
 #[test]
 fn a_refused_hop_of_a_transport_pinned_registration_reads_as_the_pin_s_refusal() {
-    let key = "R2V0IHRoZSBrZXkgcmlnaHQ=";
+    let (key, other) = (synthetic_key("transport"), synthetic_key("other-peer"));
+    let (key, other) = (key.as_str(), other.as_str());
     let spki = pin(PinMechanism::CertKeyPin, Some(key));
     let https = "https://agent.example/a";
-    assert!(hop_refusal(&spki, &hop(Some("b3RoZXI="), false), https)
+    assert!(hop_refusal(&spki, &hop(Some(other), false), https)
         .unwrap()
-        .contains("subject-public-key-info is `b3RoZXI=`"));
+        .contains(&format!("subject-public-key-info is `{other}`")));
     assert_eq!(hop_refusal(&spki, &hop(None, false), https), None);
     assert!(
         hop_refusal(&spki, &hop(None, false), "http://127.0.0.1:9/a")
@@ -762,7 +770,7 @@ fn a_refused_hop_of_a_transport_pinned_registration_reads_as_the_pin_s_refusal()
     );
     assert_eq!(hop_refusal(&spki, &hop(Some(key), false), https), None);
     assert_eq!(
-        hop_refusal(&signed_root(), &hop(Some("b3RoZXI="), false), https),
+        hop_refusal(&signed_root(), &hop(Some(other), false), https),
         None
     );
 }

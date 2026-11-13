@@ -46,6 +46,27 @@ async function httpStatus(url, headers) {
     request.end();
   });
 }
+// A raw HTTP/1.1 request line, so absolute-form and other non-origin-form targets reach the wire
+// exactly as written (http.request and fetch normalize them).
+async function rawStatus(port, requestTarget) {
+  const socket = net.connect(port, '127.0.0.1');
+  try {
+    return await new Promise((resolve, reject) => {
+      let text = '';
+      socket.setEncoding('latin1');
+      socket.on('error', reject);
+      socket.setTimeout(3000, () => reject(new Error('raw HTTP probe timed out')));
+      socket.on('data', chunk => {
+        text += chunk;
+        const status = /^HTTP\/1\.1 (\d{3}) /.exec(text);
+        if (status) resolve(Number(status[1]));
+      });
+      socket.write(`GET ${requestTarget} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nConnection: close\r\n\r\n`);
+    });
+  } finally {
+    socket.destroy();
+  }
+}
 async function start(script, port, ...args) {
   const credential = script === 'binding-shim.mjs' ? args.pop() : null;
   if (credential !== null) args.push('-');
@@ -102,6 +123,33 @@ try {
                                             format: 'der', type: 'spki' });
   assert(crypto.verify(null, Buffer.from(`${signature.protected}.${payload}`), publicKey,
                        Buffer.from(signature.signature, 'base64url')), 'signature must use UTF-16 key order');
+  // The vendor is a reverse proxy to one origin: a request target that names another host must be
+  // refused before any upstream connection, never forwarded (an open forward proxy is SSRF).
+  let elsewhereHits = 0;
+  const elsewhere = http.createServer((request, response) => {
+    elsewhereHits++;
+    response.writeHead(204);
+    response.end();
+  });
+  try {
+    const elsewherePort = await listen(elsewhere);
+    const beforeTargets = received.length;
+    for (const requestTarget of [
+      `http://127.0.0.1:${elsewherePort}/.well-known/agent-card.json`,
+      `http://127.0.0.1:${elsewherePort}/probe`,
+      `//127.0.0.1:${elsewherePort}/probe`,
+      `/\\127.0.0.1:${elsewherePort}/probe`,
+    ]) {
+      assert.equal(await rawStatus(vendorPort, requestTarget), 400, `vendor must refuse ${requestTarget}`);
+    }
+    assert.equal(elsewhereHits, 0, 'a refused request target must never reach another origin');
+    assert.equal(received.length, beforeTargets, 'a refused request target must never reach the backend');
+    assert.equal(await rawStatus(vendorPort, '/probe?x=1'), 200, 'origin-form targets still proxy');
+    assert.equal(received.length, beforeTargets + 1);
+  } finally {
+    elsewhere.closeAllConnections();
+    await new Promise(resolve => elsewhere.close(resolve));
+  }
   const shimPort = await unusedPort();
   await start('binding-shim.mjs', shimPort, backendPort, 'fixture-token');
   const local = `http://127.0.0.1:${shimPort}`;
