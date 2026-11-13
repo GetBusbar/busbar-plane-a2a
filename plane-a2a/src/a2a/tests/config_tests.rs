@@ -194,9 +194,14 @@ fn an_agent_may_not_be_named_by_a_reserved_word() {
             json!({"url": "https://x/", "pin": {"mechanism": "unpinned"}}),
         );
         let err = parse(&serde_json::Value::Object(section)).unwrap_err();
+        let signed = busbar_contract::section::reserved_name_refusal(
+            crate::CONFIG_SECTION,
+            super::SUBJECT_NOUN,
+            reserved,
+        );
         assert!(
-            err.contains("RESERVED"),
-            "`{reserved}` must be refused as an agent name, got: {err}"
+            err.contains(&signed),
+            "`{reserved}` must be refused with the signed reserved-name wording `{signed}`, got: {err}"
         );
     }
 }
